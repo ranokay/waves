@@ -9,8 +9,8 @@ import "../search"
 // Provider welcome surface: the first-run gate, and the same cards
 // re-opened as a non-blocking page from Settings -> Providers (or the
 // "Finish setup" chip). One card per provider, from the descriptors the
-// schema carries; Skip and the Apple card end the first-run state.
-// Choosing TIDAL swaps the cards for its inline sign-in steps on this
+// schema carries; Skip and a provider setup action end the first-run state.
+// Choosing a browser-flow provider opens the shared inline sign-in steps on this
 // same surface: the browser opens only from the explicit OPEN BROWSER
 // LOGIN click, CANCEL/Escape returns to the cards without answering
 // anything, and a sign-in that is started never covers the app
@@ -20,7 +20,7 @@ import "../search"
 // fails at load.
 // It reads through it:
 //   host.cancelSetupSignIn / host.providerCards / host.setupMode /
-//   host.setupUrlOpened
+//   host.setupUrlOpened / host.setupProviderId / host.setupProviderName
 //   host.accent / host.gold / host.red / host.textDim  the status-light
 //     palette StatusLight.colorFor(host, state) reads for each step card's
 //     state light (read through host, not copied locally, because the
@@ -71,7 +71,7 @@ Rectangle {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         textFormat: Text.PlainText
-        text: "Choose where to start. You can enable the other provider later in Settings."
+        text: "Choose where to start. You can enable other providers later in Settings."
         color: textLo
         font.pixelSize: 13
       }
@@ -211,8 +211,8 @@ Rectangle {
         }
       }
     }
-    // TIDAL's sign-in steps, inline on the same card. Step one is an
-    // explicit click, the only caller of beginLogin; the paste field
+    // Browser sign-in steps, inline on the same card. Step one is an
+    // explicit click; the paste field
     // and COMPLETE action appear with the redirect. Same
     // matrix-decrypt paste field as the search bar: a pasted redirect
     // URL auto-attempts sign-in once it has decoded in.
@@ -221,7 +221,16 @@ Rectangle {
       objectName: "welcomeSignIn"
       Layout.fillWidth: true
       spacing: 13
-      visible: host.setupMode === "tidal"
+      visible: host.setupProviderId !== ""
+      onVisibleChanged: if (!visible)
+        loginDecoder.cancel()
+      Connections {
+        target: host
+        function onSetupModeChanged() {
+          loginDecoder.cancel()
+          redirectField.clear()
+        }
+      }
       RowLayout {
         Layout.fillWidth: true
         spacing: 10
@@ -238,7 +247,7 @@ Rectangle {
           Layout.fillWidth: true
           wrapMode: Text.WordWrap
           textFormat: Text.PlainText
-          text: "Open the TIDAL login in your browser and sign in."
+          text: "Open the " + host.setupProviderName + " login in your browser and sign in."
           color: textLo
           font.pixelSize: 13
         }
@@ -246,7 +255,7 @@ Rectangle {
       GateAction {
         objectName: "welcomeSignInOpen"
         label: host.setupUrlOpened ? "REOPEN BROWSER LOGIN" : "OPEN BROWSER LOGIN"
-        onClicked: waves.beginLogin()
+        onClicked: waves.beginProviderLogin(host.setupProviderId)
       }
       RowLayout {
         Layout.fillWidth: true
@@ -296,7 +305,8 @@ Rectangle {
           field: redirectField
           glyph: loginPaste
           onDecoded: function (text) {
-            waves.completeLogin(text)
+            if (signInCol.visible)
+              waves.completeProviderLogin(host.setupProviderId, text)
           }
         }
         RowLayout {
@@ -321,7 +331,7 @@ Rectangle {
             // the settled link, so a press meanwhile is already answered
             // and stays quiet instead of erroring spuriously.
             onAccepted: if (!loginDecoder.decoding)
-              waves.completeLogin(text)
+              waves.completeProviderLogin(host.setupProviderId, text)
             onTextChanged: loginDecoder.noteTextChanged()
           }
           PasteGlyph {
@@ -348,7 +358,7 @@ Rectangle {
         // isn't the sign-in link" before the real submit lands), so it
         // stays quiet and the decode's own submit carries the link.
         onClicked: if (!loginDecoder.decoding)
-          waves.completeLogin(redirectField.text)
+          waves.completeProviderLogin(host.setupProviderId, redirectField.text)
       }
       // The bridge's status line, shown inside the steps: the
       // status bar sits under the first-run gate's scrim, so this

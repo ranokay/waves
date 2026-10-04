@@ -13,14 +13,19 @@ cycle; a lazy one keeps every direction working.
 
 from waves.constants import QualityTier, quality_rank, tier_from_word
 from waves.providers.base import (
+    AccountState,
     AudioType,
     BrowseWindow,
     Capability,
+    CatalogLink,
     DownloadAdapter,
     FavoritesUnavailable,
+    OperationReadiness,
     Provider,
     ProviderDescriptor,
+    ProviderReadiness,
     QualityOption,
+    ReadinessState,
     Refusal,
     RefusalKind,
     StatusKind,
@@ -49,17 +54,22 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AccountState",
     "AppleCollectionIncomplete",
     "AppleProvider",
     "AudioType",
     "BrowseWindow",
     "Capability",
+    "CatalogLink",
     "DownloadAdapter",
     "FavoritesUnavailable",
+    "OperationReadiness",
     "Provider",
     "ProviderDescriptor",
+    "ProviderReadiness",
     "QualityOption",
     "QualityTier",
+    "ReadinessState",
     "Refusal",
     "RefusalKind",
     "StatusKind",

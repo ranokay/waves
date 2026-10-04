@@ -7,6 +7,7 @@ import pytest
 from browse.fakes import browse_bridge
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.lifecycle import provider_contexts
 from waves.providers.apple import AppleProvider
 
 
@@ -211,6 +212,9 @@ def _preview_stub(**resources):
         previewMeta=_Signal(),
     )
     stub._emit_apple_preview_meta = lambda *a, **k: WavesBridge._emit_apple_preview_meta(stub, *a, **k)
+    stub._provider_readiness_probes = {
+        "apple": lambda: stub.providers["apple"].readiness(enabled=True, signed_in=False)
+    }
     stub.previewMedia = lambda kind, ident: WavesBridge.previewMedia(stub, kind, ident)
     stub.previewTrack = lambda ident: WavesBridge.previewTrack(stub, ident)
     stub.previewArtist = lambda ident: WavesBridge.previewArtist(stub, ident)
@@ -400,6 +404,9 @@ def _prefetch_stub(**overrides):
     stub._start_apple_artist_build = lambda *a, **k: WavesBridge._start_apple_artist_build(stub, *a, **k)
     for key, value in overrides.items():
         setattr(stub, key, value)
+    stub._provider_readiness_probes = {
+        "apple": lambda: stub.providers["apple"].readiness(enabled=stub._get_apple_enabled(), signed_in=False)
+    }
     return stub
 
 
@@ -429,6 +436,8 @@ def test_signed_out_apple_album_tracks_prefetch():
     fetched = []
     stub = SimpleNamespace(
         _logged_in=False,
+        providers={"apple": AppleProvider()},
+        _provider_readiness_probes={"apple": lambda: stub.providers["apple"].readiness(enabled=True, signed_in=False)},
         _get_apple_enabled=lambda: True,
         _album_tracks_cache={},
         _album_tracks_inflight={},
@@ -577,9 +586,9 @@ def test_apple_stale_worker_keeps_the_next_generations_prefetch():
     WavesBridge.prefetchArtist(stub, "apple:artist-1")
     assert len(pool.fns) == 1
 
-    # Logout clears the markers and bumps the generation; the next account
+    # Logout revokes this provider's context; the next account
     # hovers the same artist before the old request finishes.
-    stub._browse_gen = 1
+    provider_contexts(stub).revoke("apple")
     stub._artist_loading = set()
     stub._artist_prefetch = None
     stub._artist_cache = {}

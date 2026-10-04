@@ -221,6 +221,7 @@ class AppleJobHooks:
     queue_mark_changed: Callable[[int], None] = _noop
     emit_queue: Callable[[], None] = _noop
     remove_row: Callable[[int], None] = _noop
+    withdraw_row_for_hold: Callable[[int], bool] | None = None
     bump_groups: Callable[..., None] = _noop
     download_state: Callable[..., None] = _noop
     download_progress: Callable[..., None] = _noop
@@ -2746,7 +2747,10 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             return
         hooks.download_state(media_id, "")
         hooks.finish_job(qid)
-        hooks.remove_row(qid)
+        if hooks.withdraw_row_for_hold is None:
+            hooks.remove_row(qid)
+        elif not hooks.withdraw_row_for_hold(qid):
+            hooks.discard_pending_downloads([media_id])
         hooks.emit_queue()
         return
     if job_abort.is_set():

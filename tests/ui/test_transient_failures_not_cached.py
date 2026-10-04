@@ -9,6 +9,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
 from tidalapi.album import Album
 
 from waves.desktop.backend import WavesBridge
@@ -90,6 +91,7 @@ def test_the_block_gate_returns_the_button_to_idle():
 
 class _DismissStub:
     dismissDownloadFolderNudge = WavesBridge.dismissDownloadFolderNudge
+    _forget_held_queue_rows = WavesBridge._forget_held_queue_rows
 
     def __init__(self, pending):
         self._pending_lock = Lock()
@@ -253,6 +255,7 @@ class _AlbumTracksStub:
     _dress_library_row = WavesBridge._dress_library_row
 
     def __init__(self, album):
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.CATALOG}, logged_in=True)}
         self._album_tracks_cache: dict = {}
         self._edition_tracks_cache: dict = {}
         self._prefetch_lock = Lock()
@@ -385,7 +388,7 @@ class _LoadLibStub:
         self._fail = fail
         # The loader resolves its source's provider first; a live one keeps
         # the fetch path under test.
-        self.providers = {"tidal": object()}
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
 
     def _set_busy(self, on):
         pass

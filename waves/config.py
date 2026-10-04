@@ -186,6 +186,16 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
                 os.path.basename(self.file_path),
             )
             return
+        tmp_path = self.stage_serialized(data_json)
+        _replace_with_retry(tmp_path, self.file_path)
+
+    def stage_serialized(self, data_json: str) -> str:
+        """Flush a private JSON sibling without publishing or changing the model.
+
+        The caller owns the returned path and must replace or remove it. This
+        keeps the fsync-bearing work outside a staged auth commit's short lock.
+        ``mkstemp`` creates the sibling with mode 0600 on Unix.
+        """
         # Try to create the base folder.
         os.makedirs(self.path_base, exist_ok=True)
 
@@ -221,7 +231,7 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
             with contextlib.suppress(OSError):
                 os.remove(tmp_path)
             raise
-        _replace_with_retry(tmp_path, self.file_path)
+        return tmp_path
 
     def set_option(self, key: str, value: Any) -> None:
         value_old: Any = getattr(self.data, key)

@@ -25,9 +25,12 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import BareProvider
+from providers.qml_auth import CallbackLoginAttempt
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.auth import apply_login_event
+from waves.providers.base import ProviderDescriptor
 
 # --------------------------------------------------------------------------- #
 # the static contract: backend.py's reach inventory
@@ -133,6 +136,16 @@ class _Signal:
         self.emits.append(args[0] if len(args) == 1 else args)
 
 
+class _LoginEventSignal(_Signal):
+    def __init__(self, bridge):
+        super().__init__()
+        self.bridge = bridge
+
+    def emit(self, event) -> None:
+        super().emit(event)
+        apply_login_event(self.bridge, event)
+
+
 class _GuardTidal:
     """Any attribute touch fails: the provider is the only road."""
 
@@ -140,12 +153,32 @@ class _GuardTidal:
         raise AssertionError(f"the bridge reached the TIDAL object directly: .{name}")
 
 
-class _FakeProvider:
+class _FakeProvider(BareProvider):
     """Records the seam calls the bridge makes; answers with canned values."""
+
+    id = "tidal"
 
     def __init__(self, **answers):
         self.calls: list[tuple] = []
         self._answers = answers
+        self._answers.setdefault("login_begin", "https://login.tidal.com/authorize")
+
+    @staticmethod
+    def descriptor() -> ProviderDescriptor:
+        return ProviderDescriptor(id="tidal", name="Fixture TIDAL")
+
+    def create_login_attempt(self, *, resume=False, register_secrets=None):
+        self.calls.append(("create_login_attempt", resume))
+        return CallbackLoginAttempt(
+            lambda: self._answer("login_begin", "begin"),
+            (lambda _payload: self._answer("login_resume", "validate_saved"))
+            if resume
+            else (lambda payload: self._answer("login_complete", "validate", payload)),
+            lambda: self._answer("persist", "persist"),
+        )
+
+    def invalidate_catalog_context(self) -> None:
+        return None
 
     def _answer(self, key, *call):
         self.calls.append(call)
@@ -221,6 +254,14 @@ class _ThirdProvider(BareProvider):
     def _call(self, verb, *args):
         self.calls.append((verb, *args))
 
+    def create_login_attempt(self, *, resume=False, register_secrets=None):
+        self._call("create_login_attempt", resume)
+        return CallbackLoginAttempt(
+            self.login_begin,
+            (lambda _payload: self.login_resume()) if resume else self.login_complete,
+            lambda: self._call("persist"),
+        )
+
     def login_begin(self):
         self._call("login_begin")
         return "https://third.test/authorize"
@@ -260,6 +301,11 @@ class _AuthStub:
 
     _page_path_ok = staticmethod(WavesBridge._page_path_ok)
     _unbind_merge_plans = WavesBridge._unbind_merge_plans
+    _end_provider_context = WavesBridge._end_provider_context
+    _start_provider_logout = WavesBridge._start_provider_logout
+    _schedule_provider_cache_clear = WavesBridge._schedule_provider_cache_clear
+    _warm_provider_login_cache = WavesBridge._warm_provider_login_cache
+    beginProviderLogin = WavesBridge.beginProviderLogin
 
     def __init__(self, provider):
         self.providers = {"tidal": provider}
@@ -268,6 +314,16 @@ class _AuthStub:
         self.statuses: list[str] = []
         self.busy: list[bool] = []
         self.loginUrlReady = _Signal()
+        self.providerLoginUrlReady = _Signal()
+        self.providerLoginFinished = _Signal()
+        self.providerStateChanged = _Signal()
+        self.sessionResolvedChanged = _Signal()
+        self._providerLoginEvent = _LoginEventSignal(self)
+        self._provider_login_attempts = {}
+        self._tracked_sessions = frozenset({"tidal"})
+        self._provider_login_busy = set()
+        self._catalog_thread = threading.local()
+        self._stop_provider_downloads = lambda _provider, _reason: 0
 
     @staticmethod
     def start(worker, priority: int = 0):  # matches self.threadpool.start(worker)
@@ -276,14 +332,21 @@ class _AuthStub:
     def _set_status(self, msg: str) -> None:
         self.statuses.append(msg)
 
-    def _emit_dressed(self, signal, payload, gen: int) -> None:
+    def _emit_dressed(self, signal, payload, gen) -> None:
         # Card dressing itself is covered by test_browse_card_dressing; here
         # it must only apply the same staleness gate the real seam does.
-        if gen == getattr(self, "_browse_gen", gen):
+        if backend._provider_result_current(self, gen):
             signal.emit(payload)
 
     def _set_busy(self, value: bool) -> None:
         self.busy.append(value)
+
+    def _set_login_busy(self, provider_id: str, value: bool) -> None:
+        if value:
+            self._provider_login_busy.add(provider_id)
+        else:
+            self._provider_login_busy.discard(provider_id)
+        self._set_busy(bool(self._provider_login_busy))
 
     def _set_logged_in(self, value: bool) -> None:
         self.logged_in_calls.append(value)
@@ -303,7 +366,7 @@ def _seed_session_state(stub) -> None:
     for name, value in {
         "_logged_in": True,
         "_lib_cache": {},
-        "_lib_loading": {},
+        "_lib_loading": set(),
         "_lib_sort": {},
         "_fav_ids": {},
         "_pending_lock": threading.Lock(),
@@ -324,7 +387,7 @@ def _seed_session_state(stub) -> None:
         "_album_tracks_unrecorded": set(),
         "_item_fetch_ts": {},
         "_artist_cache": {},
-        "_artist_loading": {},
+        "_artist_loading": set(),
         "_artist_reval_ts": {},
         "_jobs": SimpleNamespace(objs={}),
         "_merge_scanned": set(),
@@ -364,12 +427,18 @@ class TestTheSessionLifecycle:
         method = getattr(WavesBridge, name)
         method.__get__(stub, type(stub))(*args)
 
+    def _start_attempt(self, stub) -> None:
+        self._run(stub, "beginLogin")
+        stub._provider.calls.clear()
+        stub.statuses.clear()
+        stub.busy.clear()
+
     def test_begin_login_asks_the_provider_for_the_flow_entry(self):
         stub = self._stub(login_begin="https://login.tidal.com/authorize?x=1")
 
         self._run(stub, "beginLogin")
 
-        assert stub._provider.calls == [("login_begin",)]
+        assert stub._provider.calls == [("create_login_attempt", False), ("begin",)]
         assert stub.loginUrlReady.emits == ["https://login.tidal.com/authorize?x=1"]
         assert stub.statuses[-1] == "Finish signing in, then paste the URL back"
 
@@ -378,15 +447,16 @@ class TestTheSessionLifecycle:
 
         self._run(stub, "beginLogin")
 
-        assert stub.statuses[-1] == "Could not start login"
+        assert stub.statuses[-1] == "Sign-in failed. Try again."
         assert stub.loginUrlReady.emits == []
 
     def test_complete_login_exchanges_through_the_provider(self):
         stub = self._stub(login_complete=True)
+        self._start_attempt(stub)
 
         self._run(stub, "completeLogin", "https://tidal.com/login?code=q")
 
-        assert stub._provider.calls == [("login_complete", "https://tidal.com/login?code=q")]
+        assert stub._provider.calls == [("validate", "https://tidal.com/login?code=q"), ("persist",)]
         assert stub.statuses[-1] == "Signed in"
         assert stub.logged_in_calls == [True]
         assert stub.busy == [True, False]
@@ -394,6 +464,7 @@ class TestTheSessionLifecycle:
 
     def test_complete_login_reports_a_failed_finalize(self):
         stub = self._stub(login_complete=False)
+        self._start_attempt(stub)
 
         self._run(stub, "completeLogin", "https://tidal.com/login?code=q")
 
@@ -417,7 +488,7 @@ class TestTheSessionLifecycle:
 
         self._run(stub, "_try_token_login")
 
-        assert stub._provider.calls == [("login_resume",)]
+        assert stub._provider.calls == [("create_login_attempt", True), ("validate_saved",), ("persist",)]
         assert stub.statuses[-1] == "Signed in"
         assert stub.logged_in_calls == [True]
         assert stub._session_resolved is True
@@ -481,8 +552,11 @@ class TestTheSessionLifecycle:
         self._run(stub, "logout")
 
         assert provider.calls == [
+            ("create_login_attempt", False),
             ("login_begin",),
             ("login_complete", "https://third.test/redirect?code=1"),
+            ("persist",),
+            ("create_login_attempt", True),
             ("login_resume",),
             ("credential_facts",),
             ("account_id",),
@@ -683,8 +757,9 @@ class TestTheCatalogRoads:
 
         assert stub._provider.calls == [("get_object", "album", "42")]
         assert remembered == [("album", "42", obj)]
-        ((bucket, mid),) = stub._mediaRefetched.emits
+        ((bucket, mid, token),) = stub._mediaRefetched.emits
         assert (bucket, mid) == ("album", "42")
+        assert backend.provider_contexts(stub).current(token)
 
     def test_a_failed_refetch_reports_the_row_failed(self):
         stub = self._stub(get_object=RuntimeError("gone"))

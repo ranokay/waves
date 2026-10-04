@@ -20,6 +20,7 @@ from catalog.discography_fakes import bind as _bind
 from catalog.discography_fakes import schema_stub as _schema_stub
 
 from waves.desktop.backend import _ARTIST_VIDEO_PAGE, WavesBridge
+from waves.desktop.providers.lifecycle import scan_generation
 from waves.desktop.settings.schema import FLAG_FIELDS
 from waves.model.cfg import HelpSettings
 
@@ -72,7 +73,7 @@ def test_discography_queues_videos_when_the_source_is_on():
     artist = _Artist([SimpleNamespace(id="v1"), SimpleNamespace(id="v2")])
     stub = _DiscoStub(artist, video_download=True)
     stub.downloadArtist("art1")
-    assert stub._videosQueued.emits == [(0, ["v1", "v2"])]
+    assert stub._videosQueued.emits == [(scan_generation(stub), ["v1", "v2"])]
     assert ("video", "v1") in stub.remembered and ("video", "v2") in stub.remembered
     # The videos roll up into the artist button's aggregate, like albums do.
     assert stub._artist_groups["art1"]["keys"] == {"al1", "v1", "v2"}
@@ -201,7 +202,7 @@ def test_discography_leaves_out_claimed_albums():
     stub._library_bulk_skip_on = lambda: True
     stub._library_claims_album = lambda a: a is owned
     stub.downloadArtist("art1")
-    assert stub._albumsQueued.emits == [(0, ["al1"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["al1"])]
     assert stub._artist_groups["art1"]["keys"] == {"al1"}
     assert any("(1 already in your library)" in s for s in stub.statuses)
 

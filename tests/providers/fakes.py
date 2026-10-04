@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from waves.desktop.providers.presentation import apple_status
 from waves.providers.base import Provider, ProviderDescriptor, StatusKind
 
 
@@ -93,4 +94,13 @@ def stub_bridge(providers, *, logged_in=False, tracked=frozenset(), probes=None)
         _logged_in=logged_in,
         _tracked_sessions=tracked,
         _provider_status_probes=dict(probes or {}),
+        _provider_status_presenters={
+            "apple": lambda flags: apple_status(
+                bool(flags.get("enabled", False)),
+                runtime_ready=bool(flags.get("runtime_ready", False)),
+                signed_in=bool(flags.get("signed_in", False)),
+                needs_attention=bool(flags.get("needs_attention", False)),
+                cookies_ready=bool(flags.get("cookies_ready", False)),
+            )
+        },
     )

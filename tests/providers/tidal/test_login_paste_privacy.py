@@ -2,21 +2,22 @@
 
 The sign-in flow asks the user to copy a URL from the browser, so a stale
 clipboard entry (a password, a chat message, a personal note) is a realistic
-slip. tidalapi refuses a paste without "https://" by raising with the pasted
-text INSIDE the exception message, and completeLogin's logger.exception would
-persist that verbatim: breadcrumb ring, stderr, the always-on disk log, the
-ERROR-triggered crumb dump, and any exported bundle. The scrubber's nets catch
-structured PII, not arbitrary prose, and the "also hide titles and searches"
-switch only hashes content() spans, which third-party exception text never
-gets. completeLogin now refuses such a paste before tidalapi can see it.
+slip. The compatibility slot refuses a stray paste before scheduling account
+work. An accepted URL reaches a detached candidate, whose exceptions may
+contain that full URL: auth orchestration must log only a generic failure.
 """
 
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
+
+from conftest import _InlinePool, _Signal
+from providers.fakes import BareProvider
+from providers.qml_auth import CallbackLoginAttempt
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.auth import apply_login_event, start_login
+from waves.providers.base import ProviderDescriptor
 
 
 class _Capture(logging.Handler):
@@ -46,6 +47,49 @@ class _Stub:
         self.busy.append(bool(on))
 
 
+class _LoginEventSignal(_Signal):
+    def __init__(self, bridge):
+        super().__init__()
+        self.bridge = bridge
+
+    def emit(self, event) -> None:
+        super().emit(event)
+        apply_login_event(self.bridge, event)
+
+
+class _PasteProvider(BareProvider):
+    id = "tidal"
+
+    def __init__(self):
+        self.payloads: list[str] = []
+
+    @staticmethod
+    def descriptor() -> ProviderDescriptor:
+        return ProviderDescriptor(id="tidal", name="Fixture TIDAL")
+
+    def _validate(self, payload: str) -> bool:
+        self.payloads.append(payload)
+        raise KeyError(payload)
+
+    def create_login_attempt(self, *, resume=False, register_secrets=None):
+        return CallbackLoginAttempt(lambda: "https://tidal.test/authorize", self._validate)
+
+
+class _StagedStub(_Stub):
+    def __init__(self):
+        super().__init__()
+        self.provider = _PasteProvider()
+        self.providers = {"tidal": self.provider}
+        self.threadpool = _InlinePool()
+        self._providerLoginEvent = _LoginEventSignal(self)
+        self.providerLoginUrlReady = _Signal()
+        self.loginUrlReady = _Signal()
+        self.providerLoginFinished = _Signal()
+
+    def _set_login_busy(self, provider_id: str, value: bool) -> None:
+        self._set_busy(value)
+
+
 def _watching_waves_logger():
     handler = _Capture()
     handler.setFormatter(logging.Formatter("%(message)s"))
@@ -68,24 +112,22 @@ def test_a_stray_clipboard_paste_is_refused_and_never_logged():
         logger.removeHandler(handler)
 
 
-def test_a_real_looking_url_still_goes_through_to_tidalapi():
-    # The guard uses tidalapi's own predicate ("https://" anywhere in the
-    # paste); anything it would accept must still be handed over. Here the
-    # hand-off fails downstream, which is the normal sign-in failure path.
-    class _Pool:
-        @staticmethod
-        def start(worker, priority: int = 0):
-            worker.fn()
+def test_a_signin_url_reaches_the_candidate_without_logging_its_exception():
+    logger, handler = _watching_waves_logger()
+    try:
+        stub = _StagedStub()
+        start_login(stub, "tidal")
+        stub.busy.clear()
+        paste = "https://tidal.com/android/login/auth?code=private-one-time-code"
 
-    stub = _Stub()
-    stub.threadpool = _Pool()
+        stub.completeLogin(paste)
 
-    def _raise_keyerror(url):
-        raise KeyError("code")
-
-    stub.tidal = SimpleNamespace(session=SimpleNamespace(pkce_get_auth_token=_raise_keyerror))
-
-    stub.completeLogin("https://tidal.com/android/login/auth?weird=1")
-
-    assert stub.statuses[-1] == "Sign-in failed. Try again."
-    assert stub.busy == [True, False]
+        assert stub.provider.payloads == [paste]
+        assert stub.statuses[-1] == "Sign-in failed. Try again."
+        assert stub.busy == [True, False]
+        assert stub.providerLoginFinished.emits == [("tidal", False)]
+        joined = "\n".join(handler.messages)
+        assert "Provider sign-in failed" in joined
+        assert paste not in joined and "private-one-time-code" not in joined
+    finally:
+        logger.removeHandler(handler)

@@ -119,6 +119,8 @@ def _scenario() -> int:
     settle()
 
     q("_searchSeq = _navSeq")
+    bridge.settings.data.apple_enabled = True
+    bridge.appleStatusChanged.emit()
     bridge.searchResults.emit(_payload(grouped=True))
     settle(500)
     tidal = "root.searchGroupFor('tidal')"

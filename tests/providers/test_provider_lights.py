@@ -76,10 +76,19 @@ def test_browse_requires_a_browse_capable_provider():
     # TIDAL declares BROWSE: the destination exists, and its account state
     # decides between the page and the sign-in call to action.
     tidal = StubProvider("tidal", "TIDAL", capabilities={Capability.BROWSE})
-    assert backend._browse_nav(stub_bridge({"tidal": tidal})) == {"available": True, "signed_in": False}
+    assert backend._browse_nav(stub_bridge({"tidal": tidal})) == {
+        "available": True,
+        "signed_in": False,
+        "provider": "tidal",
+        "message": "Browse TIDAL",
+        "action": "signin",
+        "action_label": "Sign in to TIDAL",
+    }
     assert backend._browse_nav(stub_bridge({"tidal": tidal}, logged_in=True, tracked=frozenset({"tidal"}))) == {
         "available": True,
         "signed_in": True,
+        "provider": "tidal",
+        "message": "Browse TIDAL",
     }
 
     # Apple declares no BROWSE today: an Apple-only registry has no Browse.
@@ -91,7 +100,12 @@ def test_browse_requires_a_browse_capable_provider():
 def test_a_third_provider_with_browse_restores_the_destination():
     fake = StubProvider("fake", "Fake Music", capabilities={Capability.BROWSE}, logged_in=True)
 
-    assert backend._browse_nav(stub_bridge({"fake": fake})) == {"available": True, "signed_in": True}
+    assert backend._browse_nav(stub_bridge({"fake": fake})) == {
+        "available": True,
+        "signed_in": True,
+        "provider": "fake",
+        "message": "Browse Fake Music",
+    }
 
 
 def test_browse_reports_the_session_of_the_provider_that_fills_it():
@@ -104,6 +118,10 @@ def test_browse_reports_the_session_of_the_provider_that_fills_it():
     assert backend._browse_nav(stub_bridge({"tidal": tidal, "fake": fake})) == {
         "available": True,
         "signed_in": False,
+        "provider": "tidal",
+        "message": "Browse TIDAL",
+        "action": "signin",
+        "action_label": "Sign in to TIDAL",
     }
 
 

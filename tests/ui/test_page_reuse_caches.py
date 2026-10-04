@@ -15,6 +15,20 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability, ProviderDescriptor
+
+
+def _saved_provider(**operations):
+    """Known signed-in source facts for the cache reader's provider seam."""
+    return SimpleNamespace(
+        id="tidal",
+        name="TIDAL",
+        capabilities=frozenset({Capability.FAVORITES, Capability.PLAYLISTS, Capability.MIXES}),
+        descriptor=lambda: ProviderDescriptor(id="tidal", name="TIDAL"),
+        is_logged_in=True,
+        **operations,
+    )
+
 
 # ----- playlists/mixes sweep cache ------------------------------------------
 
@@ -32,7 +46,7 @@ def _sweep_bridge(monkeypatch, calls):
 
     # The sweep and the folder walk ride the Provider seam.
     b.providers = {
-        "tidal": SimpleNamespace(
+        "tidal": _saved_provider(
             user_collections=fake_sweep,
             folder_tree=lambda root_folders=None: SimpleNamespace(nodes=[], playlist_paths={}, partial=False),
             # The pane's rows come through the source's own row vocabulary.
@@ -134,7 +148,7 @@ def _fav_bridge(ids_per_call):
         return {o.id for o in ids_per_call}
 
     # The id pagination rides the Provider seam.
-    b.providers = {"tidal": SimpleNamespace(favorite_ids=fake_ids)}
+    b.providers = {"tidal": _saved_provider(favorite_ids=fake_ids)}
     return b, calls
 
 
@@ -161,7 +175,7 @@ def test_favorite_ids_failed_refresh_serves_stale():
     def boom(kind):
         raise RuntimeError("blip")
 
-    b.providers = {"tidal": SimpleNamespace(favorite_ids=boom)}
+    b.providers = {"tidal": _saved_provider(favorite_ids=boom)}
     assert b._favorite_ids("albums") == {"old"}
 
 
@@ -197,11 +211,12 @@ def _cache_bridge(tmp_path):
     b._search_cache = {}
     b._home_cache = {}
     b._page_cache_path = str(tmp_path / "page_cache.json")
+    b._search_cache_path = str(tmp_path / "search_cache.json")
     b._page_cache_lock = Lock()
     b.tidal = MagicMock()
     b.tidal.session.user.id = "42"
-    # The snapshot's user stamp reads the provider.
-    b.providers = {"tidal": SimpleNamespace(account_id=lambda: "42")}
+    # The snapshot's opaque account stamp reads this provider's identity.
+    b.providers = {"tidal": _saved_provider(account_id=lambda: "42")}
     return b
 
 

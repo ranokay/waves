@@ -468,12 +468,18 @@ def _search_stub(providers):
 def test_the_search_gate_runs_only_providers_that_declare_search():
     called: list = []
     tidal = SimpleNamespace(
+        id="tidal",
         name="TIDAL",
+        descriptor=TidalProvider.descriptor,
+        is_logged_in=True,
         capabilities=frozenset({Capability.SEARCH}),
         search=lambda needle: called.append("tidal") or {},
     )
     apple = SimpleNamespace(
+        id="apple",
         name="Apple Music",
+        descriptor=AppleProvider.descriptor,
+        is_logged_in=False,
         capabilities=frozenset(),
         search=lambda needle: called.append("apple") or {},
     )

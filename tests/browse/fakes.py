@@ -62,6 +62,13 @@ def fake_track(tid, album):
 def browse_bridge(obj, kind):
     b = WavesBridge.__new__(WavesBridge)
     b._logged_in = True
+    b._tracked_sessions = {CTX_TIDAL}
+    b._provider_readiness_probes = {
+        "apple": lambda: b.providers["apple"].readiness(enabled=b._get_apple_enabled(), signed_in=False)
+    }
+    # This fixture skips QObject initialization; dispatch through the real
+    # epoch receiver inline instead of an uninitialized Qt signal instance.
+    b._catalogEvent = SimpleNamespace(emit=lambda event: WavesBridge._on_catalog_event(b, event))
     b._provider_search_gates = {"tidal": lambda: b._logged_in, "apple": b._get_apple_enabled}
     b._browse_pages = {}
     b._browse_loading = set()

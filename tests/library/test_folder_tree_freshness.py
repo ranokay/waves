@@ -24,7 +24,10 @@ from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from providers.fakes import StubProvider
+
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 from waves.providers.tidal_folders import FolderNode, FolderTree
 
 
@@ -59,15 +62,11 @@ def _bridge(monkeypatch, trees, sweeps=None):
         calls["walk"] += 1
         return trees.pop(0)
 
-    b.providers = {
-        "tidal": SimpleNamespace(
-            user_collections=fake_sweep,
-            folder_tree=fake_walk,
-            # The pane's rows come through the source's own row vocabulary;
-            # the stub answers with the one key these tests read.
-            row_for=lambda kind, item: {"id": getattr(item, "id", "")},
-        )
-    }
+    provider = StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)
+    provider.user_collections = fake_sweep
+    provider.folder_tree = fake_walk
+    provider.row_for = lambda kind, item: {"id": getattr(item, "id", "")}
+    b.providers = {"tidal": provider}
     return b, calls
 
 

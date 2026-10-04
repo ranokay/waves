@@ -22,6 +22,7 @@ import json
 import sys
 
 import pytest
+from providers.fakes import BareProvider
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
@@ -157,7 +158,7 @@ def _run_scenario() -> int:
 
     calls: list[str] = []
 
-    class NewCo:
+    class NewCo(BareProvider):
         """A provider registered after every QML surface was written."""
 
         id = "newco"

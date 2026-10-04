@@ -13,7 +13,7 @@ WHAT THIS FENCES OFF
    welcome surface on its inline sign-in steps, NOT start a browser login.
 
 3. The explicit click opening the flow. OPEN BROWSER LOGIN is the only caller
-   of beginLogin; a real click on it must open the browser and bring the
+   of beginProviderLogin; a real click on it must open the browser and bring the
    paste field back with it.
 
 4. Sign-out only living in the top bar. The TIDAL session row carries a
@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from providers.qml_auth import CallbackLoginAttempt
 from support.paths import QML_MAIN
 from support.qml import run_scenario
 from support.qml_probe import scene_js
@@ -135,6 +136,9 @@ def _run_scenario() -> int:
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
+    bridge.providers["tidal"].create_login_attempt = lambda **kwargs: CallbackLoginAttempt(
+        lambda: "https://tidal.test/authorize", lambda payload: False
+    )
     engine.rootContext().setContextProperty("waves", bridge)
     engine.rootContext().setContextProperty("monoFont", _load_mono())
     engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
@@ -289,6 +293,9 @@ def _run_signout_scenario() -> int:
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
+    bridge.providers["tidal"].create_login_attempt = lambda **kwargs: CallbackLoginAttempt(
+        lambda: "https://tidal.test/authorize", lambda payload: False
+    )
     # The sign-in flip makes Main re-fetch Browse; keep the scenario offline.
     bridge._browse_root = lambda: {"sections": [], "genres": [], "moods": [], "decades": [], "error": True}
     engine.rootContext().setContextProperty("waves", bridge)

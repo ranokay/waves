@@ -24,11 +24,9 @@ from __future__ import annotations
 
 import logging
 
-from waves.desktop.providers.presentation import apple_status
-from waves.desktop.worker import Worker
 from waves.ids import provider_of_id
 from waves.library.index import FILES_VIEWS
-from waves.providers import Capability, StatusKind
+from waves.providers import AccountState, Capability, Provider, ProviderReadiness, ReadinessState, StatusKind
 
 # The subsystem child logger (per the diagnostics conventions): propagates into
 # the root "waves" breadcrumb ring while letting verbose logs slice per subsystem.
@@ -80,23 +78,9 @@ def _begin_login(bridge, provider_id: str) -> None:
     One body for the landing panel and the provider card's action, so a
     card's Sign in and the panel's button can never diverge.
     """
-    provider = bridge.providers.get(provider_id)
-    if provider is None:
-        return
+    from waves.desktop.providers.auth import start_login
 
-    def work() -> None:
-        try:
-            # The provider owns the flow entry (and rebuilds the session a
-            # prior sign-out tore down, so a fresh PKCE login can start).
-            url = provider.login_begin()
-        except Exception:
-            logger.exception("Could not obtain login URL")
-            bridge._set_status("Could not start login")
-            return
-        bridge.loginUrlReady.emit(url)
-        bridge._set_status("Finish signing in, then paste the URL back")
-
-    bridge.threadpool.start(Worker(work))
+    start_login(bridge, provider_id)
 
 
 def _provider_sign_out(bridge, provider_id: str) -> None:
@@ -114,10 +98,8 @@ def _provider_sign_out(bridge, provider_id: str) -> None:
     if flow is not None:
         flow()
         return
-    try:
-        provider.logout()
-    except Exception:
-        logger.exception("Provider sign-out failed")
+    bridge._end_provider_context(provider_id, f"Signed out of {provider.name}")
+    bridge._start_provider_logout(provider_id)
 
 
 def _provider_registry(bridge) -> list:
@@ -135,7 +117,11 @@ def _source_provider(bridge, source):
     another provider's rows.
     """
     providers = getattr(bridge, "providers", None)
-    return providers.get(str(source or "")) if isinstance(providers, dict) else None
+    provider = providers.get(str(source or "")) if isinstance(providers, dict) else None
+    if provider is None:
+        return None
+    readiness = _provider_readiness(bridge, provider).for_operation(Capability.FAVORITES)
+    return provider if readiness.state == ReadinessState.READY else None
 
 
 def _source_rows(provider, row_kind: str, raw: list) -> list:
@@ -185,6 +171,61 @@ def _session_logged_in(bridge, provider) -> bool:
     except Exception:
         logger.debug("Provider session read failed", exc_info=True)
         return False
+
+
+def _provider_readiness(bridge, provider) -> ProviderReadiness:
+    """One provider's live facts, refined by its registered desktop adapter."""
+    compose = getattr(provider, "readiness", None)
+    if compose is None:
+        # Older statically registered adapters implement the original seam.
+        compose = lambda **facts: Provider.readiness(provider, **facts)
+    probe = getattr(bridge, "_provider_readiness_probes", {}).get(provider.id)
+    if probe is not None:
+        try:
+            return probe()
+        except Exception:
+            logger.debug("Provider readiness probe failed", exc_info=True)
+            return compose(enabled=None)
+    enabled = True
+    if provider.descriptor().status_kind == StatusKind.SETUP:
+        flags = _provider_setup_flags(bridge, provider)
+        enabled = flags.get("enabled")
+    signed_in = None
+    try:
+        account = (
+            getattr(bridge, "_logged_in", None)
+            if provider.id in getattr(bridge, "_tracked_sessions", ())
+            else provider.is_logged_in
+        )
+        signed_in = account if isinstance(account, bool) else None
+    except Exception:
+        logger.debug("Provider account read failed", exc_info=True)
+    return compose(enabled=enabled, signed_in=signed_in)
+
+
+def _readiness_payload(readiness: ProviderReadiness) -> dict:
+    return {
+        "enabled": readiness.enabled,
+        "account": readiness.account.value,
+        "catalog": readiness.for_operation(Capability.CATALOG).state.value,
+        "operations": {
+            item.operation.value: {"state": item.state.value, "action": item.action} for item in readiness.operations
+        },
+    }
+
+
+def _operation_opportunity(bridge, provider, operation: Capability) -> dict:
+    """The provider's own action for an operation that cannot currently run."""
+    readiness = _provider_readiness(bridge, provider).for_operation(operation)
+    if not readiness.action:
+        return {}
+    descriptor = provider.descriptor()
+    verb = "Sign in to" if readiness.action == "signin" else "Set up"
+    return {
+        "provider": provider.id,
+        "action": readiness.action,
+        "action_label": f"{verb} {descriptor.name}",
+    }
 
 
 # ----- My Music's saved-shelf sources -----
@@ -261,9 +302,7 @@ def _provider_can_fill_shelves(bridge, provider) -> bool:
     ``_session_logged_in``); the descriptor's status kind says whether the
     provider has a session to read at all.
     """
-    if provider.descriptor().status_kind != StatusKind.SESSION:
-        return False
-    return _session_logged_in(bridge, provider)
+    return _provider_readiness(bridge, provider).for_operation(Capability.FAVORITES).state == ReadinessState.READY
 
 
 def _saved_shelf_sources(bridge) -> list[dict]:
@@ -326,19 +365,14 @@ def _my_music_empty(bridge) -> dict:
         if _provider_can_fill_shelves(bridge, provider):
             continue
         descriptor = provider.descriptor()
-        if descriptor.status_kind != StatusKind.SESSION:
-            # A provider that never holds a session can never fill a shelf
-            # (see _provider_can_fill_shelves), so nothing here is missing its
-            # action: the pane stays quiet rather than offering a setup that
-            # would not produce shelves.
+        opportunity = _operation_opportunity(bridge, provider, Capability.FAVORITES)
+        if not opportunity:
             continue
         shelves = [c["label"].lower() for c in _source_categories(provider) if c["id"] != "home"]
         return {
-            "provider": descriptor.id,
-            "action": "signin",
+            **opportunity,
             "message": f"My Music is your {descriptor.name} library",
-            "detail": f"Sign in to see your {_human_join(shelves)}.",
-            "action_label": f"Sign in to {descriptor.name}",
+            "detail": f"{'Sign in' if opportunity['action'] == 'signin' else opportunity['action_label']} to see your {_human_join(shelves)}.",
         }
     return {}
 
@@ -487,8 +521,13 @@ def _provider_light(bridge, provider) -> dict | None:
     descriptor contract, not a branch here.
     """
     descriptor = provider.descriptor()
+    readiness = _provider_readiness(bridge, provider)
+    if readiness.enabled is False:
+        return None
+    if readiness.enabled is None or readiness.account == AccountState.UNKNOWN:
+        return {"id": descriptor.id, "name": descriptor.name, "state": "unknown", "word": "Checking"}
     if descriptor.status_kind == StatusKind.SESSION:
-        logged_in = _session_logged_in(bridge, provider)
+        logged_in = readiness.account == AccountState.SIGNED_IN
         return {
             "id": descriptor.id,
             "name": descriptor.name,
@@ -499,13 +538,14 @@ def _provider_light(bridge, provider) -> dict | None:
         }
     if descriptor.status_kind == StatusKind.SETUP:
         flags = _provider_setup_flags(bridge, provider)
-        described = apple_status(
-            bool(flags.get("enabled", False)),
-            runtime_ready=bool(flags.get("runtime_ready", False)),
-            signed_in=bool(flags.get("signed_in", False)),
-            needs_attention=bool(flags.get("needs_attention", False)),
-            cookies_ready=bool(flags.get("cookies_ready", False)),
-        )
+        presenter = getattr(bridge, "_provider_status_presenters", {}).get(provider.id)
+        if presenter is None:
+            described = {
+                "state": readiness.account.value,
+                "word": "Signed in" if readiness.account == AccountState.SIGNED_IN else "Signed out",
+            }
+        else:
+            described = presenter(flags)
         if described["state"] == "off":
             return None
         return {
@@ -557,10 +597,22 @@ def _browse_nav(bridge) -> dict:
         ),
         None,
     )
-    return {
+    result = {
         "available": source is not None,
-        "signed_in": bool(source is not None and _session_logged_in(bridge, source)),
+        "signed_in": bool(
+            source is not None
+            and _provider_readiness(bridge, source).for_operation(Capability.BROWSE).state == ReadinessState.READY
+        ),
     }
+    if source is not None:
+        result.update(
+            {
+                "provider": source.id,
+                "message": f"Browse {source.name}",
+                **_operation_opportunity(bridge, source, Capability.BROWSE),
+            }
+        )
+    return result
 
 
 # The status line for an Apple verb with no implementation yet. Present tense on

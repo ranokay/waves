@@ -8,16 +8,13 @@ real ``Worker.run`` (which deliberately swallows and logs any exception so a
 background crash cannot abort Qt) is exercised as shipped, so a raise inside the
 worker behaves here exactly as it would in the app.
 
-A corrupt ``page_cache.json`` must not decide the login: if ``_load_page_cache``
-raises *before* the session-resolved latch is set, ``sessionResolved`` never
-flips and the launch overlay latches on "Signing in…" forever. The latch lives
-in a ``finally`` and the page-cache warmup is guarded.
+A corrupt ``page_cache.json`` must not decide the login: its worker warmup is
+best-effort after credential commit, and the GUI completion event resolves
+``sessionResolved`` even when that warmup raises.
 
-``completeLogin`` has the same exposure on the post-success path: its whole
-block must sit inside a ``finally``, or the identical corrupt cache raises there
-too, the busy spinner never clears, and the app shows signed out over
-credentials the exchange had already saved. The boot path above guards the same
-call, so restarting signed in cleanly would make the hang look random.
+``completeLogin`` has the same exposure after a staged candidate commits: cache
+and download/art setup failures must still settle the busy flag and show the
+account that was already committed.
 
 Both slots ask the provider for the login work; the stand-ins answer through a
 recording fake and carry no TIDAL object at all.
@@ -25,13 +22,31 @@ recording fake and carry no TIDAL object at all.
 
 from __future__ import annotations
 
+import threading
+
 from conftest import _InlinePool, _Signal
+from providers.fakes import BareProvider
+from providers.qml_auth import CallbackLoginAttempt
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.auth import apply_login_event
+from waves.providers.base import ProviderDescriptor
 
 
-class _FakeLoginProvider:
+class _LoginEventSignal(_Signal):
+    def __init__(self, bridge):
+        super().__init__()
+        self.bridge = bridge
+
+    def emit(self, event) -> None:
+        super().emit(event)
+        apply_login_event(self.bridge, event)
+
+
+class _FakeLoginProvider(BareProvider):
     """The login surface of the provider, canned."""
+
+    id = "tidal"
 
     def __init__(self, *, resume_ok: bool = True, resume_raises: bool = False):
         self.resume_calls = 0
@@ -43,6 +58,24 @@ class _FakeLoginProvider:
         if self._resume_raises:
             raise ConnectionError("black-holed network")
         return self._resume_ok
+
+    @staticmethod
+    def descriptor() -> ProviderDescriptor:
+        return ProviderDescriptor(id="tidal", name="Fixture TIDAL")
+
+    def create_login_attempt(self, *, resume=False, register_secrets=None):
+        return CallbackLoginAttempt(lambda: "https://tidal.test/authorize", lambda _payload: self.login_resume())
+
+
+def _wire_staged_auth(stub) -> None:
+    stub._provider_login_attempts = {}
+    stub._tracked_sessions = frozenset({"tidal"})
+    stub._providerLoginEvent = _LoginEventSignal(stub)
+    stub.providerLoginUrlReady = _Signal()
+    stub.loginUrlReady = _Signal()
+    stub.providerLoginFinished = _Signal()
+    stub.providerStateChanged = _Signal()
+    stub._catalog_thread = threading.local()
 
 
 class _LoginStub:
@@ -56,9 +89,17 @@ class _LoginStub:
         self._page_cache_loaded = False
         self._init_download_called = False
         self._prefetch_called = False
+        self._busy: list[bool] = []
         self.sessionResolvedChanged = _Signal()
         self.threadpool = _InlinePool()
         self.providers = {"tidal": _FakeLoginProvider(resume_ok=login_ok, resume_raises=login_raises)}
+        _wire_staged_auth(self)
+
+    _warm_provider_login_cache = WavesBridge._warm_provider_login_cache
+    beginProviderLogin = WavesBridge.beginProviderLogin
+
+    def _set_login_busy(self, provider_id: str, value: bool) -> None:
+        self._busy.append(value)
 
     def _set_status(self, msg: str) -> None:
         self._statuses.append(msg)
@@ -139,8 +180,10 @@ def test_login_exception_resolves_as_not_signed_in():
 # --------------------------------------------------------------------------- #
 # completeLogin: the pasted-URL path, which had no guard of its own.
 # --------------------------------------------------------------------------- #
-class _FakePkceProvider:
+class _FakePkceProvider(BareProvider):
     """The PKCE half of the provider, canned."""
+
+    id = "tidal"
 
     def __init__(self, *, finalize_ok: bool = True, exchange_raises: bool = False):
         self.exchange_calls: list[str] = []
@@ -152,6 +195,13 @@ class _FakePkceProvider:
         if self._exchange_raises:
             raise ConnectionError("black-holed network")
         return self._finalize_ok
+
+    @staticmethod
+    def descriptor() -> ProviderDescriptor:
+        return ProviderDescriptor(id="tidal", name="Fixture TIDAL")
+
+    def create_login_attempt(self, *, resume=False, register_secrets=None):
+        return CallbackLoginAttempt(lambda: "https://tidal.test/authorize", self.login_complete)
 
 
 class _PkceStub:
@@ -167,6 +217,13 @@ class _PkceStub:
         self._prefetch_called = False
         self.threadpool = _InlinePool()
         self.providers = {"tidal": _FakePkceProvider(finalize_ok=finalize_ok, exchange_raises=exchange_raises)}
+        _wire_staged_auth(self)
+
+    _warm_provider_login_cache = WavesBridge._warm_provider_login_cache
+    beginProviderLogin = WavesBridge.beginProviderLogin
+
+    def _set_login_busy(self, provider_id: str, value: bool) -> None:
+        self._set_busy(value)
 
     def _set_busy(self, value: bool) -> None:
         self._busy.append(value)
@@ -190,6 +247,10 @@ class _PkceStub:
 
 
 def _complete(stub: _PkceStub, url: str = "https://tidal.com/cb?code=x") -> None:
+    if url.strip():
+        WavesBridge.beginLogin.__get__(stub, _PkceStub)()
+        stub._busy.clear()
+        stub._statuses.clear()
     WavesBridge.completeLogin.__get__(stub, _PkceStub)(url)
 
 

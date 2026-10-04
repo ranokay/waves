@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import contextmanager
-from threading import Lock
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from threading import Lock, RLock, local
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -35,6 +36,10 @@ class _QuietCatalogLog:
 
     def debug(self, *_args, **_values) -> None:
         return None
+
+
+class _CatalogThreadState(local):
+    epoch: int | None = None
 
 
 class AppleCatalogUnavailable(RuntimeError):
@@ -109,6 +114,9 @@ class AppleProvider(Provider):
             Capability.PREVIEW,
         }
     )
+    public_operations = frozenset(
+        {Capability.SEARCH, Capability.CATALOG, Capability.OPEN_URL, Capability.ART, Capability.PREVIEW}
+    )
     # Apple's catalog answers artists, albums, tracks and playlists; it has no
     # videos or mixes, so its search group carries no such buckets and the
     # page's videos/mixes filters never show its head.
@@ -176,6 +184,8 @@ class AppleProvider(Provider):
                 "apple_quarantine_keep",
             ),
             status_kind=StatusKind.SETUP,
+            link_hosts=("music.apple.com",),
+            login_flow="setup",
         )
 
     def __init__(self, catalog=None, catalog_factory=None) -> None:
@@ -183,6 +193,9 @@ class AppleProvider(Provider):
         self._catalog_factory = catalog_factory or self._create_catalog
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_lock = Lock()
+        self._catalog_cache_lock = RLock()
+        self._catalog_epoch = 0
+        self._catalog_thread = _CatalogThreadState()
         self._objects: dict[str, dict[str, dict]] = {
             "artist": {},
             "album": {},
@@ -221,6 +234,36 @@ class AppleProvider(Provider):
         # one every fetch builds and closes its own stack.
         self._fetch_scoped = False
         self._fetch_stack: AppleFetchSession | None = None
+
+    def catalog_context(self) -> AbstractContextManager[None]:
+        """Capture this dispatch's cache epoch before its worker can be delayed.
+
+        Nested service/translation calls retain their outer dispatch's epoch.
+        The scope carries no resource ownership and holds no lock while work
+        runs; only individual cache reads/writes share the invalidation lock.
+        """
+        with self._catalog_cache_lock:
+            outer = self._catalog_thread.epoch
+            epoch = self._catalog_epoch if outer is None else outer
+        return self._catalog_scope(epoch)
+
+    @contextmanager
+    def _catalog_scope(self, epoch: int) -> Iterator[None]:
+        outer = self._catalog_thread.epoch
+        if outer is None:
+            self._catalog_thread.epoch = epoch
+        try:
+            yield
+        finally:
+            self._catalog_thread.epoch = outer
+
+    def invalidate_catalog_context(self) -> None:
+        """Forget catalog results without closing a shared client or fetch loop."""
+        with self._catalog_cache_lock:
+            self._catalog_epoch += 1
+            for objects in self._objects.values():
+                objects.clear()
+            self._complete.clear()
 
     @property
     def wrapper_available(self) -> bool:
@@ -378,26 +421,27 @@ class AppleProvider(Provider):
 
     def search(self, needle: str) -> dict:
         """Return Apple's public catalog matches as complete Waves row dictionaries."""
-        try:
-            response = self._run(self._search(needle))
-            results = response.get("results") or {}
-            artist_resources = self._resources(results, "artists")
-            artist_ids = {
-                str(self._attributes(item).get("name") or "").casefold(): self._id(item.get("id"))
-                for item in artist_resources
-                if self._attributes(item).get("name") and item.get("id")
-            }
-            return {
-                "artists": [self._artist_row(item) for item in artist_resources],
-                "albums": [self._album_row(item, artist_ids) for item in self._resources(results, "albums")],
-                "tracks": [self._track_row(item, artist_ids) for item in self._resources(results, "songs")],
-                "videos": [],
-                "playlists": [self._playlist_row(item) for item in self._resources(results, "playlists")],
-                "mixes": [],
-                "top": None,
-            }
-        except Exception as exc:
-            raise AppleCatalogUnavailable from exc
+        with self.catalog_context():
+            try:
+                response = self._run(self._search(needle))
+                results = response.get("results") or {}
+                artist_resources = self._resources(results, "artists")
+                artist_ids = {
+                    str(self._attributes(item).get("name") or "").casefold(): self._id(item.get("id"))
+                    for item in artist_resources
+                    if self._attributes(item).get("name") and item.get("id")
+                }
+                return {
+                    "artists": [self._artist_row(item) for item in artist_resources],
+                    "albums": [self._album_row(item, artist_ids) for item in self._resources(results, "albums")],
+                    "tracks": [self._track_row(item, artist_ids) for item in self._resources(results, "songs")],
+                    "videos": [],
+                    "playlists": [self._playlist_row(item) for item in self._resources(results, "playlists")],
+                    "mixes": [],
+                    "top": None,
+                }
+            except Exception as exc:
+                raise AppleCatalogUnavailable from exc
 
     @staticmethod
     def _resources(results: dict, kind: str) -> list[dict]:
@@ -523,9 +567,14 @@ class AppleProvider(Provider):
         # fetched object itself (row_for on a get_object result) passes the
         # identical dict back and must preserve its marker, or a legitimately
         # empty collection refetches on every read.
-        if raw_id and self._objects[kind].get(raw_id) is not item:
-            self._objects[kind][raw_id] = item
-            self._complete.discard((kind, raw_id))
+        with self.catalog_context(), self._catalog_cache_lock:
+            if (
+                self._catalog_thread.epoch == self._catalog_epoch
+                and raw_id
+                and self._objects[kind].get(raw_id) is not item
+            ):
+                self._objects[kind][raw_id] = item
+                self._complete.discard((kind, raw_id))
         return self._id(raw_id)
 
     def _artist_row(self, item: dict) -> dict:
@@ -656,15 +705,16 @@ class AppleProvider(Provider):
         not Apple's grammar or the item is gone. The bridge builds the page
         payload from the resolved resource.
         """
-        parsed = self.parse_apple_url(url)
-        if parsed is None:
-            return None
-        kind, raw_id, _song_id = parsed
-        try:
-            item = self.get_object(kind, raw_id)
-        except Exception:
-            return None
-        return {"kind": kind, "item": item}
+        with self.catalog_context():
+            parsed = self.parse_apple_url(url)
+            if parsed is None:
+                return None
+            kind, raw_id, _song_id = parsed
+            try:
+                item = self.get_object(kind, raw_id)
+            except Exception:
+                return None
+            return {"kind": kind, "item": item}
 
     @staticmethod
     def parse_apple_url(url: str) -> tuple[str, str, str | None] | None:
@@ -678,7 +728,8 @@ class AppleProvider(Provider):
             parsed = urlparse(str(url or ""))
         except Exception:
             return None
-        if "apple.com" not in (parsed.hostname or ""):
+        host = (parsed.hostname or "").lower()
+        if host != "music.apple.com" and not host.endswith(".music.apple.com"):
             return None
         parts = [seg for seg in parsed.path.split("/") if seg]
         if len(parts) < 3:
@@ -695,29 +746,34 @@ class AppleProvider(Provider):
         a miss refetches on a worker exactly like the TIDAL _objs dance.
         """
         raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
-        item = self._objects.get(kind, {}).get(raw_id)
+        with self._catalog_cache_lock:
+            item = self._objects.get(kind, {}).get(raw_id)
         return item if isinstance(item, dict) else None
 
     def get_object(self, kind: str, raw_id: str) -> object:
-        raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
-        cached = self._objects.get(kind, {}).get(raw_id)
-        if cached is not None and ((kind, raw_id) in self._complete or self._is_complete(kind, cached)):
-            return cached
-        if kind == "album":
-            item = self._first_data(self._run(self._fetch_album(raw_id)))
-        elif kind == "artist":
-            item = self._first_data(self._run(self._fetch_artist(raw_id)))
-        elif kind == "playlist":
-            item = self._first_data(self._run(self._fetch_playlist(raw_id)))
-        elif kind == "track":
-            item = self._first_data(self._run(self._fetch_song(raw_id)))
-        else:
-            raise KeyError(kind)
-        if not isinstance(item, dict) or not item.get("id"):
-            raise KeyError(raw_id)
-        self._objects[kind][raw_id] = item
-        self._complete.add((kind, raw_id))
-        return item
+        with self.catalog_context():
+            raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
+            with self._catalog_cache_lock:
+                cached = self._objects.get(kind, {}).get(raw_id)
+                if cached is not None and ((kind, raw_id) in self._complete or self._is_complete(kind, cached)):
+                    return cached
+            if kind == "album":
+                item = self._first_data(self._run(self._fetch_album(raw_id)))
+            elif kind == "artist":
+                item = self._first_data(self._run(self._fetch_artist(raw_id)))
+            elif kind == "playlist":
+                item = self._first_data(self._run(self._fetch_playlist(raw_id)))
+            elif kind == "track":
+                item = self._first_data(self._run(self._fetch_song(raw_id)))
+            else:
+                raise KeyError(kind)
+            if not isinstance(item, dict) or not item.get("id"):
+                raise KeyError(raw_id)
+            with self._catalog_cache_lock:
+                if self._catalog_thread.epoch == self._catalog_epoch:
+                    self._objects[kind][raw_id] = item
+                    self._complete.add((kind, raw_id))
+            return item
 
     @staticmethod
     def _has_view_data(views: object) -> bool:
@@ -900,15 +956,20 @@ class AppleProvider(Provider):
         ``relationships.tracks.data``; entries without attributes are
         re-fetched individually. Artists read through :meth:`artist_page`.
         """
-        if isinstance(obj, dict) and obj.get("_apple_kind") == "artist":
-            page = self.artist_page(obj["item"])
-            return list(page.get("tracks") or [])
-        item = self._unwrap(obj)
-        if not isinstance(item, dict):
-            return []
-        tracks = self._relationship_items(item, "tracks")
-        label = str(item.get("type") or "collection").removesuffix("s") or "collection"
-        return self._track_rows(tracks, label)
+        with self.catalog_context():
+            if isinstance(obj, dict) and obj.get("_apple_kind") == "artist":
+                page = self.artist_page(obj["item"])
+                return list(page.get("tracks") or [])
+            item = self._unwrap(obj)
+            if not isinstance(item, dict):
+                return []
+            tracks = self._relationship_items(item, "tracks")
+            label = str(item.get("type") or "collection").removesuffix("s") or "collection"
+            return self._track_rows(tracks, label)
+
+    def collection_rows(self, obj, include_videos: bool = True) -> list:
+        """Apple collection items already are the complete Waves row vocabulary."""
+        return self.collection_items(obj, include_videos=include_videos)
 
     def _track_rows(self, resources: list[dict], label: str = "collection") -> list[dict]:
         """Listed track entries as Waves rows; an unresolvable one fails loudly.
@@ -917,20 +978,21 @@ class AppleProvider(Provider):
         and a failure raises AppleCollectionIncomplete: a collection missing
         an item it listed is never handed on as complete.
         """
-        rows: list[dict] = []
-        for res in resources:
-            if not isinstance(res, dict) or not res.get("id"):
-                continue
-            if not self._attributes(res).get("name"):
-                try:
-                    res = self.get_object("track", str(res.get("id")))
-                except Exception as exc:
-                    logger.warning("Apple could not resolve a listed track: %s", res.get("id"))
-                    raise AppleCollectionIncomplete(label) from exc
-                if not isinstance(res, dict):
-                    raise AppleCollectionIncomplete(label)
-            rows.append(self._track_row(res, {}))
-        return rows
+        with self.catalog_context():
+            rows: list[dict] = []
+            for res in resources:
+                if not isinstance(res, dict) or not res.get("id"):
+                    continue
+                if not self._attributes(res).get("name"):
+                    try:
+                        res = self.get_object("track", str(res.get("id")))
+                    except Exception as exc:
+                        logger.warning("Apple could not resolve a listed track: %s", res.get("id"))
+                        raise AppleCollectionIncomplete(label) from exc
+                    if not isinstance(res, dict):
+                        raise AppleCollectionIncomplete(label)
+                rows.append(self._track_row(res, {}))
+            return rows
 
     @classmethod
     def _relationship_items(cls, item: dict, kind: str) -> list[dict]:
@@ -955,44 +1017,49 @@ class AppleProvider(Provider):
         views omit still land as albums. Entries without a name never
         become rows.
         """
-        attrs = self._attributes(artist_item)
-        albums: list[dict] = []
-        singles: list[dict] = []
-        tracks: list[dict] = []
-        seen: set[str] = set()
-        artist_ids = {
-            str(attrs.get("name") or "").casefold(): self._id(artist_item.get("id")) if artist_item.get("id") else ""
-        }
-        views = artist_item.get("views") or {}
-        if isinstance(views, dict):
-            for view_name, view in views.items():
-                view_data = (view or {}).get("data") if isinstance(view, dict) else None
-                if isinstance(view_data, list):
-                    self._sort_artist_resources(view_data, str(view_name), albums, singles, tracks, artist_ids, seen)
-        relationships = artist_item.get("relationships") or {}
-        for key, rel in relationships.items():
-            if not isinstance(rel, dict):
-                continue
-            data = rel.get("data")
-            items = data if isinstance(data, list) else []
-            rel_views = rel.get("views") if isinstance(rel.get("views"), dict) else None
-            if rel_views:
-                for view_name, view in rel_views.items():
+        with self.catalog_context():
+            attrs = self._attributes(artist_item)
+            albums: list[dict] = []
+            singles: list[dict] = []
+            tracks: list[dict] = []
+            seen: set[str] = set()
+            artist_ids = {
+                str(attrs.get("name") or "").casefold(): self._id(artist_item.get("id"))
+                if artist_item.get("id")
+                else ""
+            }
+            views = artist_item.get("views") or {}
+            if isinstance(views, dict):
+                for view_name, view in views.items():
                     view_data = (view or {}).get("data") if isinstance(view, dict) else None
                     if isinstance(view_data, list):
                         self._sort_artist_resources(
                             view_data, str(view_name), albums, singles, tracks, artist_ids, seen
                         )
-            self._sort_artist_resources(items, str(key), albums, singles, tracks, artist_ids, seen)
-        return {
-            "id": self._id(artist_item.get("id")),
-            "name": str(attrs.get("name") or ""),
-            "art": self._art(attrs, 320),
-            "bio": "",
-            "albums": albums,
-            "eps": singles,
-            "tracks": tracks,
-        }
+            relationships = artist_item.get("relationships") or {}
+            for key, rel in relationships.items():
+                if not isinstance(rel, dict):
+                    continue
+                data = rel.get("data")
+                items = data if isinstance(data, list) else []
+                rel_views = rel.get("views") if isinstance(rel.get("views"), dict) else None
+                if rel_views:
+                    for view_name, view in rel_views.items():
+                        view_data = (view or {}).get("data") if isinstance(view, dict) else None
+                        if isinstance(view_data, list):
+                            self._sort_artist_resources(
+                                view_data, str(view_name), albums, singles, tracks, artist_ids, seen
+                            )
+                self._sort_artist_resources(items, str(key), albums, singles, tracks, artist_ids, seen)
+            return {
+                "id": self._id(artist_item.get("id")),
+                "name": str(attrs.get("name") or ""),
+                "art": self._art(attrs, 320),
+                "bio": "",
+                "albums": albums,
+                "eps": singles,
+                "tracks": tracks,
+            }
 
     def _sort_artist_resources(
         self,
@@ -1034,15 +1101,16 @@ class AppleProvider(Provider):
 
     def row_for(self, kind: str, item: dict) -> dict:
         """One catalog resource as the Waves row dict the pages render."""
-        if kind == "artist":
-            return self._artist_row(item)
-        if kind == "album":
-            return self._album_row(item, {})
-        if kind == "track":
-            return self._track_row(item, {})
-        if kind == "playlist":
-            return self._playlist_row(item)
-        raise KeyError(kind)
+        with self.catalog_context():
+            if kind == "artist":
+                return self._artist_row(item)
+            if kind == "album":
+                return self._album_row(item, {})
+            if kind == "track":
+                return self._track_row(item, {})
+            if kind == "playlist":
+                return self._playlist_row(item)
+            raise KeyError(kind)
 
     def user_collections(self) -> dict | None:
         return None
@@ -1536,7 +1604,7 @@ class AppleProvider(Provider):
         album_artist_id = ""
         album_id = self._album_id(item if isinstance(item, dict) else {}, attrs)
         if album_id:
-            album_raw = self._objects.get("album", {}).get(album_id.removeprefix(f"{CTX_APPLE}:"))
+            album_raw = self.cached("album", album_id)
             if isinstance(album_raw, dict):
                 maybe = self._attributes(album_raw)
                 if isinstance(maybe, dict):

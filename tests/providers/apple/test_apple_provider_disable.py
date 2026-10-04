@@ -19,13 +19,18 @@ from types import SimpleNamespace
 from waves.constants import CTX_APPLE
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.queue.bridge import QueueMixin
 from waves.desktop.queue.runtime import JobRuntime
 
 _REASON = "Apple Music was disabled"
 
 
-def _stop_stub() -> SimpleNamespace:
-    stub = SimpleNamespace()
+class _StopStub(QueueMixin):
+    pass
+
+
+def _stop_stub() -> _StopStub:
+    stub = _StopStub()
     stub._jobs = JobRuntime()
     stub._queue_lock = Lock()
     stub._pending_lock = Lock()
@@ -36,6 +41,7 @@ def _stop_stub() -> SimpleNamespace:
     ]
     stub._queue_index = {row["qid"]: row for row in stub._queue}
     stub._qdirty_changed = {}
+    stub._refetch_inflight = set()
     stub._jobs.specs = {1: "apple-spec", 2: "tidal-spec"}
     stub._pending_qids = deque([1, 2])
     stub._jobs.aborts = {3: Event()}
@@ -44,11 +50,13 @@ def _stop_stub() -> SimpleNamespace:
     stub._recovery_poll = SimpleNamespace(stop=lambda: stub.stopped_poll.append("stop"))
     stub.released = []
     stub._release_abandoned_hold = lambda mids: stub.released.extend(mids)
+    stub.credited = []
+    stub._bump_download_groups = lambda *args: stub.credited.append(args)
     stub.emitted = []
     stub.downloadState = SimpleNamespace(emit=lambda mid, state: stub.emitted.append((mid, state)))
     stub.queue_emits = 0
     stub._emit_queue = lambda: setattr(stub, "queue_emits", stub.queue_emits + 1)
-    stub._stop_provider_downloads = WavesBridge._stop_provider_downloads.__get__(stub, SimpleNamespace)
+    stub._stop_provider_downloads = WavesBridge._stop_provider_downloads.__get__(stub, _StopStub)
     return stub
 
 

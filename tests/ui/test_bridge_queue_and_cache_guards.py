@@ -20,12 +20,15 @@ Covered:
 from __future__ import annotations
 
 from threading import Event, Lock
+from types import SimpleNamespace
 
 import pytest
+from providers.fakes import StubProvider
 from support.dispatch_stub import arm_queue
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.queue.runtime import JobRuntime
+from waves.providers import Capability
 
 
 class _Signal:
@@ -57,7 +60,7 @@ class _Stub:
         self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._merge_plans_unbound: dict = {}
-        self._merge_scanned: set = {}
+        self._merge_scanned: set = set()
         self._pending_downloads: list = []
         self._pending_lock = Lock()
         self._queue_lock = Lock()
@@ -216,7 +219,7 @@ def test_clear_queue_aborts_removed_queued_items():
 # logout bumps the library generation so in-flight loads can't
 # re-poison the cache for the next account.
 # --------------------------------------------------------------------------- #
-def test_logout_bumps_lib_gen_and_clears_cache():
+def test_logout_invalidates_only_its_library_generation_and_caches():
     stub = _Stub()
     stub._lib_cache = {
         ("tidal", "albums"): {"items": [1, 2], "offset": 100, "more": True},
@@ -229,7 +232,7 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     stub._home_cache = {"tidal": [{"title": "Recent albums"}]}
     stub._media_lists_cache = {"tidal": (0.0, {"playlists": []}, object())}
     stub._folder_tree = {"tidal": object()}
-    captured = (stub._lib_epoch, stub._lib_gen[("tidal", "albums")])
+    captured = stub._lib_generation(("tidal", "albums"))
     # logout() also resets the browse caches on the current build; provide them
     # so the SUT (the _lib_gen bump) runs regardless of that co-located cleanup.
     stub._browse_root_cache = object()
@@ -254,24 +257,25 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     stub._album_tracks_unrecorded = {"a1"}
     stub._item_fetch_ts = {"item:playlist:p1": 1.0}
 
-    # logout() ends the downloads before it touches the session;
-    # the stop itself is pinned in test_signout_stops_the_queue.
-    stub.stopAll = lambda: None
-    # logout() touches self.tidal.logout/_reset_tidal_session; stub them.
-    calls = {"logout": 0, "reset": 0}
-    stub.tidal = type("T", (), {"logout": lambda self: calls.__setitem__("logout", 1)})()
-    stub._reset_tidal_session = lambda: calls.__setitem__("reset", 1)
+    stub.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities=set(Capability), logged_in=True)}
+    stub._end_provider_context = WavesBridge._end_provider_context.__get__(stub)
+    stub._stop_provider_downloads = lambda provider_id, reason: 0
+    stub._schedule_provider_cache_clear = lambda provider_id: None
+    stub._set_login_busy = lambda provider_id, busy: None
+    stub._start_provider_logout = lambda provider_id: None
+    stub.providerStateChanged = _Signal()
     stub._set_logged_in = lambda v: setattr(stub, "_logged_in", v)
     stub._logged_in = True
 
     _bind(stub, "logout")()
 
-    assert stub._lib_cache == {}, "cache cleared on logout"
+    assert stub._lib_cache == {("fake", "albums"): {"items": [3], "offset": 100, "more": False}}
     assert stub._lib_loading == set()
     assert stub._lib_gen == {}, "per-page counters dropped with the account"
     assert stub._home_cache == {} and stub._media_lists_cache == {}, "no source's pages survive the account"
     assert stub._folder_tree == {}, "nor its folder tree"
-    assert (stub._lib_epoch, 0) != captured, "the epoch moved, so a stale in-flight load is dropped"
+    assert stub._lib_generation(("tidal", "albums")) != captured
+    assert stub._lib_epoch == 0, "another provider must keep its global library generation"
     assert stub._prefetch_key is None and stub._prefetch_claimed is False, "no prefetch survives the account"
     assert stub._prefetch_unrecorded == set(), "a hover-built page of the old account is never recorded for the new one"
     assert stub._album_tracks_inflight == {} and stub._album_tracks_unrecorded == set(), (
@@ -393,6 +397,8 @@ def test_load_more_library_transient_error_keeps_more(monkeypatch):
     stub._logged_in = True
 
     # Make the page fetch raise, and run the worker synchronously.
+    stub.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
+
     def boom(source, category, offset, limit):
         raise RuntimeError("transient network blip")
 
@@ -455,6 +461,10 @@ def _cache_stub(path, user_id):
     stub._page_cache_path = str(path)
     stub._page_cache_lock = Lock()
     stub._cache_user_id = lambda: user_id
+    stub.providers = {
+        pid: SimpleNamespace(account_id=lambda account=account: account, capabilities={Capability.FAVORITES})
+        for pid, account in (("tidal", user_id), ("fake", "fake-account"))
+    }
     stub._browse_root_cache = None
     stub._browse_pages = {}
     stub._artist_cache = {}
@@ -540,3 +550,47 @@ def test_refresh_browse_throttles_and_falls_back():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_an_old_library_page_cannot_paint_after_a_new_load_begins():
+    stub = _Stub()
+    stub._lib_cache = {("tidal", "albums"): {"items": [], "offset": 100, "more": True}}
+    stub.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
+
+    stub._library_page = lambda *args: ([{"id": "old"}], False)
+    stub._dress_library_rows = lambda category, items: items
+    stub._lib_count = lambda category, items: len(items)
+    stub._lib_status = lambda *args: "old status"
+    stub.libraryMore = _Signal()
+    stub._catalogEvent = _Signal()
+    pending = []
+    stub.threadpool = SimpleNamespace(start=pending.append)
+    _bind(stub, "loadMoreLibrary")("tidal", "albums")
+    pending.pop().fn()
+    assert len(stub._catalogEvent.emits) == 1
+    stub._lib_start(("tidal", "albums"))
+    stub._status = "new load"
+    WavesBridge._on_catalog_event(stub, stub._catalogEvent.emits.pop())
+    assert stub.libraryMore.emits == [] and stub._status == "new load"
+
+
+def test_an_old_library_page_cannot_release_a_new_loads_marker():
+    stub = _Stub()
+    key = ("tidal", "albums")
+    stub._lib_cache = {key: {"items": [], "offset": 100, "more": True}}
+
+    stub.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
+
+    def fetch(*args):
+        stub._lib_start(key)
+        stub._lib_loading.add(key)
+        return [], False
+
+    stub._library_page = fetch
+    stub.libraryMore = _Signal()
+    pending = []
+    stub.threadpool = SimpleNamespace(start=pending.append)
+    _bind(stub, "loadMoreLibrary")(*key)
+    pending.pop().fn()
+    assert key in stub._lib_loading and stub.libraryMore.emits == []
+    assert stub._lib_cache[key]["offset"] == 100

@@ -126,12 +126,13 @@ def _cache_bridge(tmp_path):
     b._browse_pages = {}
     b._artist_cache = {}
     b._search_cache = {}
-    b._home_cache = None
+    b._home_cache = {}
     b._page_cache_path = str(tmp_path / "page_cache.json")
     b._search_cache_path = str(tmp_path / "search_cache.json")
     b._page_cache_lock = Lock()
     b.tidal = MagicMock()
     b.tidal.session.user.id = "42"
+    b.providers = {"tidal": SimpleNamespace(account_id=lambda: "42")}
     return b
 
 

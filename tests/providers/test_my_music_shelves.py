@@ -179,8 +179,8 @@ def test_a_signed_in_source_leaves_no_empty_state():
 def test_no_favourites_provider_means_no_empty_state():
     # A registry that could never fill the pane has nothing to say: no dead
     # call to action stands over shelves no provider would ever load. A
-    # FAVORITES provider whose status kind is not a session cannot fill
-    # shelves either (see _provider_can_fill_shelves), so it gets no state.
+    # A setup card without known enable facts cannot offer an operation
+    # action either: its presentation alone grants no shelf readiness.
     from waves.providers import StatusKind
 
     apple = StubProvider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
@@ -210,17 +210,10 @@ def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
     """
     albums = [f"al{i}" for i in range(7)]
 
-    class _Provider:
-        capabilities = frozenset({Capability.FAVORITES})
-        is_logged_in = True
-
+    class _Provider(StubProvider):
         def __init__(self):
+            super().__init__("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)
             self.calls: list = []
-
-        def descriptor(self):
-            from waves.providers import ProviderDescriptor, StatusKind
-
-            return ProviderDescriptor(id="tidal", name="TIDAL", status_kind=StatusKind.SESSION)
 
         def favorites_page(self, kind, offset, limit, order=None):
             self.calls.append(("favorites_page", offset, limit))
@@ -277,17 +270,9 @@ def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C90
     """
     rows = {"tidal": [{"id": "t1"}], "fake": [{"id": "f1"}]}
 
-    class _Provider:
-        capabilities = frozenset({Capability.FAVORITES})
-        is_logged_in = True
-
+    class _Provider(StubProvider):
         def __init__(self, provider_id):
-            self.id = provider_id
-
-        def descriptor(self):
-            from waves.providers import ProviderDescriptor, StatusKind
-
-            return ProviderDescriptor(id=self.id, name=self.id, status_kind=StatusKind.SESSION)
+            super().__init__(provider_id, provider_id, capabilities={Capability.FAVORITES}, logged_in=True)
 
         def favorites_page(self, kind, offset, limit, order=None):
             return list(rows[self.id]), False

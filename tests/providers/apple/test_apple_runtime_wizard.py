@@ -39,6 +39,7 @@ from settings.fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
 from support.paths import REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.lifecycle import provider_contexts
 from waves.desktop.providers.presentation import apple_status
 from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
@@ -824,6 +825,60 @@ def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path):
     assert stub._apple_wrapper_login_result == {"ok": True, "needs_2fa": False, "error": ""}
 
 
+def test_signout_waits_for_an_inflight_guest_post_then_clears_its_session(tmp_path):
+    from threading import Event, Thread
+
+    stub = _bridge_stub(tmp_path, enabled=True)
+    provider = SimpleNamespace(wrapper_logged_in=False)
+    stub.providers["apple"] = provider
+    stub._configure_apple_provider = lambda: None
+    stub._save_settings = lambda: None
+    entered, release, stopped = Event(), Event(), Event()
+    order = []
+    threads = []
+
+    def start(worker):
+        thread = Thread(target=worker.fn)
+        threads.append(thread)
+        thread.start()
+
+    def stop():
+        order.append("stop")
+        stopped.set()
+        return True
+
+    stub.threadpool = SimpleNamespace(start=start)
+    stub._apple_supervisor_for_job = lambda: SimpleNamespace(stop=stop)
+    stub._refresh_apple_wrapper_auth = lambda: setattr(provider, "wrapper_logged_in", True)
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: None)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub.appleRuntimeStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub.appleRuntimeStateChanged = SimpleNamespace(emit=lambda *_args: None)
+
+    def post():
+        entered.set()
+        assert release.wait(3)
+        order.append("post")
+        return {"ok": True, "needs_2fa": False}
+
+    try:
+        WavesBridge._run_apple_wrapper_login(stub, post)
+        assert entered.wait(3)
+        WavesBridge.appleSignOut(stub)
+        assert not stopped.wait(0.05), "cleanup must follow the guest's credential mutation"
+        release.set()
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(3)
+            assert not thread.is_alive()
+
+    assert order == ["post", "stop"]
+    assert provider.wrapper_logged_in is False
+    assert stub._apple_wrapper_login_result["ok"] is None
+    assert stub._apple_wrapper_auth_cache is None
+
+
 def test_refresh_wrapper_auth_signals_error_text_changes(tmp_path, monkeypatch):
     # Error text, not just the signed-in flip, drives the form's last-probe line.
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
@@ -1151,6 +1206,7 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
     stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
+    stub._end_provider_context = lambda pid, _reason: provider_contexts(stub).revoke(pid)
     return stub
 
 

@@ -302,15 +302,25 @@ ApplicationWindow {
   // or the "Finish setup" chip). The first-run presentation is the gate
   // below; this flag drives the non-blocking page variant.
   property bool setupOpen: false
-  // The welcome surface's mode: "cards" (the provider choice) or "tidal"
-  // (the inline sign-in steps). Cancel/Escape returns to the cards; a
+  onSetupOpenChanged: if (!setupOpen && !welcomeDue && root.setupProviderId)
+    root.cancelSetupSignIn()
+  // The welcome surface's mode: "cards" or the selected browser provider's
+  // id. Cancel/Escape returns to the cards; a
   // completed sign-in closes the surface. Session state only, never
   // persisted: starting a sign-in is not a commitment.
   property string setupMode: "cards"
   // The explicit OPEN BROWSER LOGIN click happened in this signing, so the
-  // paste steps (and their field) can appear. Set from onLoginUrlReady,
-  // which only beginLogin emits; nothing else opens a browser.
+  // paste steps (and their field) can appear. Only that provider's current
+  // login URL opens a browser.
   property bool setupUrlOpened: false
+  readonly property string setupProviderId: setupMode === "cards" ? "" : setupMode
+  readonly property string setupProviderName: String(providerCard(setupProviderId).name || "")
+  function providerCard(providerId) {
+    for (var i = 0; i < root.providerCards.length; ++i)
+      if (String(root.providerCards[i].id) === String(providerId))
+        return root.providerCards[i]
+    return ({})
+  }
   // The live Apple light, refreshed on appleStatusChanged; the chip's
   // "can any provider download yet" test reads it.
   property var appleLight: ({})
@@ -325,6 +335,15 @@ ApplicationWindow {
   // that later declares FAVORITES appears in `sources`
   // with its own categories and no QML edit.
   property var myMusicSources: []
+  ListModel {
+    id: libSourceModel
+  }
+  function myMusicSource(providerId) {
+    for (var i = 0; i < root.myMusicSources.length; ++i)
+      if (String(root.myMusicSources[i].id) === providerId)
+        return root.myMusicSources[i]
+    return ({})
+  }
   property var myMusicEmpty: ({})
   // The Library section's shape (ADR 0007): its two views
   // (Saved first, the section's default) and whether a library folder is
@@ -336,15 +355,15 @@ ApplicationWindow {
       signed_in: false
     })
   readonly property bool browseAvailable: !!(root.browseNav && root.browseNav.available)
-  // The browse source's session, not the header's TIDAL flag: the bridge
-  // names the provider that fills the pane, so the call to action follows
-  // the source that would actually load it.
+  // The bridge names the source that can fill Browse; the compatibility
+  // signed_in key reports that operation's readiness.
   readonly property bool browseSignedIn: !!(root.browseNav && root.browseNav.signed_in)
   // The welcome surface's provider cards (identity, copy, live status),
   // composed by the bridge from the descriptors. Re-read at boot and on
   // every flip that moves a session or the Apple light, and again when the
   // surface opens, so a card never states a stale account state.
   property var providerCards: []
+  property var searchOpportunities: []
   function refreshProviderLights() {
     try {
       root.providerLights = waves.providerLights()
@@ -369,8 +388,28 @@ ApplicationWindow {
     // Re-assign only on a real change: the pane's Repeater rebuilds its
     // groups when the array changes, so a setup flip that leaves the
     // sources as they were must not cost the pane its rows and scroll.
-    if (JSON.stringify(next) !== JSON.stringify(root.myMusicSources))
+    if (JSON.stringify(next) !== JSON.stringify(root.myMusicSources)) {
       root.myMusicSources = next
+      // A model row is keyed by provider, so removing one source does not
+      // reconstruct the other source's retained shelves and scroll state.
+      for (var i = 0; i < next.length; ++i) {
+        var id = String(next[i].id)
+        var found = -1
+        for (var j = i; j < libSourceModel.count; ++j)
+          if (libSourceModel.get(j).providerKey === id) {
+            found = j
+            break
+          }
+        if (found < 0)
+          libSourceModel.insert(i, {
+            providerKey: id
+          })
+        else if (found !== i)
+          libSourceModel.move(found, i, 1)
+      }
+      if (libSourceModel.count > next.length)
+        libSourceModel.remove(next.length, libSourceModel.count - next.length)
+    }
     try {
       root.myMusicEmpty = waves.myMusicEmpty()
     } catch (e) {
@@ -387,8 +426,33 @@ ApplicationWindow {
   // so one call keeps the BRIDGE.md rule in one place.
   function refreshProviderSurfaces() {
     root.refreshProviderLights()
+    var previousCards = root.providerCards
     root.refreshProviderCards()
+    // Legacy status notifications also refresh these descriptors. Retire
+    // only providers whose catalog is now gated; public signed-out catalogs
+    // and unrelated groups keep their retained rows and navigation.
+    for (var i = 0; i < root.providerCards.length; ++i) {
+      var card = root.providerCards[i]
+      var readiness = card.readiness || ({})
+      var previous = null
+      for (var j = 0; j < previousCards.length; ++j)
+        if (String(previousCards[j].id) === String(card.id)) {
+          previous = previousCards[j].readiness || ({})
+          break
+        }
+      var changed = previous && (previous.enabled !== readiness.enabled || previous.catalog !== readiness.catalog)
+      if (changed && (readiness.enabled === false || readiness.catalog === "disabled" || readiness.catalog === "sign_in_required" || readiness.catalog === "setup_required"))
+        root.clearProviderViews(String(card.id))
+      else if (previous) {
+        var beforeSearch = (previous.operations || ({})).search || ({})
+        var afterSearch = (readiness.operations || ({})).search || ({})
+        if (beforeSearch.state === "ready" && afterSearch.state !== "ready")
+          root.clearSearchGroup(String(card.id))
+      }
+    }
     root.refreshMyMusicSources()
+    root.searchAvailable = waves.searchEnabled()
+    root.searchOpportunities = waves.searchOpportunities()
     try {
       root.signInStepProviders = waves.providerSignInSteps()
     } catch (e) {
@@ -405,11 +469,19 @@ ApplicationWindow {
       }
     }
   }
-  // First-run welcome: nothing answered and nothing set up yet.
-  readonly property bool welcomeDue: waves.sessionResolved && !signedIn && !waves.appleEnabled && !setupSettings.firstRunAnswered
+  readonly property bool catalogReady: providerCards.some(function (card) {
+    return card.readiness && card.readiness.catalog === "ready"
+  })
+  readonly property bool downloadReady: providerCards.some(function (card) {
+    var readiness = card.readiness || ({})
+    var operation = (readiness.operations || ({})).download || ({})
+    return operation.state === "ready"
+  })
+  // First-run welcome: nothing answered and no provider's catalog is ready.
+  readonly property bool welcomeDue: waves.sessionResolved && !catalogReady && !setupSettings.firstRunAnswered
   // The "Finish setup" chip: onboarding answered, but no provider can
   // download yet, and the user has not dismissed it.
-  readonly property bool downloadsNeedSetup: setupSettings.firstRunAnswered && !signedIn && String(appleLight.state || "") !== "signed_in" && !setupSettings.setupChipDismissed
+  readonly property bool downloadsNeedSetup: setupSettings.firstRunAnswered && !downloadReady && !setupSettings.setupChipDismissed
   // A newer release found by the updater (startup check or a manual one on
   // the Settings page). Drives the gold notice in the status bar's right
   // slot so the news is visible from any page, not just Settings.
@@ -680,13 +752,9 @@ ApplicationWindow {
     if (next !== null)
       root.artistsById = next
   }
-  // The one rule for "a provider that can issue a search is live": the
-  // search row and the build hint both follow it (the row is live for a
-  // signed-out Apple-only user too). The bridge answers the generic half
-  // (any registered SEARCH provider that is on), so a third
-  // provider alone keeps the row live; the shipped two ride their reactive
-  // flags so a sign-in or switch-off flips the row at once.
-  readonly property bool searchAvailable: root.signedIn || root.appleEnabled || waves.searchEnabled()
+  // Refreshed with provider surfaces on neutral and legacy state signals;
+  // signed-out catalog access is the provider's readiness decision.
+  property bool searchAvailable: false
   // The query as it is sent: every run of whitespace (a pasted line break
   // or tab the single-line field never shows) becomes one space.
   function searchQueryText(t) {
@@ -2500,6 +2568,7 @@ ApplicationWindow {
     if (browseOpen)
       return {
         v: "browse",
+        provider: root.browseProvider(browsePage, browsePageKey),
         key: browsePageKey,
         page: browsePage,
         stack: browseStack.slice(),
@@ -3072,61 +3141,39 @@ ApplicationWindow {
   function dismissSetupChip() {
     setupSettings.setupChipDismissed = true
   }
-  // The welcome surface was answered: persist the answer, route the choice,
-  // and close the surface. TIDAL swaps the SAME surface to its inline
-  // sign-in steps and stays up: the first run is not answered until the
-  // sign-in succeeds, so a cancel leaves nothing behind.
-  // Apple enables and the existing wizard routing takes over; Skip just
-  // lands in the app.
+  // Browser sign-in stays on this surface until completion or cancellation;
+  // a setup flow is an explicit provider action and answers the choice.
   function answerWelcome(choice) {
-    if (choice === "tidal") {
-      setupMode = "tidal"
+    var id = String(choice || "")
+    if (root.signInStepProviders.indexOf(id) >= 0) {
+      setupMode = id
       setupUrlOpened = false
       return
     }
     setupSettings.firstRunAnswered = true
     setupOpen = false
     setupCards()
-    if (choice === "apple") {
-      // Choosing the card means set it up, whether Apple was already on
-      // (a re-opened welcome page after Skip) or not: the enable's own
-      // wizard request only fires on a real flip, so an already-enabled
-      // Apple would otherwise close the surface and open nothing.
-      var wasEnabled = root.appleEnabled
-      waves.applySettings({
-        "apple_enabled": true
-      })
-      if (wasEnabled)
-        root.openAppleSetup("")
-    }
+    if (id)
+      waves.providerAction(id, "setup")
   }
-  // One reset for every path that leaves the TIDAL steps: the mode and the
-  // paste-field latch fall back together, so no exit can leave a late URL
-  // opening a browser or a stale "REOPEN" step behind.
-  function setupCards() {
+  // Leaving an unfinished flow invalidates its worker and pending decoder.
+  // A successful completion has already committed the session.
+  function setupCards(completed) {
+    if (root.setupProviderId && completed !== true)
+      waves.cancelProviderLogin(root.setupProviderId)
     setupMode = "cards"
     setupUrlOpened = false
   }
-  // Cancel/Escape from the TIDAL sign-in steps: back to the provider cards.
+  // Cancel/Escape from browser sign-in: back to the provider cards.
   // The abandoned browser flow is not retried or reported, and the surface
   // stays exactly where it was (the first-run gate or the welcome page).
   function cancelSetupSignIn() {
     setupCards()
   }
-  // The TIDAL sign-in entry points (Settings -> Providers, the Search and
-  // Browse empty states, My Music's empty state) open the welcome page on
-  // the same inline steps. No browser opens here: the steps' own button is
-  // the only caller of beginLogin.
-  function openSetupSignIn() {
-    root.openProviderSignIn("tidal")
-  }
   // A completed sign-in answers the first run, closes the welcome/sign-in
   // surface and lands on Search with its field focused.
   function finishSetupSignIn() {
-    // No early return on a cancelled mode: a login that lands after the
-    // user left the steps still closes the surface and answers the first
-    // run, or a completed sign-in would strand the welcome page.
-    setupCards()
+    setupCards(true)
     setupOpen = false
     setupSettings.firstRunAnswered = true
     openSearch()
@@ -4129,11 +4176,11 @@ ApplicationWindow {
     enabled: root.videoNow !== null
     onActivated: root.closeVideo()
   }
-  // The inline TIDAL sign-in's keyboard exit, the same as its CANCEL
+  // The inline browser sign-in's keyboard exit, the same as its CANCEL
   // button. Only while the welcome surface is the one on screen.
   Shortcut {
     sequence: "Esc"
-    enabled: root.setupMode === "tidal" && (root.setupOpen || root.welcomeDue) && root.peekNow === null && root.videoNow === null
+    enabled: root.setupProviderId !== "" && (root.setupOpen || root.welcomeDue) && root.peekNow === null && root.videoNow === null
     onActivated: root.cancelSetupSignIn()
   }
   Shortcut {
@@ -5529,25 +5576,99 @@ ApplicationWindow {
     // surface on the steps this build ships for it. No verb branch here.
     waves.providerAction(provider, String(empty.action || ""))
   }
-  // The providers whose sign-in the welcome surface's inline steps complete
-  // (the bridge's wiring; the steps are QML components, see
-  // waves.providerSignInSteps). A provider without one lands on the cards,
-  // where its own card action lives, rather than a blank page.
+  // Browser-flow providers share the same inline steps and supply their own
+  // names and auth entry points. Setup flows remain provider actions.
   property var signInStepProviders: []
   function openProviderSignIn(providerId) {
     openSetupPage()
     var id = String(providerId || "")
     setupMode = root.signInStepProviders.indexOf(id) >= 0 ? id : "cards"
   }
-  // The account flipped: every keep-alive My Music pane holds the previous
-  // account's rows for its whole life, so the flip is the one thing that
-  // clears them (per source group, each of which owns its own models).
-  function clearMyMusicPanes() {
-    var groups = root.libGroupList()
-    for (var i = 0; i < groups.length; ++i)
-      groups[i].clearPanes()
-    // No category reset: the pane stays where the user left it, and the
-    // primary group's mirror keeps root.libraryCategory in step.
+  // Identity resolution stays in Python, including bare legacy TIDAL IDs.
+  function mediaProvider(value) {
+    if (!value)
+      return ""
+    var descriptor = waves.providerDescriptor(String(value))
+    return descriptor ? String(descriptor.id || "") : ""
+  }
+  function browseProvider(page, key) {
+    if (page && page.header && page.header.id)
+      return root.mediaProvider(page.header.id)
+    if (String(key || "").indexOf("item:") === 0)
+      return root.mediaProvider(String(key).split(":").slice(2).join(":"))
+    return String(root.browseNav.provider || "")
+  }
+  function snapshotProvider(snapshot) {
+    if (snapshot.v === "artist")
+      return root.mediaProvider(snapshot.id)
+    if (snapshot.v === "browse")
+      return String(snapshot.provider || root.browseProvider(snapshot.page, snapshot.key))
+    return ""
+  }
+  function withoutProviderKeys(values, providerId) {
+    var next = ({})
+    for (var key in values)
+      if (root.mediaProvider(key) !== providerId)
+        next[key] = values[key]
+    return next
+  }
+  // An account/enable change retires only that provider's retained rows and
+  // history. Other providers keep their models, folds and saved pages.
+  function clearProviderViews(providerId) {
+    if (root.mediaProvider(root.previewId) === providerId)
+      root.stopPreview()
+    root.clearSearchGroup(providerId)
+    var group = root.libGroupFor(providerId)
+    if (group)
+      group.clearPanes()
+    root.navHistory = root.navHistory.filter(function (snapshot) {
+      return root.snapshotProvider(snapshot) !== providerId
+    })
+    root.navForwardHistory = root.navForwardHistory.filter(function (snapshot) {
+      return root.snapshotProvider(snapshot) !== providerId
+    })
+    if (root.searchSaved && root.searchSaved.artistData && root.mediaProvider(root.searchSaved.artistData.id) === providerId)
+      root.searchSaved = null
+    if (root._artistRestoreState && root.mediaProvider(root._artistRestoreState.id) === providerId) {
+      root._artistRestoreState = null
+      root._navRestoring = false
+    }
+    root.trackCache = root.withoutProviderKeys(root.trackCache, providerId)
+    root.playlistTrackCache = root.withoutProviderKeys(root.playlistTrackCache, providerId)
+    root.artistsById = root.withoutProviderKeys(root.artistsById, providerId)
+    root.folderRemainMap = root.withoutProviderKeys(root.folderRemainMap, providerId)
+    if (root.artistData && root.mediaProvider(root.artistData.id) === providerId) {
+      root.artistData = null
+      root.artistOpen = false
+      root.artistLoading = false
+      root._navRestoring = false
+    }
+    root.browseStack = root.browseStack.filter(function (page) {
+      return root.browseProvider(page, "") !== providerId
+    })
+    if (root.browseProvider(root.browsePage, root.browsePageKey) !== providerId)
+      return
+    root.browseSections = []
+    root.browseChips = {
+      genres: [],
+      moods: [],
+      decades: []
+    }
+    root.browsePage = null
+    root.browsePageKey = ""
+    root.browseTitleHint = ""
+    root.browseArtHint = ""
+    root.browseStack = []
+    root.browseError = false
+    root.browsePageError = false
+    root.browsePageLoading = false
+    root.browseLoading = false
+    root._navRestoring = false
+    root._browseParked = null
+    root.browseHighlightId = ""
+    root.catPendingDl = ""
+    root.catPendingPv = ""
+    root.catDlPrompt = null
   }
 
   Connections {
@@ -5557,8 +5678,16 @@ ApplicationWindow {
       // search-group clearing both read the same fresh light.
       root.appleLight = waves.appleStatus()
       root.refreshProviderSurfaces()
-      if (waves.appleStatus().state === "off")
-        root.clearSearchGroup("apple")
+    }
+    function onProviderStateChanged(providerId) {
+      var id = String(providerId)
+      root.clearProviderViews(id)
+      root.refreshProviderSurfaces()
+      root.refreshBrowseNav()
+      if (root.browseOpen && root.browseSignedIn && String(root.browseNav.provider) === id) {
+        root.browseLoading = true
+        waves.loadBrowse()
+      }
     }
     function onSetupRequested() {
       root.openSetupPage()
@@ -5678,69 +5807,9 @@ ApplicationWindow {
       root.ffmpegBlocked = true
     }
     function onLoggedInChanged() {
-      // The header's lights follow the session, and so does Browse's
-      // answer: the TIDAL mark flips with the flag every catalog read
-      // moves with, and the landing's call to action retires with it.
-      // The welcome's cards follow the same flips.
+      // Compatibility notification: lifecycle invalidation is provider-scoped.
       root.refreshProviderSurfaces()
       root.refreshBrowseNav()
-      // Drop every QML-side copy of Browse data when the account flips:
-      // the landing embeds personalized For You rows, and the backend's
-      // own logout cache-clear can't reach these copies. Re-fetch right
-      // away if the user is sitting on the Browse tab.
-      root.browseSections = []
-      root.browseChips = {
-        genres: [],
-        moods: [],
-        decades: []
-      }
-      root.browsePage = null
-      root.browsePageKey = ""
-      root.browseTitleHint = ""
-      root.browseArtHint = ""
-      root.browseStack = []
-      root.browseError = false
-      root.browsePageError = false
-      root.browsePageLoading = false
-      root.browseLoading = false
-      // Including a landing payload parked mid-handover: it is the
-      // previous account's, and applying it after the reveal would put
-      // their personalized rows back on screen.
-      root._browseParked = null
-      // History snapshots hold page payloads (personalized rows) and
-      // artist ids from the previous account, drop them too (both
-      // stacks: a stale forward entry would otherwise replay the old
-      // account's page when the forward button is pressed).
-      root.navHistory = []
-      root.navForwardHistory = []
-      root._navRestoring = false
-      root.browseHighlightId = ""
-      // A DOWNLOAD ALL or PREVIEW whose resolve the logout generation
-      // bump threw away is still armed here. Left alone, the next resolve
-      // of the same category path after signing back in consumes it: a
-      // confirm nobody asked for, or (with the confirm muted) the whole
-      // category queued on the new account off a click made on the old.
-      root.catPendingDl = ""
-      root.catPendingPv = ""
-      root.catDlPrompt = null
-      // The keep-alive My Music panes hold the previous account's
-      // favourites for their whole life; only the account flip may
-      // clear them (switching categories never does).
-      root.clearMyMusicPanes()
-      // The saved Search drill-in can hold the previous account's artist
-      // page, restorable from the Search tab: same class of leak as the
-      // history stacks dropped above.
-      root.searchSaved = null
-      // The folder badges are the previous account's too.
-      root.folderRemainMap = ({})
-      if (root.signedIn && root.browseOpen) {
-        root.browseLoading = true
-        waves.loadBrowse()
-      }
-      // A sign-in that lands while the welcome surface is on its TIDAL
-      // steps is finished there: close it and land on Search.
-      if (root.signedIn)
-        root.finishSetupSignIn()
     }
     function onBrowseLoaded(p) {
       root.markRender("browse render")
@@ -6236,13 +6305,17 @@ ApplicationWindow {
       root.previewNowTrackId = trackId
       root.previewNowArtists = artists || []
     }
-    function onLoginUrlReady(url) {
+    function onProviderLoginUrlReady(providerId, url) {
       // Only the inline steps are listening: a URL landing after CANCEL
       // must not open a browser or latch the paste field.
-      if (root.setupMode !== "tidal")
+      if (!root.setupProviderId || String(providerId) !== root.setupProviderId || (!root.setupOpen && !root.welcomeDue))
         return
       Qt.openUrlExternally(url)
       root.setupUrlOpened = true
+    }
+    function onProviderLoginFinished(providerId, ok) {
+      if (ok && root.setupProviderId === String(providerId))
+        root.finishSetupSignIn()
     }
     function onSignInRequested(providerId) {
       root.openProviderSignIn(providerId)
@@ -6621,23 +6694,7 @@ ApplicationWindow {
                 }
               }
 
-              // A genuine TIDAL link auto-resolves once it has decoded in: host must
-              // be tidal.com or any *.tidal.com subdomain (e.g. listen.tidal.com) AND
-              // have a path. Lookalikes (eviltidal.com, tidal.com.evil.com) never fire.
-              function isTidalUrl(s) {
-                var u = ("" + s).trim().replace(/^https?:\/\//i, "")
-                var slash = u.indexOf("/")
-                if (slash < 1)
-                  return false
-                // need a host and a path
-                var host = u.substring(0, slash).toLowerCase().replace(/^[^@]*@/, "").replace(/:\d+$/, "")
-                var path = u.substring(slash + 1)
-                if (!path.length)
-                  return false
-                // need something to resolve
-                return host === "tidal.com" || /\.tidal\.com$/.test(host)
-              }
-              // Matrix-decrypt paste-in; a pasted TIDAL link auto-searches once
+              // Matrix-decrypt paste-in; an allowlisted provider link auto-searches once
               // settled. A paste-glyph click arms the same auto-search for plain
               // text too: the button means "search this", while a
               // bare Ctrl+V still only fills the field so a term can be edited.
@@ -6669,7 +6726,7 @@ ApplicationWindow {
                 onDecoded: function (text) {
                   var armed = submitArmed
                   submitArmed = false
-                  if (!searchBox.isTidalUrl(text) && !armed)
+                  if (!waves.isProviderLink(text) && !armed)
                     return
                   if (seqAtPaste !== root._navSeq || root.browseOpen || root.libraryOpen || root.settingsOpen)
                     return
@@ -7135,24 +7192,16 @@ ApplicationWindow {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 textFormat: Text.PlainText
-                text: "Browse the TIDAL catalog"
+                text: String(root.browseNav.message || "Browse")
                 color: root.textHi
                 font.pixelSize: 22
-              }
-              Text {
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.WordWrap
-                textFormat: Text.PlainText
-                text: "Sign in to explore playlists, genres, moods and new releases."
-                color: root.textLo
-                font.pixelSize: 13
               }
               GateAction {
                 objectName: "browseSignInAction"
                 width: parent.width
-                label: "Sign in to TIDAL"
-                onClicked: root.openSetupSignIn()
+                label: String(root.browseNav.action_label || "")
+                visible: String(root.browseNav.action || "") !== ""
+                onClicked: waves.providerAction(String(root.browseNav.provider || ""), String(root.browseNav.action || ""))
               }
             }
           }
@@ -7891,13 +7940,10 @@ ApplicationWindow {
           }
         }
 
-        // The empty state's one-click setup actions: instead of a
-        // blank page, offer the click that would fill it. Apple search
-        // needs no account; TIDAL needs a session. Each action retires
-        // itself the moment its provider is set up.
+        // The bridge names each provider's actionable search opportunity.
         Item {
           objectName: "emptySetupCtas"
-          visible: !root.hasResults && emptyHint.visible && (!root.appleEnabled || !root.signedIn)
+          visible: !root.hasResults && emptyHint.visible && root.searchOpportunities.length > 0
           width: parent.width
           height: emptyCtaCol.height
           Column {
@@ -7905,23 +7951,15 @@ ApplicationWindow {
             anchors.horizontalCenter: parent.horizontalCenter
             width: Math.min(parent.width, 460)
             spacing: 10
-            GateAction {
-              objectName: "emptyAppleCta"
-              width: parent.width
-              visible: !root.appleEnabled
-              label: "Enable Apple Music — search works without an account"
-              // The bridge owns the rest of the enable flow
-              // (search row, status light, the in-place wizard).
-              onClicked: waves.applySettings({
-                "apple_enabled": true
-              })
-            }
-            GateAction {
-              objectName: "emptyTidalCta"
-              width: parent.width
-              visible: !root.signedIn
-              label: "Sign in to TIDAL"
-              onClicked: root.openSetupSignIn()
+            Repeater {
+              model: root.searchOpportunities
+              delegate: GateAction {
+                required property var modelData
+                objectName: "emptyProviderCta_" + String(modelData.provider)
+                width: emptyCtaCol.width
+                label: String(modelData.action_label || "")
+                onClicked: waves.providerAction(String(modelData.provider), String(modelData.action))
+              }
             }
           }
         }
@@ -8445,7 +8483,7 @@ ApplicationWindow {
       // The Apple wizard's own skip: setup is deferred, not undone.
       // Apple stays enabled (search and previews keep working) and the
       // app lands on Search with the field focused, the same useful
-      // landing a completed TIDAL sign-in gets.
+      // landing a completed provider sign-in gets.
       onAppleSetupSkipped: root.openSearch()
       onResetSettingsRequested: root.confirmSettingsReset = true
       onFactoryResetRequested: root.confirmFactoryReset = true
@@ -8491,12 +8529,12 @@ ApplicationWindow {
           spacing: 0
           Repeater {
             id: libSourceRep
-            model: root.myMusicSources
+            model: libSourceModel
             delegate: SavedSourceGroup {
               host: root
-              required property var modelData
+              required property string providerKey
               required property int index
-              sourceData: modelData
+              sourceData: root.myMusicSource(providerKey)
               primary: index === 0
             }
           }
@@ -9356,7 +9394,7 @@ ApplicationWindow {
     // downloads-still-running close prompt permanently.
     property bool exitWarnMuted: false
     // Onboarding: answered = the welcome surface was answered (a
-    // provider card, a completed TIDAL sign-in, or Skip), so it never
+    // provider card, a completed sign-in, or Skip), so it never
     // returns automatically. Seeded once from the legacy provider-picker
     // bit by migrateOnboarding(); the setup popup below is the deliberate
     // way back.
