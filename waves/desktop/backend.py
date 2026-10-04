@@ -2806,12 +2806,16 @@ def _standalone_lock_for(bridge):
     return lock
 
 
-def _standalone_write(bridge, folder: pathlib.Path, build: Callable[[pathlib.Path], bool]) -> bool:
+def _standalone_write(
+    bridge, folder: pathlib.Path, build: Callable[[pathlib.Path], bool], *, keep_existing: bool = False
+) -> bool:
     """Build sidecars/tags privately; publish only under the request's context.
 
     Fetches, conversion and tag writes run outside the provider lock. Only
     same-filesystem replacements hold it, so revocation never waits on I/O
     preparation and a revoked request cannot modify an existing saved file.
+    Covers retain existing sidecars, checked at publication because another
+    request can save one while the builder is preparing its replacement.
     """
     _standalone_check(bridge)
     with tempfile.TemporaryDirectory(prefix=".waves-assets-", dir=folder) as temporary:
@@ -2825,7 +2829,9 @@ def _standalone_write(bridge, folder: pathlib.Path, build: Callable[[pathlib.Pat
             with _standalone_lock_for(bridge):
                 _standalone_check(bridge)
                 for entry in files:
-                    os.replace(entry, folder / entry.name)
+                    target = folder / entry.name
+                    if not keep_existing or not target.exists():
+                        os.replace(entry, target)
 
         if not _cache_commit(bridge, publish):
             raise _StandaloneStopped
@@ -3940,6 +3946,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     providerLoginUrlReady = Signal(str, str)
     # providerId, ok: the current login attempt settled; stale attempts never fire.
     providerLoginFinished = Signal(str, bool)
+    # Internal login/catalog/search results carry captured context tokens;
+    # GUI receivers discard revoked results before changing visible state.
     _providerLoginEvent = Signal(object)
     _catalogEvent = Signal(object)
     _searchEvent = Signal(object)
@@ -17488,6 +17496,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         )
                         is not None
                     ),
+                    keep_existing=True,
                 ):
                     served_here = True
                 if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)) and embed_cover is not None:
@@ -17683,6 +17692,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         write_cover_sidecar(staged, bytes(cover), fmt, ffmpeg_path=self._cover_convert_ffmpeg())
                         is not None
                     ),
+                    keep_existing=True,
                 ):
                     served += 1
                 if bool(self._psetting(CTX_TIDAL, "metadata_cover_embed", True)):

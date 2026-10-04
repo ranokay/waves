@@ -448,6 +448,53 @@ def test_download_art_only_writes_the_cover_and_no_audio(tmp_path):
     assert statuses[-1] == "Saved artwork for 1 track"
 
 
+@pytest.mark.parametrize("provider_id", ["apple", "tidal"])
+@pytest.mark.parametrize("saved_cover", ["absent", "existing", "while_preparing"])
+def test_download_art_only_keeps_saved_covers_at_publication(tmp_path, monkeypatch, provider_id, saved_cover):
+    from types import SimpleNamespace
+
+    from providers.fakes import StubProvider
+
+    from waves.desktop.backend import WavesBridge
+    from waves.providers import Capability
+    from waves.providers.apple import files
+
+    stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map())
+    media_id = "apple:s1"
+    if provider_id == "tidal":
+        media_id = "1"
+        stub.providers["tidal"] = StubProvider("tidal", "TIDAL", capabilities={Capability.ART}, logged_in=True)
+        track = SimpleNamespace(id=1, album=SimpleNamespace(image=lambda dimension: "https://test.invalid/cover"))
+        stub._standalone_tidal_tracks = lambda media_id: [(track, None, False)]
+        stub._tidal_standalone_dest = lambda base, track, collection: (folder, "S1")
+        stub._dl = SimpleNamespace(
+            _retrieve_lyrics=lambda track: ("", "", ""),
+            cover_data_cached=lambda url: b"\xff\xd8\xff\xdbjpeg-bytes",
+        )
+        stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+    target = folder / "cover.jpg"
+    original = b"custom saved artwork"
+    if saved_cover == "existing":
+        target.write_bytes(original)
+    elif saved_cover == "while_preparing":
+        write_cover = files.write_cover_sidecar
+
+        def prepare_cover(*args, **kwargs):
+            result = write_cover(*args, **kwargs)
+            target.write_bytes(original)
+            return result
+
+        monkeypatch.setattr(files, "write_cover_sidecar", prepare_cover)
+
+    stub.downloadArtOnly(media_id)
+
+    expected = b"\xff\xd8\xff\xdbjpeg-bytes" if saved_cover == "absent" else original
+    assert target.read_bytes() == expected
+    assert states == [(media_id, "running"), (media_id, "done")]
+    assert statuses[-1] == "Saved artwork for 1 track"
+    assert list(folder.iterdir()) == [target]
+
+
 def test_download_lyrics_only_files_the_verbatim_ttml_when_asked(tmp_path):
     """The TTML sidecar toggle is independent: the verbatim document lands as .ttml."""
     ttml = '<tt><body><div><p begin="00:01.00">Hi</p></div></body></tt>'

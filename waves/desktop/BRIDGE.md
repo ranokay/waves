@@ -452,17 +452,21 @@ documented 30-second clip URL directly (no remux).
 
 ## Internal signals (thread hops)
 
-Signals prefixed `_` are not for QML; they marshal work back onto the GUI
-thread: `_albumsQueued` (batch-enqueue a resolved discography),
-`_tracksQueued` (same batch marshalling for individual tracks),
-`_videosQueued` (same batch marshalling for music videos),
-`_artistsQueued` (batch-enqueue a shelf's favourite artists, one discography
-each), `_collectionsQueued(kind, keys)` (batch-enqueue a shelf's favourite
-playlists or mixes),
-`_mediaRefetched` (re-dispatch a download whose object was evicted from the
-cache), `_queueTracksFetched` (merge a track snapshot without racing live
-events), `_folderTreeWarmed(source)` (one source's folder sweep finished;
-the parked drill-ins for that source replay).
+Signals prefixed `_` are Python-only GUI thread hops. Provider tokens and
+event objects stay inside Python; only the public signals carry QML payloads.
+
+| Signal                                                                                     | Payload and delivery                                                                                                                                       |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_providerLoginEvent(event)`                                                               | `LoginEvent(token, phase, url, ok, resume)`; apply account/login state only while its attempt is current                                                   |
+| `_catalogEvent(event)`                                                                     | `_CatalogEvent(token, deliver)`; invoke the GUI callback only while its provider context is current                                                        |
+| `_searchEvent(event)`                                                                      | `_SearchEvent(generation, tokens, payload, status, cache_key, cacheable, paint)`; discard superseded searches and filter revoked providers before delivery |
+| `_albumsQueued(token, rows)` / `_tracksQueued(token, rows)` / `_videosQueued(token, rows)` | Batch enqueue a resolved discography, guest tracks or music videos, only while the provider context is current                                             |
+| `_artistsQueued(token, keys)`                                                              | Batch enqueue a shelf's favourite artists, one discography each, while the context is current                                                              |
+| `_collectionsQueued(token, kind, keys)`                                                    | Batch enqueue a shelf's favourite playlists or mixes (`kind`), while the context is current                                                                |
+| `_mediaRefetched(bucket, mediaId, token)`                                                  | Re-dispatch a download after fetching its evicted object, while the context is current                                                                     |
+| `_queueRetryRefetched(bucket, mediaId, qid, token)`                                        | Retry the captured queue row only if the context and that row's refetch ownership remain current                                                           |
+| `_queueTracksFetched(...)`                                                                 | Merge a track snapshot without racing live events                                                                                                          |
+| `_folderTreeWarmed(source)`                                                                | Replay parked drill-ins after that source's folder sweep finishes                                                                                          |
 
 The My Music slots name their source, so the doc's payload rule applies to
 them too: `loadLibrary(source, category[, quiet])`,
