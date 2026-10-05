@@ -2346,3 +2346,48 @@ def test_owned_untagged_file_retries_tagging_while_tagged_skips(tmp_path, monkey
     assert summary == " (already downloaded)"
     assert provider.fetched == []
     assert any(ev.get("status") == "skipped" for ev in relay.events)
+
+
+def test_queued_engine_pin_and_priority_survive_a_default_change_and_retry(tmp_path):
+    from waves.providers.apple.provider import AppleProvider
+
+    provider = AppleProvider()
+    provider.engine_selection = "gamdl"
+    provider.engine_preferences = ("gamdl", "future")
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(tmp_path / "lib", provider, cookies)
+    stub._download_apple = lambda *args, **kwargs: WavesBridge._download_apple(stub, *args, **kwargs)
+    args = ("album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1")
+    assert stub._download_apple(*args)
+    original = stub._queue[0]
+    original_spec = stub._jobs.specs[original["qid"]]
+    provider.engine_selection = "auto"
+    provider.engine_preferences = ("future", "gamdl")
+    original["status"] = "failed"
+    assert provider.downloads.serve_retry(original, _album_row())
+    retried = stub._queue[-1]
+    retry_spec = stub._jobs.specs[retried["qid"]]
+    assert retried["askEngine"] == "gamdl"
+    assert retried["enginePreferences"] == ["gamdl", "future"]
+    assert retry_spec.engine_policy == original_spec.engine_policy
+    retried["status"] = "done"
+    assert stub._download_apple(*args)
+    assert stub._queue[-1]["askEngine"] == "auto"
+    assert stub._queue[-1]["enginePreferences"] == ["future", "gamdl"]
+
+
+def test_chooser_engine_pin_is_distinct_from_a_provider_auto_choice(tmp_path):
+    from waves.providers.apple.provider import AppleProvider
+
+    provider = AppleProvider()
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(tmp_path / "lib", provider, cookies)
+    args = ("album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1")
+    assert WavesBridge._download_apple(stub, *args, chooser_toggles={"engine": "gamdl"})
+    assert WavesBridge._download_apple(stub, *args)
+    assert [row["askEngine"] for row in stub._queue] == ["gamdl", "auto"]
+    assert all("engine" not in row["askToggles"] for row in stub._queue)
+    assert all("engine" not in spec.chooser_toggles for spec in stub._jobs.specs.values())
+    assert provider.engine_selection == "auto"

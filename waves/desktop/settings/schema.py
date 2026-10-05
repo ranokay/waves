@@ -183,6 +183,7 @@ PATH_FIELDS = [
     "path_binary_ffmpeg",
     # Cookies tier: a Netscape cookies export that unlocks Apple downloads,
     # browsed like the FFmpeg override above.
+    "apple_engine",
     "apple_cookies_path",
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
@@ -263,6 +264,7 @@ FIELD_LABELS = {
     "download_base_path": "Download folder",
     "tidal_quality_audio": "Audio quality",
     "apple_quality_audio": "Audio quality (Apple)",
+    "apple_engine": "Download engine",
     "apple_cookies_path": "Cookies file (Apple)",
     "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
     "apple_wrapper_port": "Wrapper port (Apple)",
@@ -505,6 +507,15 @@ class SettingsSchema:
         def auto_field(key: str) -> dict:
             """Build a field dict for an engine ``Settings`` key, choosing the
             control type from the registries above."""
+            if key == "apple_engine":
+                return field(
+                    key,
+                    "enum",
+                    str(getattr(d, key, "auto")),
+                    {
+                        "options": [{"value": "auto", "label": "Auto"}, {"value": "gamdl", "label": "gamdl"}],
+                    },
+                )
             if key in ENUM_BY_FIELD:
                 enum = ENUM_BY_FIELD[key]
                 current = getattr(d, key)

@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from threading import Lock, RLock, local
+from threading import Event, Lock, RLock, local
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.providers.apple.engines import (
+    AppleEngine,
+    EngineFacts,
+    EngineOperation,
+    EnginePolicy,
+    EngineRequest,
+    EngineResult,
+    EngineRouter,
+    EngineRouteUnavailable,
+)
 from waves.providers.base import (
     AudioType,
     Capability,
@@ -40,6 +50,11 @@ class _QuietCatalogLog:
 
 class _CatalogThreadState(local):
     epoch: int | None = None
+
+
+class _EngineThreadState(local):
+    policy: EnginePolicy | None = None
+    abort: Event | None = None
 
 
 class AppleCatalogUnavailable(RuntimeError):
@@ -165,6 +180,7 @@ class AppleProvider(Provider):
                 "provider_apple_status",
                 "apple_setup_wizard",
                 "apple_quality_audio",
+                "apple_engine",
                 "apple_lyrics_embed",
                 "apple_lyrics_file",
                 "apple_lyrics_prefer_lrclib",
@@ -188,7 +204,16 @@ class AppleProvider(Provider):
             login_flow="setup",
         )
 
-    def __init__(self, catalog=None, catalog_factory=None) -> None:
+    def __init__(self, catalog=None, catalog_factory=None, *, engines: tuple[AppleEngine, ...] | None = None) -> None:
+        from waves.providers.apple.gamdl_engine import GamdlEngine
+
+        self._engines = EngineRouter(engines if engines is not None else (GamdlEngine(self),))
+        self._engine_thread = _EngineThreadState()
+        self.engine_selection = "auto"
+        self.engine_preferences = ("gamdl",)
+        # Composition supplies current setup facts when execution runs on a
+        # worker. Direct library callers keep the engine's own validation.
+        self.engine_facts_probe: Callable[[], EngineFacts] | None = None
         self._catalog = catalog
         self._catalog_factory = catalog_factory or self._create_catalog
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -234,6 +259,64 @@ class AppleProvider(Provider):
         # one every fetch builds and closes its own stack.
         self._fetch_scoped = False
         self._fetch_stack: AppleFetchSession | None = None
+
+    def engine_policy(self, selection: str | None = None) -> EnginePolicy:
+        selected = str(self.engine_selection if selection is None else selection).strip().lower()
+        return EnginePolicy(tuple(self.engine_preferences), "" if selected in ("", "auto") else selected)
+
+    @contextmanager
+    def engine_job_context(self, policy: EnginePolicy, abort: Event) -> Iterator[None]:
+        """Keep the captured engine choice and whole-job Cancel on this worker."""
+        outer = self._engine_thread.policy, self._engine_thread.abort
+        self._engine_thread.policy, self._engine_thread.abort = policy, abort
+        try:
+            yield
+        finally:
+            self._engine_thread.policy, self._engine_thread.abort = outer
+
+    def engine_details(self, facts: EngineFacts | None = None) -> list[dict]:
+        """Safe capability/setup data. No paths, endpoints or account identifiers."""
+        details = []
+        for engine in self._engines.engines.values():
+            descriptor = engine.descriptor
+            requirements = []
+            for requirement in descriptor.requirements:
+                request = EngineRequest(
+                    requirement.operation,
+                    {},
+                    requirement.tiers[-1] if requirement.tiers else QualityTier.HIGH,
+                    requirement.audio_types[0] if requirement.audio_types else AudioType.STEREO,
+                    required_codec=requirement.codecs[0] if requirement.codecs else "",
+                )
+                readiness = engine.readiness(request, facts or EngineFacts())
+                requirements.append(
+                    {
+                        "operation": str(requirement.operation),
+                        "codecs": list(requirement.codecs),
+                        "audio_types": [str(value) for value in requirement.audio_types],
+                        "tiers": [str(value) for value in requirement.tiers],
+                        "runtime": requirement.runtime,
+                        "runtime_kind": requirement.runtime_kind,
+                        "account_boundary": requirement.account_boundary,
+                        "protocol": requirement.protocol,
+                        "formats": list(requirement.formats),
+                        "state": str(readiness.state),
+                        "action": readiness.action,
+                    }
+                )
+            details.append(
+                {
+                    "id": descriptor.id,
+                    "name": descriptor.name,
+                    "client": descriptor.client,
+                    "compatible_versions": descriptor.compatible_versions,
+                    "requirements": requirements,
+                    "recommended_operations": [
+                        str(operation) for operation, evidence in descriptor.recommendations if evidence
+                    ],
+                }
+            )
+        return details
 
     def catalog_context(self) -> AbstractContextManager[None]:
         """Capture this dispatch's cache epoch before its worker can be delayed.
@@ -509,8 +592,12 @@ class AppleProvider(Provider):
             h = w
         return template.replace("{w}", str(w)).replace("{h}", str(h)).replace("{f}", "jpg")
 
+    def cover_raw_url(self, obj) -> str:
+        """Original-master artwork from the pinned or preferred engine."""
+        return self._engine_artwork(obj, 5000, original=True)
+
     @staticmethod
-    def cover_raw_url(obj) -> str:
+    def _gamdl_cover_raw_url(obj) -> str:
         """The true original-master image URL for an Apple resource.
 
         The gamdl raw-mode rewrite: strip the ``image/thumb/`` path segment,
@@ -1238,6 +1325,50 @@ class AppleProvider(Provider):
         return tier, audio_type
 
     def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
+        """Route one audio ask beneath Apple, preserving the job's engine pin."""
+        tier, audio_type = self._required_request(tier, audio_type)
+        request = EngineRequest(
+            EngineOperation.AUDIO,
+            self._unwrap(track),
+            tier,
+            audio_type,
+            self._engine_thread.abort or Event(),
+        )
+        engine, result = self._execute_engine(request)
+        if result.error is not None:
+            raise result.error
+        if result.failure is not None or not isinstance(result.value, StreamInfo):
+            raise EngineRouteUnavailable("The selected Apple engine could not execute this request.")  # noqa: TRY003
+        info = result.value
+        codec = str((info.delivered or {}).get("codecs") or "").lower()
+        codec = {"mp4a.40.2": "aac", "ec-3": "eac3"}.get(codec, codec)
+        requirement = next(
+            (entry for entry in engine.descriptor.requirements if codec in entry.codecs),
+            None,
+        )
+        info.delivered = {
+            **(info.delivered or {}),
+            "engine_id": engine.descriptor.id,
+            "runtime_id": requirement.runtime if requirement else "",
+        }
+        return info
+
+    def _execute_engine(self, request: EngineRequest) -> tuple[AppleEngine, EngineResult]:
+        policy = self._engine_thread.policy or self.engine_policy()
+        facts = self.engine_facts_probe() if self.engine_facts_probe is not None else None
+        engine = self._engines.select(request, policy, facts)
+        result = engine.execute(request)
+        if request.abort.is_set():
+            if isinstance(result.value, StreamInfo) and result.value.local_file:
+                self.discard_delivery(result.value.local_file)
+            from waves.providers.apple.engine import _AppleAborted
+
+            raise _AppleAborted()
+        return engine, result
+
+    def _resolve_gamdl_stream(
+        self, track, tier: QualityTier | None, audio_type: AudioType | None, *, required_codec: str = ""
+    ) -> StreamInfo:
         """Fetch and locally decrypt one song through the gamdl engine.
 
         The request parameters may be None per the seam contract (a caller that
@@ -1269,7 +1400,8 @@ class AppleProvider(Provider):
             want = QualityTier(tier) if isinstance(tier, QualityTier) else QualityTier(str(tier))
         except ValueError:
             want = QualityTier.HIGH
-        if not atmos and want in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS) and self.wrapper_available:
+        self._check_gamdl_constraint(required_codec, atmos)
+        if self._gamdl_wrapper_requested(item, want, audio_type, required_codec):
             try:
                 return self._resolve_via_wrapper(item, want)
             except Exception as exc:
@@ -1288,7 +1420,11 @@ class AppleProvider(Provider):
                     kind = self.classify_refusal(exc).kind
                 except Exception:
                     kind = None
-                if str(kind) != str(RefusalKind.UNAVAILABLE) or not str(self.cookies_path or "").strip():
+                if (
+                    required_codec
+                    or str(kind) != str(RefusalKind.UNAVAILABLE)
+                    or not str(self.cookies_path or "").strip()
+                ):
                     raise
                 logger.debug("Apple ALAC unavailable, falling back to AAC", exc_info=True)
         delivery = self._fetch_cookies(song_id=str(item.get("id")), atmos=atmos)
@@ -1325,6 +1461,23 @@ class AppleProvider(Provider):
             single_file=True,
             local_file=str(delivery.staged_path),
         )
+
+    def _gamdl_wrapper_requested(self, media, tier: QualityTier, audio_type: AudioType, codec: str = "") -> bool:
+        """One route predicate for setup evidence and the concrete fetch."""
+        return codec == "alac" or (
+            codec != "aac"
+            and not self._delivery_atmos(media, audio_type)
+            and tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+            and self.wrapper_available
+        )
+
+    def _check_gamdl_constraint(self, codec: str, atmos: bool) -> None:
+        from waves.providers.apple.engine import AppleVariantUnavailable
+
+        if codec == "eac3" and not atmos:
+            raise AppleVariantUnavailable("This song has no Atmos rendition.")  # noqa: TRY003
+        if codec == "alac" and not self.wrapper_available:
+            raise AppleVariantUnavailable("ALAC requires the wrapper-v2 runtime.")  # noqa: TRY003
 
     def _resolve_via_wrapper(self, item: dict, want: QualityTier) -> StreamInfo:
         """One stereo song through the managed wrapper's ALAC path.
@@ -1442,6 +1595,16 @@ class AppleProvider(Provider):
         return None
 
     def fetch_lyrics(self, track) -> tuple[str, str]:
+        """Route optional lyrics under the same captured engine policy."""
+        request = EngineRequest(EngineOperation.LYRICS, self._unwrap(track), abort=self._engine_thread.abort or Event())
+        try:
+            _engine, result = self._execute_engine(request)
+        except EngineRouteUnavailable:
+            return "", ""
+        value = result.value
+        return value if isinstance(value, tuple) and len(value) == 2 else ("", "")
+
+    def _fetch_gamdl_lyrics(self, track) -> tuple[str, str]:
         """Apple-native lyrics as (synced, plain), converted in Waves' layer.
 
         Fetches the line-timed ``lyrics`` relationship and converts TTML to
@@ -1548,7 +1711,28 @@ class AppleProvider(Provider):
         track_id = str(getattr(track, "id", track) or "")
         return track_id
 
+    def _engine_ttml(self, track, format_name: str) -> str:
+        request = EngineRequest(
+            EngineOperation.LYRICS,
+            self._unwrap(track),
+            abort=self._engine_thread.abort or Event(),
+            lyrics_format=format_name,
+        )
+        try:
+            _engine, result = self._execute_engine(request)
+        except EngineRouteUnavailable:
+            return ""
+        return result.value if isinstance(result.value, str) else ""
+
     def fetch_syllable_ttml(self, track) -> str:
+        """Word-timed TTML from the pinned or preferred lyrics engine."""
+        return self._engine_ttml(track, "syllable_ttml")
+
+    def fetch_line_ttml(self, track) -> str:
+        """Line-timed TTML from the pinned or preferred lyrics engine."""
+        return self._engine_ttml(track, "line_ttml")
+
+    def _fetch_gamdl_syllable_ttml(self, track) -> str:
         """Word-timed syllable TTML for one song, or "" when absent."""
         try:
             return self._run(self._fetch_ttml_resource(self._song_id_of(track), "syllable-lyrics"))
@@ -1556,7 +1740,7 @@ class AppleProvider(Provider):
             logger.debug("Apple syllable-TTML fetch failed", exc_info=True)
             return ""
 
-    def fetch_line_ttml(self, track) -> str:
+    def _fetch_gamdl_line_ttml(self, track) -> str:
         """Line-timed TTML for one song, or "" when absent."""
         try:
             return self._run(self._fetch_ttml_resource(self._song_id_of(track), "lyrics"))
@@ -1578,6 +1762,24 @@ class AppleProvider(Provider):
         return ttml_to_enhanced_lrc(ttml)
 
     def cover_url(self, obj, dimension: int) -> str:
+        """Route optional artwork under the same captured engine policy."""
+        return self._engine_artwork(obj, dimension)
+
+    def _engine_artwork(self, obj, dimension: int, *, original: bool = False) -> str:
+        request = EngineRequest(
+            EngineOperation.ARTWORK,
+            self._unwrap(obj),
+            abort=self._engine_thread.abort or Event(),
+            artwork_dimension=dimension,
+            artwork_original=original,
+        )
+        try:
+            _engine, result = self._execute_engine(request)
+        except EngineRouteUnavailable:
+            return ""
+        return result.value if isinstance(result.value, str) else ""
+
+    def _gamdl_cover_url(self, obj, dimension: int) -> str:
         """Best-effort cover URL at the requested square dimension."""
         item = self._unwrap(obj)
         attrs = self._attributes(item if isinstance(item, dict) else {})

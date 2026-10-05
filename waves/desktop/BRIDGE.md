@@ -103,9 +103,24 @@ registered provider with its descriptor identity (id/name/logo), its
 action words — a setup for Apple, a sign-in for TIDAL), plus `state`/`word`
 from the same light composer as the header's marks ("" when the provider has
 nothing to report, e.g. Apple switched off), plus `readiness` and
-`login_flow` (`browser` by default, `setup` for Apple's wizard). The surface re-reads the list
+`login_flow` (`browser` by default, `setup` for Apple's wizard), and `engines`
+(the same list as `providerEngines(providerId)`). The surface re-reads the list
 at boot, when the surface opens and on the same flips as the lights, so a
 card never states a stale account state.
+
+`providerEngines(providerId)` returns safe subordinate execution detail, or `[]`
+for a provider without engines. Each entry carries `id`, `name`, `client`,
+`compatible_versions`, `recommended_operations` and `requirements`. A requirement
+names `operation`, `codecs`, `audio_types`, `tiers`, `runtime`, `runtime_kind`,
+`account_boundary`, `protocol`, `formats`, `state` and `action`. These are capability/setup
+facts, not verified item availability or qualification claims. No paths, runtime
+endpoints, credentials or personal account identifiers enter this payload.
+The slot reads cached facts and schedules a coalesced worker refresh; cold or
+unverified facts remain unknown. Prepared facts return through the internal
+`_catalogEvent` relay and a guarded GUI receiver; provider revocation and setup
+changes discard pending results. Re-read on provider/session/setup changes and
+`appleStatusChanged` after refresh. Missing optional requirements affect only
+operations that use them.
 
 `appleSetupRequested(reason)` carries the wizard step a pre-setup click was
 missing: `"cookies"` (no account yet — the cookies/wrapper tier) or
@@ -287,6 +302,11 @@ REDOWNLOAD stays the way back. Disabling Apple in Settings stops its queued
 and running rows through the same Stopped shape STOP uses, each carrying the
 reason that says why.
 
+Queue rows carry `askEngine` (`auto`, an engine ID, or empty for a provider
+without engine selection) and `enginePreferences`, captured when queued.
+Apple retries preserve both. Delivered quality includes `engine_id` and
+`runtime_id` for the actual route. Engine choices in Settings affect new jobs.
+
 The per-click Chooser's two answer-only slots are capability-driven (issue
 #235), so a provider is never named by QML: `chooserSupported(mediaId, kind)`
 says whether a control carries the split button at all (the covered kinds plus
@@ -295,7 +315,9 @@ capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
 `provider` (the row's own, stated as a static chip whose mark comes from
 `providerDescriptor`), `tier`, `audioType` (clamped to `audioOptions`),
 `audioOptions`, `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt`
-and the lyrics/art quick-toggles. A provider whose metadata offers nothing
+and the lyrics/art quick-toggles, plus `engines` and the saved `engine` choice
+(`auto` or an engine ID). The optional `engine` in a Chooser click's toggles
+pins that request; an unknown pin fails without substitution. A provider whose metadata offers nothing
 per-click answers `chooserSupported` False, so no chevron renders.
 `artistDownloadSupported(artistId)` is the same kind of answer for the artist
 page's discography control: True only where the artist's provider

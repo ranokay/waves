@@ -104,12 +104,12 @@ def test_apple_origin_raw_url():
     from waves.providers.apple import AppleProvider
 
     template = "https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/ef/{w}x{h}bb.jpg"
-    raw = AppleProvider.cover_raw_url({"attributes": {"artwork": {"url": template}}})
+    raw = AppleProvider().cover_raw_url({"attributes": {"artwork": {"url": template}}})
     assert "is1-ssl" not in raw
     assert "image/thumb/" not in raw
     assert "{w}" not in raw
     assert raw.startswith("https://a1")
-    assert AppleProvider.cover_raw_url({}) == ""
+    assert AppleProvider().cover_raw_url({}) == ""
 
 
 def test_apple_cover_url_clamps_to_5000():

@@ -599,6 +599,8 @@ class QueueMixin:
         ask_tier: str | None = None,
         audio_type: str | None = None,
         ask_toggles: dict | None = None,
+        ask_engine: str = "",
+        engine_preferences: tuple[str, ...] = (),
     ) -> int:
         # A per-item quality choice arrives as both halves of the ask (the
         # Waves tier string the job pins, the word the drawer states); without
@@ -680,7 +682,9 @@ class QueueMixin:
             # (base keys, booleans). Empty for a plain click: the job then
             # reads the provider's stored options. Pinned like the quality so
             # a retry asks with the same options.
-            "askToggles": dict(ask_toggles or {}),
+            "askToggles": {key: bool(value) for key, value in (ask_toggles or {}).items() if key != "engine"},
+            "askEngine": ask_engine,
+            "enginePreferences": list(engine_preferences),
             # How many quarantined copies this row's job wrote (Apple
             # integrity failures only). The drawer shows open/delete actions
             # while it is nonzero; the paths themselves stay bridge-side.
