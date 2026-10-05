@@ -193,7 +193,10 @@ def test_the_notice_names_every_bundled_component():
     assert "com.apple.android.music" in notice and "remain" in notice
 
 
-def test_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
+def test_wiring_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
+    """The guard drives the watcher's own parse command against the shipped pin
+    file; the job's schedule, dedupe and issue side run on a GitHub runner
+    (network + Actions runtime), so no behavioral seam exists here."""
     import re
 
     text = (REPO_ROOT / ".github" / "wrapper-upstream.sha").read_text()
