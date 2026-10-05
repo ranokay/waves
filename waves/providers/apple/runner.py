@@ -2897,6 +2897,7 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             is_retry=bool(getattr(spec, "is_retry", False)),
             chooser_toggles=getattr(spec, "chooser_toggles", None),
             engine_policy=getattr(spec, "engine_policy", None),
+            **({"request_intent": spec.intent} if getattr(spec, "intent", None) else {}),
         )
 
     if not hooks.gate_reachability(replay, media_id):
@@ -2952,7 +2953,21 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             engine_context = getattr(provider, "engine_job_context", None)
             if callable(engine_context):
                 policy = getattr(spec, "engine_policy", None) or provider.engine_policy()
-                stack.enter_context(engine_context(policy, job_abort))
+                intent = getattr(spec, "intent", None)
+                stack.enter_context(
+                    engine_context(
+                        policy,
+                        job_abort,
+                        **(
+                            {
+                                "required_codec": intent.policy.required_codec,
+                                "operation_priority": intent.operation_priority,
+                            }
+                            if intent
+                            else {}
+                        ),
+                    )
+                )
             opener = getattr(provider, "fetch_job_session", None)
             if callable(opener):
                 stack.enter_context(opener())

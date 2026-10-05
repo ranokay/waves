@@ -11,6 +11,7 @@ from waves.constants import (
     QualityVideo,
     default_audio_is_both,
 )
+from waves.model.download_policy import DownloadPolicies, decode_policies, encode_policies
 
 
 class _JsonModel:
@@ -31,6 +32,10 @@ class _JsonModel:
 @dataclass_json
 @dataclass
 class Settings(_JsonModel):
+    download_policies: DownloadPolicies = field(
+        default_factory=DownloadPolicies,
+        metadata=config(encoder=encode_policies, decoder=decode_policies),
+    )
     skip_existing: bool = True
     # ----- shared lyrics/artwork keys: migration carriers only -----
     # The keys below predate the per-provider mirrors further down. Two readers

@@ -24,10 +24,11 @@ class EngineOperation(StrEnum):
 
 @dataclass(frozen=True)
 class EnginePolicy:
-    """Order is a preference; a pin admits only that engine."""
+    """Order is a preference; a pin is exclusive unless fallback is allowed."""
 
     preferences: tuple[str, ...] = ("gamdl",)
     pin: str = ""
+    allow_fallback: bool = False
 
     def __post_init__(self) -> None:
         normalized = tuple(dict.fromkeys(value.strip().lower() for value in self.preferences if value.strip()))
@@ -142,7 +143,7 @@ class EngineRouter:
             raise ValueError("Apple engine identities must be unique")  # noqa: TRY003
 
     def select(self, request: EngineRequest, policy: EnginePolicy, facts: EngineFacts | None = None) -> AppleEngine:
-        if policy.pin:
+        if policy.pin and not policy.allow_fallback:
             order = (policy.pin,)
         else:
             recommended = tuple(
@@ -153,7 +154,11 @@ class EngineRouter:
                     for operation, evidence in engine.descriptor.recommendations
                 )
             )
-            order = tuple(dict.fromkeys((*policy.preferences, *recommended, *self.engines)))
+            order = tuple(
+                dict.fromkeys(
+                    (*((policy.pin,) if policy.pin else ()), *policy.preferences, *recommended, *self.engines)
+                )
+            )
         for identity in order:
             engine = self.engines.get(identity)
             if engine is None or not engine.supports(request):

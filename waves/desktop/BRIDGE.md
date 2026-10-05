@@ -13,6 +13,23 @@ links their Python, QML and test owners. Settings payload construction belongs
 to `settings/schema.py`, provider cards/status to `providers/presentation.py`.
 Their Qt entry points remain on this context object.
 
+## Download policy settings
+
+`settingsSchema()` exposes the one `settings.json` policy store through dotted
+`download_policies.*` field keys. `applySettings(values)` validates and commits
+these alongside existing preferences. Opening Settings and Cancel do not write.
+Shared rules live under Downloads, sparse overrides and engine/operation orders
+under the owning provider, and bounded retry/timeouts plus provider pacing under
+Advanced. Diagnostics retains explicit probes and redacted capture.
+
+Existing quality tier strings, per-provider lyrics/art mirrors, shared video
+values and pacing values keep their original persistence keys. The additive
+policy store requires no replay of a migration or reset; settings writes and
+migration completion retain their existing atomicity and downgrade guards.
+Cross-provider choice, failure recovery, upgrades and enrichment are independent
+and default off. Policies capture intent for the corresponding execution owners;
+new fulfillment capabilities remain subject to their implementation and gates.
+
 ## Application events
 
 | Signal                                                | Fires when                                                                            |
@@ -338,7 +355,13 @@ reason that says why.
 
 Queue rows carry `askEngine` (`auto`, an engine ID, or empty for a provider
 without engine selection) and `enginePreferences`, captured when queued.
-Apple retries preserve both. Delivered quality includes `engine_id` and
+Retry preserves both and the private immutable request intent: origin identity,
+shared/provider rules, quality/type/codec/video requirements, lyrics/art mirrors,
+metadata/organization/duplicate preferences and recovery permissions. Changes
+in Settings apply to new requests. Intent carries no cookies, credentials or
+network origins and never crosses the QML payload. Auto checks live readiness
+within its captured orders and constraints; a selected provider still permits
+Auto engine selection. Delivered quality includes `engine_id` and
 `runtime_id` for the actual route. Engine choices in Settings affect new jobs.
 
 The per-click Chooser's two answer-only slots are capability-driven (issue
@@ -351,7 +374,12 @@ capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
 `audioOptions`, `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt`
 and the lyrics/art quick-toggles, plus `engines` and the saved `engine` choice
 (`auto` or an engine ID). The optional `engine` in a Chooser click's toggles
-pins that request; an unknown pin fails without substitution. A provider whose metadata offers nothing
+pins that request; an unknown pin fails without substitution unless the same
+click sets `allow_fallback: true`. That control explicitly relaxes the selected
+provider/engine dimensions within the captured fallback permissions; it does
+not change quality, audio type or required codecs. A Chooser selection pins its
+provider; plain Download retains origin unless its separately opted-in policy
+permits an eligible alternative. A provider whose metadata offers nothing
 per-click answers `chooserSupported` False, so no chevron renders.
 `artistDownloadSupported(artistId)` is the same kind of answer for the artist
 page's discography control: True only where the artist's provider

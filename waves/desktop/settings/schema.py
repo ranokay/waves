@@ -29,6 +29,7 @@ from waves.desktop.providers.presentation import (
     provider_card,
     provider_session_field,
 )
+from waves.desktop.settings.download_policy import advanced_fields, engine_fields, policy_fields, routing_fields
 from waves.model.cfg import Settings as SettingsData
 from waves.paths import ILLEGAL_FILENAME_CHARS, safe_filename_replacement_map
 from waves.providers import Provider, StatusKind
@@ -1096,11 +1097,12 @@ class SettingsSchema:
                 "fields": [
                     "download_base_path",
                     "quality_video",
+                    "video_download",
+                    "video_convert_mp4",
                     "downloads_concurrent_max",
                     "default_audio_type",
                     "skip_existing",
                     "confirm_category_download",
-                    "download_delay",
                 ],
             },
             {
@@ -1170,7 +1172,6 @@ class SettingsSchema:
                 # The two ffmpeg_* auto-check fields are embedded in the card.
                 "fields": [
                     "path_binary_ffmpeg",
-                    "video_convert_mp4",
                     "extract_flac",
                     "extract_flac_all",
                     "ffmpeg_auto_update",
@@ -1191,7 +1192,6 @@ class SettingsSchema:
                     "disco_eps",
                     "disco_featured",
                     "disco_appears_on",
-                    "video_download",
                     "collapse_editions",
                     "artist_page_all_editions",
                 ],
@@ -1224,12 +1224,16 @@ class SettingsSchema:
                     "video_hover_peek",
                     "downsample_target",
                     "downloads_simultaneous_per_track_max",
+                    "download_delay",
                     "download_delay_sec_min",
                     "download_delay_sec_max",
                     "api_rate_limit_batch_size",
                     "api_rate_limit_delay_sec",
                     "apple_integrity_retries",
                     "apple_integrity_retry_delay_sec",
+                    "apple_pacing_batch_size",
+                    "apple_pacing_delay_sec",
+                    "apple_wrapper_idle_sec",
                     "downsample_enabled",
                 ],
             },
@@ -1240,4 +1244,11 @@ class SettingsSchema:
             # one Providers section, one card per provider.
             for provider in sec.get("providers") or []:
                 provider["fields"] = [get_field(k) for k in provider["fields"]]
+                provider["fields"].extend(policy_fields(d.download_policies, provider["id"].removeprefix("providers_")))
+                provider["fields"].extend(engine_fields(d.download_policies, provider["id"].removeprefix("providers_")))
+            if sec["id"] == "downloads":
+                sec["fields"].extend(policy_fields(d.download_policies))
+                sec["fields"].extend(routing_fields(d.download_policies))
+            elif sec["id"] == "advanced":
+                sec["fields"].extend(advanced_fields(d.download_policies))
         return sections

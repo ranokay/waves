@@ -56,6 +56,8 @@ class _CatalogThreadState(local):
 class _EngineThreadState(local):
     policy: EnginePolicy | None = None
     abort: Event | None = None
+    required_codec: str = ""
+    operation_priority: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 class AppleCatalogUnavailable(RuntimeError):
@@ -194,9 +196,6 @@ class AppleProvider(Provider):
                 "apple_cookies_path",
                 "path_binary_nm3u8dlre",
                 "apple_wrapper_port",
-                "apple_pacing_batch_size",
-                "apple_pacing_delay_sec",
-                "apple_wrapper_idle_sec",
                 "apple_quarantine_dir",
                 "apple_quarantine_keep",
             ),
@@ -266,14 +265,33 @@ class AppleProvider(Provider):
         return EnginePolicy(tuple(self.engine_preferences), "" if selected in ("", "auto") else selected)
 
     @contextmanager
-    def engine_job_context(self, policy: EnginePolicy, abort: Event) -> Iterator[None]:
+    def engine_job_context(
+        self,
+        policy: EnginePolicy,
+        abort: Event,
+        *,
+        required_codec: str = "",
+        operation_priority: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    ) -> Iterator[None]:
         """Keep the captured engine choice and whole-job Cancel on this worker."""
-        outer = self._engine_thread.policy, self._engine_thread.abort
+        outer = (
+            self._engine_thread.policy,
+            self._engine_thread.abort,
+            self._engine_thread.required_codec,
+            self._engine_thread.operation_priority,
+        )
         self._engine_thread.policy, self._engine_thread.abort = policy, abort
+        self._engine_thread.required_codec = required_codec
+        self._engine_thread.operation_priority = operation_priority
         try:
             yield
         finally:
-            self._engine_thread.policy, self._engine_thread.abort = outer
+            (
+                self._engine_thread.policy,
+                self._engine_thread.abort,
+                self._engine_thread.required_codec,
+                self._engine_thread.operation_priority,
+            ) = outer
 
     def engine_details(self, facts: EngineFacts | None = None) -> list[dict]:
         """Safe capability/setup data. No paths, endpoints or account identifiers."""
@@ -1334,6 +1352,7 @@ class AppleProvider(Provider):
             tier,
             audio_type,
             self._engine_thread.abort or Event(),
+            required_codec=self._engine_thread.required_codec,
         )
         engine, result = self._execute_engine(request)
         if result.error is not None:
@@ -1358,6 +1377,9 @@ class AppleProvider(Provider):
 
     def _execute_engine(self, request: EngineRequest) -> tuple[AppleEngine, EngineResult]:
         policy = self._engine_thread.policy or self.engine_policy()
+        order = dict(self._engine_thread.operation_priority).get(request.operation)
+        if order:
+            policy = EnginePolicy(order, policy.pin, policy.allow_fallback)
         facts = self.engine_facts_probe() if self.engine_facts_probe is not None else None
         engine = self._engines.select(request, policy, facts)
         result = engine.execute(request)
