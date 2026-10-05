@@ -272,6 +272,9 @@ def capture_intent(
         payload.pop(key, None)
     payload[f"{provider_id}_quality_audio"] = tier
     payload["default_audio_type"] = audio_type or policy.audio_type or data.default_audio_type
+    # An exact original-codec request takes precedence over optional conversion.
+    if policy.required_codec and policy.required_codec != "flac":
+        payload["extract_flac"] = False
     if policy.video_quality:
         payload["quality_video"] = policy.video_quality
     for key, value in toggles.items():

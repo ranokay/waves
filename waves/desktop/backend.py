@@ -2992,13 +2992,18 @@ def _capture_request(
         media_id,
         tier=tier,
         audio_type=audio_type,
-        toggles={key: bool(value) for key, value in (toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS},
+        toggles=_chooser_asset_pins(toggles),
         engine_pin=engine_pin,
         provider_pin=str((toggles or {}).get("provider_pin") or ""),
         allow_fallback=bool((toggles or {}).get("allow_fallback", False)),
         clean_album_artist=prefs("clean_album_artist") if callable(prefs) else False,
-        library_bulk_skip=prefs("library_bulk_skip") if callable(prefs) else True,
+        library_bulk_skip=bridge._library_bulk_skip_on(),
     )
+
+
+def _chooser_asset_pins(toggles: dict | None) -> dict[str, bool]:
+    """Only asset toggles cross into queue rows and engine option overrides."""
+    return {key: bool(value) for key, value in (toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS}
 
 
 @dataclasses.dataclass(slots=True)
@@ -10295,6 +10300,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if provider is None or AudioType.ATMOS in provider.audio_types:
             audio_options += ["atmos", "both"]
         audio_default = self._chooser_default_audio()
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if isinstance(data, CfgSettings):
+            audio_default = data.download_policies.effective(provider_id).audio_type or audio_default
         if audio_default not in audio_options:
             # A stereo-only provider cannot honor a "both" default: the value
             # and the offered words must agree, or the popover opens with no
@@ -10348,11 +10356,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             and tier in {option.tier for option in provider.quality_options}
         ):
             staged[provider.quality_setting] = str(tier.value)
-        if audio in ("stereo", "both"):
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if isinstance(data, CfgSettings) and provider_id and audio in ("stereo", "atmos", "both"):
+            staged[f"download_policies.providers.{provider_id}.audio_type"] = audio
+        elif audio in ("stereo", "both"):
             staged["default_audio_type"] = audio
-        # "atmos" alone has no Settings spelling (it is a per-click choice
-        # only): SET AS DEFAULTS leaves the default unchanged rather than
-        # misrecording it as both.
         # Lyrics/art quick-toggles write back to the row's own provider
         # mirrors (its settings card, or the id an unregistered word still
         # namespaces); the shared keys are fallbacks. An explicit mirror
@@ -13487,6 +13495,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         on its way and acknowledged); False when a gate held or blocked the
         click and nothing was queued, so callers that confirm with their own
         status line keep the gate's message instead of overwriting it."""
+        asset_pins = _chooser_asset_pins(chooser_toggles)
         # getattr: partial test stubs drive _download without the Chooser
         # helper; their holds replay bare, as before.
         _chooser_wrap = getattr(self, "_chooser_replay", None)
@@ -13674,12 +13683,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         and it.get("template") == row_template
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
-                        and dict(it.get("askToggles") or {})
-                        == {
-                            key: bool(value)
-                            for key, value in (chooser_toggles or {}).items()
-                            if key in _CHOOSER_TOGGLE_KEYS
-                        }
+                        and dict(it.get("askToggles") or {}) == asset_pins
                         and getattr(self._jobs, "intents", {}).get(it["qid"]) == intent
                         for it in self._queue
                     )
@@ -13699,9 +13703,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
                 **({"library_skip": intent.library_bulk_skip} if intent else {}),
-                ask_toggles={
-                    key: bool(value) for key, value in (chooser_toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS
-                },
+                ask_toggles=asset_pins,
             )
             queued_any = True
             # Acknowledge the click on the button itself, immediately: behind a
@@ -13743,9 +13745,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 merge_plan=merge_plan,
                 audio_type=row_atype,
                 base_template=base_for_spec,
-                chooser_toggles={
-                    key: bool(value) for key, value in (chooser_toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS
-                },
+                chooser_toggles=dict(asset_pins),
                 intent=intent,
             )
             if intent is not None:
@@ -13872,6 +13872,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """
         chooser_toggles = dict(chooser_toggles or {})
         selected = chooser_toggles.pop("engine", None)
+        asset_pins = _chooser_asset_pins(chooser_toggles)
         if engine_policy is None:
             provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
             capture = getattr(provider, "engine_policy", None)
@@ -14084,20 +14085,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # quality is an upgrade request and keeps its own row. Each
             # Version guards on its own audioType, so stereo+Atmos coexist.
             intent = request_intent or _capture_request(
-                self, CTX_APPLE, type_media, media_id, ask, row_atype, chooser_toggles, str(selected or "")
+                self, CTX_APPLE, type_media, media_id, ask, row_atype, chooser_toggles, engine_policy.pin
             )
             if intent is not None:
                 preferred = (
                     intent.engine_priority if request_intent else intent.engine_priority or engine_policy.preferences
                 )
-                if request_intent is None and selected is None:
-                    configured = str(getattr(self.settings.data, "apple_engine", "auto"))
-                    preferred = preferred if configured in ("", "auto") else (configured, *preferred)
-                    intent = dataclasses.replace(
-                        intent,
-                        engine_pin="",
-                        same_provider_fallback=self.settings.data.download_policies.same_provider_fallback,
-                    )
                 if request_intent is None:
                     intent = dataclasses.replace(intent, engine_priority=tuple(preferred), base_template=base_for_spec)
                 engine_policy = EnginePolicy(preferred, intent.engine_pin, intent.same_provider_fallback)
@@ -14110,12 +14103,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         and it.get("template") == row_template
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
-                        and dict(it.get("askToggles") or {})
-                        == {
-                            key: bool(value)
-                            for key, value in (chooser_toggles or {}).items()
-                            if key in _CHOOSER_TOGGLE_KEYS
-                        }
+                        and dict(it.get("askToggles") or {}) == asset_pins
                         and getattr(self._jobs, "intents", {}).get(it["qid"]) == intent
                         and EnginePolicy(
                             tuple(it.get("enginePreferences") or ("gamdl",)),
@@ -14141,9 +14129,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
                 **({"library_skip": intent.library_bulk_skip} if intent else {}),
-                ask_toggles={
-                    key: bool(value) for key, value in (chooser_toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS
-                },
+                ask_toggles=asset_pins,
                 ask_engine=engine_policy.pin or "auto",
                 engine_preferences=engine_policy.preferences,
             )
@@ -14163,9 +14149,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 audio_type=row_atype,
                 base_template=base_for_spec,
                 is_retry=is_retry,
-                chooser_toggles={
-                    key: bool(value) for key, value in (chooser_toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS
-                },
+                chooser_toggles=dict(asset_pins),
                 intent=intent,
                 engine_policy=engine_policy,
             )

@@ -381,6 +381,9 @@ not change quality, audio type or required codecs. A Chooser selection pins its
 provider; plain Download retains origin unless its separately opted-in policy
 permits an eligible alternative. A provider whose metadata offers nothing
 per-click answers `chooserSupported` False, so no chevron renders.
+The audio choice starts at the effective shared/provider policy. Set as defaults
+writes that provider's audio override and existing quality/asset mirrors through
+the staged settings writer; the shared audio default remains independently editable.
 `artistDownloadSupported(artistId)` is the same kind of answer for the artist
 page's discography control: True only where the artist's provider
 declares `Capability.ARTIST_DOWNLOAD`, so an Apple artist page renders no

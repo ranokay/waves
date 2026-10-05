@@ -208,13 +208,17 @@ def test_real_enqueue_and_retry_keep_original_single_audio_row_and_full_intent(m
     monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "HI-RES")
     bridge = _bridge()
     bridge.settings.data = Settings(tidal_quality_audio="LOSSLESS", tidal_lyrics_embed=True)
-    bridge._waves_pref_bool = lambda key: True
+    from waves.desktop.library.bridge import LibraryMixin
+
+    preferences = {"library_enabled": False, "library_bulk_skip": True}
+    bridge._waves_pref_bool = lambda key: preferences.get(key, False)
+    bridge._library_bulk_skip_on = LibraryMixin._library_bulk_skip_on.__get__(bridge)
     obj = _track()
     assert bridge._download(obj, "track", "Song", "Original/{track_title}", False, "t1")
     original = bridge._queue[-1]
     original["status"] = "failed"
-    intent = bridge._jobs.intents[original["qid"]]
     bridge.settings.data.default_audio_type = "both"
+    preferences["library_enabled"] = True
     bridge.settings.data.tidal_lyrics_embed = False
     bridge.settings.data.download_policies.shared = replace(
         bridge.settings.data.download_policies.shared, matching="release"
@@ -224,9 +228,8 @@ def test_real_enqueue_and_retry_keep_original_single_audio_row_and_full_intent(m
     retried = bridge._queue[-1]
     assert len(bridge._queue) == 2
     assert retried["audioType"] == original["audioType"] == ""
-    assert bridge._jobs.intents[retried["qid"]] is intent
-    assert bridge._jobs.specs[retried["qid"]].intent.settings_data().tidal_lyrics_embed
-    assert retried["askLibrarySkip"]
+    assert _dispatch_settings(monkeypatch, bridge, retried["qid"])["settings_data"].tidal_lyrics_embed
+    assert not retried["askLibrarySkip"]
     assert bridge._download(obj, "track", "Song", "New/{track_title}", False, "t1")
     assert bridge._jobs.intents[bridge._queue[-1]["qid"]].policy.matching == "release"
 
@@ -268,6 +271,26 @@ def test_dispatch_builds_engine_from_snapshot_and_keeps_credentials_live(monkeyp
     assert calls["settings_data"].tidal_lyrics_embed and calls["settings_data"].api_rate_limit_delay_sec == 42
     assert calls["settings_data"].path_binary_ffmpeg == "current-tool"
     assert calls["album_artist_tag_clean"]()
+
+
+def _dispatch_settings(monkeypatch, bridge, qid):
+    """Observe the real dispatcher at the engine-construction boundary."""
+    from types import SimpleNamespace
+
+    from waves.desktop import backend
+
+    calls = {}
+    monkeypatch.setattr(backend, "_TrackedDownload", lambda **kwargs: calls.update(kwargs) or SimpleNamespace())
+    bridge.tidal = SimpleNamespace()
+    bridge._resolve_ffmpeg = lambda: None
+    bridge._event_abort = Event()
+    bridge._event_run = Event()
+    bridge._ownership = SimpleNamespace(ownership_of=None, stamp_ceiling=None)
+    bridge._warn_if_ffmpeg_missing = lambda dl: None
+    signals = SimpleNamespace(item=None, item_name=None, list_item=None, list_name=None)
+    spec = bridge._jobs.specs[qid]
+    WavesBridge._build_download(bridge, signals, base_template=spec.base_template, request_intent=spec.intent)
+    return calls
 
 
 def test_changed_destination_probes_original_folder_and_never_updates_new_default():
@@ -317,7 +340,7 @@ def test_atmos_retry_keeps_placement_after_the_folder_format_changes(monkeypatch
     assert WavesBridge._start_retry(bridge, original, obj)
     retried = bridge._queue[-1]
     assert retried["template"] == original["template"] == "{artist_name}/Original Atmos/{track_title}"
-    assert bridge._jobs.specs[retried["qid"]].base_template == base
+    assert _dispatch_settings(monkeypatch, bridge, retried["qid"])["base_template"] == base
 
 
 def test_apple_enqueue_dispatch_and_retry_preserve_rules_but_use_current_setup(tmp_path):
@@ -356,8 +379,9 @@ def test_apple_enqueue_dispatch_and_retry_preserve_rules_but_use_current_setup(t
     assert provider.downloads.serve_retry(original, _album_row())
     retried = bridge._queue[-1]
     assert len(bridge._queue) == 2 and retried["audioType"] == ""
-    assert bridge._jobs.intents[retried["qid"]] is intent
-    assert bridge._jobs.specs[retried["qid"]].engine_policy == EnginePolicy(("gamdl", "future"), "gamdl", True)
+    retried_hooks = bridge._apple_job_hooks(bridge._jobs.intents[retried["qid"]])
+    assert retried_hooks.apple_setting("lyrics_embed") and retried_hooks.settings().data.apple_pacing_delay_sec == 47
+    assert retried["askEngine"] == "gamdl" and retried["enginePreferences"] == ["gamdl", "future"]
     assert intent.operation_priority == (("artwork", ("future", "gamdl")),)
 
 
@@ -385,4 +409,71 @@ def test_apple_retry_held_for_ffmpeg_setup_keeps_the_original_request(tmp_path):
     )
     bridge._ffmpeg_gate_holds = lambda *args: False
     assert held.pop()()
-    assert bridge._jobs.intents[bridge._queue[-1]["qid"]] is intent
+    retried_hooks = bridge._apple_job_hooks(bridge._jobs.intents[bridge._queue[-1]["qid"]])
+    assert retried_hooks.settings().data.download_policies.shared.matching == intent.policy.matching == "recording"
+
+
+def test_chooser_reads_and_saves_provider_audio_policy_without_changing_shared_defaults():
+    from providers.test_provider_chooser_metadata import _bridge
+
+    bridge = _bridge()
+    bridge.settings.data = Settings(default_audio_type="both")
+    bridge.settings.data.download_policies = apply_policy_edit(
+        bridge.settings.data.download_policies, "download_policies.providers.apple.audio_type", "atmos"
+    )
+    assert bridge.chooserDefaults("apple:1", "track")["audioType"] == "atmos"
+    assert bridge.chooserDefaults("t1", "track")["audioType"] == "both"
+    bridge.saveChooserDefaults({"provider": "apple", "audioType": "stereo"})
+    assert bridge.staged == {"download_policies.providers.apple.audio_type": "stereo"}
+    for key, value in bridge.staged.items():
+        bridge.settings.data.download_policies = apply_policy_edit(bridge.settings.data.download_policies, key, value)
+    assert bridge.chooserDefaults("apple:1", "track")["audioType"] == "stereo"
+    assert bridge.settings.data.default_audio_type == "both"
+
+
+@pytest.mark.parametrize("codec", ["alac", "aac"])
+def test_required_original_codec_prevents_incompatible_optional_flac_conversion(codec, tmp_path):
+    from downloads.test_apple_job_runner import _bind, _FakeProvider, _stub
+
+    from waves.providers.apple import runner
+    from waves.providers.base import StreamInfo
+
+    bridge = _bind(_stub(tmp_path, _FakeProvider()))
+    bridge.settings.data = Settings(extract_flac=True, extract_flac_all=True)
+    bridge.settings.data.download_policies.shared = replace(
+        bridge.settings.data.download_policies.shared, required_codec=codec
+    )
+    hooks = bridge._apple_job_hooks(capture(bridge.settings.data))
+    info = StreamInfo(codecs=codec, requires_flac_extraction=codec == "alac")
+    assert runner.flac_mode(hooks, info, atmos=False) == ""
+    assert bridge.settings.data.extract_flac and bridge.settings.data.extract_flac_all
+
+
+def test_saved_explicit_engine_selection_stays_pinned_after_defaults_change(tmp_path):
+    from downloads.test_apple_job_runner import _album_row, _entry_stub
+
+    from waves.providers.apple.provider import AppleProvider
+
+    provider = AppleProvider()
+    provider.engine_selection = "gamdl"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    bridge = _entry_stub(tmp_path, provider, cookies)
+    bridge.settings.data = Settings(apple_enabled=True, apple_cookies_path=str(cookies), apple_engine="gamdl")
+    bridge._download_apple = lambda *args, **kwargs: WavesBridge._download_apple(bridge, *args, **kwargs)
+    assert bridge._download_apple("album", _album_row(), _album_row(), "{track_title}", True, "apple:album-1")
+    original = bridge._queue[-1]
+    provider.engine_selection = "auto"
+    bridge.settings.data.apple_engine = "auto"
+    original["status"] = "failed"
+    assert provider.downloads.serve_retry(original, _album_row())
+    retried = bridge._queue[-1]
+    intent = bridge._jobs.intents[retried["qid"]]
+    assert retried["askEngine"] == "gamdl"
+    first, second = FakeEngine("gamdl", ready=False), FakeEngine("future")
+    with pytest.raises(EngineRouteUnavailable):
+        EngineRouter((first, second)).select(
+            audio(),
+            EnginePolicy(intent.engine_priority, intent.engine_pin, intent.same_provider_fallback),
+            EngineFacts(),
+        )

@@ -188,7 +188,7 @@ class Settings(_JsonModel):
     quality_video: QualityVideo = QualityVideo.P480
     # The Chooser one-click audio default (spec §7.2): "stereo", or "both"
     # for stereo + Atmos side by side where a track offers the choice.
-    # Atmos-alone has no Settings spelling and stays per-click only.
+    # Provider download policies can additionally select Atmos alone.
     default_audio_type: str = "stereo"
     # Artist > Album > Track, the shape a music library (and Plex) expects.
     # Playlists / mixes keep their own parent folder: they are platform

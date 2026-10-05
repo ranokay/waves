@@ -3650,6 +3650,7 @@ Item {
                             }
                           }
                           SCombo {
+                            objectName: "settingsEnum_" + modelData.key
                             visible: modelData.type === "enum"
                             Layout.alignment: Qt.AlignVCenter
                             model: modelData.type === "enum" ? modelData.options : []
