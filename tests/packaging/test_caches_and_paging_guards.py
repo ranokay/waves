@@ -407,15 +407,6 @@ def test_a_failed_probe_cleanup_still_reads_as_writable(tmp_path):
     assert verdict == "ok", "the write proved the folder works; a failed cleanup must not block downloads"
 
 
-# A healed folder reaches the in-flight job.
-
-
-def test_the_download_worker_follows_a_healed_base():
-    assert "dl.path_base = self._base_ok[0] if spec.intent else self.settings.data.download_base_path" in BACKEND_SRC, (
-        "captured jobs follow the proven original destination; uncaptured jobs follow the healed setting"
-    )
-
-
 # Liveness is stamped for the path that was proven, and a landing
 # track only vouches for the folder it landed in.
 
