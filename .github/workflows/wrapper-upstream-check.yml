@@ -33,7 +33,7 @@ jobs:
       - name: Read tracked pin and upstream HEAD
         id: compare
         run: |
-          pinned="$(tr -d '[:space:]' < .github/wrapper-upstream.sha)"
+          pinned="$(grep -E '^[0-9a-f]{40}$' < .github/wrapper-upstream.sha | tail -1)"
           if ! [[ "$pinned" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::.github/wrapper-upstream.sha is not a full commit SHA."
             exit 1
