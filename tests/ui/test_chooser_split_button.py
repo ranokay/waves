@@ -440,7 +440,7 @@ def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
         "track",
         "LOSSLESS",
         "stereo",
-        {"lyrics_embed": True, "cover_album_file": False},
+        {"lyrics_embed": True, "cover_album_file": False, "provider_pin": "tidal"},
     )
     # The fetch lands: replay queues at the parked pins, not Settings.
     b._objs["track"]["t1"] = _track("t1")
@@ -462,7 +462,12 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     _bind(b, "_download_apple_with_chooser")
     b.downloadWithChooser("apple:456", "track", "HI-RES", "both", {"lyrics_embed": True})
     assert refetched == [("track", "apple:456")]
-    assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both", {"lyrics_embed": True})
+    assert b._chooser_refetch_pins[("track", "apple:456")] == (
+        "track",
+        "HI-RES",
+        "both",
+        {"lyrics_embed": True, "provider_pin": "apple"},
+    )
 
 
 def test_download_with_chooser_refuses_an_apple_mix():

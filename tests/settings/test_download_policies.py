@@ -323,6 +323,28 @@ def test_changed_destination_probes_original_folder_and_never_updates_new_defaul
         WavesBridge._request_reachability(bridge, intent, lambda: None)
 
 
+def test_dispatch_follows_the_proven_original_folder_after_defaults_change(tmp_path):
+    from types import SimpleNamespace
+
+    from providers.test_provider_download_seam import TestJobSpecDispatch
+
+    provider = SimpleNamespace(get_object=lambda kind, mid: SimpleNamespace(id=mid, name="Album"))
+    dispatcher = TestJobSpecDispatch()
+    bridge = dispatcher._stub_bridge(provider, tmp_path)
+    data = Settings(download_base_path="original", download_delay=False)
+    intent = capture_intent(data, "tidal", "album", "m1", tier="LOSSLESS", audio_type=None, toggles={})
+    bridge.settings.data = data
+    data.download_base_path = "new"
+    bridge._base_ok = ("original-remounted", 0)
+    bridge._request_reachability = lambda saved, retry, mid: saved is intent
+    spec = dispatcher._spec()
+    spec.intent = intent
+    dispatcher._drive(bridge, spec)
+    assert bridge.dl.path_base == "original-remounted"
+    assert bridge.dl.items_called is not None
+    assert data.download_base_path == "new"
+
+
 def test_atmos_retry_keeps_placement_after_the_folder_format_changes(monkeypatch):
     from settings.test_quality_override import _bridge, _track
 

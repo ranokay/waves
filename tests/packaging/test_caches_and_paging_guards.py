@@ -411,8 +411,8 @@ def test_a_failed_probe_cleanup_still_reads_as_writable(tmp_path):
 
 
 def test_the_download_worker_follows_a_healed_base():
-    assert "dl.path_base = self.settings.data.download_base_path" in BACKEND_SRC, (
-        "after the gate passes, the job must adopt the (possibly healed) setting"
+    assert "dl.path_base = self._base_ok[0] if spec.intent else self.settings.data.download_base_path" in BACKEND_SRC, (
+        "captured jobs follow the proven original destination; uncaptured jobs follow the healed setting"
     )
 
 

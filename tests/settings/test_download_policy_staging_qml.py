@@ -4,7 +4,15 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.qml import EXIT_OK, EXIT_REGRESSED, ROLLING_ALBUM_ROW, boot_main_qml, run_scenario, seed_tidal_search
+from support.qml import (
+    EXIT_OK,
+    EXIT_REGRESSED,
+    ROLLING_ALBUM_ROW,
+    boot_main_qml,
+    checkpoint,
+    run_scenario,
+    seed_tidal_search,
+)
 
 pytestmark = pytest.mark.qml
 
@@ -52,27 +60,32 @@ def _run_scenario():
     if isinstance(booted, int):
         return booted
     _root, q, settle, bridge = booted
-    q("settingsOpen = true; settingsPage.setSectionOpen('downloads', true)")
+    q("settingsOpen = true")
     settle(400)
+    q("settingsPage.setSectionOpen('downloads', true)")
+    settle(150)
     combo = "(" + (_FIND % 'o.objectName === "settingsEnum_download_policies.shared.matching"') + ")"
     cancel = "(" + (_FIND % 'o.objectName === "cancelEditsBtn"') + ")"
     save = "(" + (_FIND % 'o.objectName === "saveChangesBtn"') + ")"
+    checkpoint("visible policy selector")
     if not q(combo + " !== null"):
         return EXIT_REGRESSED
     original = bridge.settings.data.download_policies.shared.matching
-    q(combo + ".currentIndex = 1; " + combo + ".activated(1)")
+    q(combo + ".incrementCurrentIndex(); " + combo + ".activated(1)")
     if bridge.settings.data.download_policies.shared.matching != original:
         return EXIT_REGRESSED
     q(cancel + ".triggered()")
     settle(100)
+    checkpoint("cancel restores displayed policy")
     if bridge.settings.data.download_policies.shared.matching != original or q(combo + ".currentIndex") != 0:
         return EXIT_REGRESSED
-    q(combo + ".currentIndex = 1; " + combo + ".activated(1)")
+    q(combo + ".incrementCurrentIndex(); " + combo + ".activated(1)")
     q(save + ".triggered()")
     settle(200)
+    checkpoint("save persists displayed policy")
     if bridge.settings.data.download_policies.shared.matching != "release":
         return EXIT_REGRESSED
-    q(combo + ".currentIndex = 0; " + combo + ".activated(0)")
+    q(combo + ".decrementCurrentIndex(); " + combo + ".activated(0)")
     q(cancel + ".triggered()")
     settle(100)
     return EXIT_OK if q(combo + ".currentIndex") == 1 else EXIT_REGRESSED

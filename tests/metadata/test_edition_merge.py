@@ -285,6 +285,7 @@ class _EngineShaped:
 
     def __init__(self):
         self.playlist_calls = []
+        self.settings = _FakeSettings()
 
     def _playlist_for_collection(self, media, file_template, result_paths):
         self.playlist_calls.append((media, file_template, list(result_paths)))
