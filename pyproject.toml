@@ -61,7 +61,7 @@ dev = [
   "pre-commit>=4.6.2,<5",
   # Pinned so the pre-commit hooks (which run this environment's ruff) and CI
   # lint with one version; Dependabot may bump it like any other dev tool.
-  "ruff==0.16.9",
+  "ruff==0.16.10",
   "pyupgrade>=3.21.2,<4",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md). 4.x is AGPL-3.0-only, a
@@ -75,7 +75,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.12.20,<0.13"]
+requires = ["uv_build>=0.12.22,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
