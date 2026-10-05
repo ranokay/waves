@@ -39,6 +39,17 @@ from waves.constants import (
     tier_word,
 )
 from waves.errors import DownloadIncomplete
+from waves.events import (
+    ApplicationEvent,
+    EventAction,
+    EventCode,
+    EventDomain,
+    EventReferences,
+    Failure,
+    FailureScope,
+    Lifecycle,
+    application_event,
+)
 from waves.library.ownership import copy_is_current, record_names_a_broken_copy
 from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
 from waves.metadata.tags import (
@@ -112,6 +123,27 @@ class _AppleSetupRequired(Exception):
     job fails with the setup words and the wizard can open instead of a row
     holding forever with nowhere to go.
     """
+
+    def __init__(self, message: str, *, failure: Failure | None = None) -> None:
+        super().__init__(message)
+        self.failure = (
+            dataclasses.replace(failure, retryable=True)
+            if failure is not None
+            else Failure(
+                FailureScope.CONFIGURATION,
+                EventCode.INVALID_CONFIGURATION,
+                "Apple Music setup needs attention. Open Settings, finish setup, then retry.",
+                retryable=True,
+            )
+        )
+
+
+class _AppleJobIncomplete(DownloadIncomplete):
+    """Keep the owner's aggregate verdict while preserving queue settlement."""
+
+    def __init__(self, message: str, failure: Failure) -> None:
+        super().__init__(message)
+        self.failure = failure
 
 
 class _JobOptions:
@@ -215,6 +247,7 @@ class AppleJobHooks:
     quarantine_paths: Callable[[], MutableMapping[int, list[str]]] = _empty_dict
 
     status: Callable[[str], None] = _noop
+    event: Callable[[ApplicationEvent], None] = _noop
     queue_status: Callable[..., None] = _noop
     queue_progress: Callable[..., None] = _noop
     queue_item: Callable[[int], Any] = _quality_none
@@ -254,6 +287,78 @@ class AppleJobHooks:
 
 
 # --------------------------------------------------------------------------
+
+
+def _classified_failure(hooks: AppleJobHooks, exc: BaseException) -> Failure:
+    """Preserve concrete owner verdicts through the runner's explicit wraps."""
+    provider = hooks.provider()
+    classify = getattr(provider, "classify_failure", None)
+    current = exc
+    for _ in range(4):
+        if isinstance(current, _AppleSetupRequired | _AppleJobIncomplete):
+            return current.failure
+        failure = classify(current) if classify is not None else Failure()
+        if failure.scope != FailureScope.UNKNOWN or failure.code != EventCode.FAILED:
+            return failure
+        if current.__cause__ is None:
+            break
+        current = current.__cause__
+    return Failure()
+
+
+def _publish_job_failure(
+    hooks: AppleJobHooks,
+    qid: int,
+    failure: Failure,
+    *,
+    exception: BaseException | None = None,
+    media_id: str = "",
+    details: tuple[str, ...] = (),
+) -> None:
+    """Update one notice per logical job, including holds and final failures."""
+    actions = [EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS]
+    if failure.scope in (FailureScope.ACCOUNT, FailureScope.CONFIGURATION, FailureScope.RUNTIME):
+        actions.append(EventAction.OPEN_SETTINGS)
+    if failure.retryable:
+        actions.append(EventAction.RETRY_JOB)
+    with contextlib.suppress(Exception):
+        hooks.event(
+            application_event(
+                EventDomain.DOWNLOAD,
+                failure.summary,
+                key=f"job:{qid}",
+                code=failure.code,
+                title="Apple Music download",
+                scope=failure.scope,
+                retryable=failure.retryable,
+                references=EventReferences(
+                    provider_id=CTX_APPLE,
+                    engine_id=failure.engine_id,
+                    runtime_id=failure.runtime_id,
+                    job_id=qid,
+                    media_id=media_id,
+                ),
+                exception=exception,
+                details=details,
+                actions=tuple(actions),
+            )
+        )
+
+
+def _resolve_job_event(hooks: AppleJobHooks, qid: int) -> None:
+    with contextlib.suppress(Exception):
+        hooks.event(
+            application_event(
+                EventDomain.DOWNLOAD,
+                "The Apple download no longer needs this action.",
+                key=f"job:{qid}",
+                code=EventCode.COMPLETED,
+                lifecycle=Lifecycle.RESOLVED,
+                references=EventReferences(provider_id=CTX_APPLE, job_id=qid),
+            )
+        )
+
+
 # Shared readers and small helpers
 # --------------------------------------------------------------------------
 
@@ -1525,6 +1630,13 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
         hooks.status(throttled_message(total))
     with contextlib.suppress(Exception):
         hooks.queue_status(int(qid), "running", throttled_message(total))
+    _publish_job_failure(
+        hooks,
+        qid,
+        Failure(
+            FailureScope.UNKNOWN, EventCode.RATE_LIMITED, "Apple is limiting requests. Waiting before trying again."
+        ),
+    )
     last_shown = -1
     while True:
         if job_abort.is_set():
@@ -1556,9 +1668,20 @@ def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
         hooks.queue_status(int(qid), "queued", message)
     with contextlib.suppress(Exception):
         hooks.status(message)
+    if not detail:
+        _publish_job_failure(
+            hooks,
+            qid,
+            Failure(
+                FailureScope.RUNTIME,
+                EventCode.FAILED,
+                "The Apple runtime is not running. Waiting for it to return.",
+                runtime_id="apple:wrapper-v2",
+            ),
+        )
 
 
-def _setup_required(hooks: AppleJobHooks, message: str) -> _AppleSetupRequired:
+def _setup_required(hooks: AppleJobHooks, message: str, *, failure: Failure | None = None) -> _AppleSetupRequired:
     """The terminal verdict for a state only the user can fix.
 
     Ask the wizard to open, say the words the row will carry, and answer the
@@ -1570,7 +1693,7 @@ def _setup_required(hooks: AppleJobHooks, message: str) -> _AppleSetupRequired:
         hooks.setup_requested("setup")
     with contextlib.suppress(Exception):
         hooks.status(message)
-    return _AppleSetupRequired(message)
+    return _AppleSetupRequired(message, failure=failure)
 
 
 def _landed_credential(delivered: dict) -> AppleCredential:
@@ -1664,7 +1787,11 @@ def wait_for_session(
         failures += 1
         if failures >= max(1, int(HELD_CREDENTIAL_POLLS)):
             _hold, terminal = _credential_words(credential)
-            raise _setup_required(hooks, terminal)
+            raise _setup_required(
+                hooks,
+                terminal,
+                failure=_classified_failure(hooks, AppleCredentialsError(terminal, credential=credential)),
+            )
         if not sleep_abortable(HELD_POLL_SEC, job_abort):
             return False
     return False
@@ -1741,6 +1868,15 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
             # the wizard has not picked one. Hold with the setup words
             # instead of failing the wall.
             set_held(hooks, qid, "The wrapper tier has no port yet.")
+            _publish_job_failure(
+                hooks,
+                qid,
+                Failure(
+                    FailureScope.CONFIGURATION,
+                    EventCode.INVALID_CONFIGURATION,
+                    "The Apple runtime needs a port. Finish its setup in Settings.",
+                ),
+            )
             terminal_message = f"Apple's wrapper tier is not set up. Finish setup in {SETUP_PATH}, then retry."
             failures += 1
         if failures >= max(1, int(HELD_START_FAILURES)):
@@ -2104,6 +2240,17 @@ def deliver_track(
                 logger.debug("Could not emit the Apple integrity-retry event", exc_info=True)
             with contextlib.suppress(Exception):
                 hooks.status(f"Retrying {row.get('title') or track_id} (integrity)…")
+            _publish_job_failure(
+                hooks,
+                qid,
+                Failure(
+                    FailureScope.ENGINE,
+                    EventCode.INTEGRITY_FAILED,
+                    "An Apple download failed verification. Retrying before placement.",
+                ),
+                exception=exc,
+                media_id=track_id,
+            )
             logger.warning(
                 "Apple integrity check failed for %s (attempt %s); retrying",
                 hooks.redact(track_id),
@@ -2356,6 +2503,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             return " (already downloaded)"
     num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
     ok = fail = skipped = unavailable = quarantined = 0
+    last_failure: Failure | None = None
     failed_names: list[str] = []
     landed: list = []
     # The lyrics/art options this job runs with: the row's per-click
@@ -2515,10 +2663,11 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                         hold_words, terminal = _credential_words(credential)
                         credential_holds += 1
                         if credential_holds > max(1, int(HELD_CREDENTIAL_RETRIES)):
-                            raise _setup_required(hooks, terminal) from exc
+                            raise _setup_required(hooks, terminal, failure=_classified_failure(hooks, exc)) from exc
                         hooks.mark_session_expired(credential)
                         with contextlib.suppress(Exception):
                             set_held(hooks, qid, hold_words)
+                        _publish_job_failure(hooks, qid, _classified_failure(hooks, exc))
                         if not wait_for_session(hooks, provider, job_abort, credential=credential):
                             raise _AppleAborted() from exc
                         continue
@@ -2592,6 +2741,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             raise DownloadIncomplete(str(exc)) from exc
         except Exception as exc:
             fail += 1
+            last_failure = _classified_failure(hooks, exc)
             failed_names.append(str(row.get("title") or track_id))
             # Integrity quarantines end FAILED in plain words (spec §6.4);
             # other failures keep the existing failed row without a reason.
@@ -2619,6 +2769,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
         # healed (spec §3). A probe never has to have observed the recovery.
         with contextlib.suppress(Exception):
             hooks.clear_session_expired(_landed_credential(delivered))
+        _resolve_job_event(hooks, qid)
         # Wrapper work stamps the idle clock so an in-flight run never
         # looks idle to the sidecar stop.
         with contextlib.suppress(Exception):
@@ -2665,17 +2816,44 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
         if ok or skipped:
             return "" if ok else " (already downloaded)"
         if unavailable:
-            raise DownloadIncomplete("not available on Apple Music anymore")
+            raise _AppleJobIncomplete(
+                "not available on Apple Music anymore",
+                Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on Apple Music."),
+            )
         if quarantined:
-            raise DownloadIncomplete(INTEGRITY_FAIL_MESSAGE)
-        raise DownloadIncomplete("Apple download produced no file")
+            raise _AppleJobIncomplete(
+                INTEGRITY_FAIL_MESSAGE,
+                Failure(
+                    FailureScope.ENGINE,
+                    EventCode.INTEGRITY_FAILED,
+                    "The Apple download failed verification. Any rejected file stays outside your library.",
+                    retryable=True,
+                ),
+            )
+        raise _AppleJobIncomplete("Apple download produced no file", last_failure or Failure())
     short = fail + unavailable
     if short:
         done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
         if quarantined and quarantined == fail and not unavailable:
             # Every failure is a quarantine: the row's plain-words verdict.
-            raise DownloadIncomplete(f"{done_word} downloaded ({INTEGRITY_FAIL_MESSAGE})")
-        raise DownloadIncomplete(f"{done_word} downloaded ({short} failed)")
+            raise _AppleJobIncomplete(
+                f"{done_word} downloaded ({INTEGRITY_FAIL_MESSAGE})",
+                Failure(
+                    FailureScope.ENGINE,
+                    EventCode.INTEGRITY_FAILED,
+                    "Apple downloads failed verification. Any rejected files stay outside your library.",
+                    retryable=True,
+                ),
+            )
+        raise _AppleJobIncomplete(
+            f"{done_word} downloaded ({short} failed)",
+            Failure(
+                FailureScope.UNKNOWN,
+                EventCode.FAILED,
+                "Some Apple Music tracks did not finish. Retry the job or open the logs.",
+                retryable=True,
+            ),
+        )
     if skipped and not ok:
         return " (already downloaded)"
     return ""
@@ -2818,6 +2996,7 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             reason = str(exc) if isinstance(exc, (DownloadIncomplete, AppleCredentialsError)) else ""
             hooks.download_state(media_id, "failed")
             hooks.queue_status(qid, "failed", reason)
+            _publish_job_failure(hooks, qid, _classified_failure(hooks, exc), exception=exc, media_id=media_id)
             hooks.bump_groups(media_id, None, "failed")
             hooks.status(f"Failed {name}{': ' + reason if reason else ''}")
             hooks.devlog_done("download", f"FAILED {type_media} id={media_id}", hooks.devlog_clock() - started_at)

@@ -13,6 +13,33 @@ links their Python, QML and test owners. Settings payload construction belongs
 to `settings/schema.py`, provider cards/status to `providers/presentation.py`.
 Their Qt entry points remain on this context object.
 
+## Application events
+
+`applicationEvent(payload)` delivers redacted plain data on the GUI thread:
+`id`, `code`, `severity`, `domain`, `scope`, `title`, `summary`, `details`,
+`diagnostics`, `references`, `retryable`, `lifecycle`, `actions`, `occurrences`.
+References are `{provider_id, engine_id, runtime_id, job_id, media_id}`; absent
+job identity is `null`, other absent references are empty strings. Normal
+presentation uses title/summary; redacted exception traces belong only in the
+optional diagnostics detail. No exception objects cross this signal.
+
+Identity is an opaque lifecycle/dedup key. A repeated active issue updates that
+identity and increments `occurrences`. Recovery and dismissal publish terminal
+updates with no actions. Provider/job/generation guards reject stale results and
+are checked again before dispatch. The bridge retains active action context;
+persistent notification history and toast behavior have their own planned owner.
+
+`eventAction(id, action)` returns whether an advertised, applicable action ran.
+Allowed commands are `open_settings`, `open_logs`, `reconnect`, `retry_job`,
+`copy_diagnostics`. Reconnect and retry re-enter the existing provider/job
+flows; copy re-scrubs the event. Settings/log navigation emits
+`applicationEventActionRequested(action, providerId)` for Main to handle.
+`dismissEvent(id)` removes active actions and publishes `dismissed`.
+
+Legacy status/error text, install/update state messages, queue failure reasons
+and log display/copy are redacted before their consumers receive them. Existing
+log, diagnostics-export and update actions remain available.
+
 ## Session and status
 
 | Signal                                                                                             | Fires when                                                                                                       |

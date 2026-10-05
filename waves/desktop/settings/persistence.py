@@ -87,7 +87,8 @@ class SingleFlightWriter:
     shutdown hook: it drains what is pending (inline if the thread cannot
     finish in time), so a pref set just before quit still lands."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_result: Callable[[str, Exception | None], None] | None = None) -> None:
+        self._on_result = on_result
         self._cond = Condition()
         self._pending: dict[str, Callable] = {}
         self._writing = False
@@ -99,6 +100,19 @@ class SingleFlightWriter:
             self._pending[key] = fn
             self._cond.notify_all()
 
+    def _write(self, key: str, fn: Callable) -> None:
+        error = None
+        try:
+            fn()
+        except Exception as exc:
+            error = exc
+            logger.exception("Background config write failed")
+        if self._on_result is not None:
+            try:
+                self._on_result(key, error)
+            except Exception:
+                logger.exception("Config write result could not be delivered")
+
     def _run(self) -> None:
         while True:
             with self._cond:
@@ -108,9 +122,7 @@ class SingleFlightWriter:
                 fn = self._pending.pop(key)
                 self._writing = True
             try:
-                fn()
-            except Exception:
-                logger.exception("Background config write failed")
+                self._write(key, fn)
             finally:
                 with self._cond:
                     self._writing = False
@@ -121,12 +133,9 @@ class SingleFlightWriter:
         with self._cond:
             while (self._pending or self._writing) and time.monotonic() < deadline:
                 self._cond.wait(timeout=0.05)
-            leftovers = list(self._pending.values())
+            leftovers = list(self._pending.items())
             self._pending.clear()
         # Past the deadline with work still queued (a wedged disk, a dead
         # thread): write inline rather than lose a pref on quit.
-        for fn in leftovers:
-            try:
-                fn()
-            except Exception:
-                logger.exception("Config write during shutdown flush failed")
+        for key, fn in leftovers:
+            self._write(key, fn)

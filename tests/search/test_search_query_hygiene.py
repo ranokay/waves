@@ -46,19 +46,19 @@ def _boom(needle):
     raise RuntimeError("network down")
 
 
-def test_a_lone_raised_fetch_reports_its_own_words_not_zero_results():
+def test_a_lone_raised_fetch_reports_a_safe_summary_not_zero_results():
     # A lone enabled provider's failure answers its own group with the
-    # provider's words, never a silent "Search failed" with a blank page;
+    # owner's safe summary, never a silent "Search failed" with a blank page;
     # nothing is cached and busy is released. The page-count line still never
     # says "N results".
     stub = _Stub()
     stub.providers = {"tidal": _provider(_boom)}
     stub.search("needle")
-    assert stub.statuses[-1] == "network down"
+    assert stub.statuses[-1] == "The operation could not finish. Try again or open the logs."
     assert not any(s.endswith(" results") for s in stub.statuses)
     assert stub.busy[-1] is False
     (payload,) = _payloads(stub)
-    assert payload["groups"][0]["error"] == "network down"
+    assert payload["groups"][0]["error"] == "The operation could not finish. Try again or open the logs."
     assert stub.saves == 0 and "needle" not in stub._search_cache
 
 

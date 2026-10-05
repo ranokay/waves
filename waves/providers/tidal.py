@@ -23,12 +23,22 @@ from collections.abc import Iterator
 import tidalapi
 from requests import HTTPError
 from tidalapi import page as tidal_page
-from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable, TooManyRequests
+from tidalapi.exceptions import (
+    AssetNotAvailable,
+    AuthenticationError,
+    ManifestDecodeError,
+    ObjectNotFound,
+    StreamNotAvailable,
+    TooManyRequests,
+    UnknownManifestFormat,
+)
 from tidalapi.media import AudioMode, Track, Video
 from tidalapi.mix import Mix
 
 from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
 from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
+from waves.errors import DownloadIncomplete
+from waves.events import EventCode, Failure, FailureScope
 from waves.ids import credited_artist_ids, download_identity_id
 from waves.metadata.naming import get_album_artist_ids, get_album_artists
 from waves.providers.base import (
@@ -873,6 +883,56 @@ class TidalProvider(Provider):
         }
 
     # ----- refusals
+
+    def classify_failure(self, exc: BaseException) -> Failure:
+        """Use TIDAL's concrete response/type facts, never its diagnostic copy."""
+        if isinstance(exc, DownloadIncomplete):
+            return Failure(
+                FailureScope.ITEM,
+                EventCode.FAILED,
+                "Some items were not downloaded. Retry the job or open the logs.",
+                retryable=True,
+            )
+        if isinstance(exc, AuthenticationError):
+            return Failure(FailureScope.ACCOUNT, EventCode.ACCOUNT_REQUIRED, "Sign in to TIDAL again.")
+        if isinstance(exc, TooManyRequests):
+            return Failure(
+                FailureScope.UNKNOWN, EventCode.RATE_LIMITED, "TIDAL is limiting requests. Wait before trying again."
+            )
+        if isinstance(exc, StreamNotAvailable | ObjectNotFound | AssetNotAvailable):
+            return Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on TIDAL.")
+        if isinstance(exc, ManifestDecodeError | UnknownManifestFormat):
+            return Failure(
+                FailureScope.ENGINE,
+                EventCode.PROTOCOL_INCOMPATIBLE,
+                "Waves could not read TIDAL's delivery format. Check for an update.",
+            )
+        if isinstance(exc, HTTPError):
+            return self._http_application_failure(exc) or super().classify_failure(exc)
+        return super().classify_failure(exc)
+
+    @staticmethod
+    def _http_application_failure(exc: HTTPError) -> Failure | None:
+        if exc.response is None:
+            return None
+        status = exc.response.status_code
+        # 401/403 also describe item refusals. Preserve that distinction
+        # before identifying an expired account as the failure boundary.
+        if asset_refusal_message(exc) is not None or status == 404:
+            return Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on TIDAL.")
+        if status in (401, 403):
+            return Failure(FailureScope.ACCOUNT, EventCode.ACCOUNT_REQUIRED, "Sign in to TIDAL again.")
+        if status == 429:
+            return Failure(
+                FailureScope.UNKNOWN,
+                EventCode.RATE_LIMITED,
+                "TIDAL is limiting requests. Wait before trying again.",
+            )
+        if 500 <= status < 600:
+            return Failure(
+                FailureScope.PROVIDER, EventCode.FAILED, "TIDAL could not answer. Try again later.", retryable=True
+            )
+        return None
 
     def classify_refusal(self, exc) -> Refusal:
         """The engine's refusal decision, restated in the shared vocabulary.

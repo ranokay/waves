@@ -12,6 +12,7 @@ from threading import Event
 from typing import Protocol
 
 from waves.constants import QualityTier
+from waves.events import FailureScope
 from waves.providers.base import AudioType, ReadinessState, StreamInfo
 
 
@@ -19,14 +20,6 @@ class EngineOperation(StrEnum):
     AUDIO = "audio"
     LYRICS = "lyrics"
     ARTWORK = "artwork"
-
-
-class FailureScope(StrEnum):
-    ENGINE = "engine"
-    RUNTIME = "runtime"
-    ACCOUNT = "account"
-    PROVIDER = "provider"
-    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -134,6 +127,10 @@ class AppleEngine(Protocol):
 
 class EngineRouteUnavailable(RuntimeError):
     """The pin or request has no eligible route; selection never relaxes it."""
+
+    def __init__(self, message: str, *, failure: EngineFailure | None = None) -> None:
+        super().__init__(message)
+        self.failure = failure
 
 
 class EngineRouter:

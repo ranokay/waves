@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.events import EventCode, Failure, FailureScope
 from waves.providers.apple.engines import (
     AppleEngine,
     EngineFacts,
@@ -1338,7 +1339,9 @@ class AppleProvider(Provider):
         if result.error is not None:
             raise result.error
         if result.failure is not None or not isinstance(result.value, StreamInfo):
-            raise EngineRouteUnavailable("The selected Apple engine could not execute this request.")  # noqa: TRY003
+            raise EngineRouteUnavailable(  # noqa: TRY003
+                "The selected Apple engine could not execute this request.", failure=result.failure
+            )
         info = result.value
         codec = str((info.delivered or {}).get("codecs") or "").lower()
         codec = {"mp4a.40.2": "aac", "ec-3": "eac3"}.get(codec, codec)
@@ -1859,6 +1862,84 @@ class AppleProvider(Provider):
             return ids
         single = self._artist_id(item, attrs, {})
         return [single] if single else []
+
+    def classify_failure(self, exc: BaseException) -> Failure:
+        """Apple-owned concrete boundaries; arbitrary text stays unknown."""
+        from waves.providers.apple.engine import (
+            AppleCredentialsError,
+            AppleIntegrityError,
+            AppleTrackUnavailable,
+            AppleVariantUnavailable,
+            AppleWrapperDown,
+        )
+
+        if isinstance(exc, AppleCredentialsError):
+            wrapper = str(exc.credential) == "wrapper"
+            return Failure(
+                FailureScope.ACCOUNT,
+                EventCode.ACCOUNT_REQUIRED,
+                "Sign in to Apple's wrapper session again."
+                if wrapper
+                else "Export fresh Apple Music cookies in Settings.",
+                runtime_id="apple:wrapper-v2" if wrapper else "apple:cookies-client",
+            )
+        if isinstance(exc, AppleWrapperDown):
+            return Failure(
+                FailureScope.RUNTIME,
+                EventCode.FAILED,
+                "The Apple runtime is not responding. Check its setup in Settings.",
+                retryable=True,
+                runtime_id="apple:wrapper-v2",
+            )
+        if isinstance(exc, AppleIntegrityError):
+            return Failure(
+                FailureScope.ENGINE,
+                EventCode.INTEGRITY_FAILED,
+                "The Apple download failed verification. Any rejected file stays outside your library.",
+                retryable=True,
+            )
+        if isinstance(exc, AppleVariantUnavailable):
+            return Failure(
+                FailureScope.ENGINE,
+                EventCode.UNAVAILABLE,
+                "The requested delivery is not available through this Apple engine.",
+            )
+        if isinstance(exc, AppleTrackUnavailable):
+            return Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on Apple Music.")
+        if isinstance(exc, AppleCatalogUnavailable):
+            return Failure(
+                FailureScope.PROVIDER,
+                EventCode.PROTOCOL_INCOMPATIBLE,
+                "Apple's catalog format has changed. Check for a Waves update.",
+            )
+        if isinstance(exc, AppleCollectionIncomplete):
+            return Failure(
+                FailureScope.PROVIDER,
+                EventCode.FAILED,
+                "Apple sent only part of this collection. Try again.",
+                retryable=True,
+            )
+        if isinstance(exc, EngineRouteUnavailable):
+            if exc.failure is None:
+                return Failure(
+                    FailureScope.CONFIGURATION,
+                    EventCode.INVALID_CONFIGURATION,
+                    "No selected Apple engine can serve this request. Check your engine and delivery settings.",
+                )
+            failure = exc.failure
+            code, summary = {
+                "incompatible_client": (
+                    EventCode.PROTOCOL_INCOMPATIBLE,
+                    "The Apple engine needs a compatible client update.",
+                ),
+                "unsupported_request": (
+                    EventCode.UNAVAILABLE,
+                    "This Apple engine does not support the requested delivery.",
+                ),
+                "rate_limited": (EventCode.RATE_LIMITED, "Apple is limiting requests. Wait before trying again."),
+            }.get(failure.code, (EventCode.FAILED, "The selected Apple engine could not finish the request."))
+            return Failure(failure.scope, code, summary, failure.retryable, failure.engine, failure.runtime)
+        return super().classify_failure(exc)
 
     def classify_refusal(self, exc) -> Refusal:
         """Apple engine errors into the shared refusal vocabulary."""

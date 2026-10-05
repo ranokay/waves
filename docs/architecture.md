@@ -38,13 +38,13 @@ flowchart TD
   universal engine, and Apple uses its own adapter.
 - Infrastructure modules have specific contracts: `ids.py` for identity,
   `http.py` for pooled sessions, `file_integrity.py` for streaming SHA-256,
-  `redaction.py` for log privacy. Do not borrow another domain's private
+  `redaction.py` for privacy, and `events.py` for typed redacted application events. Do not borrow another domain's private
   helpers for these operations.
 
 This map names the current implementation. The accepted extensions are planned:
 [Provider → Engine → Runtime](adr/0010-provider-engine-runtime-boundary.md),
 [captured fulfillment intent and catalog offers](adr/0011-captured-fulfillment-intent.md),
-[composable surfaces/Settings](adr/0012-composable-provider-surfaces.md), and
+[composable surfaces/Settings](adr/0012-composable-provider-surfaces.md), and the notification-center consumer of
 [structured redacted events](adr/0013-redacted-event-lifecycle.md). Add those
 contracts within their existing provider, download, metadata and desktop owners;
 do not infer new implemented folders or a global manager from the target design.
@@ -75,7 +75,7 @@ behavior has been extracted.
 | Library / ownership / My Music            | `library/index.py`, `ownership.py`, recovery/mount helpers and `worker.py`; `desktop/library/bridge.py` presence/scans/files, `scan_process.py` child lifecycle; backend saved shelves/folders                                    | `domains/library/`                                      | `tests/library/`, provider saved-shelf tests; ADR-0003/0007                         |
 | Providers / authentication / session      | `providers/base.py`; `tidal.py`, `tidal_client.py`, `tidal_folders.py`, `tidal_manifest.py`, `tidal_refusals.py`; `apple/`; `desktop/session.py`; backend session lifecycle; `desktop/providers/presentation.py` payload builders | `domains/providers/`; provider settings in SettingsPage | `tests/providers/` with `tidal/` and `apple/`; provider spec and ADR-0004/0006/0008 |
 | Settings / preferences                    | `model/cfg.py` persisted fields, `config.py` loading/migration/session; `desktop/settings/schema.py` labels/defaults/schema/coercion registries, `persistence.py` atomic/coalesced writers; backend apply/side effects            | `domains/settings/`                                     | `tests/settings/`; ADR-0001 and provider spec                                       |
-| Diagnostics                               | `desktop/diagnostics/export.py` breadcrumb/crash/export, `devlog.py` opt-in timing, `redaction.py` shared privacy                                                                                                                 | `domains/diagnostics/`                                  | `tests/diagnostics/`                                                                |
+| Diagnostics                               | `events.py` typed events, `desktop/diagnostics/events.py` queued delivery/actions, `desktop/diagnostics/export.py` breadcrumb/crash/export, `devlog.py` opt-in timing, `redaction.py` shared privacy                              | `domains/diagnostics/`                                  | `tests/diagnostics/`                                                                |
 | Updates                                   | `desktop/updates/updater.py`, `signing.py`; `desktop/runtime_paths.py` shared frozen/source launch identity                                                                                                                       | settings and shell restart surfaces                     | `tests/updates/`, signing tools and packaging guards                                |
 | FFmpeg provisioning                       | `desktop/ffmpeg/manager.py`; engine FFmpeg use stays beside the download behavior                                                                                                                                                 | `domains/ffmpeg/`                                       | `tests/ffmpeg/`, `tests/downloads/`                                                 |
 | Metadata / tagging                        | `metadata/tags.py`, `matching.py`, `naming.py`, lyrics/TTML, MusicBrainz arbiter, Camelot; path templates in `paths.py`                                                                                                           | Settings and catalog consumers                          | `tests/metadata/`, relevant library/download tests                                  |
