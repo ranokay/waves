@@ -172,7 +172,7 @@ def catalog_succeeded(bridge: EventHost, *, key: str = "") -> None:
         resolve_events(bridge, EventDomain.PROVIDER, key=key)
     else:
         context = getattr(bridge, "_catalog_thread", None)
-        if isinstance(getattr(context, "event_key", None), str):
+        if context is not None and isinstance(getattr(context, "event_key", None), str):
             context.event_success = True
 
 
@@ -192,7 +192,7 @@ def report_failure(
 ) -> ApplicationEvent:
     context = getattr(bridge, "_catalog_thread", None)
     operation_key = getattr(context, "event_key", "")
-    if domain == EventDomain.PROVIDER and isinstance(operation_key, str) and operation_key:
+    if context is not None and domain == EventDomain.PROVIDER and isinstance(operation_key, str) and operation_key:
         context.event_failed = True
         key = key or operation_key
     if references is None:
