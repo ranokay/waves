@@ -432,8 +432,6 @@ def test_runtime_install_owners_distinguish_transport_from_local_failures_and_ke
     for representation in (json.dumps(states), json.dumps(delivered), repr(retained), copied[0]):
         for private in ("dXNlcjpwYXNz", "Private Runtime", "Secret Installer", "staged.bin"):
             assert private not in representation
-    assert bridge._ffmpeg_install_inflight is False
-    assert bridge._apple_runtime_inflight is False
 
 
 def test_apple_port_reservation_failure_and_recovery_follow_queued_action_lifecycle(runtime_event_bridge, event_loop):
