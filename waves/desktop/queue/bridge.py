@@ -606,6 +606,7 @@ class QueueMixin:
         ask_toggles: dict | None = None,
         ask_engine: str = "",
         engine_preferences: tuple[str, ...] = (),
+        library_skip: bool | None = None,
     ) -> int:
         # A per-item quality choice arrives as both halves of the ask (the
         # Waves tier string the job pins, the word the drawer states); without
@@ -659,7 +660,7 @@ class QueueMixin:
             # the expanded row's prediction must answer alike, and a preference
             # flipped while a long queue works through it would otherwise move
             # one of them and not the other. See _job_library_skip.
-            "askLibrarySkip": self._library_bulk_skip_on(),
+            "askLibrarySkip": self._library_bulk_skip_on() if library_skip is None else library_skip,
             # The catalog's advertised ceiling for this release ("" when it has
             # none: playlists and mixes have no tier of their own). The drawer
             # states the LOWER of this and the request, so a lossless-only
@@ -1001,6 +1002,7 @@ class QueueMixin:
             self._job_owned.pop(qid, None)
             self._job_fetched.pop(qid, None)
             self._jobs.objs.pop(qid, None)
+            getattr(self._jobs, "intents", {}).pop(qid, None)
 
     @Slot(str)
     def cancelQueuedGroup(self, gid: str) -> None:

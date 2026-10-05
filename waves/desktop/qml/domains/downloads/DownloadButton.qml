@@ -126,6 +126,7 @@ Rectangle {
   property bool chooserLyricsTtml: false
   property bool chooserCoverEmbed: true
   property bool chooserCoverFile: true
+  property bool chooserAllowFallback: false
   function refreshChooser() {
     var d = ({})
     try {
@@ -150,6 +151,7 @@ Rectangle {
     db.chooserLyricsTtml = d.lyricsTtml === true && db.chooserShowTtml
     db.chooserCoverEmbed = d.coverEmbed !== false
     db.chooserCoverFile = d.coverFile !== false
+    db.chooserAllowFallback = false
   }
   // What a click does, without the pointer: the same decision the tap
   // area and the keyboard/accessibility press action take (the gates
@@ -285,6 +287,7 @@ Rectangle {
     var tier = db.chooserAtmosOnly ? "" : ("" + (db.chooserTier || ""))
     var audio = db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || ""))
     var toggles = {
+      allow_fallback: db.chooserAllowFallback,
       lyrics_embed: db.chooserLyricsEmbed,
       lyrics_file: db.chooserLyricsFile,
       lyrics_ttml_file: db.chooserLyricsTtml,
@@ -1482,6 +1485,23 @@ Rectangle {
                 }
               }
             }
+          }
+        }
+        Row {
+          spacing: 8
+          Check {
+            objectName: "chooserAllowFallback"
+            checked: db.chooserAllowFallback
+            accessibleLabel: "Allow fallback"
+            onToggled: db.chooserAllowFallback = !db.chooserAllowFallback
+          }
+          Text {
+            textFormat: Text.PlainText
+            text: "Allow provider / engine fallback"
+            color: textLo
+            font.family: uiFont
+            font.pixelSize: 10
+            anchors.verticalCenter: parent.verticalCenter
           }
         }
         Column {

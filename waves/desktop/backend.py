@@ -32,6 +32,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 from collections import Counter, deque, namedtuple
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -134,6 +135,7 @@ from waves.model.cfg import (
     wants_both_default,
 )
 from waves.model.cfg import Settings as CfgSettings
+from waves.model.download_policy import DownloadIntent, apply_policy_edit, capture_intent
 from waves.paths import (
     format_path_media,
     format_str_media,
@@ -2976,6 +2978,34 @@ def _stoppable(recs_of, stop_check: Callable[[], None] | None):
 _RETRYABLE = frozenset({"failed", "cancelled"})
 
 
+def _capture_request(
+    bridge, provider_id, kind, media_id, tier, audio_type, toggles, engine_pin=""
+) -> DownloadIntent | None:
+    data = getattr(getattr(bridge, "settings", None), "data", None)
+    if not isinstance(data, CfgSettings):
+        return None
+    prefs = getattr(bridge, "_waves_pref_bool", None)
+    return capture_intent(
+        data,
+        provider_id,
+        kind,
+        media_id,
+        tier=tier,
+        audio_type=audio_type,
+        toggles=_chooser_asset_pins(toggles),
+        engine_pin=engine_pin,
+        provider_pin=str((toggles or {}).get("provider_pin") or ""),
+        allow_fallback=bool((toggles or {}).get("allow_fallback", False)),
+        clean_album_artist=prefs("clean_album_artist") if callable(prefs) else False,
+        library_bulk_skip=bridge._library_bulk_skip_on(),
+    )
+
+
+def _chooser_asset_pins(toggles: dict | None) -> dict[str, bool]:
+    """Only asset toggles cross into queue rows and engine option overrides."""
+    return {key: bool(value) for key, value in (toggles or {}).items() if key in _CHOOSER_TOGGLE_KEYS}
+
+
 @dataclasses.dataclass(slots=True)
 class _JobSpec:
     """What a queued row's download needs, held until its turn comes.
@@ -3018,9 +3048,10 @@ class _JobSpec:
     # leaks nothing (the flag dies with its spec).
     is_retry: bool = False
     # Per-click Chooser lyrics/art pins (base keys, booleans), or None for a
-    # plain click: the job reads these over the provider's stored options.
+    # plain click. Enqueue captures effective options in the request intent.
     chooser_toggles: dict | None = None
     engine_policy: EnginePolicy | None = None
+    intent: DownloadIntent | None = None
 
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
@@ -3085,6 +3116,7 @@ class _AppleDownloads(DownloadAdapter):
                 str(item.get("askEngine") or ""),
             ),
             is_retry=True,
+            request_intent=getattr(self._bridge._jobs, "intents", {}).get(item.get("qid")),
         )
 
     def cached_row(self, kind: str, media_id: str) -> object | None:
@@ -3162,14 +3194,15 @@ class _AppleDownloads(DownloadAdapter):
 
     def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name) -> Callable[[object], None]:
         bridge = self._bridge
+        hooks = bridge._apple_job_hooks(spec.intent) if spec.intent else bridge._apple_job_hooks()
 
         def run(obj) -> None:
             # File-level Apple delivery on the job's own worker: the shared
             # settlement the engine path runs is TIDAL-engine shaped (dl
-            # counters), so the runner settles its own row and returns. The
-            # hooks are built here, on the worker, as they always were.
+            # counters), so the runner settles its own row and returns.
+            # Hooks capture settings before the worker starts.
             runner.run_job_body(
-                bridge._apple_job_hooks(),
+                hooks,
                 qid,
                 spec,
                 obj,
@@ -10233,7 +10266,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         provider: the row's provider id, stated by the popover as a static
         chip (its mark comes from ``providerDescriptor``, the badge's identity
         answer); tier: the Settings tier word for that provider; audioType:
-        stereo/both from Settings, clamped to the words ``audioOptions``
+        the effective shared/provider policy, clamped to the words ``audioOptions``
         offers; atmosOnly: collapse the audio control; tiers: the provider's
         tier entries; audioOptions: the provider's own audio words;
         showLyrics/showLyricsTtml/showArt: whether each popover section
@@ -10267,6 +10300,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if provider is None or AudioType.ATMOS in provider.audio_types:
             audio_options += ["atmos", "both"]
         audio_default = self._chooser_default_audio()
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if isinstance(data, CfgSettings):
+            audio_default = data.download_policies.effective(provider_id).audio_type or audio_default
         if audio_default not in audio_options:
             # A stereo-only provider cannot honor a "both" default: the value
             # and the offered words must agree, or the popover opens with no
@@ -10320,11 +10356,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             and tier in {option.tier for option in provider.quality_options}
         ):
             staged[provider.quality_setting] = str(tier.value)
-        if audio in ("stereo", "both"):
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if isinstance(data, CfgSettings) and provider_id and audio in ("stereo", "atmos", "both"):
+            staged[f"download_policies.providers.{provider_id}.audio_type"] = audio
+        elif audio in ("stereo", "both"):
             staged["default_audio_type"] = audio
-        # "atmos" alone has no Settings spelling (it is a per-click choice
-        # only): SET AS DEFAULTS leaves the default unchanged rather than
-        # misrecording it as both.
         # Lyrics/art quick-toggles write back to the row's own provider
         # mirrors (its settings card, or the id an unregistered word still
         # namespaces); the shared keys are fallbacks. An explicit mirror
@@ -10432,6 +10468,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 values = None
         incoming = values if isinstance(values, dict) else {}
         pins: dict = {}
+        if "allow_fallback" in incoming:
+            pins["allow_fallback"] = bool(incoming["allow_fallback"])
         if "engine" in incoming:
             pins["engine"] = str(incoming["engine"]).strip().lower()
         for key in _CHOOSER_TOGGLE_KEYS:
@@ -10444,8 +10482,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """DOWNLOAD from the Chooser popover: that click only, never stored.
 
         tier is a UI word (HI-RES/LOSSLESS/HIGH/LOW); audio_type is
-        stereo/atmos/both ("" follows Settings); toggles are the five
-        lyrics/art quick choices for this click. Unsupported kinds fall back
+        stereo/atmos/both ("" follows Settings); toggles carry lyrics/art
+        choices, an optional engine pin and explicit fallback permission for
+        this click. Unsupported kinds fall back
         to the row's plain download slot."""
         mid = str(media_id or "")
         k = str(kind or "").strip().lower()
@@ -10453,6 +10492,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         pins = self._chooser_toggle_pins(toggles)
         provider_id = self._chooser_provider_of(mid)
+        pins["provider_pin"] = provider_id
         ask = self._chooser_ask_for(provider_id, tier)
         audio = self._chooser_normalize_audio(audio_type, provider_id)
         if _download_click(self, k, mid, chooser=True, chooser_ask=ask, chooser_audio=audio, chooser_toggles=pins):
@@ -12627,8 +12667,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         audio_type: str | None = None,
         base_template: str | None = None,
         chooser_toggles: dict | None = None,
+        request_intent: DownloadIntent | None = None,
     ) -> Download:
         self._resolve_ffmpeg()
+        data = request_intent.settings_data() if request_intent else self.settings.data
+        if request_intent:
+            data.path_binary_ffmpeg = self.settings.data.path_binary_ffmpeg
+
         progress_gui = ProgressBars(
             item=signals.item,
             item_name=signals.item_name,
@@ -12637,9 +12682,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         )
         dl = _TrackedDownload(
             tidal_obj=self.tidal,
-            path_base=self.settings.data.download_base_path,
+            path_base=data.download_base_path,
             fn_logger=logger,
-            skip_existing=self.settings.data.skip_existing,
+            skip_existing=data.skip_existing,
             progress=Progress(),
             progress_gui=progress_gui,
             event_abort=event_abort or self._event_abort,
@@ -12648,11 +12693,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # provider (spec §4.1 composition); the registration of this job's
             # stream resolver happens in Download.__init__.
             provider=self.providers["tidal"],
-            # The 'Clean album-artist tag' pref lives in waves.json, bridge
-            # territory; the rule lives in the engine beside the tag write it
-            # shapes. The live probe means a settings change applies to this
-            # job's later tracks without a restart.
-            album_artist_tag_clean=lambda: self._waves_pref_bool("clean_album_artist"),
+            # GUI-only metadata policy is captured with engine preferences;
+            # a change applies to new jobs, never this job's later tracks.
+            album_artist_tag_clean=(lambda: request_intent.clean_album_artist)
+            if request_intent
+            else lambda: self._waves_pref_bool("clean_album_artist"),
             track_signals=signals,
             ownership_of=self._ownership.ownership_of,
             ownership_stamp=self._ownership.stamp_ceiling,
@@ -12666,6 +12711,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             audio_type=audio_type,
             base_template=base_template,
             chooser_toggles=chooser_toggles,
+            **({"settings_data": data} if request_intent else {}),
         )
         self._warn_if_ffmpeg_missing(dl)
         return dl
@@ -12750,7 +12796,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         return ("healed", str(live))
         return ("dead", path)
 
-    def _probe_download_base(self, timeout_s: float = 8.0) -> tuple[str, str]:
+    def _probe_download_base(self, timeout_s: float = 8.0, *, path_override: str | None = None) -> tuple[str, str]:
         """Run :meth:`_probe_folder_verdict` with a hang guard: the probe runs
         on a daemon thread, so the worst a stale mount can cost the caller is
         `timeout_s`, not a 30s+ SMB stall. A probe that misses the deadline
@@ -12764,7 +12810,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         :meth:`_remount_download_share`) and probed once more, so "Try
         again", the download gate and the recovery watch all actually
         remount instead of watching a path that cannot return by itself."""
-        path = self.settings.data.download_base_path
+        path = self.settings.data.download_base_path if path_override is None else path_override
 
         def guarded() -> tuple[str, str]:
             result: list[tuple[str, str]] = []
@@ -12948,6 +12994,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return False
         logger.info("The share is gone; asking macOS to mount it back")
         return netmount.remount(url, timeout_s=20.0)
+
+    def _request_reachability(self, intent: DownloadIntent | None, retry, media_id: str = "") -> bool:
+        if intent is None:
+            return self._gate_reachability(retry, media_id)
+        base = intent.settings_data().download_base_path
+        if base == self.settings.data.download_base_path:
+            return self._gate_reachability(retry, media_id)
+        verdict, live = self._probe_download_base(path_override=base)
+        if verdict not in ("ok", "healed"):
+            _raise_download_incomplete("The original download folder is unavailable. Retry after reconnecting it.")
+        self._note_download_base_ok(live)
+        return True
 
     def _downloads_running(self) -> bool:
         """True while any queue row is actively downloading. Read from download
@@ -13422,6 +13480,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
+        request_intent: DownloadIntent | None = None,
     ) -> bool:
         """``keep_ask`` = (askQuality, tier word) of a row being RETRIED: the
         retry asks at what that row asked, not at a choice or setting that
@@ -13437,6 +13496,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         on its way and acknowledged); False when a gate held or blocked the
         click and nothing was queued, so callers that confirm with their own
         status line keep the gate's message instead of overwriting it."""
+        asset_pins = _chooser_asset_pins(chooser_toggles)
         # getattr: partial test stubs drive _download without the Chooser
         # helper; their holds replay bare, as before.
         _chooser_wrap = getattr(self, "_chooser_replay", None)
@@ -13489,6 +13549,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         chooser_ask=chooser_ask,
                         chooser_audio=chooser_audio,
                         chooser_toggles=chooser_toggles,
+                        request_intent=request_intent,
                     )
                 ),
             )
@@ -13508,6 +13569,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
                     chooser_toggles=chooser_toggles,
+                    request_intent=request_intent,
                 )
             ),
         ):
@@ -13552,12 +13614,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # and a Chooser click (chooser_audio) pins its own Versions for that
         # click only. Test stubs without settings read as stereo (single
         # legacy, existing behavior).
+        policy_data = getattr(getattr(self, "settings", None), "data", None)
+        if isinstance(policy_data, CfgSettings) and not chooser_audio and keep_ask is None:
+            chooser_ver = policy_data.download_policies.effective(provider_id).audio_type or chooser_ver
         versions: list[str | None]
         try:
             _atmos_on = wants_both_default(self.settings)
         except Exception:
             _atmos_on = False
-        if keep_ver is not None:
+        if request_intent is not None or keep_ver is not None:
             versions = [keep_ver]
         elif chooser_ver is not None and (merge_plan is not None or type_media == "video"):
             versions = [None]
@@ -13601,10 +13666,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             row_tier_word = ask_tier
             base_for_spec = ""
             if ver == "atmos":
-                row_template = atmos_file_template(file_template, atmos_fragment)
+                row_template = file_template if request_intent else atmos_file_template(file_template, atmos_fragment)
                 row_expected = ATMOS_WORD
                 row_tier_word = ATMOS_WORD
-                base_for_spec = file_template
+                base_for_spec = request_intent.base_template if request_intent else file_template
+            intent = request_intent or _capture_request(
+                self, provider_id, type_media, media_id, ask, row_atype, chooser_toggles, ""
+            )
+            if intent is not None and request_intent is None:
+                intent = dataclasses.replace(intent, base_template=base_for_spec)
             if media_id:
                 with self._queue_lock:
                     dup = any(
@@ -13614,7 +13684,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         and it.get("template") == row_template
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
-                        and dict(it.get("askToggles") or {}) == dict(chooser_toggles or {})
+                        and dict(it.get("askToggles") or {}) == asset_pins
+                        and getattr(self._jobs, "intents", {}).get(it["qid"]) == intent
                         for it in self._queue
                     )
                 if dup:
@@ -13632,7 +13703,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_quality=ask,
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
-                ask_toggles=chooser_toggles,
+                **({"library_skip": intent.library_bulk_skip} if intent else {}),
+                ask_toggles=asset_pins,
             )
             queued_any = True
             # Acknowledge the click on the button itself, immediately: behind a
@@ -13674,8 +13746,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 merge_plan=merge_plan,
                 audio_type=row_atype,
                 base_template=base_for_spec,
-                chooser_toggles=dict(chooser_toggles or {}),
+                chooser_toggles=dict(asset_pins),
+                intent=intent,
             )
+            if intent is not None:
+                self._jobs.intents[qid] = intent
             self._pending_qids.append(qid)
         if not queued_any:
             # Every Version already queued/running: acknowledge like a fresh row
@@ -13772,6 +13847,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
+        request_intent: DownloadIntent | None = None,
         engine_policy: EnginePolicy | None = None,
     ) -> bool:
         """Queue one Apple track or collection. The TIDAL _download's shape
@@ -13797,6 +13873,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """
         chooser_toggles = dict(chooser_toggles or {})
         selected = chooser_toggles.pop("engine", None)
+        asset_pins = _chooser_asset_pins(chooser_toggles)
         if engine_policy is None:
             provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
             capture = getattr(provider, "engine_policy", None)
@@ -13866,6 +13943,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         chooser_ask=chooser_ask,
                         chooser_audio=chooser_audio,
                         chooser_toggles=chooser_toggles,
+                        request_intent=request_intent,
                         engine_policy=engine_policy,
                     )
                 ),
@@ -13886,6 +13964,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
                     chooser_toggles=chooser_toggles,
+                    request_intent=request_intent,
                     engine_policy=engine_policy,
                 )
             ),
@@ -13919,8 +13998,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # alongside where a track carries Atmos; the stereo default stays
         # single stereo rows. A retry re-queues only its own Version, and a
         # Chooser click pins its own Versions for that click only.
+        policy_data = getattr(getattr(self, "settings", None), "data", None)
+        if isinstance(policy_data, CfgSettings) and not chooser_audio and keep_ask is None:
+            chooser_ver = policy_data.download_policies.effective(CTX_APPLE).audio_type or chooser_ver
         versions: list[str | None]
-        if keep_ver is not None:
+        if request_intent is not None or keep_ver is not None:
             versions = [keep_ver]
         elif chooser_ver == "both":
             versions = ["stereo", "atmos"]
@@ -13993,16 +14075,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             row_tier_word = ask_tier
             base_for_spec = ""
             if ver == "atmos":
-                row_template = atmos_file_template(file_template, atmos_fragment)
+                row_template = file_template if request_intent else atmos_file_template(file_template, atmos_fragment)
                 row_expected = "ATMOS"
                 row_tier_word = ATMOS_WORD
-                base_for_spec = file_template
+                base_for_spec = request_intent.base_template if request_intent else file_template
             elif ver == "stereo":
                 row_expected = "HIGH"
             # A re-clicked row overlapping a queued or running one is pure
             # duplication (the TIDAL _download guard): a different pinned
             # quality is an upgrade request and keeps its own row. Each
             # Version guards on its own audioType, so stereo+Atmos coexist.
+            intent = request_intent or _capture_request(
+                self, CTX_APPLE, type_media, media_id, ask, row_atype, chooser_toggles, engine_policy.pin
+            )
+            if intent is not None:
+                preferred = (
+                    intent.engine_priority if request_intent else intent.engine_priority or engine_policy.preferences
+                )
+                if request_intent is None:
+                    intent = dataclasses.replace(intent, engine_priority=tuple(preferred), base_template=base_for_spec)
+                engine_policy = EnginePolicy(preferred, intent.engine_pin, intent.same_provider_fallback)
             if media_id:
                 with self._queue_lock:
                     dup = any(
@@ -14012,9 +14104,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         and it.get("template") == row_template
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
-                        and dict(it.get("askToggles") or {}) == dict(chooser_toggles or {})
+                        and dict(it.get("askToggles") or {}) == asset_pins
+                        and getattr(self._jobs, "intents", {}).get(it["qid"]) == intent
                         and EnginePolicy(
-                            tuple(it.get("enginePreferences") or ("gamdl",)), str(it.get("askEngine") or "")
+                            tuple(it.get("enginePreferences") or ("gamdl",)),
+                            str(it.get("askEngine") or ""),
+                            intent.same_provider_fallback if intent else False,
                         )
                         == engine_policy
                         for it in self._queue
@@ -14034,7 +14129,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_quality=ask,
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
-                ask_toggles=chooser_toggles,
+                **({"library_skip": intent.library_bulk_skip} if intent else {}),
+                ask_toggles=asset_pins,
                 ask_engine=engine_policy.pin or "auto",
                 engine_preferences=engine_policy.preferences,
             )
@@ -14054,9 +14150,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 audio_type=row_atype,
                 base_template=base_for_spec,
                 is_retry=is_retry,
-                chooser_toggles=dict(chooser_toggles or {}),
+                chooser_toggles=dict(asset_pins),
+                intent=intent,
                 engine_policy=engine_policy,
             )
+            if intent is not None:
+                self._jobs.intents[qid] = intent
             self._pending_qids.append(qid)
         if not queued_any:
             self.downloadState.emit(media_id, "queued")
@@ -14135,15 +14234,30 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._release_job_signals(qid)
         self._jobs.dls.pop(qid, None)
 
-    def _apple_job_hooks(self) -> AppleJobHooks:
+    def _apple_job_hooks(self, intent: DownloadIntent | None = None) -> AppleJobHooks:
         """The bridge-owned services one Apple job reaches, as plain callables.
 
-        Built per call, never cached: the settings, provider registry, queue
-        and supervisor are read live while a job runs, and every callable
-        defers its attribute read to call time so a job path only touches
-        what it uses.
+        Captured jobs read private settings; credentials, provider readiness,
+        queue and runtime services stay live. No policy mutation crosses back
+        into the shared Settings instance.
         """
         token = provider_contexts(self).capture(CTX_APPLE)
+        data = intent.settings_data() if intent else None
+        if data is not None:
+            for key in (
+                "path_binary_ffmpeg",
+                "apple_cookies_path",
+                "path_binary_nm3u8dlre",
+                "apple_wrapper_port",
+                "apple_wrapper_idle_sec",
+            ):
+                setattr(data, key, getattr(self.settings.data, key))
+
+        def gate_reachability(retry, media_id="") -> bool:
+            ready = self._request_reachability(intent, retry, media_id)
+            if ready and data is not None:
+                data.download_base_path = self._base_ok[0]
+            return ready
 
         def deliver_event(event: ApplicationEvent) -> None:
             qid = event.references.job_id
@@ -14162,10 +14276,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         return AppleJobHooks(
             provider=lambda: (getattr(self, "providers", {}) or {}).get(CTX_APPLE),
-            settings=lambda: getattr(self, "settings", None),
-            psetting=lambda provider_id, key, default=None: self._psetting(provider_id, key, default),
-            apple_setting=lambda key, default=None: self._apple_setting(key, default),
-            tag_write_flags=lambda: self._tag_write_flags(),
+            settings=(lambda: types.SimpleNamespace(data=data))
+            if data is not None
+            else lambda: getattr(self, "settings", None),
+            psetting=(lambda provider_id, key, default=None: provider_setting(data, provider_id, key, default))
+            if data is not None
+            else lambda provider_id, key, default=None: self._psetting(provider_id, key, default),
+            apple_setting=(lambda key, default=None: provider_setting(data, CTX_APPLE, key, default))
+            if data is not None
+            else lambda key, default=None: self._apple_setting(key, default),
+            tag_write_flags=(lambda: {f"write_{tag}": metadata_tag_write(data, tag) for tag in METADATA_TAG_FLAGS})
+            if data is not None
+            else lambda: self._tag_write_flags(),
             job_quality=lambda qid: self._job_quality(qid) if hasattr(self, "_job_quality") else None,
             job_audio_type=lambda qid: self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else None,
             ownership=lambda: getattr(self, "_ownership", None),
@@ -14187,7 +14309,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             download_progress=lambda media_id, pct: self.downloadProgress.emit(media_id, pct),
             setup_requested=lambda kind: self.appleSetupRequested.emit(kind),
             finish_job=lambda qid: self._finish_job(qid),
-            gate_reachability=lambda retry, media_id="": self._gate_reachability(retry, media_id),
+            gate_reachability=gate_reachability
+            if intent
+            else lambda retry, media_id="": self._gate_reachability(retry, media_id),
             discard_pending_downloads=lambda media_ids: self._discard_pending_downloads(media_ids),
             release_abandoned_hold=lambda media_ids: self._release_abandoned_hold(media_ids),
             # getattr: partial test stubs build these hooks without the helper.
@@ -15014,6 +15138,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 audio_type=getattr(spec, "audio_type", None),
                 base_template=getattr(spec, "base_template", None) or None,
                 chooser_toggles=getattr(spec, "chooser_toggles", None),
+                **({"request_intent": spec.intent} if spec.intent else {}),
             )
         if dl is not None and (collection or merge_plan is not None):
             self._jobs.tracks.setdefault(qid, {})
@@ -15024,6 +15149,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             try:
                 body()
+            except DownloadIncomplete as exc:
+                # A captured destination can become unavailable before dispatch.
+                # Keep its retryable row; changing defaults never redirects it.
+                status = "cancelled" if job_abort.is_set() else "failed"
+                self._set_queue_status(qid, status, str(exc))
+                self.downloadState.emit(media_id, "" if job_abort.is_set() else "failed")
+                self._bump_download_groups(media_id, None, "failed")
+                self._jobs.aborts.pop(qid, None)
+                self._release_job_signals(qid)
+                self._jobs.dls.pop(qid, None)
             finally:
                 # The job's segment executor dies with the job, or its worker
                 # threads would pile up across queue rows. A provider-run job
@@ -15102,7 +15237,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # mount costs seconds). On a dead mount: dialog + held retry, and
             # the optimistic queue row is withdrawn so the queue reads as if
             # the download never started (matching the pre-probe contract).
-            if not self._gate_reachability(
+            reachability = (
+                (lambda retry, mid: self._request_reachability(spec.intent, retry, mid))
+                if spec.intent
+                else self._gate_reachability
+            )
+            if not reachability(
                 lambda: self._download(
                     obj,
                     type_media,
@@ -15113,6 +15253,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     merge_plan,
                     keep_ask=row_ask,
                     chooser_toggles=getattr(spec, "chooser_toggles", None),
+                    **({"request_intent": spec.intent} if spec.intent else {}),
                 ),
                 media_id,
             ):
@@ -15182,7 +15323,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # against the old mount while the gate keeps saying all is well.
             # Apple jobs build no engine, so there is no snapshot to follow.
             if dl is not None:
-                dl.path_base = self.settings.data.download_base_path
+                dl.path_base = self._base_ok[0] if spec.intent else self.settings.data.download_base_path
             # STOP can land while the gate is probing, and the probe is the
             # slow part of starting a job: seconds against a stale network
             # mount, which then remounts and probes again. stopAll had already
@@ -15215,7 +15356,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     dl.items(
                         file_template=file_template,
                         media=obj,
-                        download_delay=bool(self.settings.data.download_delay),
+                        download_delay=bool(dl.settings.data.download_delay),
                     )
                     # Empty-dual withdrawal (§5.2): a dual row that met no
                     # track offering its Version has no work — it leaves no
@@ -15255,7 +15396,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     ok, _path = dl.item(
                         file_template=file_template,
                         media=obj,
-                        download_delay=bool(self.settings.data.download_delay),
+                        download_delay=bool(dl.settings.data.download_delay),
                     )
                     # Empty-dual withdrawal for single tracks (a dual row whose
                     # one track offers nothing of its Version): no row, not done.
@@ -15329,6 +15470,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         merge_plan,
                         keep_ask=row_ask,
                         chooser_toggles=getattr(spec, "chooser_toggles", None),
+                        **({"request_intent": spec.intent} if spec.intent else {}),
                     ),
                     media_id,
                     qid,
@@ -15404,11 +15546,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         total = len(plan)
         if not total:
             return
-        max_workers = max(1, int(self.settings.data.downloads_concurrent_max or 3))
+        max_workers = max(1, int(dl.settings.data.downloads_concurrent_max or 3))
         # items() forwards this to every track it fans out; this fan-out stands in
         # for items(), so it has to forward it too or the setting is honored on a
         # plain album and ignored on a merged one.
-        download_delay = bool(self.settings.data.download_delay)
+        download_delay = bool(dl.settings.data.download_delay)
         done = 0
         failures = 0
         # The gauge counts items in flight so a verbose report can show whether
@@ -19748,6 +19890,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 str(item.get("audioType") or "") or None,
             ),
             chooser_toggles=dict(item.get("askToggles") or {}),
+            request_intent=getattr(self._jobs, "intents", {}).get(item.get("qid")),
         )
 
     @Slot(int)
@@ -21612,6 +21755,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         for key, value in values.items():
             if key in self._waves_prefs:
                 self.setWavesPref(key, value)
+                continue
+            if key.startswith("download_policies."):
+                data.download_policies = apply_policy_edit(data.download_policies, key, value)
                 continue
             if not hasattr(data, key):
                 continue

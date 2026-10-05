@@ -1,13 +1,9 @@
-"""'Download discography' includes music videos when their source toggle is on.
+"""The shared Music videos preference controls discography inclusion.
 
-A ``video_download`` flag under Settings > Downloads that nothing consults is
-dead wiring: manual video downloads never read it (``dl.item()`` allows videos
-by default) and a whole-artist download gathers only albums, EPs and guest
-tracks. The flag is a discography source toggle (Settings > Discography &
-editions, beside Albums / EPs & singles / Featured on) and ``downloadArtist``
-queues the artist's music videos when it is on. These tests pin the wiring end
-to end: the schema placement, the queueing, the off-by-default restraint, and
-the partial-scan refusal when the video fetch fails.
+Settings > Downloads owns video preferences. ``downloadArtist`` queues the
+artist's music videos when enabled; manual video downloads remain available.
+These tests cover placement, queueing, the off-by-default restraint and the
+partial-scan refusal when the video fetch fails.
 """
 
 from __future__ import annotations
@@ -31,16 +27,16 @@ def _sections_by_id():
     return {s["id"]: s for s in WavesBridge.settingsSchema(_schema_stub())}
 
 
-def test_the_toggle_lives_with_the_discography_sources():
+def test_the_shared_video_toggle_lives_under_downloads():
     sections = _sections_by_id()
     disco_keys = [f["key"] for f in sections["discography"]["fields"]]
     downloads_keys = [f["key"] for f in sections["downloads"]["fields"]]
-    assert _KEY in disco_keys, "the Music videos source belongs in Discography & editions"
-    assert _KEY not in downloads_keys, "the toggle must not also sit under Downloads"
+    assert _KEY in downloads_keys
+    assert _KEY not in disco_keys, "shared video preferences have one Settings control"
 
 
 def test_the_toggle_reads_as_a_discography_source():
-    field = next(f for f in _sections_by_id()["discography"]["fields"] if f["key"] == _KEY)
+    field = next(f for f in _sections_by_id()["downloads"]["fields"] if f["key"] == _KEY)
     assert field["type"] == "bool"
     assert field["label"] == "Music videos"
     # The stock engine help ("Allow download of videos.") describes a

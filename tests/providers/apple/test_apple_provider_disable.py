@@ -101,6 +101,7 @@ def test_an_empty_provider_queue_stops_nothing_and_emits_nothing():
 
 def _retry_stub(item: dict) -> SimpleNamespace:
     stub = SimpleNamespace()
+    stub._jobs = JobRuntime()
     stub._queue_index = {item["qid"]: item}
     stub._merge_plans = {}
     stub.removed = []

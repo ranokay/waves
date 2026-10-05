@@ -101,7 +101,9 @@ class _Stub:
 
     def _build_download(self, signals, **kwargs):
         self.built_with = kwargs
-        return _FakeDownload()
+        dl = _FakeDownload()
+        dl.settings = self.settings
+        return dl
 
     def _job_quality(self, qid):
         # The real bridge pins the row's queued audio quality onto its job;

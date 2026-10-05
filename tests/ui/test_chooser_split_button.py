@@ -436,20 +436,16 @@ def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
     # Cold cache: the click parks instead of queueing.
     b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo", {"lyrics_embed": True, "cover_album_file": False})
     assert b._queue == []
-    assert b._chooser_refetch_pins[("track", "t1")] == (
-        "track",
-        "LOSSLESS",
-        "stereo",
-        {"lyrics_embed": True, "cover_album_file": False},
-    )
+    assert b._refetched == ("track", "t1")
+    b.settings.data.tidal_quality_audio = "LOW"
+    b.settings.data.default_audio_type = "atmos"
     # The fetch lands: replay queues at the parked pins, not Settings.
     b._objs["track"]["t1"] = _track("t1")
-    b._refetch_inflight.discard(("track", "t1"))
     b._on_media_refetched("track", "t1")
+    assert len(b._queue) == 1
     assert (b._queue[-1]["askQuality"], b._queue[-1]["quality"]) == ("LOSSLESS", "LOSSLESS")
+    assert b._queue[-1]["audioType"] == "stereo"
     assert b._queue[-1]["askToggles"] == {"lyrics_embed": True, "cover_album_file": False}
-    assert b._jobs.specs[b._queue[-1]["qid"]].chooser_toggles == {"lyrics_embed": True, "cover_album_file": False}
-    assert ("track", "t1") not in b._chooser_refetch_pins
 
 
 def test_download_with_chooser_apple_parks_pins_across_a_refetch():
@@ -459,10 +455,31 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     provider.downloads = backend._AppleDownloads(b)
     refetched = []
     b._refetch_apple_for_download = lambda bucket, mid: refetched.append((bucket, mid))
-    _bind(b, "_download_apple_with_chooser")
+    _bind(b, "_on_media_refetched")
     b.downloadWithChooser("apple:456", "track", "HI-RES", "both", {"lyrics_embed": True})
     assert refetched == [("track", "apple:456")]
-    assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both", {"lyrics_embed": True})
+    calls = []
+
+    def serve_entry(kind, media_id, **kwargs):
+        calls.append((kind, media_id, kwargs))
+        return True
+
+    provider.downloads = SimpleNamespace(serve_entry=serve_entry)
+    b.settings.data.apple_quality_audio = "HIGH"
+    b.settings.data.default_audio_type = "stereo"
+    b._on_media_refetched("track", "apple:456")
+    assert calls == [
+        (
+            "track",
+            "apple:456",
+            {
+                "chooser": True,
+                "chooser_ask": ("HI_RES_LOSSLESS", "HI-RES"),
+                "chooser_audio": "both",
+                "chooser_toggles": {"lyrics_embed": True, "provider_pin": "apple"},
+            },
+        )
+    ]
 
 
 def test_download_with_chooser_refuses_an_apple_mix():

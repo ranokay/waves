@@ -5,7 +5,7 @@ the per-job ``_ProgressSignals`` relay, which must live on the GUI thread
 (the app's main thread). Construction is checked here so a worker cannot accidentally create
 a relay with the wrong affinity.
 
-This class owns the six per-qid lifecycle registries (specs, live objects,
+This class owns the per-qid lifecycle registries (specs, immutable intent, live objects,
 abort events, signal relays, track registries, live downloads) and refuses
 to be constructed — or to construct a relay — off the GUI thread. Derived
 caches (``_job_fetched``/``_job_owned``/``_job_quality``/``_job_library``/
@@ -22,6 +22,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from threading import current_thread, main_thread
 
+from waves.model.download_policy import DownloadIntent
+
 
 def _require_gui_thread(what: str) -> None:
     if current_thread() is not main_thread():
@@ -35,6 +37,7 @@ class JobRuntime:
         _require_gui_thread("JobRuntime construction")
         self._parent = parent
         self.specs: dict = {}
+        self.intents: dict[int, DownloadIntent] = {}
         self.objs: dict = {}
         self.aborts: dict = {}
         self.signals: dict = {}
