@@ -1,10 +1,14 @@
 Closes #<n>.
 
-<!-- 1-2 sentences: the problem and the fix. No background, no log tails. -->
+## Summary
+
+<!-- 1-2 sentences: the problem and the fix. Add a diagram, diff-sketch or tree when it shows the change faster than prose. No background, no log tails. -->
 
 <problem + fix>
 
-<!-- Only if tests were added or the fix needs proof; delete otherwise. -->
+## Evidence
+
+<!-- No raw logs, no linked logs: counts and exits are the whole record. Delete lines that do not apply. -->
 
 Tests: <what was added; red/green proof in one clause>
 
@@ -15,3 +19,11 @@ Gate (frozen SHA `<sha>`, no writes since):
 - OpenCodeReview — <n> findings; /code-review — <n> fixed, <n> refuted
 
 Merge stands on the local gate; checks read, not awaited.
+
+## Merge Danger
+
+<!-- Door: one-way or two-way. Blast Radius: one word; add a line when the impact is not obvious. -->
+
+**Door:** <one-way or two-way>
+
+**Blast Radius:** <one-word description>
