@@ -271,6 +271,10 @@ def operation_state(
     message: str,
     *,
     exception: BaseException | None = None,
+    key: str = "",
+    scope: FailureScope = FailureScope.UNKNOWN,
+    references: EventReferences | None = None,
+    valid: Callable[[], bool] | None = None,
 ) -> None:
     """Install/update owners share safe delivery while retaining their existing signals."""
     message = scrub_event_text(message)
@@ -279,11 +283,13 @@ def operation_state(
             bridge,
             domain,
             message,
-            key=signal_name,
+            key=key or signal_name,
             exception=exception,
-            scope=FailureScope.CONFIGURATION if isinstance(exception, OSError) else FailureScope.UNKNOWN,
+            scope=scope,
+            references=references,
+            valid=valid,
             actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
         )
     elif state in {"done", "cancelled"}:
-        resolve_events(bridge, domain, key=signal_name)
+        resolve_events(bridge, domain, key=key or signal_name, valid=valid)
     getattr(bridge, signal_name).emit(state, message)

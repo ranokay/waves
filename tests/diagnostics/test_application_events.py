@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import threading
 from types import SimpleNamespace
 
 import pytest
+import requests
 from PySide6.QtCore import QCoreApplication
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.diagnostics.events import ApplicationEvents, operation_state, provider_failure_event
+from waves.desktop.providers.lifecycle import provider_contexts
 from waves.desktop.settings.persistence import SingleFlightWriter
 from waves.events import (
     ApplicationEvent,
@@ -185,6 +188,7 @@ def test_install_failure_legacy_payload_and_event_are_both_redacted(event_loop):
         "failed",
         "Cannot install: password=private123 at /Volumes/Private Music/install.bin",
         exception=PermissionError("/Volumes/Private Music/install.bin"),
+        scope=FailureScope.CONFIGURATION,
     )
     event_loop.processEvents()
     for value in (str(states), json.dumps(events)):
@@ -236,6 +240,251 @@ def test_one_update_recovery_preserves_the_other_operation_actions(event_loop):
     event_loop.processEvents()
     assert relay.action(install["id"], "open_settings") is not None
     assert relay.action(probe["id"], "open_settings") is None
+
+
+@pytest.fixture()
+def runtime_event_bridge(event_loop):
+    """Run real runtime slots with fake installers and the queued GUI relay."""
+    relay = ApplicationEvents()
+    delivered = []
+    states = {"appleRuntimeStateChanged": [], "ffmpegStateChanged": []}
+    relay.changed.connect(delivered.append)
+    bridge = SimpleNamespace(
+        _events=relay,
+        _apple_runtime_inflight=False,
+        _ffmpeg_install_inflight=False,
+        _ffmpeg_abort=threading.Event(),
+        _logged_in=False,
+        _apple_runtime=SimpleNamespace(
+            install=lambda **kwargs: {"version": "test"}, ensure_image=lambda **kwargs: None
+        ),
+        _ffmpeg=SimpleNamespace(install=lambda **kwargs: {"version": "test"}),
+        _apple_container_state=lambda: {"name": "docker", "available": True, "running": True, "hint": ""},
+        _refresh_apple_container_cache=lambda **kwargs: {"name": "docker", "available": True, "running": True},
+        _configure_apple_provider=lambda: None,
+        _restore_ffmpeg_flags=lambda: None,
+        threadpool=SimpleNamespace(start=lambda worker: worker.run()),
+        appleRuntimeProgress=SimpleNamespace(emit=lambda *args: None),
+        ffmpegProgress=SimpleNamespace(emit=lambda *args: None),
+        appleRuntimeStatusChanged=SimpleNamespace(emit=lambda: None),
+        appleStatusChanged=SimpleNamespace(emit=lambda: None),
+        ffmpegStatusChanged=SimpleNamespace(emit=lambda: None),
+    )
+    for name, output in states.items():
+        setattr(bridge, name, SimpleNamespace(emit=lambda *args, output=output: output.append(args)))
+    for name in ("installAppleRuntime", "installAppleImage", "refreshAppleSetup", "installFfmpeg", "appleEnsurePort"):
+        setattr(bridge, name, getattr(WavesBridge, name).__get__(bridge))
+    yield bridge, delivered, states
+    relay.close()
+    event_loop.processEvents()
+
+
+def test_apple_binary_image_and_setup_recover_only_their_own_runtime_notice(runtime_event_bridge, event_loop):
+    bridge, delivered, states = runtime_event_bridge
+
+    def binary_failed(**kwargs):
+        raise requests.Timeout("Binary download timed out")
+
+    def image_failed(**kwargs):
+        raise requests.ConnectionError("Image download could not connect")
+
+    bridge._apple_runtime.install = binary_failed
+    bridge._apple_runtime.ensure_image = image_failed
+    bridge.installAppleRuntime()
+    bridge.installAppleImage()
+    assert delivered == [], "runtime failures reach the index through queued delivery"
+    event_loop.processEvents()
+    binary, image = delivered
+    assert binary["id"] != image["id"]
+    assert binary["scope"] == image["scope"] == FailureScope.UNKNOWN
+    for payload in (binary, image):
+        assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is not None
+
+    bridge.refreshAppleSetup()
+    event_loop.processEvents()
+    assert states["appleRuntimeStateChanged"][-1][0] == "done"
+    for payload in (binary, image):
+        assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is not None
+
+    def probe_failed(**kwargs):
+        raise requests.ConnectionError(
+            "Setup probe failed\nAuthorization: Basic dXNlcjpwYXNz\nCannot read /Volumes/Private Runtime/probe.json"
+        )
+
+    bridge._refresh_apple_container_cache = probe_failed
+    bridge.refreshAppleSetup()
+    event_loop.processEvents()
+    probe = delivered[-1]
+    assert probe["id"] not in {binary["id"], image["id"]}
+    assert probe["lifecycle"] == "active" and probe["scope"] == FailureScope.UNKNOWN
+    assert "ConnectionError" not in probe["summary"] and "ConnectionError" in probe["diagnostics"]
+    assert states["appleRuntimeStateChanged"][-1][0] == "failed"
+    for representation in (json.dumps(states), json.dumps(delivered)):
+        assert "dXNlcjpwYXNz" not in representation
+        assert "Private Runtime" not in representation and "probe.json" not in representation
+    for payload in (binary, image, probe):
+        assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is not None
+
+    bridge._refresh_apple_container_cache = lambda **kwargs: {"name": "docker", "running": True}
+    bridge.refreshAppleSetup()
+    event_loop.processEvents()
+    assert delivered[-1]["id"] == probe["id"] and delivered[-1]["lifecycle"] == "resolved"
+    assert bridge._events.action(probe["id"], EventAction.OPEN_SETTINGS) is None
+    for payload in (binary, image):
+        assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is not None
+
+    bridge._apple_runtime.install = lambda **kwargs: {"version": "test"}
+    bridge.installAppleRuntime()
+    event_loop.processEvents()
+    assert delivered[-1]["id"] == binary["id"] and delivered[-1]["lifecycle"] == "resolved"
+    assert bridge._events.action(binary["id"], EventAction.OPEN_SETTINGS) is None
+    assert bridge._events.action(image["id"], EventAction.OPEN_SETTINGS) is not None
+
+    bridge._apple_runtime.ensure_image = lambda **kwargs: None
+    bridge.installAppleImage()
+    event_loop.processEvents()
+    assert delivered[-1]["id"] == image["id"] and delivered[-1]["lifecycle"] == "resolved"
+    assert bridge._events.action(image["id"], EventAction.OPEN_SETTINGS) is None
+    resolved = [payload["id"] for payload in delivered if payload["lifecycle"] == "resolved"]
+    assert resolved == [probe["id"], binary["id"], image["id"]]
+
+
+def test_ffmpeg_removal_recovery_preserves_an_unresolved_install(runtime_event_bridge, event_loop):
+    bridge, delivered, _states = runtime_event_bridge
+    bridge._restore_ffmpeg_path = lambda: None
+
+    def install_failed(**kwargs):
+        raise requests.Timeout("The FFmpeg download timed out")
+
+    bridge._ffmpeg.install = install_failed
+    bridge._ffmpeg.remove = lambda: {"remove_error": "Cannot remove /Users/private/bin/ffmpeg"}
+    bridge.installFfmpeg()
+    WavesBridge.removeFfmpeg(bridge)
+    event_loop.processEvents()
+    install, removal = delivered
+    assert install["id"] != removal["id"]
+    assert removal["scope"] == FailureScope.CONFIGURATION
+    assert "/Users/private" not in json.dumps(delivered)
+    bridge._ffmpeg.remove = lambda: {"available": False}
+    WavesBridge.removeFfmpeg(bridge)
+    event_loop.processEvents()
+    assert delivered[-1]["id"] == removal["id"]
+    assert delivered[-1]["lifecycle"] == "resolved"
+    assert bridge._events.action(removal["id"], EventAction.OPEN_SETTINGS) is None
+    assert bridge._events.action(install["id"], EventAction.OPEN_SETTINGS) is not None
+
+
+@pytest.mark.parametrize("owner", ["installAppleRuntime", "installAppleImage", "installFfmpeg"])
+@pytest.mark.parametrize(
+    "error_type, error_number, scope",
+    [
+        pytest.param(requests.HTTPError, None, FailureScope.UNKNOWN, id="http-503"),
+        pytest.param(requests.ConnectionError, None, FailureScope.UNKNOWN, id="connection"),
+        pytest.param(requests.Timeout, None, FailureScope.UNKNOWN, id="timeout"),
+        pytest.param(PermissionError, errno.EACCES, FailureScope.CONFIGURATION, id="permission"),
+        pytest.param(OSError, errno.ENOSPC, FailureScope.CONFIGURATION, id="disk-full"),
+        pytest.param(FileNotFoundError, errno.ENOENT, FailureScope.CONFIGURATION, id="missing-local-file"),
+    ],
+)
+def test_runtime_install_owners_distinguish_transport_from_local_failures_and_keep_copy_private(
+    runtime_event_bridge, event_loop, owner, error_type, error_number, scope, monkeypatch
+):
+    bridge, delivered, states = runtime_event_bridge
+    private_path = "/Volumes/Private Runtime/Secret Installer/staged.bin"
+    diagnostic = f"Install transport failed\nAuthorization: Basic dXNlcjpwYXNz\nCannot read {private_path}"
+    if issubclass(error_type, requests.RequestException):
+        error = error_type(diagnostic)
+        if isinstance(error, requests.HTTPError):
+            error.response = requests.Response()
+            error.response.status_code = 503
+    else:
+        error = error_type(error_number, "Local install failed", private_path)
+
+    def fail(**kwargs):
+        kwargs["log_cb"](diagnostic)
+        raise error
+
+    if owner == "installAppleImage":
+        bridge._apple_runtime.ensure_image = fail
+    elif owner == "installAppleRuntime":
+        bridge._apple_runtime.install = fail
+    else:
+        bridge._ffmpeg.install = fail
+    copied = []
+    monkeypatch.setattr(
+        "waves.desktop.backend.QtGui.QGuiApplication.clipboard", lambda: SimpleNamespace(setText=copied.append)
+    )
+
+    getattr(bridge, owner)()
+    assert delivered == []
+    event_loop.processEvents()
+
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert payload["scope"] == scope
+    assert type(error).__name__ not in payload["summary"]
+    assert type(error).__name__ in payload["diagnostics"]
+    assert payload["domain"] == (EventDomain.DEPENDENCY if owner == "installFfmpeg" else EventDomain.RUNTIME)
+    retained = bridge._events.action(payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert retained is not None
+    assert WavesBridge.eventAction(bridge, payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert len(copied) == 1
+    for representation in (json.dumps(states), json.dumps(delivered), repr(retained), copied[0]):
+        for private in ("dXNlcjpwYXNz", "Private Runtime", "Secret Installer", "staged.bin"):
+            assert private not in representation
+    assert bridge._ffmpeg_install_inflight is False
+    assert bridge._apple_runtime_inflight is False
+
+
+def test_apple_port_reservation_failure_and_recovery_follow_queued_action_lifecycle(runtime_event_bridge, event_loop):
+    bridge, delivered, _states = runtime_event_bridge
+
+    def refused(preferred=0):
+        raise PermissionError(
+            errno.EACCES, "Cannot persist reserved port", "/Volumes/Private Runtime/private-port.json"
+        )
+
+    bridge._apple_runtime.ensure_port = refused
+    failure = bridge.appleEnsurePort()
+    assert failure == {"port": 0, "url": "", "error": "The wrapper port could not be reserved"}
+    assert delivered == []
+    event_loop.processEvents()
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert payload["scope"] == FailureScope.CONFIGURATION
+    assert payload["references"]["provider_id"] == "apple"
+    assert payload["references"]["runtime_id"] == "apple:wrapper-v2"
+    assert payload["actions"] == [EventAction.OPEN_SETTINGS]
+    assert "PermissionError" in payload["diagnostics"] and "PermissionError" not in payload["summary"]
+    assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is not None
+    for representation in (json.dumps(failure), json.dumps(delivered)):
+        assert "Private Runtime" not in representation and "private-port.json" not in representation
+
+    bridge._apple_runtime.ensure_port = lambda preferred=0: 51234
+    success = bridge.appleEnsurePort()
+    assert success == {"port": 51234, "url": "http://127.0.0.1:51234"}
+    assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is not None
+    event_loop.processEvents()
+    assert delivered[-1]["id"] == payload["id"] and delivered[-1]["lifecycle"] == "resolved"
+    assert bridge._events.action(payload["id"], EventAction.OPEN_SETTINGS) is None
+
+
+def test_revoked_provider_drops_queued_apple_port_failure(runtime_event_bridge, event_loop):
+    bridge, delivered, _states = runtime_event_bridge
+
+    def refused(preferred=0):
+        raise PermissionError(
+            errno.EACCES, "Cannot persist reserved port", "/Volumes/Private Runtime/private-port.json"
+        )
+
+    bridge._apple_runtime.ensure_port = refused
+    bridge.appleEnsurePort()
+    assert delivered == []
+    provider_contexts(bridge).revoke("apple")
+    event_loop.processEvents()
+    assert delivered == []
+    identity = application_event(EventDomain.RUNTIME, "", key="apple-port").id
+    assert bridge._events.action(identity, EventAction.OPEN_SETTINGS) is None
 
 
 def test_apple_job_events_follow_the_queue_settle_and_provider_epoch(event_loop):

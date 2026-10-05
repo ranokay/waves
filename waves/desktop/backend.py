@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import dataclasses
+import errno
 import gc
 import hashlib
 import json
@@ -2252,6 +2253,27 @@ def _user_error(exc: BaseException, fallback: str, plain: tuple[type, ...] = (),
     ``nouns`` (server, folder) name what the failing installer reached.
     """
     return redaction.scrub_event_text(user_facing_error(exc, fallback, plain, **nouns)).strip() or fallback
+
+
+def _install_failure_scope(exc: BaseException) -> FailureScope:
+    """Only concrete local file/access facts establish a configuration failure.
+
+    Transport exceptions can also inherit OSError, so ancestry alone cannot
+    establish a local setup problem.
+    """
+    if isinstance(exc, (PermissionError, FileNotFoundError, IsADirectoryError, NotADirectoryError)):
+        return FailureScope.CONFIGURATION
+    if isinstance(exc, OSError) and exc.errno in {
+        errno.EACCES,
+        errno.EPERM,
+        errno.ENOSPC,
+        errno.EROFS,
+        errno.ENOTDIR,
+        errno.EISDIR,
+        errno.ENOENT,
+    }:
+        return FailureScope.CONFIGURATION
+    return FailureScope.UNKNOWN
 
 
 def _popularity(obj) -> int:
@@ -19209,18 +19231,32 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             self._ffmpeg_abort.clear()
-            operation_state(self, EventDomain.DEPENDENCY, "ffmpegStateChanged", "downloading", "Downloading FFmpeg…")
+            operation_state(
+                self,
+                EventDomain.DEPENDENCY,
+                "ffmpegStateChanged",
+                "downloading",
+                "Downloading FFmpeg…",
+                key="ffmpeg-install",
+            )
             try:
                 try:
                     status = self._ffmpeg.install(
                         progress_cb=lambda p: self.ffmpegProgress.emit(float(p)),
                         log_cb=lambda m: operation_state(
-                            self, EventDomain.DEPENDENCY, "ffmpegStateChanged", "downloading", m
+                            self, EventDomain.DEPENDENCY, "ffmpegStateChanged", "downloading", m, key="ffmpeg-install"
                         ),
                         abort=self._ffmpeg_abort,
                     )
                 except FfmpegCancelled:
-                    operation_state(self, EventDomain.DEPENDENCY, "ffmpegStateChanged", "cancelled", "Cancelled")
+                    operation_state(
+                        self,
+                        EventDomain.DEPENDENCY,
+                        "ffmpegStateChanged",
+                        "cancelled",
+                        "Cancelled",
+                        key="ffmpeg-install",
+                    )
                     self.ffmpegStatusChanged.emit()
                     return
                 except Exception as exc:
@@ -19232,6 +19268,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         "failed",
                         _user_error(exc, "Install failed"),
                         exception=exc,
+                        key="ffmpeg-install",
+                        scope=_install_failure_scope(exc),
                     )
                     return
                 # ffmpeg is available, undo any in-memory feature disabling
@@ -19246,6 +19284,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "ffmpegStateChanged",
                     "done",
                     f"FFmpeg {status.get('version', '')} ready",
+                    key="ffmpeg-install",
                 )
                 self.ffmpegStatusChanged.emit()
             finally:
@@ -19267,8 +19306,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # rather than doing nothing silently. Its own state, so the card
             # reads "Remove failed", not "Install failed".
             operation_state(
-                self, EventDomain.DEPENDENCY, "ffmpegStateChanged", "remove_failed", str(status["remove_error"])
+                self,
+                EventDomain.DEPENDENCY,
+                "ffmpegStateChanged",
+                "remove_failed",
+                str(status["remove_error"]),
+                key="ffmpeg-remove",
+                scope=FailureScope.CONFIGURATION,
             )
+        elif isinstance(status, dict):
+            resolve_events(self, EventDomain.DEPENDENCY, key="ffmpeg-remove")
         # The managed binary is gone; a prior _resolve_ffmpeg may have injected
         # its dangling path in-memory. Reset the live value to the user's
         # real override (empty when none), so downloads/previews don't keep
@@ -19464,17 +19511,36 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                operation_state(self, EventDomain.UPDATE, "appUpdateStateChanged", "downloading", "Downloading update…")
+                operation_state(
+                    self,
+                    EventDomain.UPDATE,
+                    "appUpdateStateChanged",
+                    "downloading",
+                    "Downloading update…",
+                    key="app-update-install",
+                )
                 try:
                     result = self._updater.install(
                         progress_cb=lambda p: self.appUpdateProgress.emit(float(p)),
                         log_cb=lambda m: operation_state(
-                            self, EventDomain.UPDATE, "appUpdateStateChanged", "downloading", m
+                            self,
+                            EventDomain.UPDATE,
+                            "appUpdateStateChanged",
+                            "downloading",
+                            m,
+                            key="app-update-install",
                         ),
                         abort=self._app_update_abort,
                     )
                 except UpdateCancelled:
-                    operation_state(self, EventDomain.UPDATE, "appUpdateStateChanged", "cancelled", "Cancelled")
+                    operation_state(
+                        self,
+                        EventDomain.UPDATE,
+                        "appUpdateStateChanged",
+                        "cancelled",
+                        "Cancelled",
+                        key="app-update-install",
+                    )
                     return
                 except Exception as exc:
                     _update_log.exception("App update failed")
@@ -19485,6 +19551,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         "failed",
                         _user_error(exc, "Update failed"),
                         exception=exc,
+                        key="app-update-install",
+                        scope=_install_failure_scope(exc),
                     )
                     return
                 # A managed upgrade may not know the version tag (offline resolve);
@@ -19518,6 +19586,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "appUpdateStateChanged",
                     "done",
                     (f"Updated to {ver}. " if ver else "Updated. ") + "Restart to finish." + note,
+                    key="app-update-install",
                 )
                 self.appUpdateStatusChanged.emit()
             finally:
@@ -20086,11 +20155,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         manager = getattr(self, "_apple_runtime", None)
         if manager is None:
             return {"port": 0, "url": ""}
+        token = provider_contexts(self).capture(CTX_APPLE)
         data = getattr(getattr(self, "settings", None), "data", None)
         try:
             from waves.providers.apple.runtime import wrapper_url as _url
 
             port = _apple_provision_port(data, manager)
+            resolve_events(
+                self,
+                EventDomain.RUNTIME,
+                key="apple-port",
+                valid=lambda: provider_contexts(self).current(token),
+            )
             return {"port": port, "url": _url(port)}
         except Exception as exc:
             logger.debug("Apple port ensure failed", exc_info=True)
@@ -20100,6 +20176,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "The wrapper port could not be reserved. Check setup in Settings.",
                 exception=exc,
                 scope=FailureScope.CONFIGURATION,
+                key="apple-port",
+                references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+                valid=lambda: provider_contexts(self).current(token),
                 actions=(EventAction.OPEN_SETTINGS,),
             )
             return {"port": 0, "url": "", "error": "The wrapper port could not be reserved"}
@@ -20117,20 +20196,34 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "appleRuntimeStateChanged",
                 "failed",
                 "Apple runtime unavailable on this machine",
+                key="apple-binary-install",
+                references=EventReferences(runtime_id="N_m3u8DL-RE"),
             )
             return
         self._apple_runtime_inflight = True
 
         def work() -> None:
             operation_state(
-                self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "downloading", "Downloading N_m3u8DL-RE…"
+                self,
+                EventDomain.RUNTIME,
+                "appleRuntimeStateChanged",
+                "downloading",
+                "Downloading N_m3u8DL-RE…",
+                key="apple-binary-install",
+                references=EventReferences(runtime_id="N_m3u8DL-RE"),
             )
             try:
                 try:
                     status = manager.install(
                         progress_cb=lambda p: self.appleRuntimeProgress.emit(float(p)),
                         log_cb=lambda m: operation_state(
-                            self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "downloading", m
+                            self,
+                            EventDomain.RUNTIME,
+                            "appleRuntimeStateChanged",
+                            "downloading",
+                            m,
+                            key="apple-binary-install",
+                            references=EventReferences(runtime_id="N_m3u8DL-RE"),
                         ),
                     )
                 except Exception as exc:
@@ -20142,6 +20235,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         "failed",
                         _user_error(exc, "Install failed"),
                         exception=exc,
+                        key="apple-binary-install",
+                        scope=_install_failure_scope(exc),
+                        references=EventReferences(runtime_id="N_m3u8DL-RE"),
                     )
                     # Refresh the wizard card too, so the failed step is
                     # visible where the user clicked, not only on the signal.
@@ -20157,6 +20253,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "appleRuntimeStateChanged",
                     "done",
                     f"N_m3u8DL-RE {status.get('version', '')} ready",
+                    key="apple-binary-install",
+                    references=EventReferences(runtime_id="N_m3u8DL-RE"),
                 )
                 self.appleRuntimeStatusChanged.emit()
                 self.appleStatusChanged.emit()
@@ -20195,9 +20293,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         self._apple_signout_inflight = True
         self._end_provider_context(CTX_APPLE, "Signed out of Apple Music")
+        event_token = provider_contexts(self).capture(CTX_APPLE)
         self._apple_session_gen = getattr(self, "_apple_session_gen", 0) + 1
         operation_state(
-            self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "downloading", "Signing out of Apple Music…"
+            self,
+            EventDomain.RUNTIME,
+            "appleRuntimeStateChanged",
+            "downloading",
+            "Signing out of Apple Music…",
+            key="apple-sign-out",
+            references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+            valid=lambda: provider_contexts(self).current(event_token),
         )
 
         def work() -> None:
@@ -20257,10 +20363,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 finally:
                     self._apple_signout_inflight = False
                 if failure:
-                    operation_state(self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "failed", failure)
+                    operation_state(
+                        self,
+                        EventDomain.RUNTIME,
+                        "appleRuntimeStateChanged",
+                        "failed",
+                        failure,
+                        key="apple-sign-out",
+                        references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+                        valid=lambda: provider_contexts(self).current(event_token),
+                    )
                 else:
                     operation_state(
-                        self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "done", "Signed out of Apple Music"
+                        self,
+                        EventDomain.RUNTIME,
+                        "appleRuntimeStateChanged",
+                        "done",
+                        "Signed out of Apple Music",
+                        key="apple-sign-out",
+                        references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+                        valid=lambda: provider_contexts(self).current(event_token),
                     )
                 with contextlib.suppress(Exception):
                     self.appleWrapperAuthChanged.emit()
@@ -20300,7 +20422,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             container = self._refresh_apple_container_cache(timeout=10)
             if container.get("running"):
                 operation_state(
-                    self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "done", f"{container.get('name')} is running"
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "done",
+                    f"{container.get('name')} is running",
+                    key="apple-container-start",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
                 )
             elif attempted:
                 operation_state(
@@ -20309,6 +20437,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "appleRuntimeStateChanged",
                     "downloading",
                     "Waiting for the container runtime to start…",
+                    key="apple-container-start",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
                 )
             else:
                 operation_state(
@@ -20317,6 +20447,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "appleRuntimeStateChanged",
                     "failed",
                     str(container.get("hint") or "No container runtime found"),
+                    key="apple-container-start",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
                 )
             try:
                 self.appleRuntimeStatusChanged.emit()
@@ -20338,12 +20470,20 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             operation_state(
-                self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "downloading", "Checking Apple setup…"
+                self,
+                EventDomain.RUNTIME,
+                "appleRuntimeStateChanged",
+                "downloading",
+                "Checking Apple setup…",
+                key="apple-setup-probe",
+                references=EventReferences(runtime_id="apple:wrapper-v2"),
             )
+            failure = None
             try:
                 self._refresh_apple_container_cache(timeout=10)
-            except Exception:
+            except Exception as exc:
                 logger.debug("Apple setup re-probe failed", exc_info=True)
+                failure = exc
             try:
                 self.appleRuntimeStatusChanged.emit()
             except Exception:
@@ -20352,7 +20492,28 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.appleStatusChanged.emit()
             except Exception:
                 logger.debug("Apple status signal emit failed", exc_info=True)
-            operation_state(self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "done", "Setup state refreshed")
+            if failure is not None:
+                operation_state(
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "failed",
+                    "Could not refresh Apple setup. Try again.",
+                    exception=failure,
+                    scope=_install_failure_scope(failure),
+                    key="apple-setup-probe",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
+                )
+            else:
+                operation_state(
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "done",
+                    "Setup state refreshed",
+                    key="apple-setup-probe",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
+                )
 
         try:
             self.threadpool.start(Worker(work))
@@ -20375,6 +20536,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "appleRuntimeStateChanged",
                 "failed",
                 "Apple runtime unavailable on this machine",
+                key="apple-image-install",
+                references=EventReferences(runtime_id="apple:wrapper-v2"),
             )
             return
         try:
@@ -20387,14 +20550,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             operation_state(
-                self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "downloading", "Pulling the wrapper image…"
+                self,
+                EventDomain.RUNTIME,
+                "appleRuntimeStateChanged",
+                "downloading",
+                "Pulling the wrapper image…",
+                key="apple-image-install",
+                references=EventReferences(runtime_id="apple:wrapper-v2"),
             )
             try:
                 try:
                     manager.ensure_image(
                         binary=binary,
                         log_cb=lambda m: operation_state(
-                            self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "downloading", m
+                            self,
+                            EventDomain.RUNTIME,
+                            "appleRuntimeStateChanged",
+                            "downloading",
+                            m,
+                            key="apple-image-install",
+                            references=EventReferences(runtime_id="apple:wrapper-v2"),
                         ),
                     )
                 except Exception as exc:
@@ -20406,13 +20581,24 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         "failed",
                         _user_error(exc, "Pull failed"),
                         exception=exc,
+                        key="apple-image-install",
+                        scope=_install_failure_scope(exc),
+                        references=EventReferences(runtime_id="apple:wrapper-v2"),
                     )
                     try:
                         self.appleRuntimeStatusChanged.emit()
                     except Exception:
                         logger.debug("Apple runtime signal emit failed", exc_info=True)
                     return
-                operation_state(self, EventDomain.RUNTIME, "appleRuntimeStateChanged", "done", "Wrapper image ready")
+                operation_state(
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "done",
+                    "Wrapper image ready",
+                    key="apple-image-install",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
+                )
                 self.appleRuntimeStatusChanged.emit()
                 self.appleStatusChanged.emit()
             finally:
