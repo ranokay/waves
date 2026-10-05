@@ -11,6 +11,7 @@ from waves.constants import (
     QualityVideo,
     default_audio_is_both,
 )
+from waves.model.download_policy import DownloadPolicies, decode_policies, encode_policies
 
 
 class _JsonModel:
@@ -31,6 +32,10 @@ class _JsonModel:
 @dataclass_json
 @dataclass
 class Settings(_JsonModel):
+    download_policies: DownloadPolicies = field(
+        default_factory=DownloadPolicies,
+        metadata=config(encoder=encode_policies, decoder=decode_policies),
+    )
     skip_existing: bool = True
     # ----- shared lyrics/artwork keys: migration carriers only -----
     # The keys below predate the per-provider mirrors further down. Two readers
@@ -183,7 +188,7 @@ class Settings(_JsonModel):
     quality_video: QualityVideo = QualityVideo.P480
     # The Chooser one-click audio default (spec §7.2): "stereo", or "both"
     # for stereo + Atmos side by side where a track offers the choice.
-    # Atmos-alone has no Settings spelling and stays per-click only.
+    # Provider download policies can additionally select Atmos alone.
     default_audio_type: str = "stereo"
     # Artist > Album > Track, the shape a music library (and Plex) expects.
     # Playlists / mixes keep their own parent folder: they are platform

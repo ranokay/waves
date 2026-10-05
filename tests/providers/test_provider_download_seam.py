@@ -696,6 +696,8 @@ class TestJobSpecDispatch:
         def _build_download(signals, **kwargs):
             stub.dl.library_claim = kwargs.get("library_claim")
             stub.dl.built_kwargs = kwargs
+            intent = kwargs.get("request_intent")
+            stub.dl.settings = SimpleNamespace(data=intent.settings_data()) if intent else stub.settings
             return stub.dl
 
         class _Pool:
@@ -957,7 +959,9 @@ class TestTheThirdProviderAdapter:
 
         WavesBridge.downloadWithChooser(stub, "third:t1", "track", "HIGH", "stereo", {"lyrics_embed": True})
 
-        assert downloads.entries == [("track", "third:t1", True, None, "stereo", {"lyrics_embed": True})]
+        assert downloads.entries == [
+            ("track", "third:t1", True, None, "stereo", {"lyrics_embed": True, "provider_pin": "third"})
+        ]
 
     def test_a_third_provider_drives_a_job_end_to_end(self, tmp_path):
         provider, stub, downloads = self._bridge(tmp_path)

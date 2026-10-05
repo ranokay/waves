@@ -1,6 +1,6 @@
 # 0011: fulfillment follows captured intent and evidenced catalog offers
 
-- Status: accepted target; cross-provider fulfillment and intent snapshots are planned
+- Status: accepted; persisted policies and queued intent implemented, cross-provider fulfillment planned
 - Decided: 2026-10-03
 - Scope: request policy, identity, collections, files and asset provenance
 

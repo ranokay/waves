@@ -87,7 +87,7 @@ def test_the_providers_area_is_one_section_with_two_provider_cards():
 
 
 def test_the_tidal_card_hosts_the_session_and_its_quality_default():
-    assert _keys(_providers()["providers_tidal"]) == [
+    assert [k for k in _keys(_providers()["providers_tidal"]) if not k.startswith("download_policies.")] == [
         "provider_tidal_session",
         "tidal_quality_audio",
         "tidal_lyrics_embed",
@@ -111,7 +111,7 @@ def test_the_tidals_quality_default_no_longer_sits_under_downloads():
 
 def test_the_apple_card_holds_the_switch_row_and_the_quality():
     apple = _keys(_providers()["providers_apple"])
-    assert apple == [
+    assert [k for k in apple if not k.startswith("download_policies.")] == [
         "provider_apple_status",
         "apple_setup_wizard",
         "apple_quality_audio",
@@ -128,9 +128,6 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
         "apple_cookies_path",
         "path_binary_nm3u8dlre",
         "apple_wrapper_port",
-        "apple_pacing_batch_size",
-        "apple_pacing_delay_sec",
-        "apple_wrapper_idle_sec",
         "apple_quarantine_dir",
         "apple_quarantine_keep",
     ]
@@ -165,7 +162,7 @@ def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():
 
 
 def test_the_supervision_seconds_fields_span_their_defaults():
-    fields = {f["key"]: f for f in _providers()["providers_apple"]["fields"]}
+    fields = {f["key"]: f for f in _schema()["advanced"]["fields"]}
     assert fields["apple_wrapper_idle_sec"]["value"] == 300.0
     assert fields["apple_wrapper_idle_sec"]["maximum"] >= 300.0
     assert fields["apple_pacing_delay_sec"]["value"] == 30.0
@@ -640,7 +637,9 @@ def test_the_schema_cards_come_from_the_descriptors():
         descriptor.logo,
         descriptor.logo_width,
     )
-    assert [f["key"] for f in tidal["fields"]] == list(descriptor.settings_fields)
+    assert [f["key"] for f in tidal["fields"] if not f["key"].startswith("download_policies.")] == list(
+        descriptor.settings_fields
+    )
 
 
 def test_a_third_provider_renders_a_card_and_actions_with_no_qml_branch():

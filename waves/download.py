@@ -19,6 +19,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent import futures
+from dataclasses import dataclass
 from threading import Event, Lock
 from uuid import uuid4
 
@@ -71,6 +72,7 @@ from waves.metadata.tags import (
     read_file_audio_type,
     read_item_id,
 )
+from waves.model.cfg import Settings as SettingsData
 from waves.model.cfg import metadata_tag_write, provider_setting
 from waves.model.downloader import DownloadSegmentResult, ProgressGui, TrackStreamInfo
 from waves.paths import (
@@ -239,6 +241,11 @@ class RequestsClient:
 
 
 # TODO: Use pathlib.Path everywhere
+@dataclass(frozen=True)
+class _DownloadSettings:
+    data: SettingsData
+
+
 class Download:
     """Main class for managing downloads, segment merging, file operations, and metadata for provider media."""
 
@@ -302,7 +309,7 @@ class Download:
                 )
             return cls._http_shared
 
-    settings: Settings
+    settings: Settings | _DownloadSettings
     tidal: "Tidal"
     session: Session
     skip_existing: bool = False
@@ -332,6 +339,7 @@ class Download:
         chooser_toggles: dict | None = None,
         pinned_tier: QualityTier | None = None,
         pinned_audio_type: str | None = None,
+        settings_data: SettingsData | None = None,
     ) -> None:
         """Initialize the Download object and its dependencies.
 
@@ -355,14 +363,13 @@ class Download:
                 which composes the TIDAL provider over this download's own
                 TIDAL configuration.
             album_artist_tag_clean (Callable[[], bool] | None, optional): A
-                live probe of the 'Clean album-artist tag' pref, consulted at
-                tag-write time so a settings change applies without a
-                restart. Defaults to None (the pref is off; every main-credit
+                probe of the 'Clean album-artist tag' policy. Desktop jobs
+                supply the captured value for all tracks in the request. Defaults to None (the pref is off; every main-credit
                 album artist is written).
             chooser_toggles (dict | None, optional): The per-click Chooser
                 lyrics/art pins (base keys, booleans). They win over the
                 provider's stored options for this job only. Defaults to None
-                (every option reads Settings).
+                (every option reads this job's settings view).
             pinned_tier (QualityTier | None, optional): The Waves rung this job
                 was queued at. It rides ``resolve_stream`` as the job's own
                 request, so a job fetches at the quality the user started it
@@ -375,7 +382,7 @@ class Download:
                 (the default) means the job did not pin one and the resolver
                 decides.
         """
-        self.settings = Settings()
+        self.settings = Settings() if settings_data is None else _DownloadSettings(settings_data)
         self.tidal = tidal_obj
         self.session = tidal_obj.session
 

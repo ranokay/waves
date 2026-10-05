@@ -577,6 +577,7 @@ def _body_stub(fail=False):
     s.downloadState = _Sig()
     s.downloadProgress = _Sig()
     s.dl = _BodyDownload(fail=fail)
+    s.dl.settings = s.settings
     s._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
     arm_dispatch(s)
     s._reap_stranded_groups = lambda: None

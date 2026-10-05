@@ -102,6 +102,7 @@ class _Stub:
         self.downloadState = _Signal()
         self.downloadProgress = _Signal()
         self.dl = _RecordingDownload()
+        self.dl.settings = self.settings
         self._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
         arm_dispatch(self)
 
