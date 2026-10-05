@@ -10266,7 +10266,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         provider: the row's provider id, stated by the popover as a static
         chip (its mark comes from ``providerDescriptor``, the badge's identity
         answer); tier: the Settings tier word for that provider; audioType:
-        stereo/both from Settings, clamped to the words ``audioOptions``
+        the effective shared/provider policy, clamped to the words ``audioOptions``
         offers; atmosOnly: collapse the audio control; tiers: the provider's
         tier entries; audioOptions: the provider's own audio words;
         showLyrics/showLyricsTtml/showArt: whether each popover section
@@ -10482,8 +10482,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """DOWNLOAD from the Chooser popover: that click only, never stored.
 
         tier is a UI word (HI-RES/LOSSLESS/HIGH/LOW); audio_type is
-        stereo/atmos/both ("" follows Settings); toggles are the five
-        lyrics/art quick choices for this click. Unsupported kinds fall back
+        stereo/atmos/both ("" follows Settings); toggles carry lyrics/art
+        choices, an optional engine pin and explicit fallback permission for
+        this click. Unsupported kinds fall back
         to the row's plain download slot."""
         mid = str(media_id or "")
         k = str(kind or "").strip().lower()

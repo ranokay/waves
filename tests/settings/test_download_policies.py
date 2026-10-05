@@ -231,7 +231,12 @@ def test_real_enqueue_and_retry_keep_original_single_audio_row_and_full_intent(m
     assert _dispatch_settings(monkeypatch, bridge, retried["qid"])["settings_data"].tidal_lyrics_embed
     assert not retried["askLibrarySkip"]
     assert bridge._download(obj, "track", "Song", "New/{track_title}", False, "t1")
-    assert bridge._jobs.intents[bridge._queue[-1]["qid"]].policy.matching == "release"
+    assert (
+        _dispatch_settings(monkeypatch, bridge, bridge._queue[-1]["qid"])[
+            "settings_data"
+        ].download_policies.shared.matching
+        == "release"
+    )
 
 
 def test_dispatch_builds_engine_from_snapshot_and_keeps_credentials_live(monkeypatch):
