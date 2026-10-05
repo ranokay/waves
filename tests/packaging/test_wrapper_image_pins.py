@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 
+import pytest
 import yaml
 from support.paths import REPO_ROOT
 
@@ -193,7 +194,11 @@ def test_the_notice_names_every_bundled_component():
     assert "com.apple.android.music" in notice and "remain" in notice
 
 
-def test_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
+@pytest.mark.integration
+def test_wiring_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
+    """The guard drives the watcher's own parse command against the shipped pin
+    file; the job's schedule, dedupe and issue side run on a GitHub runner
+    (network + Actions runtime), so no behavioral seam exists here."""
     import re
 
     text = (REPO_ROOT / ".github" / "wrapper-upstream.sha").read_text()
@@ -206,3 +211,18 @@ def test_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
     assert "issues: write" in watcher
     # Human-gated: watches and files issues, never builds or publishes.
     assert "build-push-action" not in watcher and "docker push" not in watcher.lower()
+    # The parser must read the file as shipped, comments and all: a
+    # whitespace-only strip once glued the comment block to the SHA, so the
+    # watcher failed every run before it could open an upstream-moved issue.
+    parse = re.search(r'pinned="\$\((.+?)\)"', watcher)
+    assert parse, "the watcher must read the pin file into $pinned"
+    bash = shutil.which("bash")
+    assert bash, "bash is not on PATH; the watcher runs its step under bash"
+    parsed = subprocess.run(  # noqa: S603 (fixed argv: the resolved bash, the workflow's own parse line)
+        [bash, "-c", parse.group(1)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert parsed.stdout.strip() == sha, "the watcher's parser must yield the pin file's SHA"
