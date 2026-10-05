@@ -1401,12 +1401,7 @@ class AppleProvider(Provider):
         except ValueError:
             want = QualityTier.HIGH
         self._check_gamdl_constraint(required_codec, atmos)
-        if (
-            not atmos
-            and required_codec != "aac"
-            and want in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
-            and self.wrapper_available
-        ):
+        if self._gamdl_wrapper_requested(item, want, audio_type, required_codec):
             try:
                 return self._resolve_via_wrapper(item, want)
             except Exception as exc:
@@ -1465,6 +1460,15 @@ class AppleProvider(Provider):
             encrypted=False,
             single_file=True,
             local_file=str(delivery.staged_path),
+        )
+
+    def _gamdl_wrapper_requested(self, media, tier: QualityTier, audio_type: AudioType, codec: str = "") -> bool:
+        """One route predicate for setup evidence and the concrete fetch."""
+        return codec == "alac" or (
+            codec != "aac"
+            and not self._delivery_atmos(media, audio_type)
+            and tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+            and self.wrapper_available
         )
 
     def _check_gamdl_constraint(self, codec: str, atmos: bool) -> None:

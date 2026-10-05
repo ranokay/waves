@@ -110,12 +110,8 @@ class GamdlEngine:
 
     def requirement(self, request: EngineRequest) -> EngineRequirement:
         if request.operation == EngineOperation.AUDIO:
-            codec = request.required_codec.lower()
-            wrapper = codec == "alac" or (
-                codec != "aac"
-                and not self.provider._delivery_atmos(request.media, request.audio_type)
-                and request.tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
-                and self.provider.wrapper_available
+            wrapper = self.provider._gamdl_wrapper_requested(
+                request.media, request.tier, request.audio_type, request.required_codec.lower()
             )
             return self.descriptor.requirements[1 if wrapper else 0]
         return next(item for item in self.descriptor.requirements if item.operation == request.operation)
