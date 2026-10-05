@@ -32,6 +32,7 @@ from PySide6.QtCore import Slot
 from tidalapi.exceptions import ObjectNotFound
 
 from waves.constants import CTX_TIDAL, ITEM_FETCH_FAILED, ITEM_GONE
+from waves.desktop.diagnostics.events import publish_event, report_failure, resolve_events
 from waves.desktop.providers.lifecycle import (
     ProviderContexts,
     ProviderToken,
@@ -40,7 +41,9 @@ from waves.desktop.providers.lifecycle import (
     scan_current,
 )
 from waves.desktop.worker import Worker
+from waves.events import EventAction, EventCode, EventDomain, EventReferences, Lifecycle, Severity, application_event
 from waves.ids import DEFAULT_PROVIDER, namespaced_id, provider_of_id
+from waves.redaction import scrub_event_text
 
 logger = logging.getLogger("waves.queue")
 
@@ -208,6 +211,8 @@ class QueueMixin:
                 forced.discard(mid)
                 claims.discard(mid)
                 plans.pop(mid, None)
+        for qid in gone:
+            resolve_events(self, EventDomain.DOWNLOAD, job_id=qid)
         return gone
 
     def _archive_held_rows_locked(self, rows: list[dict]) -> None:
@@ -715,7 +720,7 @@ class QueueMixin:
         item = self._queue_item(qid)
         if item is None:
             return
-        reason = str(reason or "")
+        reason = scrub_event_text(str(reason or ""))
         if item["status"] == status and item.get("reason", "") == reason:
             return
         if status == "cancelled" and not reason and item["status"] == "cancelled" and item.get("reason", ""):
@@ -725,6 +730,43 @@ class QueueMixin:
             return
         item["status"] = status
         item["reason"] = reason
+        media_id = str(item.get("media_id") or "")
+        refs = EventReferences(
+            provider_id=str(item.get("provider_id") or (provider_of_id(media_id) if media_id else "")),
+            job_id=qid,
+            media_id=media_id,
+        )
+
+        def current() -> bool:
+            row = self._queue_item(qid)
+            return row is not None and row.get("status") == status
+
+        if status == "failed":
+            report_failure(
+                self,
+                EventDomain.DOWNLOAD,
+                "Download failed. Open the logs for details.",
+                key=f"job:{qid}",
+                references=refs,
+                valid=current,
+                actions=(EventAction.RETRY_JOB, EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
+            )
+        elif status in {"queued", "done", "cancelled"} or (status == "running" and not reason):
+            resolve_events(self, EventDomain.DOWNLOAD, job_id=qid, valid=current)
+            if status == "done":
+                publish_event(
+                    self,
+                    application_event(
+                        EventDomain.DOWNLOAD,
+                        f"Finished {item.get('title') or item.get('name') or 'download'}",
+                        key=f"job:{qid}",
+                        code=EventCode.COMPLETED,
+                        severity=Severity.SUCCESS,
+                        references=refs,
+                        lifecycle=Lifecycle.RESOLVED,
+                    ),
+                    current,
+                )
         self._queue_mark_changed(qid)
         self._emit_queue()
 

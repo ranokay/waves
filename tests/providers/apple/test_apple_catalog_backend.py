@@ -5,9 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 from browse.fakes import browse_bridge
+from PySide6.QtCore import QCoreApplication
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.diagnostics.events import ApplicationEvents
 from waves.desktop.providers.lifecycle import provider_contexts
+from waves.events import EventAction, EventPayload
 from waves.providers.apple import AppleProvider
 
 
@@ -558,6 +561,87 @@ def test_apple_click_failure_reports_and_releases_the_load():
     assert stub.statuses == ["Loading artist…", "Could not open that artist"]
     assert stub.busy == [True, False]
     assert stub.artistLoadFailed.emits == ["apple:artist-1"]
+
+
+@pytest.mark.qml
+def test_apple_artist_recovery_resolves_only_that_artists_queued_event(monkeypatch):
+    app = QCoreApplication.instance() or QCoreApplication([])
+    relay = ApplicationEvents()
+    seen: list[EventPayload] = []
+    relay.changed.connect(seen.append)
+    catalog = _apple_artist_catalog()
+    fetch_artist = catalog.get_artist
+    failures = {"artist-1", "artist-2"}
+
+    async def get_artist(artist_id):
+        if artist_id in failures:
+            raise RuntimeError("token=private-artist-session /Users/private-owner/catalog")
+        return await fetch_artist(artist_id)
+
+    monkeypatch.setattr(catalog, "get_artist", get_artist)
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=catalog)}, _events=relay)
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-2")
+    assert seen == [], "catalog failures cross the queued Qt event boundary"
+    app.processEvents()
+    first, second = seen
+    assert first["id"] != second["id"]
+    assert first["lifecycle"] == second["lifecycle"] == "active"
+    assert first["references"]["provider_id"] == second["references"]["provider_id"] == "apple"
+    assert relay.action(first["id"], EventAction.OPEN_LOGS) is not None
+    assert relay.action(second["id"], EventAction.OPEN_LOGS) is not None
+
+    failures.remove("artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
+    assert stub.artistLoaded.emits[-1]["id"] == "apple:artist-1"
+    assert len(seen) == 2, "success resolution also waits for queued delivery"
+    app.processEvents()
+    assert len(seen) == 3
+    assert seen[-1]["id"] == first["id"] and seen[-1]["lifecycle"] == "resolved"
+    assert seen[-1]["actions"] == []
+    assert relay.action(first["id"], EventAction.OPEN_LOGS) is None
+    assert relay.action(second["id"], EventAction.OPEN_LOGS) is not None
+    assert "private-artist-session" not in str(seen)
+    relay.close()
+
+
+@pytest.mark.qml
+@pytest.mark.parametrize("outcome", ["failure", "recovery"])
+@pytest.mark.parametrize("revoke_at", ["fetch", "delivery"])
+def test_provider_revoke_rejects_late_apple_artist_failure_or_recovery(monkeypatch, outcome, revoke_at):
+    app = QCoreApplication.instance() or QCoreApplication([])
+    relay = ApplicationEvents()
+    seen: list[EventPayload] = []
+    relay.changed.connect(seen.append)
+    catalog = _apple_artist_catalog()
+    fetch_artist = catalog.get_artist
+    succeeds = False
+    revoke_during_fetch = False
+
+    async def get_artist(artist_id):
+        if revoke_during_fetch:
+            provider_contexts(stub).revoke("apple")
+        if not succeeds:
+            raise RuntimeError("catalog request did not finish")
+        return await fetch_artist(artist_id)
+
+    monkeypatch.setattr(catalog, "get_artist", get_artist)
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=catalog)}, _events=relay)
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
+    app.processEvents()
+    (active,) = seen
+    assert active["lifecycle"] == "active"
+
+    succeeds = outcome == "recovery"
+    revoke_during_fetch = revoke_at == "fetch"
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
+    if revoke_at == "delivery":
+        provider_contexts(stub).revoke("apple")
+    app.processEvents()
+    assert seen == [active], "a stale worker cannot publish or resolve the owning artist event"
+    assert relay.action(active["id"], EventAction.OPEN_LOGS) is None
+    assert seen[-1]["lifecycle"] == "resolved" and seen[-1]["actions"] == []
+    relay.close()
 
 
 class _DeferredPool:

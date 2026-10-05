@@ -108,6 +108,7 @@ from urllib.parse import urlsplit
 # interface speaks it in its signatures; implementations and callers import
 # the ladder (and its rank/fold helpers) from waves.constants directly.
 from waves.constants import MediaType, QualityTier
+from waves.events import Failure
 
 logger = logging.getLogger(__name__)
 
@@ -986,6 +987,14 @@ class Provider(ABC):
     @abstractmethod
     def classify_refusal(self, exc) -> Refusal:
         """Classify an engine error into the shared refusal vocabulary."""
+
+    def classify_failure(self, exc: BaseException) -> Failure:
+        """Classify an application failure without guessing from exception text.
+
+        Unknown failures do not establish an independent engine/runtime
+        boundary. Concrete providers override this for facts they own.
+        """
+        return Failure()
 
     # ----- optional hooks
 

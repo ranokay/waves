@@ -47,7 +47,9 @@ from PySide6 import QtCore, QtGui
 from PySide6.QtCore import Signal, Slot
 
 import waves.metadata.matching as matching
+from waves.desktop.diagnostics.events import report_failure, resolve_events
 from waves.desktop.worker import Worker
+from waves.events import EventAction, EventCode, EventDomain, FailureScope
 from waves.library.index import SCAN_MISSING, SCAN_OK, SCAN_UNREADABLE, root_comparison_key
 from waves.library.ownership import path_under
 from waves.library.recover import recover_untrusted
@@ -709,6 +711,24 @@ def _rehome_map(folded: dict, by_id: dict) -> dict:
     return rehomed
 
 
+def _report_scan_status(bridge, status: str | None, generation: int) -> None:
+    def current() -> bool:
+        return generation == bridge._library_gen
+
+    if status == SCAN_OK:
+        resolve_events(bridge, EventDomain.LIBRARY, valid=current)
+    elif status in {SCAN_MISSING, SCAN_UNREADABLE}:
+        report_failure(
+            bridge,
+            EventDomain.LIBRARY,
+            "The Library folder could not be read. Check its location and access in Settings.",
+            code=EventCode.PATH_UNREACHABLE,
+            scope=FailureScope.CONFIGURATION,
+            valid=current,
+            actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
+        )
+
+
 class LibraryMixin:
     """The local music-library scan, watch and presence family, mixed into
     WavesBridge (see the module docstring)."""
@@ -1296,11 +1316,22 @@ class LibraryMixin:
 
                     count, status = self._library_scan_once(lib, root, force_full, alive, on_progress)
                     index, track_index = build_index()
-                except Exception:
+                except Exception as exc:
                     _log_scan_failure(lib)
+                    report_failure(
+                        self,
+                        EventDomain.LIBRARY,
+                        "The Library scan could not finish. Check folder access and scan again.",
+                        exception=exc,
+                        scope=FailureScope.CONFIGURATION if isinstance(exc, OSError) else FailureScope.UNKNOWN,
+                        code=EventCode.PATH_UNREACHABLE if isinstance(exc, OSError) else EventCode.FAILED,
+                        valid=lambda: gen == self._library_gen,
+                        actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
+                    )
                     index = None  # keep the last good index; do not blank the badge
                     status = "error"  # Settings says the scan did not finish, not a silent "ok"
                 if gen == self._library_gen:
+                    _report_scan_status(self, status, gen)
                     # Publish only an index that belongs to THIS root: a failed
                     # probe of a changed root (an offline drive, a down NAS)
                     # returns early with the previous library's rows still in

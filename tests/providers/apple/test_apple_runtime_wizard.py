@@ -35,12 +35,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import QCoreApplication
 from settings.fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
 from support.paths import REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.diagnostics.events import ApplicationEvents
 from waves.desktop.providers.lifecycle import provider_contexts
 from waves.desktop.providers.presentation import apple_status
+from waves.events import EventAction, EventCode, EventDomain, EventReferences, FailureScope, application_event
 from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
     NM3U8DLRE_VERSION,
@@ -547,7 +550,7 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
     monkeypatch.setattr(
         "waves.providers.apple.runtime.wrapper_login",
         lambda url, username, password: (
-            events.append("post")
+            events.append(("post", url, provider.wrapper_url))
             or {
                 "ok": True,
                 "needs_2fa": False,
@@ -560,9 +563,7 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
 
     stub.appleWrapperLogin("me@example.com", "secret")
 
-    assert events == ["ensure_port", "post"]
-    assert stub._apple_wrapper_login_result["url"] == "http://127.0.0.1:51234"
-    assert stub._apple_wrapper_login_result["provider_url"] == "http://127.0.0.1:51234"
+    assert events == ["ensure_port", ("post", "http://127.0.0.1:51234", "http://127.0.0.1:51234")]
 
 
 def test_start_port_keeps_the_effective_port_when_free_or_serving(tmp_path, monkeypatch):
@@ -740,7 +741,164 @@ def test_login_form_shows_busy_until_the_worker_finishes(tmp_path):
     deferred[0].run()
 
     assert stub.appleWrapperAuth()["busy"] is False
-    assert stub.appleWrapperAuth()["login_error"] == "guest did not answer"
+    assert stub.appleWrapperAuth()["login_error"] == "Sign-in failed. Try again."
+
+
+@pytest.fixture()
+def wrapper_event_bridge(tmp_path):
+    """Exercise the real login owner and queued event relay without a window."""
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_url="", wrapper_logged_in=False)
+    _bind_wrapper_login(stub)
+    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub, SimpleNamespace)
+    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_auth_cache = {
+        "at": time.time(),
+        "result": {"reachable": True, "state": "logged_out", "logged_in": False, "account": "", "error": ""},
+    }
+    visible = []
+    delivered = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: visible.append(stub.appleWrapperAuth()))
+    stub._events = ApplicationEvents()
+    stub._events.changed.connect(delivered.append)
+    yield stub, visible, delivered, loop
+    stub._events.close()
+    loop.processEvents()
+
+
+@pytest.mark.parametrize(
+    "header, secrets",
+    [
+        ("Authorization: Basic dXNlcjpwYXNz", ("dXNlcjpwYXNz",)),
+        (
+            'Authorization: Digest username="private-user", nonce="private-nonce", response="private-response"',
+            ("private-user", "private-nonce", "private-response"),
+        ),
+    ],
+)
+def test_failed_wrapper_callback_is_private_in_form_retention_events_and_copy(
+    wrapper_event_bridge, monkeypatch, header, secrets
+):
+    stub, visible, delivered, loop = wrapper_event_bridge
+    raw = f"Request rejected.\n{header}\nCannot open /Volumes/Private Wrapper/Account Folder/cached-login.json"
+    result = {"ok": False, "needs_2fa": False, "error": raw, "_exception": RuntimeError(raw)}
+    copied = []
+    monkeypatch.setattr(
+        "waves.desktop.backend.QtGui.QGuiApplication.clipboard", lambda: SimpleNamespace(setText=copied.append)
+    )
+
+    stub._run_apple_wrapper_login(lambda: result)
+
+    assert delivered == [], "the event waits for queued GUI delivery"
+    assert visible[-1]["login_error"] == "Sign-in failed. Try again."
+    assert stub._apple_wrapper_login_result == {"ok": False, "needs_2fa": False, "error": "Sign-in failed. Try again."}
+    loop.processEvents()
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert payload["scope"] == FailureScope.UNKNOWN
+    assert payload["references"]["provider_id"] == "apple"
+    assert payload["references"]["runtime_id"] == "apple:wrapper-v2"
+    assert payload["summary"] == "Sign-in failed. Try again."
+    assert "RuntimeError" not in payload["summary"] and "RuntimeError" in payload["diagnostics"]
+    retained = stub._events.action(payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert retained is not None
+    assert WavesBridge.eventAction(stub, payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert len(copied) == 1
+    for representation in (
+        repr(visible),
+        repr(stub.appleWrapperAuth()),
+        repr(stub._apple_wrapper_login_result),
+        json.dumps(delivered),
+        repr(retained),
+        retained.copy_text(),
+        copied[0],
+    ):
+        for private in (*secrets, "Private Wrapper", "Account Folder", "cached-login.json"):
+            assert private not in representation
+
+
+def test_wrapper_port_provisioning_failure_has_configuration_scope_and_private_diagnostics(wrapper_event_bridge):
+    stub, visible, delivered, loop = wrapper_event_bridge
+
+    def refuse(preferred=0):
+        raise PermissionError("Cannot write /Volumes/Private Wrapper/private-port.json")
+
+    stub._apple_runtime = SimpleNamespace(ensure_port=refuse)
+    stub._apple_wrapper_port_for_start = lambda: 0
+    posted = []
+
+    stub._run_apple_wrapper_login(
+        lambda: stub._apple_wrapper_login_call(lambda url: posted.append(url) or {"ok": True})
+    )
+    loop.processEvents()
+
+    assert posted == []
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert payload["scope"] == FailureScope.CONFIGURATION
+    assert payload["code"] == EventCode.INVALID_CONFIGURATION
+    assert payload["summary"] == "The wrapper port could not be provisioned. Check setup in Settings."
+    assert visible[-1]["login_error"] == payload["summary"]
+    assert "PermissionError" in payload["diagnostics"] and "PermissionError" not in payload["summary"]
+    retained = stub._events.action(payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert retained is not None
+    for representation in (
+        repr(visible),
+        repr(stub._apple_wrapper_login_result),
+        json.dumps(delivered),
+        retained.copy_text(),
+    ):
+        assert "Private Wrapper" not in representation and "private-port.json" not in representation
+
+
+def test_wrapper_login_retry_resolves_only_its_notice_after_non_two_factor_success(wrapper_event_bridge):
+    stub, _visible, delivered, loop = wrapper_event_bridge
+    other = application_event(
+        EventDomain.ACCOUNT,
+        "The cookies session needs attention.",
+        key="cookies-account",
+        scope=FailureScope.ACCOUNT,
+        references=EventReferences(provider_id="apple"),
+        actions=(EventAction.COPY_DIAGNOSTICS,),
+    )
+    stub._events.publish(other)
+    stub._run_apple_wrapper_login(lambda: {"ok": False, "needs_2fa": False, "error": "Guest rejected sign-in"})
+    loop.processEvents()
+    wrapper_id = application_event(EventDomain.ACCOUNT, "", key="wrapper-login").id
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is not None
+    assert stub._events.action(other.id, EventAction.COPY_DIAGNOSTICS) is not None
+
+    stub._run_apple_wrapper_login(lambda: {"ok": True, "needs_2fa": True, "error": ""})
+    loop.processEvents()
+    assert stub.appleWrapperAuth()["needs_2fa"] is True
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is not None
+
+    refreshed = []
+    stub._refresh_apple_wrapper_auth = lambda: refreshed.append(True)
+    stub._run_apple_wrapper_login(lambda: {"ok": True, "needs_2fa": False, "error": ""})
+    loop.processEvents()
+
+    assert refreshed == [True]
+    assert stub.appleWrapperAuth()["login_ok"] is True
+    assert stub.appleWrapperAuth()["login_error"] == ""
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is None
+    assert stub._events.action(other.id, EventAction.COPY_DIAGNOSTICS) is not None
+    resolved = [payload for payload in delivered if payload["lifecycle"] == "resolved"]
+    assert [payload["id"] for payload in resolved] == [wrapper_id]
+
+
+def test_revoked_apple_context_drops_the_queued_wrapper_login_notice(wrapper_event_bridge):
+    stub, _visible, delivered, loop = wrapper_event_bridge
+    stub._run_apple_wrapper_login(lambda: {"ok": False, "needs_2fa": False, "error": "Guest rejected sign-in"})
+    assert delivered == []
+
+    provider_contexts(stub).revoke("apple")
+    loop.processEvents()
+
+    assert delivered == []
+    wrapper_id = application_event(EventDomain.ACCOUNT, "", key="wrapper-login").id
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is None
 
 
 def test_apple_sign_out_clears_the_account_session(tmp_path):

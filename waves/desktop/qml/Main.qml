@@ -5673,6 +5673,19 @@ ApplicationWindow {
 
   Connections {
     target: waves
+    function onApplicationEventActionRequested(action, providerId) {
+      if (action === "open_logs") {
+        logsDrawer.open()
+      } else if (action === "open_settings") {
+        root.navPush()
+        root.markNav("settings")
+        root.setupOpen = false
+        root.settingsOpen = true
+        root.artistOpen = false
+        root.libraryOpen = false
+        root.browseOpen = false
+      }
+    }
     function onAppleStatusChanged() {
       // The chip's "can any provider download yet" test and Apple's
       // search-group clearing both read the same fresh light.

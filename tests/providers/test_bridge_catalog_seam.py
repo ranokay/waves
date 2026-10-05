@@ -20,6 +20,7 @@ from __future__ import annotations
 from threading import Barrier, Lock
 from types import SimpleNamespace
 
+import pytest
 from providers.fakes import BareProvider
 from tidalapi.album import Album
 from tidalapi.artist import Artist
@@ -28,7 +29,7 @@ from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
 from waves.providers import Capability, ProviderDescriptor, TidalProvider
-from waves.providers.apple import AppleCatalogUnavailable
+from waves.providers.apple import AppleCatalogUnavailable, AppleProvider
 
 
 class _Signal:
@@ -83,6 +84,11 @@ class _FakeProvider(BareProvider):
     # The SDK interpretation belongs to its provider, as in production.
     resolve_link = TidalProvider.resolve_link
     row_for = TidalProvider.row_for
+
+    def classify_failure(self, exc):
+        if self.id == CTX_APPLE:
+            return AppleProvider.__new__(AppleProvider).classify_failure(exc)
+        return super().classify_failure(exc)
 
     def search(self, needle):
         self.calls.append(("search", needle))
@@ -283,8 +289,8 @@ def test_a_lone_failed_provider_answers_its_own_group():
     (payload,) = stub.searchResults.emits
     group = payload["groups"][0]
     assert group["provider"] == "tidal"
-    assert group["error"] == "network died" and group["albums"] == []
-    assert stub.statuses[-1] == "network died"
+    assert group["error"] == "The operation could not finish. Try again or open the logs." and group["albums"] == []
+    assert stub.statuses[-1] == "The operation could not finish. Try again or open the logs."
     assert stub._search_cache == {}
 
 
@@ -306,9 +312,12 @@ def test_a_partial_tidal_failure_answers_the_tidal_group():
     (payload,) = stub.searchResults.emits
     tidal_group = next(g for g in payload["groups"] if g["provider"] == "tidal")
     apple_group = next(g for g in payload["groups"] if g["provider"] == "apple")
-    assert tidal_group["error"] == "network died" and tidal_group["albums"] == []
+    assert (
+        tidal_group["error"] == "The operation could not finish. Try again or open the logs."
+        and tidal_group["albums"] == []
+    )
     assert apple_group["error"] == "" and apple_group["tracks"] != []
-    assert stub.statuses[-1] == "network died"
+    assert stub.statuses[-1] == "The operation could not finish. Try again or open the logs."
     assert stub._search_cache == {}
 
 
@@ -487,7 +496,7 @@ def test_an_apple_only_failure_delivers_its_words_to_the_group():
     assert stub.searchResults.emits, "an Apple-only failure must still answer the group"
     payload = stub.searchResults.emits[-1]
     group = next(g for g in payload["groups"] if g["provider"] == CTX_APPLE)
-    assert group["error"] == "Apple changed its web app. A Waves update is needed."
+    assert group["error"] == "Apple's catalog format has changed. Check for a Waves update."
     assert group["albums"] == []
     assert "videos" not in group and "mixes" not in group, "Apple's group carries no buckets its search does not answer"
     assert stub.statuses[-1] == group["error"]
@@ -563,7 +572,7 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
 
     stub.search("aphex twin")
 
-    assert stub.statuses[-1] == "Apple changed its web app. A Waves update is needed."
+    assert stub.statuses[-1] == "Apple's catalog format has changed. Check for a Waves update."
     assert stub._search_cache == {}
     group = next(g for g in stub.searchResults.emits[0]["groups"] if g["provider"] == CTX_APPLE)
     assert group["tracks"] == []
@@ -626,6 +635,38 @@ def test_a_link_the_provider_cannot_resolve_reports_failure():
     assert stub.statuses[-1] == "Could not open that link"
     assert stub.busy == [True, False]
     assert stub.searchResults.emits == []
+
+
+@pytest.mark.qml
+def test_link_failure_is_redacted_and_success_resolves_its_event():
+    import json
+
+    from PySide6.QtCore import QCoreApplication
+
+    from waves.desktop.diagnostics.events import ApplicationEvents
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    provider = _provider(open_url=RuntimeError("Authorization: Basic dXNlcjpwYXNz /Users/private/link.json"))
+    stub = _OpenUrlStub(provider)
+    stub._events = ApplicationEvents()
+    seen = []
+    stub._events.changed.connect(seen.append)
+    stub._open_url("https://tidal.com/browse/album/42")
+    app.processEvents()
+    failure = seen[-1]
+    assert failure["domain"] == "search"
+    assert failure["scope"] == "unknown"
+    assert "dXNlcjpwYXNz" not in json.dumps(seen)
+    assert "link.json" not in json.dumps(seen)
+    assert "RuntimeError" not in failure["summary"]
+    assert "RuntimeError" in failure["diagnostics"]
+    provider._answers["open_url"] = Album.__new__(Album)
+    stub._open_url("https://tidal.com/browse/album/42")
+    app.processEvents()
+    assert stub.statuses[-1] == "Opened link"
+    assert seen[-1]["id"] == failure["id"]
+    assert seen[-1]["lifecycle"] == "resolved"
+    assert stub._events.action(failure["id"], "open_logs") is None
 
 
 def test_a_pasted_artist_link_lands_in_the_artists_bucket():

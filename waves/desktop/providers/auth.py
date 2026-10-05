@@ -11,7 +11,8 @@ from waves import redaction
 from waves.constants import CTX_TIDAL
 from waves.desktop.providers.lifecycle import ProviderToken, provider_contexts
 from waves.desktop.worker import Worker
-from waves.providers.base import LoginAttempt, Provider
+from waves.events import EventAction, EventCode, EventDomain, EventReferences, FailureScope, application_event
+from waves.providers.base import Capability, LoginAttempt, Provider
 
 logger = logging.getLogger("waves.providers.auth")
 
@@ -184,6 +185,24 @@ def _publish_account(bridge, event: LoginEvent) -> None:
     account_token = dataclasses.replace(event.token, attempt=None)
     if not event.ok or not provider_contexts(bridge).current(account_token):
         return
+    from waves.desktop.diagnostics.events import resolve_events
+
+    for key in (event.token.provider_id, "download-account", "browse-account"):
+        resolve_events(
+            bridge,
+            EventDomain.ACCOUNT,
+            provider_id=event.token.provider_id,
+            key=key,
+            valid=lambda: provider_contexts(bridge).current(account_token),
+        )
+    provider = getattr(bridge, "providers", {}).get(event.token.provider_id)
+    if provider is not None and Capability.SEARCH in getattr(provider, "capabilities", frozenset()):
+        resolve_events(
+            bridge,
+            EventDomain.ACCOUNT,
+            key="search-account",
+            valid=lambda: provider_contexts(bridge).current(account_token),
+        )
     if event.token.provider_id in getattr(bridge, "_tracked_sessions", ()):
         bridge._set_logged_in(True)
     bridge.providerStateChanged.emit(event.token.provider_id)
@@ -224,4 +243,20 @@ def apply_login_event(bridge, event: LoginEvent) -> None:
         bridge._session_resolved = True
         bridge.sessionResolvedChanged.emit()
     bridge._set_status("Signed in" if event.ok else "Not signed in" if event.resume else "Sign-in failed. Try again.")
+    if not event.ok:
+        from waves.desktop.diagnostics.events import publish_event
+
+        publish_event(
+            bridge,
+            application_event(
+                EventDomain.ACCOUNT,
+                "Sign-in could not finish. Reconnect your account in Settings.",
+                key=event.token.provider_id,
+                code=EventCode.ACCOUNT_REQUIRED,
+                scope=FailureScope.ACCOUNT,
+                references=EventReferences(provider_id=event.token.provider_id),
+                actions=(EventAction.RECONNECT, EventAction.OPEN_SETTINGS),
+            ),
+            valid=lambda: contexts.current(event.token),
+        )
     bridge.providerLoginFinished.emit(event.token.provider_id, event.ok)

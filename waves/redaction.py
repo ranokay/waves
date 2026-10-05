@@ -20,11 +20,44 @@ import os
 import re
 import socket
 import threading
+from urllib.parse import urlsplit, urlunsplit
 
 # Content markers («…», produced by content()). Identity placeholders use ‹…›
 # so the two never collide: the export content pass hashes «…» spans only.
 _C_OPEN, _C_CLOSE = "«", "»"
 _CONTENT_RE = re.compile(f"{_C_OPEN}([^{_C_OPEN}{_C_CLOSE}]*){_C_CLOSE}")
+
+# Events have a stricter path policy than logs: private folder and filename
+# suffixes go too. Quotes delimit spaced paths; without quotes, a path takes
+# the rest of its line rather than guessing which words belong to a filename.
+_EVENT_QUOTED = re.compile(r"(['\"])((?:\\.|(?!\1)[^\\])*)\1")
+_EVENT_URL_START = re.compile(r"(?i)^(?:[a-z][a-z0-9+.-]*://|file:/)")
+_EVENT_URL = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|file:/)[^\s'\"<>]+")
+_EVENT_FILE_URL = re.compile(r"(?i)\b(?:file:/|smb://|sftp://)[^\r\n]*")
+_EVENT_PATH_START = re.compile(r"(?:[A-Za-z]:[\\/]|[\\/]|~[\\/]|\.{1,2}[\\/])")
+_EVENT_PATH = re.compile(r"(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\\{2,}|/|~[\\/]|\.{1,2}[\\/])[^\r\n]*")
+_EVENT_RELATIVE_PATH = re.compile(r"(?<![\w:/\\])(?:[\w.-]+[\\/])+[^\r\n]*\.[A-Za-z0-9]{1,12}\b")
+_EVENT_QUOTED_SECRET = re.compile(
+    r"(?i)\b(bearer|authorization|auth|token|api[_-]?key|apikey|secret|password|passwd|passphrase|"
+    r"cookies?|set-cookie|session[_-]?id|access[_-]?token|refresh[_-]?token|client[_-]?secret)\b"
+    r"(['\"]?\s*[:=]\s*|\s+)(['\"])((?:\\.|(?!\3)[^\\])*)\3"
+)
+# A labelled unquoted value has no trustworthy word or punctuation boundary.
+# Keep the label, but discard its whole line so a passphrase or delimited token
+# cannot leave its remaining words behind. Quoted values use the pass above.
+_EVENT_UNQUOTED_SECRET = re.compile(
+    r"(?i)\b(bearer|authorization|auth|token|api[_-]?key|apikey|secret|password|passwd|passphrase|"
+    r"session[_-]?id|access[_-]?token|refresh[_-]?token|client[_-]?secret)\b"
+    r"(['\"]?[ \t]*[:=][ \t]*)(?![ \t'\"])[^\r\n]+"
+)
+_EVENT_CREDENTIAL_HEADER = re.compile(
+    r"(?i)\b(set-cookie|cookies?|(?:proxy-)?authorization)"
+    r"(?:['\"]?\s*[:=]\s*|\s+(?=[^\s=]+=\S)|\s+(?=(?:basic|digest|bearer|negotiate)\b))[^\r\n]+"
+)
+_EVENT_BEARER = re.compile(r"(?i)\bbearer[ \t]+[^\r\n]+")
+_IDENTITY_PLACEHOLDER_RE = re.compile(
+    r"(‹(?:redacted|path|url|credentials|query|fragment|secret|mac|ip|email|uuid|hex|b64|user|share|host)›)"
+)
 
 
 def content(text: object) -> str:
@@ -129,6 +162,7 @@ class _Redactor:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._secrets: list[tuple[str, str]] = []  # (value, placeholder), longest first
+        self._event_secrets: list[str] = []  # Events also redact short registered values.
         home = os.path.expanduser("~")
         self._homes = [h for h in {home, os.path.realpath(home)} if h and h != "/"]
         try:
@@ -145,10 +179,15 @@ class _Redactor:
 
     def register_secret(self, value: str, placeholder: str = "‹secret›") -> None:
         value = str(value or "")
-        if len(value) < 4:  # too short to redact without shredding the text
+        if not value:
             return
         with self._lock:
-            if all(value != v for v, _ in self._secrets):
+            if value not in self._event_secrets:
+                self._event_secrets.append(value)
+                self._event_secrets.sort(key=len, reverse=True)
+            # Logs preserve the existing short-value policy; event payloads
+            # cannot use that exception for a registered credential or PIN.
+            if len(value) >= 4 and all(value != v for v, _ in self._secrets):
                 self._secrets.append((value, placeholder))
                 self._secrets.sort(key=lambda p: len(p[0]), reverse=True)
 
@@ -223,7 +262,8 @@ def register_secret(value: str, placeholder: str = "‹secret›") -> None:
     """Register a runtime secret (token, account id) for literal redaction.
 
     Call once whenever a new sensitive value is acquired; every handler scrubs
-    it from that moment on. Values shorter than 4 characters are ignored.
+    it from that moment on. Logs ignore values shorter than 4 characters;
+    application events redact every nonempty registered value.
     """
     _redactor.register_secret(value, placeholder)
 
@@ -234,6 +274,64 @@ def scrub(text: str, redact_content: bool = False) -> str:
     if redact_content:
         text = _redactor.scrub_content(text)
     return text
+
+
+def _event_url(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "‹url›"
+    if parts.scheme.lower() in {"file", "smb", "sftp"}:
+        return "‹path›"
+    authority = parts.netloc
+    if "@" in authority:
+        authority = "‹credentials›@" + authority.rsplit("@", 1)[1]
+    return urlunsplit(
+        (parts.scheme, authority, parts.path, "‹query›" if parts.query else "", "‹fragment›" if parts.fragment else "")
+    )
+
+
+def _event_quoted(m: re.Match[str]) -> str:
+    quote, body = m.groups()
+    if _EVENT_URL_START.match(body):
+        return f"{quote}{_event_url(body)}{quote}"
+    if _EVENT_PATH_START.match(body) or (("/" in body or "\\" in body) and "://" not in body):
+        return f"{quote}‹path›{quote}"
+    return m.group(0)
+
+
+def scrub_event_text(text: str) -> str:
+    """Redact event display, retention and copy text before it crosses a boundary.
+
+    Reuse log identity scrubbing, with full private paths, URL credentials/
+    fragments, quoted secret values and all registered sensitive values removed.
+    Redaction placeholders survive repeated preparation unchanged.
+    """
+    text = _EVENT_QUOTED_SECRET.sub(r"\1\2\3‹redacted›\3", text)
+    text = _EVENT_CREDENTIAL_HEADER.sub(r"\1: ‹redacted›", text)
+    text = _EVENT_UNQUOTED_SECRET.sub(r"\1\2‹redacted›", text)
+    text = _EVENT_BEARER.sub("Bearer ‹redacted›", text)
+    text = _EVENT_QUOTED.sub(_event_quoted, text)
+    text = _EVENT_FILE_URL.sub("‹path›", text)
+    text = _EVENT_URL.sub(lambda match: _event_url(match.group(0)), text)
+    text = _EVENT_PATH.sub("‹path›", text)
+    text = _EVENT_RELATIVE_PATH.sub("‹path›", text)
+    with _redactor._lock:
+        secrets = list(_redactor._event_secrets)
+    secret_pattern = re.compile("|".join(re.escape(value) for value in secrets)) if secrets else None
+    # Keep placeholders opaque, including ones made by an earlier event pass.
+    # A short registered value must not repeatedly eat its own replacement.
+    parts = _IDENTITY_PLACEHOLDER_RE.split(text)
+    for index in range(0, len(parts), 2):
+        if secret_pattern is not None:
+            parts[index] = secret_pattern.sub("‹secret›", parts[index])
+        chunks = _IDENTITY_PLACEHOLDER_RE.split(parts[index])
+        for chunk_index in range(0, len(chunks), 2):
+            chunk = chunks[chunk_index]
+            body = chunk.rstrip()
+            chunks[chunk_index] = scrub(body) + chunk[len(body) :]
+        parts[index] = "".join(chunks)
+    return "".join(parts)
 
 
 class _RedactingFilter(logging.Filter):

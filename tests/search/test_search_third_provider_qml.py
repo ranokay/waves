@@ -29,6 +29,7 @@ import pytest
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 
 _LOGO = "assets/providers/apple-music.png"
+_SAFE_FAILURE = "The operation could not finish. Try again or open the logs."
 
 _FAKE_ALBUM = {
     "id": "fake:al1",
@@ -320,7 +321,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         failures.append("the shifted group did not come back with its own rows")
 
     # A third provider alone keeps the search row live (the bridge's generic
-    # gate) and answers its own lone failure with its words + RETRY.
+    # gate) and answers its own unclassified failure with safe copy + RETRY.
     bridge._logged_in = False
     bridge.loggedInChanged.emit()
     settle(200)
@@ -328,20 +329,20 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         failures.append("a lone search-capable provider left the search row dead")
 
     def _fake_is_down(needle):
-        raise RuntimeError("Fake Music is down")
+        raise RuntimeError("Fake Music is down: token=private-search-token /Users/private/search.json")
 
     bridge.providers["fake"].search = _fake_is_down
     q("root.submitSearch('boom')")
     landed = _settle_until(
-        q, settle, lambda: bool(q(fake)) and q(fake + ".errorText") == "Fake Music is down", timeout_ms=4000
+        q, settle, lambda: bool(q(fake)) and q(fake + ".errorText") == _SAFE_FAILURE, timeout_ms=4000
     )
     if not landed:
         failures.append(
             f"the third provider's lone failure did not answer its group ({q(fake + '.errorText') if q(fake) else None!r})"
         )
     else:
-        if q("root.searchGroupError") != "Fake Music is down":
-            failures.append("the page did not carry the third provider's failure words")
+        if q("root.searchGroupError") != _SAFE_FAILURE:
+            failures.append("the page did not carry safe copy for the third provider's failure")
         retry = json.loads(
             q(
                 _walk_expression(
