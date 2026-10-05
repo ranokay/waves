@@ -11,7 +11,7 @@ from tidalapi.exceptions import AuthenticationError, ObjectNotFound, TooManyRequ
 
 from waves.desktop.providers import auth
 from waves.desktop.providers.lifecycle import ProviderContexts
-from waves.events import ApplicationEvent, EventAction, EventCode, EventDomain, Failure, FailureScope, Lifecycle
+from waves.events import ApplicationEvent, EventAction, EventCode, EventDomain, Failure, FailureScope
 from waves.providers.apple import runner
 from waves.providers.apple.engine import (
     AppleCredential,
@@ -125,37 +125,6 @@ def test_engine_failure_contract_keeps_its_compatibility_identity_and_safe_verdi
     assert _PRIVATE not in failure.summary
 
 
-def test_repeated_apple_holds_and_recovery_use_one_job_lifecycle() -> None:
-    events: list[ApplicationEvent] = []
-    hooks = runner.AppleJobHooks(provider=AppleProvider, event=events.append)
-    for _ in range(3):
-        runner.set_held(hooks, 12)
-    account = AppleProvider().classify_failure(AppleCredentialsError(_PRIVATE))
-    runner.set_held(hooks, 12, _PRIVATE)
-    runner._publish_job_failure(hooks, 12, account)
-    runner._resolve_job_event(hooks, 12)
-    assert len({event.id for event in events}) == 1
-    assert all(event.references.job_id == 12 for event in events)
-    assert events[-2].scope == FailureScope.ACCOUNT
-    assert EventAction.OPEN_SETTINGS in events[-2].actions
-    assert EventAction.RETRY_JOB not in events[-2].actions
-    assert events[-1].lifecycle == Lifecycle.RESOLVED and events[-1].actions == ()
-    assert "account-secret-value" not in str([event.payload() for event in events])
-
-
-def test_apple_final_classification_survives_explicit_setup_wrapping() -> None:
-    hooks = runner.AppleJobHooks(provider=AppleProvider)
-    account = AppleProvider().classify_failure(AppleCredentialsError(_PRIVATE))
-    original = runner._AppleSetupRequired(_PRIVATE, failure=account)
-    from waves.errors import DownloadIncomplete
-
-    wrapped = DownloadIncomplete(_PRIVATE)
-    wrapped.__cause__ = original
-    failure = runner._classified_failure(hooks, wrapped)
-    assert failure.scope == FailureScope.ACCOUNT and failure.retryable
-    assert failure.runtime_id == "apple:cookies-client"
-
-
 def test_apple_event_failure_does_not_interrupt_existing_held_state() -> None:
     statuses: list[tuple[int, str, str]] = []
 
@@ -200,15 +169,15 @@ def test_login_event_publishes_only_current_failure_and_resolves_committed_succe
 ) -> None:
     emitted: list[ApplicationEvent] = []
     guards: list[Callable[[], bool] | None] = []
-    resolved: list[tuple[EventDomain, str]] = []
+    resolved: list[tuple[EventDomain, str, str]] = []
 
     def publish(_bridge, event: ApplicationEvent, valid: Callable[[], bool] | None = None) -> None:
         emitted.append(event)
         guards.append(valid)
 
-    def resolve(_bridge, domain: EventDomain, *, provider_id: str, valid: Callable[[], bool]) -> None:
+    def resolve(_bridge, domain: EventDomain, *, provider_id: str, key: str, valid: Callable[[], bool]) -> None:
         if valid():
-            resolved.append((domain, provider_id))
+            resolved.append((domain, provider_id, key))
 
     from waves.desktop.diagnostics import events as delivery
 
@@ -235,4 +204,4 @@ def test_login_event_publishes_only_current_failure_and_resolves_committed_succe
     assert len(emitted) == 1
     current = contexts.start_login("paper")
     auth.apply_login_event(bridge, auth.LoginEvent(current, "complete", ok=True))
-    assert resolved == [(EventDomain.ACCOUNT, "paper")]
+    assert resolved == [(EventDomain.ACCOUNT, "paper", key) for key in ("paper", "download-account", "browse-account")]

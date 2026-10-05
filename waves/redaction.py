@@ -42,7 +42,19 @@ _EVENT_QUOTED_SECRET = re.compile(
     r"cookies?|set-cookie|session[_-]?id|access[_-]?token|refresh[_-]?token|client[_-]?secret)\b"
     r"(['\"]?\s*[:=]\s*|\s+)(['\"])((?:\\.|(?!\3)[^\\])*)\3"
 )
-_EVENT_COOKIE_HEADER = re.compile(r"(?i)\b(set-cookie|cookies?)(?:['\"]?\s*[:=]\s*|\s+(?=[^\s=]+=\S))[^\r\n]+")
+# A labelled unquoted value has no trustworthy word or punctuation boundary.
+# Keep the label, but discard its whole line so a passphrase or delimited token
+# cannot leave its remaining words behind. Quoted values use the pass above.
+_EVENT_UNQUOTED_SECRET = re.compile(
+    r"(?i)\b(bearer|authorization|auth|token|api[_-]?key|apikey|secret|password|passwd|passphrase|"
+    r"session[_-]?id|access[_-]?token|refresh[_-]?token|client[_-]?secret)\b"
+    r"(['\"]?[ \t]*[:=][ \t]*)(?![ \t'\"])[^\r\n]+"
+)
+_EVENT_CREDENTIAL_HEADER = re.compile(
+    r"(?i)\b(set-cookie|cookies?|(?:proxy-)?authorization)"
+    r"(?:['\"]?\s*[:=]\s*|\s+(?=[^\s=]+=\S)|\s+(?=(?:basic|digest|bearer|negotiate)\b))[^\r\n]+"
+)
+_EVENT_BEARER = re.compile(r"(?i)\bbearer[ \t]+[^\r\n]+")
 _IDENTITY_PLACEHOLDER_RE = re.compile(
     r"(‹(?:redacted|path|url|credentials|query|fragment|secret|mac|ip|email|uuid|hex|b64|user|share|host)›)"
 )
@@ -296,7 +308,9 @@ def scrub_event_text(text: str) -> str:
     Redaction placeholders survive repeated preparation unchanged.
     """
     text = _EVENT_QUOTED_SECRET.sub(r"\1\2\3‹redacted›\3", text)
-    text = _EVENT_COOKIE_HEADER.sub(r"\1: ‹redacted›", text)
+    text = _EVENT_CREDENTIAL_HEADER.sub(r"\1: ‹redacted›", text)
+    text = _EVENT_UNQUOTED_SECRET.sub(r"\1\2‹redacted›", text)
+    text = _EVENT_BEARER.sub("Bearer ‹redacted›", text)
     text = _EVENT_QUOTED.sub(_event_quoted, text)
     text = _EVENT_FILE_URL.sub("‹path›", text)
     text = _EVENT_URL.sub(lambda match: _event_url(match.group(0)), text)

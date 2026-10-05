@@ -381,11 +381,6 @@ class _FanoutProvider(_FakeProvider):
         self._barrier = barrier
         self._result = result
 
-    def classify_failure(self, exc):
-        if self.id == CTX_APPLE:
-            return AppleProvider.__new__(AppleProvider).classify_failure(exc)
-        return super().classify_failure(exc)
-
     def search(self, needle):
         self.calls.append(("search", needle))
         self._barrier.wait(timeout=2)
@@ -639,6 +634,37 @@ def test_a_link_the_provider_cannot_resolve_reports_failure():
     assert stub.statuses[-1] == "Could not open that link"
     assert stub.busy == [True, False]
     assert stub.searchResults.emits == []
+
+
+def test_link_failure_is_redacted_and_success_resolves_its_event():
+    import json
+
+    from PySide6.QtCore import QCoreApplication
+
+    from waves.desktop.diagnostics.events import ApplicationEvents
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    provider = _provider(open_url=RuntimeError("Authorization: Basic dXNlcjpwYXNz /Users/private/link.json"))
+    stub = _OpenUrlStub(provider)
+    stub._events = ApplicationEvents()
+    seen = []
+    stub._events.changed.connect(seen.append)
+    stub._open_url("https://tidal.com/browse/album/42")
+    app.processEvents()
+    failure = seen[-1]
+    assert failure["domain"] == "search"
+    assert failure["scope"] == "unknown"
+    assert "dXNlcjpwYXNz" not in json.dumps(seen)
+    assert "link.json" not in json.dumps(seen)
+    assert "RuntimeError" not in failure["summary"]
+    assert "RuntimeError" in failure["diagnostics"]
+    provider._answers["open_url"] = Album.__new__(Album)
+    stub._open_url("https://tidal.com/browse/album/42")
+    app.processEvents()
+    assert stub.statuses[-1] == "Opened link"
+    assert seen[-1]["id"] == failure["id"]
+    assert seen[-1]["lifecycle"] == "resolved"
+    assert stub._events.action(failure["id"], "open_logs") is None
 
 
 def test_a_pasted_artist_link_lands_in_the_artists_bucket():

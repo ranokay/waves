@@ -17,8 +17,10 @@ from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
 from waves.desktop.queue.runtime import JobRuntime
 from waves.errors import DownloadIncomplete
+from waves.events import ApplicationEvent, EventAction, EventCode, FailureScope, Lifecycle
 from waves.providers import AppleCollectionIncomplete
 from waves.providers.apple import runner
+from waves.providers.apple.provider import AppleProvider
 from waves.providers.base import AudioType
 
 
@@ -1645,6 +1647,7 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
 
     provider = _FakeProvider()
+    provider.classify_failure = AppleProvider().classify_failure
     provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(
         AppleCredentialsError("Apple downloads need a signed-in cookies export", credential=AppleCredential.COOKIES)
     )
@@ -1654,42 +1657,51 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
+    application_events: list[ApplicationEvent] = []
+    settled: list[tuple] = []
+    finished: list[int] = []
+    hooks.event = application_events.append
+    hooks.queue_status = lambda *args: settled.append(args)
+    hooks.finish_job = finished.append
     probes = []
     hooks.refresh_wrapper_auth = lambda **kw: probes.append(kw) or {"logged_in": True}
-    held = []
-    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 1)
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
     relay = _Relay()
-    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    spec = SimpleNamespace(
+        kind="track", collection=False, media_id="apple:song-1", file_template="{artist_name}/{track_title}"
+    )
 
-    with pytest.raises(DownloadIncomplete) as excinfo:
-        runner.run_apple_job(
-            hooks,
-            1,
-            spec,
-            _song_resource(),
-            signals=relay,
-            job_abort=Event(),
-            file_template="{artist_name}/{track_title}",
-        )
+    runner.run_job_body(hooks, 1, spec, _song_resource(), signals=relay, job_abort=Event(), row_ask=None, name="Xtal")
 
-    surfaced = str(excinfo.value)
+    assert settled[-1][1] == "failed" and finished == [1]
+    surfaced = settled[-1][2]
     assert "cookies export" in surfaced and "Settings" in surfaced
     assert probes == [], "the wrapper probe cannot answer for a cookies fetch"
-    assert held and "cookies export" in held[0][1]
+    held_rows = [row for row in settled if row[1] == "queued"]
+    assert held_rows and "cookies export" in held_rows[0][2]
     assert stub._apple_session_expired is True, "the light reads needs attention"
     assert not any(ev.get("status") == "done" for ev in relay.events)
+    assert len(application_events) == 2
+    held, failed = application_events
+    assert held.id == failed.id and held.references.job_id == failed.references.job_id == 1
+    assert held.scope == failed.scope == FailureScope.ACCOUNT
+    assert failed.code == EventCode.ACCOUNT_REQUIRED and failed.retryable
+    assert failed.references.runtime_id == "apple:cookies-client"
+    assert EventAction.OPEN_SETTINGS in failed.actions and EventAction.RETRY_JOB in failed.actions
+    assert EventAction.RETRY_JOB not in held.actions
 
 
 @pytest.mark.ffmpeg
-def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, monkeypatch):
-    """The other half of the acceptance: a healthy credential path still
-    recovers automatically. The fetch needs the wrapper, the first call finds
-    the guest signed out, and the recovery probe finds it signed back in; the
-    same track retries in place and lands."""
+@pytest.mark.parametrize("failure_kind", ["credential", "runtime"])
+def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch, failure_kind):
+    """A restored wrapper account or runtime retries the same track in place.
+
+    The runner publishes one held event and resolves that event only after
+    the retried delivery lands.
+    """
     from waves.providers.apple import engine as apple_engine
-    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError, AppleWrapperDown
 
     monkeypatch.setattr(
         apple_engine,
@@ -1701,11 +1713,14 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
     staged = tmp_path / "staged.m4a"
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
+    provider.classify_failure = AppleProvider().classify_failure
     calls = []
 
     def _flaky(raw, tier, audio_type):
         calls.append(audio_type)
         if len(calls) == 1:
+            if failure_kind == "runtime":
+                raise AppleWrapperDown("token=account-secret-value /Users/private-account/wrapper")
             raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
         info = _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
         # The wrapper tier's delivery is stereo ALAC, and its own words must
@@ -1723,9 +1738,14 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
+    application_events: list[ApplicationEvent] = []
+    held: list[tuple[int, str]] = []
+    hooks.event = application_events.append
+    hooks.queue_status = lambda qid, state, detail="": held.append((qid, detail)) if state == "queued" else None
+    hooks.runtime = lambda: SimpleNamespace()
+    hooks.wrapper_port = lambda: 1234
+    hooks.supervisor = lambda: SimpleNamespace(ensure_started=lambda **_kwargs: True)
     hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}
-    held = []
-    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
     relay = _Relay()
@@ -1743,10 +1763,18 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
 
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the guest returns"
-    assert held and "wrapper session" in held[0][1]
-    assert stub._apple_session_expired is False, "a landed track lifts the marker"
+    assert held and ("wrapper session" if failure_kind == "credential" else "not running") in held[0][1]
+    assert getattr(stub, "_apple_session_expired", False) is False, "a landed track lifts the marker"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
     assert not any(ev.get("status") == "failed" for ev in relay.events)
+    assert len(application_events) == 2
+    failure, recovered = application_events
+    assert failure.id == recovered.id and failure.references.job_id == recovered.references.job_id == 1
+    assert failure.scope == (FailureScope.ACCOUNT if failure_kind == "credential" else FailureScope.RUNTIME)
+    assert failure.references.runtime_id == "apple:wrapper-v2"
+    assert EventAction.OPEN_SETTINGS in failure.actions and EventAction.RETRY_JOB not in failure.actions
+    assert recovered.lifecycle == Lifecycle.RESOLVED and recovered.actions == ()
+    assert "account-secret-value" not in str([event.payload() for event in application_events])
 
 
 @pytest.mark.ffmpeg

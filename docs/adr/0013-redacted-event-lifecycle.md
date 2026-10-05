@@ -18,6 +18,12 @@ thread at delivery and again at action dispatch. Terminal lifecycle updates
 remove recovery actions. Persistent history, toast timing and notification
 preferences remain planned notification-center behavior.
 
+Catalog owners pair failures with successful results using the same operation
+key and provider generation. Merely starting work, completing a different
+request or signing in through a different credential path does not resolve the
+original issue. Wrapper sign-in keeps fixed user-facing error copy and redacted
+diagnostics, and resolves its own event only after sign-in completes.
+
 Redact before display, storage and copy, including credentials, tokens, cookies,
 private paths and sensitive arbitrary values. Safe structured context does not
 authorize raw exception/URL/request dumps. Details explain the likely cause,

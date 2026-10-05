@@ -68,6 +68,7 @@ from waves.constants import (
 from waves.desktop import proc
 from waves.desktop.diagnostics.events import (
     ApplicationEvents,
+    catalog_succeeded,
     operation_state,
     provider_failure_event,
     publish_event,
@@ -86,6 +87,7 @@ from waves.events import (
     EventCode,
     EventDomain,
     EventReferences,
+    Failure,
     FailureScope,
     Lifecycle,
     application_event,
@@ -2701,7 +2703,9 @@ def _stop_check_for(bridge) -> Callable[[], None]:
     return check
 
 
-def _catalog_work(bridge, provider_id: str, work, *, token: ProviderToken | None = None) -> Callable[[], None]:
+def _catalog_work(
+    bridge, provider_id: str, work, *, token: ProviderToken | None = None, event_key: str = ""
+) -> Callable[[], None]:
     """Capture before scheduling; service-private caches share the scope."""
     contexts = provider_contexts(bridge)
     parent = getattr(getattr(bridge, "_catalog_thread", None), "token", None)
@@ -2721,18 +2725,31 @@ def _catalog_work(bridge, provider_id: str, work, *, token: ProviderToken | None
         if not contexts.current(token):
             return
         previous = getattr(bridge._catalog_thread, "token", None)
+        previous_key = getattr(bridge._catalog_thread, "event_key", "")
+        previous_failed = getattr(bridge._catalog_thread, "event_failed", False)
+        previous_success = getattr(bridge._catalog_thread, "event_success", False)
         bridge._catalog_thread.token = token
+        bridge._catalog_thread.event_key = event_key
+        bridge._catalog_thread.event_failed = False
+        bridge._catalog_thread.event_success = False
         try:
             with scope:
                 work()
+            if event_key and bridge._catalog_thread.event_success and not bridge._catalog_thread.event_failed:
+                resolve_events(bridge, EventDomain.PROVIDER, key=event_key)
         finally:
             bridge._catalog_thread.token = previous
+            bridge._catalog_thread.event_key = previous_key
+            bridge._catalog_thread.event_failed = previous_failed
+            bridge._catalog_thread.event_success = previous_success
 
     return run
 
 
-def _catalog_worker(bridge, provider_id: str, work, *, token: ProviderToken | None = None) -> Worker:
-    return Worker(_catalog_work(bridge, provider_id, work, token=token))
+def _catalog_worker(
+    bridge, provider_id: str, work, *, token: ProviderToken | None = None, event_key: str = ""
+) -> Worker:
+    return Worker(_catalog_work(bridge, provider_id, work, token=token, event_key=event_key))
 
 
 def _cache_commit(bridge, callback: Callable[[], None]) -> bool:
@@ -3108,11 +3125,14 @@ class _AppleDownloads(DownloadAdapter):
                     bridge._refetch_inflight.discard(key)
                     status_failure(bridge, EventDomain.PROVIDER, failure or "That item is no longer available")
                     return
+                catalog_succeeded(bridge)
                 bridge._queueRetryRefetched.emit(bucket, media_id, qid, gen)
 
             contexts.commit(gen, publish)
 
-        bridge.threadpool.start(_catalog_worker(bridge, CTX_APPLE, work, token=gen))
+        bridge.threadpool.start(
+            _catalog_worker(bridge, CTX_APPLE, work, token=gen, event_key=f"refetch:{bucket}:{media_id}")
+        )
         return True
 
     def standalone(self, media_id: str, mode: str) -> int | None:
@@ -6062,11 +6082,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             None,
         )
         if provider is None:
-            status_failure(self, EventDomain.PROVIDER, "Could not open that link")
+            status_failure(self, EventDomain.PROVIDER, "Could not open that link", key="open-link")
             return
         readiness = _provider_readiness(self, provider).for_operation(Capability.OPEN_URL)
         if readiness.state != ReadinessState.READY:
-            self._set_status(f"{provider.name} needs {readiness.action or 'attention'} before opening links")
+            status_failure(
+                self,
+                EventDomain.PROVIDER,
+                f"{provider.name} needs {readiness.action or 'attention'} before opening links",
+                key="open-link",
+                references=EventReferences(provider_id=provider.id),
+                actions=(EventAction.OPEN_SETTINGS,),
+            )
             return
         self._search_gen += 1
         gen = self._search_gen
@@ -6077,6 +6104,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         url = url if "://" in url else f"https://{url}"
 
         def work() -> None:
+            failures: tuple[ApplicationEvent, ...] = ()
             try:
                 resolved = provider.resolve_link(url)
                 payload = (
@@ -6092,13 +6120,35 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if resolved is not None
                     else None
                 )
-            except Exception:
+                if payload is None:
+                    failures = (
+                        application_event(
+                            EventDomain.SEARCH,
+                            "Could not open that link",
+                            key=provider.id,
+                            references=EventReferences(provider_id=provider.id),
+                            actions=(EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
+                        ),
+                    )
+            except Exception as exc:
                 logger.exception("Could not open provider link")
                 payload = None
+                failures = (provider_failure_event(provider, EventDomain.SEARCH, exc),)
+            if payload is not None:
+                resolve_events(
+                    self,
+                    EventDomain.PROVIDER,
+                    key="open-link",
+                    valid=lambda: gen == self._search_gen,
+                )
             _publish_search(
                 self,
                 _SearchEvent(
-                    gen, tokens, payload, "Opened link" if payload is not None else "Could not open that link"
+                    gen,
+                    tokens,
+                    payload,
+                    "Opened link" if payload is not None else "Could not open that link",
+                    failures=failures,
                 ),
             )
 
@@ -6129,8 +6179,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 scope=FailureScope.ACCOUNT,
                 code=EventCode.ACCOUNT_REQUIRED,
                 actions=(EventAction.OPEN_SETTINGS,),
+                key="search-account",
             )
             return
+        resolve_events(self, EventDomain.ACCOUNT, key="search-account")
         if needle.startswith("http") or _pasted_media_link(needle, self.providers):
             self._open_url(needle)
             return
@@ -6782,6 +6834,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         cached = self._artist_cache.get(artist_id)
         if cached is not None:
+            catalog_succeeded(self, key=f"artist:{artist_id}")
             self.artistLoaded.emit(cached)
             self._set_status(cached.get("name") or "Artist")
             return
@@ -6799,6 +6852,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 elif not in_flight:
                     self._artist_loading.add(artist_id)
         if cached is not None:
+            catalog_succeeded(self, key=f"artist:{artist_id}")
             self.artistLoaded.emit(cached)
             self._set_status(cached.get("name") or "Artist")
             return
@@ -6877,6 +6931,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return
             if not _provider_result_current(self, gen):
                 return  # logged out mid-fetch; the rows belong to the dead session
+            catalog_succeeded(self)
             if quiet:
                 # A page the user never opened is simply a cached page.
                 _prefetch_log.debug(
@@ -6899,7 +6954,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 tracks=len(payload["tracks"]),
             )
 
-        self.threadpool.start(_catalog_worker(self, provider_of_id(artist_id), work))
+        self.threadpool.start(_catalog_worker(self, provider_of_id(artist_id), work, event_key=f"artist:{artist_id}"))
 
     @Slot(str)
     def loadArtist(self, artist_id: str) -> None:
@@ -6930,6 +6985,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if cached is not None and bool(cached.get("editions_collapsed", False)) != collapse:
             cached = None
         if cached is not None:
+            catalog_succeeded(self, key=f"artist:{artist_id}")
             self.artistLoaded.emit(cached)
             self._set_status(cached.get("name") or "Artist")
         if not artist_id:
@@ -7181,6 +7237,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             reval_ts = getattr(self, "_artist_reval_ts", None)
             if isinstance(reval_ts, dict):
                 _cache_put(self, reval_ts, artist_id, time.monotonic())
+            if complete:
+                catalog_succeeded(self)
             changed = payload != cached
             # A page with a failed or empty-everywhere fetch is more likely a
             # transient failure than a real artist with no catalogue, show it
@@ -7212,7 +7270,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 tracks=len(payload["tracks"]),
             )
 
-        self.threadpool.start(_catalog_worker(self, provider_of_id(artist_id), work))
+        self.threadpool.start(_catalog_worker(self, provider_of_id(artist_id), work, event_key=f"artist:{artist_id}"))
 
     # Favourites move only when the user acts; 10 minutes keeps an always-on
     # app in step without re-paginating the library per artist-page open.
@@ -7278,10 +7336,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         "eps": [row for row in page.get("eps") or [] if row["id"] in albums],
                         "tracks": [row for row in page.get("tracks") or [] if row["id"] in tracks],
                     }
+                    catalog_succeeded(self)
                     _catalog_emit(self, self.artistLoaded, payload)
                     self._set_status(page.get("name") or "Artist")
-                except Exception:
+                except Exception as exc:
                     logger.exception("Could not load provider library artist")
+                    status_failure(self, EventDomain.PROVIDER, "Could not load this Library artist", exception=exc)
                     _catalog_emit(self, self.artistLoadFailed, artist_id)
                 finally:
                     self._set_busy(False)
@@ -7346,6 +7406,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return
             if not _provider_result_current(self, gen):
                 return  # logged out mid-fetch
+            catalog_succeeded(self)
             _catalog_emit(self, self.artistLoaded, payload)
             self._set_status(getattr(artist, "name", "Artist"))
             self._set_busy(False)
@@ -7358,7 +7419,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 tracks=len(payload["tracks"]),
             )
 
-        self.threadpool.start(_catalog_worker(self, provider_of_id(artist_id), work))
+        self.threadpool.start(
+            _catalog_worker(self, provider_of_id(artist_id), work, event_key=f"library-artist:{artist_id}")
+        )
 
     def _fav_artist_dict(self, artist) -> dict:
         key = str(getattr(artist, "id", id(artist)))
@@ -7537,8 +7600,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if mid:
                     self.downloadState.emit(mid, "")
             if waiting:
-                status_failure(self, EventDomain.PROVIDER, "Could not load your playlist folders, try again")
+                status_failure(
+                    self,
+                    EventDomain.PROVIDER,
+                    "Could not load your playlist folders, try again",
+                    key=f"folder-tree:{source}",
+                    references=EventReferences(provider_id=source),
+                )
             return
+        resolve_events(self, EventDomain.PROVIDER, key=f"folder-tree:{source}")
         for then, _mid, _waiter_source in ready:
             try:
                 then()
@@ -8532,6 +8602,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 scope=FailureScope.ACCOUNT,
                 code=EventCode.ACCOUNT_REQUIRED,
                 actions=(EventAction.OPEN_SETTINGS,),
+                key="browse-account",
+                references=EventReferences(provider_id=CTX_TIDAL),
             )
             return
         cached = self._browse_root_cache
@@ -8683,6 +8755,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         cached = self._browse_pages.get(api_path)
         if cached is not None:
+            catalog_succeeded(self, key=f"browse-page:{api_path}")
             _catalog_emit(self, self.browsePageLoaded, cached)
         if api_path in self._browse_loading:
             return
@@ -8711,6 +8784,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # this returns without emitting or touching shared state.
                 return
             _cache_commit(self, lambda: self._browse_loading.discard(api_path))
+            if not payload["error"]:
+                catalog_succeeded(self)
             if revalidate:
                 # Silent refresh of a cached page: re-emit only on real change
                 # (the QML's key guard drops it if the user already left).
@@ -8745,7 +8820,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not payload["error"]:
                 self._sample_links_art(_link_tiles_of(payload), gen)
 
-        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work))
+        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work, event_key=f"browse-page:{api_path}"))
 
     @Slot(str, str)
     def openBrowsePlaylists(self, api_path: str, title: str) -> None:
@@ -8762,6 +8837,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         key = f"pl:{api_path}"
         cached = self._browse_pages.get(key)
         if cached is not None:
+            catalog_succeeded(self, key=f"browse-playlists:{api_path}")
             _catalog_emit(self, self.browsePageLoaded, cached)
         if key in self._browse_loading:
             return
@@ -8813,6 +8889,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # this returns without emitting or touching shared state.
                 return
             _cache_commit(self, lambda: self._browse_loading.discard(key))
+            if not payload["error"]:
+                catalog_succeeded(self)
             if revalidate:
                 # Silent refresh of a cached page: re-emit only on real change
                 # (the QML's key guard drops it if the user already left).
@@ -8835,7 +8913,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self._set_busy(False)
             devlog.done("browse", key, devlog.clock() - t0, n=len(payload["sections"]))
 
-        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work))
+        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work, event_key=f"browse-playlists:{api_path}"))
 
     def _record_page_members(self, payload: dict) -> None:
         """Remember the track ids an item page lists as its collection's
@@ -9105,6 +9183,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._prefetch_claimed = claim = True
         cached = self._browse_pages.get(key)
         if cached is not None:
+            catalog_succeeded(self, key=f"browse-item:{kind}:{media_id}")
             _catalog_emit(self, self.browsePageLoaded, cached)
             # An absent stamp is never fresh. A 0.0 sentinel read as fresh
             # for the first minute of system uptime (monotonic starts near
@@ -9147,6 +9226,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not _provider_result_current(self, gen):
                 return  # cross-account stale load, drop silently (see loadBrowse)
             _cache_commit(self, lambda: self._browse_loading.discard(key))
+            if not payload["error"]:
+                catalog_succeeded(self)
             has_items = not payload["error"] and any(s["items"] for s in payload["sections"])
             # The disk snapshot is re-serialized and fsynced whole, so it runs
             # AFTER the page has been handed over and the spinner is off: it is
@@ -9173,7 +9254,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._save_page_cache()
             devlog.done("browse", key, devlog.clock() - t0)
 
-        self.threadpool.start(_catalog_worker(self, provider_of_id(media_id), work))
+        self.threadpool.start(
+            _catalog_worker(self, provider_of_id(media_id), work, event_key=f"browse-item:{kind}:{media_id}")
+        )
 
     @Slot(str, str)
     def refreshBrowseItem(self, kind: str, media_id: str) -> None:
@@ -9271,6 +9354,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if cached is not None:
             # Known page (maybe restored from disk at launch): nothing to
             # fetch, but its covers can still be warmed before the click.
+            catalog_succeeded(self, key=f"browse-item:{kind}:{media_id}")
             _catalog_emit(self, self.browsePagePrefetched, self._page_art_summary(cached))
             return
         with self._prefetch_lock:
@@ -9301,6 +9385,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if not _provider_result_current(self, gen):
                     released = True  # logout mid-flight: the reset already cleared our state
                     return
+                if not payload["error"]:
+                    catalog_succeeded(self)
                 has_items = not payload["error"] and any(s["items"] for s in payload["sections"])
                 with self._prefetch_lock:
                     claimed = self._prefetch_claimed
@@ -9348,7 +9434,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                             self._prefetch_claimed = False
                             _cache_commit(self, lambda: self._browse_loading.discard(key))
 
-        self.threadpool.start(_catalog_worker(self, provider_of_id(media_id), work))
+        self.threadpool.start(
+            _catalog_worker(self, provider_of_id(media_id), work, event_key=f"browse-item:{kind}:{media_id}")
+        )
 
     @staticmethod
     def _page_art_summary(payload: dict, limit: int = 16) -> dict:
@@ -12099,8 +12187,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             QtGui.QGuiApplication.clipboard().setText(redaction.scrub_event_text(text or ""))
         except Exception:
             logger.debug("Could not copy the logs", exc_info=True)
-            status_failure(self, EventDomain.DIAGNOSTICS, "Could not copy the logs")
+            status_failure(self, EventDomain.DIAGNOSTICS, "Could not copy the logs", key="copy-logs")
             return
+        resolve_events(self, EventDomain.DIAGNOSTICS, key="copy-logs")
         self._set_status("Logs copied")
 
     def _album_key(self, album):
@@ -12695,6 +12784,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 scope=FailureScope.CONFIGURATION,
                 code=EventCode.PATH_UNREACHABLE,
                 actions=(EventAction.OPEN_SETTINGS,),
+                key="download-folder",
             )
             self.downloadFolderMissing.emit()
         elif action == "nudge":
@@ -12705,6 +12795,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 scope=FailureScope.CONFIGURATION,
                 code=EventCode.PATH_UNREACHABLE,
                 actions=(EventAction.OPEN_SETTINGS,),
+                key="download-folder",
             )
             self.downloadFolderDefault.emit()
         return action
@@ -12721,6 +12812,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         folder's proof of life and skip its own probe. Cheap (no I/O),
         callable from any thread; a lost race between two writers only makes
         the stamp a moment older, which is harmless."""
+        resolve_events(
+            self,
+            EventDomain.CONFIGURATION,
+            key="download-folder",
+            valid=lambda: self.settings.data.download_base_path == proven_base,
+        )
         self._base_ok = (proven_base, time.monotonic())
         self._remember_share_origin(proven_base)
 
@@ -12894,6 +12991,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             scope=FailureScope.CONFIGURATION,
             code=EventCode.PATH_UNREACHABLE,
             actions=(EventAction.OPEN_SETTINGS,),
+            key="download-folder",
         )
         self._recovery_dialog_shown = True
         self._stash_pending_download(media_id, retry)
@@ -13060,6 +13158,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                             scope=FailureScope.CONFIGURATION,
                             code=EventCode.PATH_UNREACHABLE,
                             actions=(EventAction.OPEN_SETTINGS,),
+                            key="download-folder",
                         )
                         self.downloadFolderUnreachable.emit(self.settings.data.download_base_path)
                     return
@@ -13333,6 +13432,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 scope=FailureScope.ACCOUNT,
                 code=EventCode.ACCOUNT_REQUIRED,
                 actions=(EventAction.OPEN_SETTINGS,),
+                key="download-account",
+                references=EventReferences(provider_id=provider_id),
             )
             return False
         # A download must land somewhere the user can find. Every download path
@@ -13629,9 +13730,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 status_failure(self, EventDomain.PROVIDER, failure or "That item is no longer available")
                 self._bump_download_groups(media_id, None, "failed")
                 return
+            catalog_succeeded(self)
             _catalog_emit(self, self._mediaRefetched, bucket, media_id, gen)
 
-        self.threadpool.start(_catalog_worker(self, provider_of_id(media_id), work))
+        self.threadpool.start(
+            _catalog_worker(self, provider_of_id(media_id), work, event_key=f"refetch:{bucket}:{media_id}")
+        )
 
     def _download_apple(
         self,
@@ -14720,8 +14824,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self,
                 EventDomain.PROVIDER,
                 f"Could not delete {len(remaining)} quarantined copy" + ("s" if len(remaining) != 1 else ""),
+                key=f"quarantine:{qid}",
+                references=EventReferences(provider_id=CTX_APPLE, job_id=qid),
+                valid=lambda: self._queue_item(qid) is not None,
             )
         else:
+            resolve_events(self, EventDomain.PROVIDER, key=f"quarantine:{qid}")
             self._set_status("Quarantined copy deleted" if removed else "No quarantined copy to delete")
 
     def _apple_quarantine_folder(self, qid: int) -> pathlib.Path | None:
@@ -16585,6 +16693,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.downloadState.emit(album_id, "failed")
                 status_failure(self, EventDomain.PROVIDER, "Could not scan editions, try again")
                 return
+            catalog_succeeded(self)
             if plan:
                 key = str(getattr(identity, "id", id(identity)))
                 self._remember("album", key, identity)
@@ -16613,7 +16722,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         # Edition discovery hits the shared session like a discography scan, so
         # serialise it on the same single-thread pool.
-        self._scan_pool.start(Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work))))
+        self._scan_pool.start(
+            Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work, event_key=f"editions:{album_id}")))
+        )
 
     def _playlist_template(self, playlist_id: str) -> str:
         """The playlist path template with {folder_path} already resolved.
@@ -16821,6 +16932,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         cached = self._cached_category(api_path)
         if cached is not None:
             first = str(cached[0].id) if cached else ""
+            catalog_succeeded(self, key=f"category:{api_path}")
             _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(cached), first)
             return
         load_key = f"cat:{api_path}"
@@ -16879,11 +16991,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_status("No playlists in this category")
             else:
                 self._set_status("")
+            if not failed:
+                catalog_succeeded(self)
             first = str(playlists[0].id) if playlists else ""
             _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(playlists), first)
             devlog.done("browse", load_key, devlog.clock() - t0, n=len(playlists))
 
-        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work))
+        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work, event_key=f"category:{api_path}"))
 
     @Slot(str)
     def downloadPlaylistCategory(self, api_path: str) -> None:
@@ -17268,6 +17382,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 _credit_fav_artist(self, artist_id, None, "done")
                 # An all-claimed discography is a success story, not an empty
                 # artist; say which of the two happened.
+                catalog_succeeded(self)
                 self._set_status("Everything here is already in your library" if skipped else "No albums to download")
                 return
             # The last word before anything is queued: a STOP during the
@@ -17323,6 +17438,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if video_keys:
                 parts.append(f"{len(video_keys)} videos")
             note = f" ({skipped} already in your library)" if skipped else ""
+            catalog_succeeded(self)
             self._set_status("Downloading " + " + ".join(parts) + "…" + note)
             # The scan's LAST word: if STOP landed anywhere in this tail, the
             # raise routes to the handler below, whose "" is posted after any
@@ -17351,7 +17467,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         # Serialised scan pool: queueing several artists scans them one at a time
         # rather than racing on the shared tidalapi session and caches.
-        self._scan_pool.start(Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work))))
+        self._scan_pool.start(
+            Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work, event_key=f"discography:{artist_id}")))
+        )
 
     @Slot(str)
     def downloadArtistVideos(self, artist_id: str) -> None:
@@ -17419,6 +17537,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 video_keys.append(vkey)
             if not video_keys:
                 self.downloadState.emit(gid, "")
+                catalog_succeeded(self)
                 self._set_status("No videos to download")
                 return
             with self._artist_lock:
@@ -17441,6 +17560,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self.downloadState.emit(gid, "queued")
             self._videosQueued.emit(gen, video_keys)
             devlog.event("artist_videos_all", videos=len(video_keys))
+            catalog_succeeded(self)
             self._set_status(f"Downloading {len(video_keys)} videos…")
             # The scan's last word, same rationale as downloadArtist's.
             stop_check()
@@ -17456,7 +17576,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.downloadState.emit(gid, "")
                 status_failure(self, EventDomain.PROVIDER, "Could not load the artist's videos, try again")
 
-        self._scan_pool.start(Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work))))
+        self._scan_pool.start(
+            Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work, event_key=f"artist-videos:{artist_id}")))
+        )
 
     # Standalone lyrics / art actions (spec section 7.3).
 
@@ -17568,6 +17690,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 scope=FailureScope.CONFIGURATION,
                 code=EventCode.PATH_UNREACHABLE,
                 actions=(EventAction.OPEN_SETTINGS,),
+                key="download-folder",
             )
             return None
         path = pathlib.Path(base).expanduser()
@@ -18100,6 +18223,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     album_ids.setdefault(str(aid), None)
             if not album_ids:
                 self.downloadState.emit(gid, "")
+                catalog_succeeded(self)
                 self._set_status("No albums to download")
                 return
             albums: list = []
@@ -18165,6 +18289,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not keys:
                 self.downloadState.emit(gid, "")
                 note = f" ({skipped} already in your library)" if skipped else ""
+                catalog_succeeded(self)
                 self._set_status("No albums to download" + note)
                 return
             with self._artist_lock:
@@ -18191,6 +18316,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self._albumsQueued.emit(gen, keys)
             devlog.event("playlist_albums", albums=len(keys), skipped=skipped)
             note = f" ({skipped} already in your library)" if skipped else ""
+            catalog_succeeded(self)
             self._set_status(f"Downloading {len(keys)} albums…" + note)
             # The scan's last word, same rationale as downloadArtist's.
             stop_check()
@@ -18206,7 +18332,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.downloadState.emit(gid, "")
                 status_failure(self, EventDomain.PROVIDER, "Could not load the playlist's albums, try again")
 
-        self._scan_pool.start(Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work))))
+        self._scan_pool.start(
+            Worker(
+                _counted_scan(self, _catalog_work(self, CTX_TIDAL, work, event_key=f"playlist-albums:{playlist_id}"))
+            )
+        )
 
     # ----- My Music shelf DOWNLOAD ALL (favourites bulk) -----
 
@@ -18307,13 +18437,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return  # signed out mid-count
             if total is None or int(total) < 0:
                 total = -1
+            if total >= 0:
+                catalog_succeeded(self)
             if total == 0:
                 self._set_status(f"No favourite {kind} yet")
             elif total < 0:
                 status_failure(self, EventDomain.PROVIDER, f"Could not count your {kind}, try again")
             _catalog_emit(self, signal, source, int(total))
 
-        self.threadpool.start(_catalog_worker(self, source, work))
+        self.threadpool.start(_catalog_worker(self, source, work, event_key=f"favorite-count:{source}:{kind}"))
 
     @Slot(str)
     def resolveFavoriteTracks(self, source: str) -> None:
@@ -18432,6 +18564,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # slot yet (see downloadArtist for the full rationale).
         self.downloadState.emit(gid, "queued")
         queue()
+        catalog_succeeded(self)
 
     def _fav_scan_work(self, gid: str, kind: str, scan) -> None:
         """Run a shelf bulk ``scan`` on the serial scan pool with the STOP
@@ -18450,7 +18583,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.downloadState.emit(gid, "")
                 status_failure(self, EventDomain.PROVIDER, f"Could not load all your {kind}, try again")
 
-        self._scan_pool.start(Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work))))
+        self._scan_pool.start(
+            Worker(_counted_scan(self, _catalog_work(self, CTX_TIDAL, work, event_key=f"favorite-scan:{gid}")))
+        )
 
     @Slot(str)
     def downloadFavoriteTracks(self, source: str) -> None:
@@ -18494,12 +18629,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             stop_check()
             if not keys:
                 self.downloadState.emit(gid, "")
+                catalog_succeeded(self)
                 self._set_status("Everything here is already in your library" if skipped else "No tracks to download")
                 return
             self._register_fav_group(
                 gid, keys, dict.fromkeys(keys, 1), stop_check, lambda: self._tracksQueued.emit(gen, keys)
             )
             note = f" ({skipped} already in your library)" if skipped else ""
+            catalog_succeeded(self)
             self._set_status(f"Downloading {len(keys)} tracks…" + note)
             # The scan's last word: a STOP in this tail routes to the handler
             # below, whose "" is posted after any stale state above.
@@ -18584,6 +18721,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not keys:
                 self.downloadState.emit(gid, "")
                 note = f" ({skipped} already in your library)" if skipped else ""
+                catalog_succeeded(self)
                 self._set_status("No albums to download" + note)
                 return
 
@@ -18596,6 +18734,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
             self._register_fav_group(gid, keys, dict.fromkeys(keys, 1), stop_check, queue_albums)
             note = f" ({skipped} already in your library)" if skipped else ""
+            catalog_succeeded(self)
             self._set_status(f"Downloading {len(keys)} albums…" + note)
             stop_check()
 
@@ -18638,12 +18777,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             stop_check()
             if not ids:
                 self.downloadState.emit(gid, "")
+                catalog_succeeded(self)
                 self._set_status("No artists to download")
                 return
             members = [_ARTIST_ROLLUP_MEMBER + i for i in ids]
             self._register_fav_group(
                 gid, members, dict.fromkeys(members, 1), stop_check, lambda: self._artistsQueued.emit(gen, ids)
             )
+            catalog_succeeded(self)
             self._set_status(f"Downloading {len(ids)} artists…")
             stop_check()
 
@@ -18681,6 +18822,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             stop_check()
             if not keys:
                 self.downloadState.emit(gid, "")
+                catalog_succeeded(self)
                 self._set_status(f"No {noun} to download")
                 return
 
@@ -18691,6 +18833,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self._collectionsQueued.emit(gen, queue_kind, keys)
 
             self._register_fav_group(gid, keys, weights, stop_check, queue_collections)
+            catalog_succeeded(self)
             self._set_status(f"Downloading {len(keys)} {noun}…")
             stop_check()
 
@@ -20882,15 +21025,42 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             url = self._apple_wrapper_login_url()
         except Exception as exc:
             logger.debug("Apple wrapper login port provisioning failed", exc_info=True)
-            return {"ok": False, "needs_2fa": False, "error": f"The wrapper port could not be provisioned: {exc}"}
+            return {
+                "ok": False,
+                "needs_2fa": False,
+                "error": "The wrapper port could not be provisioned. Check setup in Settings.",
+                "_failure": Failure(
+                    FailureScope.CONFIGURATION,
+                    EventCode.INVALID_CONFIGURATION,
+                    "The wrapper port could not be provisioned. Check setup in Settings.",
+                    runtime_id="apple:wrapper-v2",
+                ),
+                "_exception": exc,
+            }
         if not url:
-            return {"ok": False, "needs_2fa": False, "error": "The wrapper tier is not set up."}
+            return {
+                "ok": False,
+                "needs_2fa": False,
+                "error": "The wrapper tier is not set up.",
+                "_failure": Failure(
+                    FailureScope.CONFIGURATION,
+                    EventCode.INVALID_CONFIGURATION,
+                    "The wrapper tier is not set up. Finish setup in Settings.",
+                    runtime_id="apple:wrapper-v2",
+                ),
+            }
         if not self._apple_wrapper_ensure_running(timeout=timeout):
             return {
                 "ok": False,
                 "needs_2fa": False,
                 "error": (
                     "The wrapper runtime did not start. Check the container runtime and image in the setup wizard."
+                ),
+                "_failure": Failure(
+                    FailureScope.RUNTIME,
+                    EventCode.FAILED,
+                    "The wrapper runtime did not start. Check setup in Settings.",
+                    runtime_id="apple:wrapper-v2",
                 ),
             }
         return request(url)
@@ -20921,14 +21091,60 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     result = callback()
                     if not provider_contexts(self).current(token):
                         return
+                    result = dict(result or {})
+                    if result.get("ok") is False and not result.get("needs_2fa"):
+                        failure = result.get("_failure")
+                        if not isinstance(failure, Failure):
+                            failure = Failure(summary="Sign-in failed. Try again.", runtime_id="apple:wrapper-v2")
+                        exception = result.get("_exception")
+                        publish_event(
+                            self,
+                            application_event(
+                                EventDomain.ACCOUNT,
+                                failure.summary,
+                                key="wrapper-login",
+                                code=failure.code,
+                                scope=failure.scope,
+                                references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+                                exception=exception if isinstance(exception, BaseException) else None,
+                                details=(str(result.get("error") or ""),),
+                                actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
+                            ),
+                            lambda: provider_contexts(self).current(token),
+                        )
+                        result["error"] = failure.summary
+                    elif result.get("ok") is True and not result.get("needs_2fa"):
+                        resolve_events(
+                            self,
+                            EventDomain.ACCOUNT,
+                            key="wrapper-login",
+                            valid=lambda: provider_contexts(self).current(token),
+                        )
+                    safe_result = {
+                        "ok": result.get("ok"),
+                        "needs_2fa": bool(result.get("needs_2fa")),
+                        "error": ""
+                        if result.get("needs_2fa") or result.get("ok") is True
+                        else redaction.scrub_event_text(str(result.get("error") or "")),
+                    }
                     if not provider_contexts(self).commit(
-                        token, lambda: setattr(self, "_apple_wrapper_login_result", dict(result or {}))
+                        token, lambda: setattr(self, "_apple_wrapper_login_result", safe_result)
                     ):
                         return
                     if result and result.get("ok") and not result.get("needs_2fa"):
                         self._refresh_apple_wrapper_auth()
-            except Exception:
-                logger.debug("Apple wrapper login call failed")
+            except Exception as exc:
+                logger.debug("Apple wrapper login call failed", exc_info=True)
+                report_failure(
+                    self,
+                    EventDomain.ACCOUNT,
+                    "Sign-in failed. Try again.",
+                    key="wrapper-login",
+                    exception=exc,
+                    references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+                    valid=lambda: provider_contexts(self).current(token),
+                    actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
+                )
                 if provider_contexts(self).current(token):
                     self._apple_wrapper_login_result = {
                         "ok": False,
@@ -20977,7 +21193,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "busy": bool(getattr(self, "_apple_wrapper_login_inflight", False)),
             "login_ok": result.get("ok"),
             "needs_2fa": bool(result.get("needs_2fa", False)),
-            "login_error": str(result.get("error") or ""),
+            "login_error": redaction.scrub_event_text(str(result.get("error") or "")),
         }
 
     def _apple_container_serves(self) -> bool:

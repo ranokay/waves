@@ -134,15 +134,18 @@ class EventHost(Protocol):
     def _set_status(self, message: str) -> None: ...
 
 
+def _owner_guard(bridge: EventHost, valid: Callable[[], bool] | None) -> Callable[[], bool] | None:
+    token = getattr(getattr(bridge, "_catalog_thread", None), "token", None)
+    contexts = getattr(bridge, "_provider_contexts", None)
+    if isinstance(token, ProviderToken) and contexts is not None:
+        return lambda: contexts.current(token) and (valid is None or valid())
+    return valid
+
+
 def publish_event(bridge: EventHost, event: ApplicationEvent, valid: Callable[[], bool] | None = None) -> None:
     relay = getattr(bridge, "_events", None)
     if relay is not None:
-        token = getattr(getattr(bridge, "_catalog_thread", None), "token", None)
-        contexts = getattr(bridge, "_provider_contexts", None)
-        if isinstance(token, ProviderToken) and contexts is not None:
-            explicit = valid
-            valid = lambda: contexts.current(token) and (explicit is None or explicit())
-        relay.publish(event, valid)
+        relay.publish(event, _owner_guard(bridge, valid))
 
 
 def resolve_events(
@@ -156,10 +159,21 @@ def resolve_events(
 ) -> None:
     relay = getattr(bridge, "_events", None)
     if relay is not None:
+        valid = _owner_guard(bridge, valid)
         if key:
             relay.resolve(domain, provider_id, job_id, valid, identity=application_event(domain, "", key=key).id)
         else:
             relay.resolve(domain, provider_id, job_id, valid)
+
+
+def catalog_succeeded(bridge: EventHost, *, key: str = "") -> None:
+    """Owners mark a successful result; unrelated or merely started work cannot recover it."""
+    if key:
+        resolve_events(bridge, EventDomain.PROVIDER, key=key)
+    else:
+        context = getattr(bridge, "_catalog_thread", None)
+        if isinstance(getattr(context, "event_key", None), str):
+            context.event_success = True
 
 
 def report_failure(
@@ -176,6 +190,11 @@ def report_failure(
     valid: Callable[[], bool] | None = None,
     actions: tuple[EventAction, ...] = (EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
 ) -> ApplicationEvent:
+    context = getattr(bridge, "_catalog_thread", None)
+    operation_key = getattr(context, "event_key", "")
+    if domain == EventDomain.PROVIDER and isinstance(operation_key, str) and operation_key:
+        context.event_failed = True
+        key = key or operation_key
     if references is None:
         token = getattr(getattr(bridge, "_catalog_thread", None), "token", None)
         references = (

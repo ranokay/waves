@@ -263,3 +263,136 @@ def test_apple_job_events_follow_the_queue_settle_and_provider_epoch(event_loop)
     contexts.revoke("apple")
     event_loop.processEvents()
     assert seen == []
+
+
+def test_library_scan_reports_missing_folder_and_resolves_after_recovery(event_loop, tmp_path):
+    from library.fakes import make_library_bridge
+
+    root = tmp_path / "Private Music"
+    bridge = make_library_bridge(tmp_path, library_folder=str(root))
+    bridge._events = ApplicationEvents()
+    seen = []
+    bridge._events.changed.connect(seen.append)
+    try:
+        bridge._rebuild_library_index()
+        event_loop.processEvents()
+        failure = seen[-1]
+        assert failure["code"] == "path_unreachable"
+        assert failure["scope"] == "configuration"
+        assert "Private Music" not in json.dumps(seen)
+        root.mkdir()
+        bridge._rebuild_library_index()
+        event_loop.processEvents()
+        assert seen[-1]["id"] == failure["id"]
+        assert seen[-1]["lifecycle"] == "resolved"
+        assert bridge._events.action(failure["id"], "open_settings") is None
+    finally:
+        bridge._library.close()
+
+
+def test_library_scan_exception_is_diagnostic_and_revoked_roots_cannot_publish(event_loop, tmp_path):
+    from library.fakes import make_library_bridge
+
+    root = tmp_path / "Private Music"
+    root.mkdir()
+    bridge = make_library_bridge(tmp_path, library_folder=str(root))
+    bridge._events = ApplicationEvents()
+    seen = []
+    bridge._events.changed.connect(seen.append)
+
+    def fail(*args):
+        raise PermissionError(f'Authorization: Basic dXNlcjpwYXNz path="{root}/secret.flac"')
+
+    bridge._library_scan_once = fail
+    try:
+        bridge._rebuild_library_index()
+        event_loop.processEvents()
+        assert seen[-1]["scope"] == "configuration"
+        assert "PermissionError" not in seen[-1]["summary"]
+        assert "PermissionError" in seen[-1]["diagnostics"]
+        assert "dXNlcjpwYXNz" not in json.dumps(seen)
+        assert "secret.flac" not in json.dumps(seen)
+        seen.clear()
+        bridge._rebuild_library_index()
+        bridge.setWavesPref("library_folder", str(tmp_path / "new-root"))
+        event_loop.processEvents()
+        assert seen == []
+    finally:
+        bridge._library.close()
+
+
+def test_library_permission_denial_recovers_after_listing_is_allowed(event_loop, tmp_path, monkeypatch):
+    import os
+
+    from library.fakes import make_library_bridge
+
+    import waves.library.index as library_index
+
+    root = tmp_path / "Private Music"
+    root.mkdir()
+    bridge = make_library_bridge(tmp_path, library_folder=str(root))
+    bridge._events = ApplicationEvents()
+    seen = []
+    bridge._events.changed.connect(seen.append)
+    real_scandir = os.scandir
+    denied = True
+
+    def scandir(path=".", *args, **kwargs):
+        if denied and os.path.abspath(path) == str(root):
+            raise PermissionError(1, "Operation not permitted")
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(library_index.os, "scandir", scandir)
+    try:
+        bridge._rebuild_library_index()
+        event_loop.processEvents()
+        assert WavesBridge.libraryScanStatus(bridge) == "unreadable"
+        failure = seen[-1]
+        assert failure["scope"] == "configuration"
+        assert "Private Music" not in json.dumps(seen)
+        denied = False
+        bridge._rebuild_library_index()
+        event_loop.processEvents()
+        assert seen[-1]["id"] == failure["id"]
+        assert seen[-1]["lifecycle"] == "resolved"
+    finally:
+        bridge._library.close()
+
+
+def test_folder_recovery_requires_proof_for_the_current_folder(event_loop, tmp_path):
+    from threading import Lock
+
+    root = str(tmp_path / "Private Music")
+    seen = []
+    relay = ApplicationEvents()
+    relay.changed.connect(seen.append)
+    bridge = SimpleNamespace(
+        _events=relay,
+        _base_ok=("", 0.0),
+        _BASE_OK_TTL_SEC=WavesBridge._BASE_OK_TTL_SEC,
+        settings=SimpleNamespace(data=SimpleNamespace(download_base_path=root)),
+        _pending_lock=Lock(),
+        _pending_downloads=[],
+        _probe_download_base=lambda: ("dead", root),
+        _set_status=lambda message: None,
+        _remember_share_origin=lambda base: None,
+        downloadFolderUnreachable=SimpleNamespace(emit=lambda path: None),
+        _recoveryWatchWanted=SimpleNamespace(emit=lambda: None),
+    )
+    bridge._stash_pending_download = WavesBridge._stash_pending_download.__get__(bridge)
+    bridge._note_download_base_ok = WavesBridge._note_download_base_ok.__get__(bridge)
+    assert not WavesBridge._gate_reachability(bridge, lambda: None, "media-id")
+    event_loop.processEvents()
+    failure = seen[-1]
+    assert failure["code"] == "path_unreachable"
+    assert "Private Music" not in json.dumps(seen)
+    bridge.settings.data.download_base_path = str(tmp_path / "new-folder")
+    bridge._note_download_base_ok(root)
+    event_loop.processEvents()
+    assert seen[-1]["lifecycle"] == "active"
+    bridge._probe_download_base = lambda: ("ok", bridge.settings.data.download_base_path)
+    assert WavesBridge._gate_reachability(bridge, lambda: None)
+    event_loop.processEvents()
+    assert seen[-1]["id"] == failure["id"]
+    assert seen[-1]["lifecycle"] == "resolved"
+    assert relay.action(failure["id"], "open_settings") is None

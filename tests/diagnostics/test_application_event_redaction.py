@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from waves import redaction
+from waves.events import EventDomain, application_event
 
 
 @pytest.fixture()
@@ -135,3 +136,61 @@ def test_arbitrary_marker_text_does_not_hide_a_registered_secret(event_redactor)
     result = event_redactor.scrub_event_text("Request context: ‹private-value›")
     assert "private-value" not in result
     assert event_redactor.scrub_event_text(result) == result
+
+
+@pytest.mark.parametrize(
+    "credential, private",
+    [
+        ("Authorization: Basic dXNlcjpwYXNz", ("Basic", "dXNlcjpwYXNz")),
+        (
+            'Authorization: Digest username="private-user", realm="private realm", '
+            'nonce="private-nonce", response="private-response"',
+            ("Digest", "private-user", "private realm", "private-nonce", "private-response"),
+        ),
+        ("Authorization Basic dXNlcjpwYXNz", ("Basic", "dXNlcjpwYXNz")),
+        ("Proxy-Authorization: Basic dXNlcjpwYXNz", ("Basic", "dXNlcjpwYXNz")),
+        ("password=correct horse battery staple", ("correct", "horse", "battery", "staple")),
+        (
+            "password: private-red,private-blue;private-green&private-tail",
+            ("private-red", "private-blue", "private-green", "private-tail"),
+        ),
+        (
+            "token=pieceAlpha;pieceBeta,pieceGamma&pieceDelta",
+            ("pieceAlpha", "pieceBeta", "pieceGamma", "pieceDelta"),
+        ),
+        (
+            "Bearer pieceAlpha;pieceBeta,pieceGamma&pieceDelta",
+            ("pieceAlpha", "pieceBeta", "pieceGamma", "pieceDelta"),
+        ),
+        ("api_key=short private suffix", ("short", "private", "suffix")),
+    ],
+)
+def test_credential_tails_are_hidden_in_visible_stored_and_copied_events(event_redactor, credential, private):
+    event = application_event(
+        EventDomain.CONFIGURATION,
+        f"Request failed: {credential}",
+        title=f"Could not connect: {credential}",
+        details=(f"Credential rejected: {credential}",),
+        exception=ValueError(credential),
+    )
+    visible = (
+        event.title,
+        event.summary,
+        *event.details,
+        event.diagnostics,
+        event.copy_text(),
+        event_redactor.scrub_event_text(credential),
+    )
+    for text in (*visible, repr(event.payload())):
+        for value in private:
+            assert value not in text
+    for text in visible:
+        assert event_redactor.scrub_event_text(text) == text
+    assert "Request failed" in event.summary
+    assert "Credential rejected" in event.details[0]
+
+
+def test_full_credential_redaction_does_not_change_legacy_log_rules(event_redactor):
+    assert event_redactor.scrub("Authorization: Basic dXNlcjpwYXNz") == "Authorization: ‹redacted› dXNlcjpwYXNz"
+    assert event_redactor.scrub("password=correct horse battery staple") == "password=‹redacted› horse battery staple"
+    assert event_redactor.scrub_event_text("password=correct horse battery staple") == "password=‹redacted›"

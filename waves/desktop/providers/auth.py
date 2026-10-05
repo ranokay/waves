@@ -12,7 +12,7 @@ from waves.constants import CTX_TIDAL
 from waves.desktop.providers.lifecycle import ProviderToken, provider_contexts
 from waves.desktop.worker import Worker
 from waves.events import EventAction, EventCode, EventDomain, EventReferences, FailureScope, application_event
-from waves.providers.base import LoginAttempt, Provider
+from waves.providers.base import Capability, LoginAttempt, Provider
 
 logger = logging.getLogger("waves.providers.auth")
 
@@ -187,12 +187,22 @@ def _publish_account(bridge, event: LoginEvent) -> None:
         return
     from waves.desktop.diagnostics.events import resolve_events
 
-    resolve_events(
-        bridge,
-        EventDomain.ACCOUNT,
-        provider_id=event.token.provider_id,
-        valid=lambda: provider_contexts(bridge).current(account_token),
-    )
+    for key in (event.token.provider_id, "download-account", "browse-account"):
+        resolve_events(
+            bridge,
+            EventDomain.ACCOUNT,
+            provider_id=event.token.provider_id,
+            key=key,
+            valid=lambda: provider_contexts(bridge).current(account_token),
+        )
+    provider = getattr(bridge, "providers", {}).get(event.token.provider_id)
+    if provider is not None and Capability.SEARCH in getattr(provider, "capabilities", frozenset()):
+        resolve_events(
+            bridge,
+            EventDomain.ACCOUNT,
+            key="search-account",
+            valid=lambda: provider_contexts(bridge).current(account_token),
+        )
     if event.token.provider_id in getattr(bridge, "_tracked_sessions", ()):
         bridge._set_logged_in(True)
     bridge.providerStateChanged.emit(event.token.provider_id)

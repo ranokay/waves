@@ -1323,6 +1323,8 @@ class LibraryMixin:
                         EventDomain.LIBRARY,
                         "The Library scan could not finish. Check folder access and scan again.",
                         exception=exc,
+                        scope=FailureScope.CONFIGURATION if isinstance(exc, OSError) else FailureScope.UNKNOWN,
+                        code=EventCode.PATH_UNREACHABLE if isinstance(exc, OSError) else EventCode.FAILED,
                         valid=lambda: gen == self._library_gen,
                         actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
                     )
