@@ -550,7 +550,7 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
     monkeypatch.setattr(
         "waves.providers.apple.runtime.wrapper_login",
         lambda url, username, password: (
-            events.append("post")
+            events.append(("post", url, provider.wrapper_url))
             or {
                 "ok": True,
                 "needs_2fa": False,
@@ -563,9 +563,7 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
 
     stub.appleWrapperLogin("me@example.com", "secret")
 
-    assert events == ["ensure_port", "post"]
-    assert stub._apple_wrapper_login_result["url"] == "http://127.0.0.1:51234"
-    assert stub._apple_wrapper_login_result["provider_url"] == "http://127.0.0.1:51234"
+    assert events == ["ensure_port", ("post", "http://127.0.0.1:51234", "http://127.0.0.1:51234")]
 
 
 def test_start_port_keeps_the_effective_port_when_free_or_serving(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -1660,9 +1660,15 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     application_events: list[ApplicationEvent] = []
     settled: list[tuple] = []
     finished: list[int] = []
+    group_states: list[tuple] = []
+    setup_requests: list[str] = []
     hooks.event = application_events.append
     hooks.queue_status = lambda *args: settled.append(args)
     hooks.finish_job = finished.append
+    hooks.gate_reachability = lambda _retry, _media_id: True
+    hooks.download_failed_with_folder = lambda *_args: False
+    hooks.bump_groups = lambda *args: group_states.append(args)
+    hooks.setup_requested = setup_requests.append
     probes = []
     hooks.refresh_wrapper_auth = lambda **kw: probes.append(kw) or {"logged_in": True}
     monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 1)
@@ -1675,6 +1681,8 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     runner.run_job_body(hooks, 1, spec, _song_resource(), signals=relay, job_abort=Event(), row_ask=None, name="Xtal")
 
     assert settled[-1][1] == "failed" and finished == [1]
+    assert group_states == [("apple:song-1", None, "failed")]
+    assert setup_requests == ["setup"]
     surfaced = settled[-1][2]
     assert "cookies export" in surfaced and "Settings" in surfaced
     assert probes == [], "the wrapper probe cannot answer for a cookies fetch"
@@ -1740,11 +1748,20 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     hooks = stub._apple_job_hooks()
     application_events: list[ApplicationEvent] = []
     held: list[tuple[int, str]] = []
+    started_ports: list[int] = []
+    sidecar_guard = Lock()
+    runtime = SimpleNamespace(read_port=lambda: 1234, app_dir=str(tmp_path))
+    supervisor = SimpleNamespace(
+        ensure_started=lambda *, http_port: started_ports.append(http_port) or True,
+        note_activity=lambda: None,
+    )
     hooks.event = application_events.append
     hooks.queue_status = lambda qid, state, detail="": held.append((qid, detail)) if state == "queued" else None
-    hooks.runtime = lambda: SimpleNamespace()
-    hooks.wrapper_port = lambda: 1234
-    hooks.supervisor = lambda: SimpleNamespace(ensure_started=lambda **_kwargs: True)
+    hooks.runtime = lambda: runtime
+    hooks.wrapper_port = runtime.read_port
+    hooks.supervisor = lambda: supervisor
+    hooks.sidecar_guard = lambda: sidecar_guard
+    hooks.note_activity = supervisor.note_activity
     hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}
     monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
@@ -1763,6 +1780,7 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
 
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the guest returns"
+    assert started_ports == ([1234] if failure_kind == "runtime" else [])
     assert held and ("wrapper session" if failure_kind == "credential" else "not running") in held[0][1]
     assert getattr(stub, "_apple_session_expired", False) is False, "a landed track lifts the marker"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
