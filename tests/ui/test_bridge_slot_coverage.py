@@ -358,6 +358,7 @@ def test_checkFfmpegUpdate_emits_the_available_triple():
         ffmpegUpdateChecked=_Signal(),
     )
     s.checkFfmpegUpdate = _bind(s, "checkFfmpegUpdate")
+    s._emit_from_worker = _bind(s, "_emit_from_worker")
     s.checkFfmpegUpdate()
     assert s.ffmpegUpdateChecked.emits == [(True, "1.0", "1.1")]
 
@@ -369,6 +370,7 @@ def test_checkFfmpegUpdate_failure_emits_blank():
 
     s = _stub(_ffmpeg=SimpleNamespace(update_available=boom), threadpool=_InlinePool(), ffmpegUpdateChecked=_Signal())
     s.checkFfmpegUpdate = _bind(s, "checkFfmpegUpdate")
+    s._emit_from_worker = _bind(s, "_emit_from_worker")
     s.checkFfmpegUpdate()
     assert s.ffmpegUpdateChecked.emits == [(False, "", "")], "a failed check must read as none available"
 

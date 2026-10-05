@@ -15,6 +15,11 @@ Their Qt entry points remain on this context object.
 
 ## Application events
 
+| Signal                                                | Fires when                                                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `applicationEvent(payload)`                           | A guarded event is delivered or its lifecycle changes; payload is redacted plain data |
+| `applicationEventActionRequested(action, providerId)` | An applicable Settings or logs action asks Main to navigate                           |
+
 `applicationEvent(payload)` delivers redacted plain data on the GUI thread:
 `id`, `code`, `severity`, `domain`, `scope`, `title`, `summary`, `details`,
 `diagnostics`, `references`, `retryable`, `lifecycle`, `actions`, `occurrences`.

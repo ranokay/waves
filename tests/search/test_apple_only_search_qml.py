@@ -23,9 +23,8 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
-# AppleCatalogUnavailable's words: the honest failure a catalog fetch raises
-# when Apple's web app moves under the fetch.
-APPLE_WORDS = "Apple changed its web app. A Waves update is needed."
+# Apple-owned safe copy for a catalog protocol incompatibility.
+APPLE_WORDS = "Apple's catalog format has changed. Check for a Waves update."
 
 # The Apple rows the stub catalog answers with. Enough for the build veil to
 # have a total to wait on (a total of 0 raises no veil at all).
@@ -129,8 +128,8 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     No account can answer in this sandbox, so the Apple catalog is stubbed;
     every step below still goes through the bridge's real search slot and the
     QML's real payload handler, so the states are the states a user gets. The
-    stub answers rows, fails once for "flaky" (the fetch error Apple's own
-    exception carries), and finds nothing for "nothingmatches". The
+    stub answers rows, fails once for "flaky" (classified by Apple's owner),
+    and finds nothing for "nothingmatches". The
     group lives on the page's provider groups and is read through
     root.searchGroupFor('apple').
     """

@@ -20,6 +20,7 @@ from __future__ import annotations
 from threading import Barrier, Lock
 from types import SimpleNamespace
 
+import pytest
 from providers.fakes import BareProvider
 from tidalapi.album import Album
 from tidalapi.artist import Artist
@@ -636,6 +637,7 @@ def test_a_link_the_provider_cannot_resolve_reports_failure():
     assert stub.searchResults.emits == []
 
 
+@pytest.mark.qml
 def test_link_failure_is_redacted_and_success_resolves_its_event():
     import json
 

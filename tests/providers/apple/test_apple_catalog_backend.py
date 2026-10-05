@@ -563,6 +563,7 @@ def test_apple_click_failure_reports_and_releases_the_load():
     assert stub.artistLoadFailed.emits == ["apple:artist-1"]
 
 
+@pytest.mark.qml
 def test_apple_artist_recovery_resolves_only_that_artists_queued_event(monkeypatch):
     app = QCoreApplication.instance() or QCoreApplication([])
     relay = ApplicationEvents()
@@ -604,6 +605,7 @@ def test_apple_artist_recovery_resolves_only_that_artists_queued_event(monkeypat
     relay.close()
 
 
+@pytest.mark.qml
 @pytest.mark.parametrize("outcome", ["failure", "recovery"])
 @pytest.mark.parametrize("revoke_at", ["fetch", "delivery"])
 def test_provider_revoke_rejects_late_apple_artist_failure_or_recovery(monkeypatch, outcome, revoke_at):
