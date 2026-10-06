@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 
 import pytest
 from support.qml import boot_main_qml, run_scenario, seed_tidal_search
@@ -154,6 +155,29 @@ def scenario():
     settle(100)
     assert not read("return b.chooserOpen;")
     assert read("return b.activeFocus;")
+    # A current but non-ready offer keeps the open Chooser and its choices.
+    read("b.openChooser(); return true;")
+    read("b.chooserPickTier('HIGH'); return true;")
+    settle(200)
+    bridge.threadpool.waitForDone()
+    settle(50)
+    generation, snapshot = bridge._catalog_offer_snapshot
+    bridge._catalog_offer_snapshot = (
+        generation,
+        replace(
+            snapshot,
+            offers=tuple(
+                replace(item, readiness="setup_required") if item.provider_id == "tidal" else item
+                for item in snapshot.offers
+            ),
+        ),
+    )
+    read("b.confirmChooser(); return true;")
+    assert read("return b.chooserOpen;")
+    assert read("return b.chooserProvider;") == "tidal"
+    assert read("return b.chooserTier;") == "HIGH"
+    assert read("return b.chooserNotice.length > 0;")
+    read("b.closeChooser(); return true;")
     print("Chooser switches, confirmation, many offers, long names, keyboard and bounds passed")
     return 0
 

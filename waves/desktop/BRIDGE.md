@@ -380,6 +380,10 @@ Offers include origin/fulfillment IDs, confidence, readiness/action, separate
 advertised/probed/selected/delivered facts, ownership/presence, timestamps,
 explanations, the provider `descriptor` and its `options`. Missing facts stay
 unknown; Apple advertised traits do not establish exact rendition availability.
+Track Library presence comes from the scanned match index independently of
+provider Ownership. An unbuilt index or unproven candidate stays unknown;
+an owned download outside the Library does not establish Library presence.
+Library-generation changes invalidate the request through memory-only guards.
 An engine pin is applied only to its selected provider's evidence, even when
 the origin provider remains unpinned.
 
@@ -394,7 +398,9 @@ silently choosing candidates. `setupChooserProvider(providerId, action)` opens
 that provider's setup/sign-in or Settings, without implicitly enabling it.
 
 `downloadCatalogOffer(requestId, providerId, tier, audioType, toggles)` validates
-the current snapshot and returns whether dispatch was admitted. Known probe
+the current snapshot and returns whether dispatch was admitted. Offer
+readiness must be `ready`; disabled, sign-in/setup-required, unknown and
+unsupported offers refuse dispatch and leave the Chooser open. Known probe
 incompatibility refuses dispatch without changing the selected requirement;
 unknown exact rendition evidence remains unknown. Enqueue retains
 the origin ID independently of fulfillment identity, preserving legacy source
