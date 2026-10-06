@@ -10409,11 +10409,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         library_present = None
         index = getattr(self, "_library_track_index", None)
         if identity.kind == "track" and index is not None and identity.title and identity.artist:
+            title = f"{identity.title} ({identity.version})" if identity.version else identity.title
+            release_title = (
+                f"{identity.release_title} ({identity.release_version})"
+                if identity.release_version
+                else identity.release_title
+            )
             verdict = decide_track_presence(
-                identity.title,
+                title,
                 identity.artist,
                 index,
-                identity.release_title,
+                release_title,
                 identity.release_date[:4],
                 (identity.duration_ms or 0) // 1000,
                 identity.explicit,

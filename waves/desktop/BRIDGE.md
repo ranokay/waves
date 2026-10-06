@@ -383,6 +383,8 @@ unknown; Apple advertised traits do not establish exact rendition availability.
 Track Library presence comes from the scanned match index independently of
 provider Ownership. An unbuilt index or unproven candidate stays unknown;
 an owned download outside the Library does not establish Library presence.
+Separate catalog recording and release-version qualifiers participate in the
+Library match; a base Edition does not prove its Deluxe or remastered Edition.
 Library folder-generation or index-publication changes invalidate the request
 through memory-only guards. An open Chooser requests replacement evidence on
 `libraryPresenceChanged`, retaining its provider and requirement choices.

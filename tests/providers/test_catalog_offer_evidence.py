@@ -625,3 +625,63 @@ def test_catalog_library_presence_does_not_promote_an_unproven_recording(differe
     presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
     assert presence.owned is False
     assert presence.library_present is None
+
+
+@pytest.mark.parametrize("release_version", ["Deluxe Edition", "Remastered", "2015 Remaster"])
+@pytest.mark.parametrize("same_edition", [False, True])
+def test_catalog_library_presence_preserves_separate_release_version(release_version, same_edition):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    album = f"Release ({release_version})" if same_edition else "Release"
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index={
+            track_key("Recording", "Artist"): [
+                {"id": "/library/Release", "album": album, "album_year": "2020", "length": 180}
+            ]
+        },
+    )
+    identity = CatalogIdentity(
+        "tidal:1",
+        "track",
+        title="Recording",
+        artist="Artist",
+        release_title="Release",
+        release_version=release_version,
+        release_date="2020-01-01",
+        duration_ms=180000,
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is (True if same_edition else None)
+
+
+@pytest.mark.parametrize("version", ["Live", "Acoustic"])
+@pytest.mark.parametrize("same_recording", [False, True])
+def test_catalog_library_presence_preserves_separate_recording_version(version, same_recording):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    title = f"Recording ({version})" if same_recording else "Recording"
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index={
+            track_key(title, "Artist"): [
+                {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180}
+            ]
+        },
+    )
+    identity = CatalogIdentity(
+        "tidal:1",
+        "track",
+        title="Recording",
+        version=version,
+        artist="Artist",
+        release_title="Release",
+        release_date="2020-01-01",
+        duration_ms=180000,
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is same_recording
