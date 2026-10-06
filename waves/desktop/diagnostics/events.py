@@ -48,6 +48,7 @@ class ApplicationEvents(QObject):
     """
 
     changed = Signal(dict)
+    resolved = Signal(object)
     submitted = Signal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -89,6 +90,11 @@ class ApplicationEvents(QObject):
                     and (delivery.job_id is None or refs.job_id == delivery.job_id)
                 ):
                     self.finish(identity)
+            # The retained history follows a resolution even when the live
+            # index no longer holds the entry (an owner resolving after a
+            # restart); its match predicate mirrors the one above.
+            with contextlib.suppress(RuntimeError):
+                self.resolved.emit(delivery)
             return
         event = delivery.event
         self._occurrences[event.id] = self._occurrences.get(event.id, 0) + 1

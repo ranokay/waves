@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import pathlib
+import platform
 import random
 import re
 import shutil
@@ -206,6 +207,7 @@ from .bridge_surfaces import (
 )
 from .diagnostics import devlog
 from .diagnostics import export as diagnostics
+from .diagnostics.notifications import NotificationHistory, compose_report, entry_copy_text, issue_draft_url
 from .ffmpeg.manager import FfmpegCancelled, FfmpegManager
 from .library.bridge import (
     _LIBRARY_DEEP_SWEEP_MS,
@@ -236,7 +238,7 @@ from .providers.lifecycle import (
 from .providers.presentation import apple_status
 from .queue.bridge import QueueMixin
 from .queue.runtime import JobRuntime
-from .settings.persistence import SingleFlightWriter, write_json_atomic
+from .settings.persistence import SingleFlightWriter, write_json_atomic, write_text_atomic
 from .settings.schema import (
     ENUM_BY_FIELD,
     FIRST_RUN_OVERRIDES,
@@ -483,6 +485,12 @@ _FACTORY_WIPE_FILES = (
     "token.json.tmp",
     "waves.json",
     "waves.json.tmp",
+    # The notification center's retained history (see notifications.py in the
+    # diagnostics owner); its .bak is the unreadable-file rescue, and the
+    # timestamped variant is listed as a pattern below.
+    "notifications.json",
+    "notifications.json.tmp",
+    "notifications.json.bak",
     "page_cache.json",
     "page_cache.json.tmp",
     "browse_tile_art.json",
@@ -522,6 +530,9 @@ _FACTORY_WIPE_LOG_PATTERNS = (
     # file Waves named.
     re.compile(r"library-[0-9a-f]{12}\.sqlite3(-wal|-shm)?\Z"),
     re.compile(r"waves-diagnostics-\d{8}-\d{6}-\d{3}\.txt\Z"),
+    # The notification history's unreadable-file rescue names its collision
+    # copy with a timestamp (see notifications.py); anchored to that exact shape.
+    re.compile(r"notifications\.json\.bak-\d{8}-\d{6}\Z"),
     # Per-write staging leftovers: BaseConfig.save and write_text_atomic both
     # stage through tempfile.mkstemp names of the shape "<name>.<random>.tmp".
     # A hard kill or power cut mid-save strands one, and for token.json the
@@ -529,7 +540,7 @@ _FACTORY_WIPE_LOG_PATTERNS = (
     # promises to remove. Anchored on both ends to the exact files Waves
     # stages, so it can only ever match a file Waves itself named.
     re.compile(
-        r"(settings\.json|settings-migrations\.json|token\.json|waves\.json|page_cache\.json|browse_tile_art\.json)"
+        r"(settings\.json|settings-migrations\.json|token\.json|waves\.json|notifications\.json|page_cache\.json|browse_tile_art\.json)"
         r"\.[0-9A-Za-z_-]+\.tmp\Z"
     ),
 )
@@ -3918,6 +3929,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     diagnosticsExported = Signal(str)  # export finished; arg = bundle path ("" = failed)
     applicationEvent = Signal("QVariantMap")
     applicationEventActionRequested = Signal(str, str)  # allowlisted UI command, provider id
+    notificationsChanged = Signal()  # the notification history or active set changed
     downloadProgress = Signal(str, float)
     # Per-media button state: "" idle, "preparing" (parked behind a metadata
     # re-fetch, a folder-tree warm or an edition scan; drawn like queued, no
@@ -4842,6 +4854,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # window-geometry save, a page-cache snapshot) re-creates the files
         # between the wipe and the quit that immediately follows.
         self._factory_reset = False
+        # The notification center's retained history: one redacted entry per
+        # event identity, beside the Waves prefs. The live action index stays in
+        # _events; this store only retains (and resolves) what was announced.
+        self._history_path = os.path.join(os.path.dirname(self._waves_prefs_path), "notifications.json")
+        self._history = NotificationHistory(self._history_path)
+        self._history.load()
+        self._history.set_limits(
+            max_entries=self._waves_pref_int("notify_history_max", 200),
+            max_age_days=self._waves_pref_int("notify_history_days", 7),
+        )
+        self._events.changed.connect(self._record_notification)
+        self._events.resolved.connect(self._resolve_notification)
         # Reality-checked record of what has actually been downloaded (see
         # waves.library.ownership). Kept across logout: it describes files on THIS disk,
         # and every query re-checks the filesystem, so the account has no bearing
@@ -5267,6 +5291,84 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(str)
     def dismissEvent(self, identity: str) -> None:
         self._events.finish(identity, Lifecycle.DISMISSED)
+
+    @Slot(result="QVariantList")
+    def notificationHistory(self) -> list:
+        """Retained notification entries, newest update first (the center's list)."""
+        return self._history.entries()
+
+    @Slot(result="QVariantMap")
+    def notificationStatus(self) -> dict:
+        entries = self._history.entries()
+        return {"active": sum(1 for entry in entries if entry.get("lifecycle") == "active"), "count": len(entries)}
+
+    @Slot()
+    def clearNotificationHistory(self) -> None:
+        """Drop resolved/dismissed history; active issues stay until resolved or dismissed."""
+        self._history.clear()
+        self._save_notification_history()
+        self.notificationsChanged.emit()
+
+    @Slot(str, result=bool)
+    def copyEventDiagnostics(self, identity: str) -> bool:
+        """Copy one notification's redacted text; history entries stay copyable after resolution."""
+        entry = self._history.entry(identity)
+        if entry is None:
+            return False
+        QtGui.QGuiApplication.clipboard().setText(entry_copy_text(entry))
+        return True
+
+    @Slot(str, result=bool)
+    def reportEventIssue(self, identity: str) -> bool:
+        """Open a reviewable prefilled issue draft; the user reviews and submits it."""
+        entry = self._history.entry(identity)
+        if entry is None:
+            return False
+        updater = getattr(self, "_updater", None)
+        repository = updater.repository_url() if updater is not None else ""
+        title, body = compose_report(
+            entry,
+            version=_WAVES_VERSION,
+            platform_name=f"{platform.system()} {platform.release()}",
+        )
+        url = issue_draft_url(repository, title, body)
+        if not url:
+            return False
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
+        return True
+
+    def _record_notification(self, payload: dict) -> None:
+        """Every relayed delivery/lifecycle change lands in the retained history."""
+        self._history.record(payload)
+        self._save_notification_history()
+        self.notificationsChanged.emit()
+
+    def _save_notification_history(self) -> None:
+        if getattr(self, "_factory_reset", False) or not self._history.savable:
+            return
+        try:
+            snapshot = self._history.snapshot()
+            path = self._history_path
+
+            def _write() -> None:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                write_text_atomic(path, snapshot)
+
+            self._config_writer.submit("notifications", _write)
+        except Exception:
+            logger.exception("Could not save notification history")
+
+    def _resolve_notification(self, resolution) -> None:
+        """An owner resolved a scope: the retained entry follows, even when a
+        restart left the live action index without it."""
+        if self._history.finish_matching(
+            domain=resolution.domain.value,
+            provider_id=resolution.provider_id,
+            job_id=resolution.job_id,
+            identity=resolution.identity,
+        ):
+            self._save_notification_history()
+            self.notificationsChanged.emit()
 
     def _config_write_finished(self, key: str, error: Exception | None) -> None:
         if key not in {"settings", "waves_prefs"} or getattr(self, "_factory_reset", False):
@@ -11981,6 +12083,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Resting the pointer on a video thumbnail grows a live preview
             # card with sound; off keeps thumbnails still (click to play).
             "video_hover_peek": True,
+            # Notification center (Settings > Notifications). Completion
+            # toasts can be turned off without losing warnings/errors; the
+            # retained resolved history is capped by count and age (active
+            # issues survive both until resolved or dismissed); toasts animate
+            # unless the user turns that off for reduced motion.
+            "notify_completion_toasts": True,
+            "notification_motion": True,
+            "notify_history_max": 200,
+            "notify_history_days": 7,
             # Settings page: which section cards the user left open, as a JSON
             # object of id -> bool ("" = never touched, everything collapsed).
             # Housekeeping state, not a user-facing setting, so not in
@@ -12239,10 +12350,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return
             self._waves_prefs[key] = False
         old = self._waves_prefs[key]
-        # Preserve the pref's type, a bool stored via str() becomes the truthy
-        # string "False", so coerce against the existing default's type.
+        # Preserve the pref's type: a bool stored via str() becomes the truthy
+        # string "False", and an int pref must stay an int so its clamp and
+        # comparisons see a number, so coerce against the existing default.
         if isinstance(self._waves_prefs[key], bool):
             value = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
+        elif isinstance(self._waves_prefs[key], int):
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = self._waves_prefs[key]
         else:
             value = str(value)
         self._waves_prefs[key] = value
@@ -12262,6 +12379,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self.artHoverTiltChanged.emit()
         elif key == "video_hover_peek":
             self.videoHoverPeekChanged.emit()
+        elif key in ("notify_history_max", "notify_history_days") and value != old:
+            self._apply_notification_limits()
         elif key == "verbose_diagnostics":
             diagnostics.set_verbose(bool(value))
         elif key == "library_enabled" and value != old:
@@ -12318,6 +12437,24 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _waves_pref_bool(self, key: str) -> bool:
         v = self._waves_prefs.get(key, False)
         return v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
+
+    def _waves_pref_int(self, key: str, default: int = 0) -> int:
+        value = self._waves_prefs.get(key, default)
+        if isinstance(value, bool):
+            return int(default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    def _apply_notification_limits(self) -> None:
+        """The retention prefs changed: clamp, trim, persist, re-announce."""
+        self._history.set_limits(
+            max_entries=self._waves_pref_int("notify_history_max", 200),
+            max_age_days=self._waves_pref_int("notify_history_days", 7),
+        )
+        self._save_notification_history()
+        self.notificationsChanged.emit()
 
     def _merge_pref_on(self) -> bool:
         """Whether 'best of both' is on. It stands independent of
