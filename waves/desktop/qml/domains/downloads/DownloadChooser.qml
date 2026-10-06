@@ -67,6 +67,7 @@ Popup {
     property int accessibleRole: Accessible.Button
     width: parent.width
     implicitHeight: Math.max(30, optionText.implicitHeight + 14)
+    hoverEnabled: true
     activeFocusOnTab: chooser.visible && visible && enabled
     Accessible.role: accessibleRole
     Accessible.name: text
