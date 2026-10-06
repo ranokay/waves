@@ -109,9 +109,6 @@ Rectangle {
   property bool chooserBuilt: false
   readonly property bool chooserOpen: chooserLoader.item !== null && chooserLoader.item.visible
   property string chooserProvider: ""
-  // The row's provider as the popover's chip states it: the descriptor the
-  // badges render (the bridge's identity answer), resolved when the popover
-  // opens. Nothing here picks a provider — the row's own is the only one.
   readonly property var chooserProviderDescriptor: ("" + db.chooserProvider) !== "" ? waves.providerDescriptor(db.chooserProvider) : null
   property string chooserTier: ""
   property string chooserAudio: "stereo"
@@ -126,17 +123,101 @@ Rectangle {
   property bool chooserLyricsTtml: false
   property bool chooserCoverEmbed: true
   property bool chooserCoverFile: true
-  property bool chooserAllowFallback: false
+  property bool chooserAllowProviderFallback: false
+  property bool chooserAllowEngineFallback: false
+  property bool chooserProviderPinned: false
+  property string chooserEngine: "auto"
+  property var chooserEngines: []
+  property var chooserOffers: []
+  property var chooserExplicit: ({})
+  property var chooserPendingSwitch: null
+  property string chooserNotice: ""
+  property bool chooserApplying: false
+  function markChooserChoice(key, value) {
+    var pins = Object.assign({}, db.chooserExplicit)
+    pins[key] = value
+    if (key === "engine")
+      pins.engineProvider = db.chooserProvider
+    db.chooserExplicit = pins
+  }
+  function applyChooserOptions(d, values) {
+    db.chooserApplying = true
+    db.chooserTier = values.tier || ""
+    db.chooserAudio = d.atmosOnly ? "atmos" : (values.audioType || "stereo")
+    db.chooserAtmosOnly = d.atmosOnly === true
+    db.chooserTiers = d.tiers || []
+    db.chooserAudioOptions = d.audioOptions || ["stereo"]
+    db.chooserShowLyrics = d.showLyrics === true
+    db.chooserShowTtml = d.showLyricsTtml === true
+    db.chooserShowArt = d.showArt === true
+    db.chooserLyricsEmbed = values.lyricsEmbed === true
+    db.chooserLyricsFile = values.lyricsFile === true
+    db.chooserLyricsTtml = values.lyricsTtml === true
+    db.chooserCoverEmbed = values.coverEmbed === true
+    db.chooserCoverFile = values.coverFile === true
+    db.chooserEngine = values.engine || "auto"
+    db.chooserEngines = d.engines || []
+    db.chooserApplying = false
+  }
+  function chooseProvider(providerId) {
+    if (providerId === db.chooserProvider) {
+      db.chooserProviderPinned = true
+      return
+    }
+    var proposal = waves.chooserSwitchOptions(db.chooserOfferRequest, providerId, db.chooserExplicit)
+    if (proposal.error) {
+      db.chooserNotice = proposal.error
+      return
+    }
+    if (proposal.changes.length > 0) {
+      db.chooserPendingSwitch = proposal
+      db.chooserNotice = "Confirm these changes before switching: " + proposal.changes.join("; ")
+      return
+    }
+    commitProviderSwitch(proposal)
+  }
+  function commitProviderSwitch(proposal) {
+    db.chooserProvider = proposal.provider
+    db.chooserProviderPinned = true
+    db.chooserExplicit = proposal.explicit
+    db.applyChooserOptions(proposal.options, proposal.values)
+    db.chooserPendingSwitch = null
+    db.chooserNotice = ""
+    db.refreshOfferEvidence()
+  }
+  function confirmProviderSwitch() {
+    var pending = db.chooserPendingSwitch
+    if (!pending)
+      return
+    var fresh = waves.chooserSwitchOptions(db.chooserOfferRequest, pending.provider, db.chooserExplicit)
+    if (fresh.error) {
+      db.chooserPendingSwitch = null
+      db.chooserNotice = fresh.error
+      return
+    }
+    if (JSON.stringify(fresh.changes) !== JSON.stringify(pending.changes)) {
+      db.chooserPendingSwitch = fresh
+      db.chooserNotice = "Options changed. Review: " + fresh.changes.join("; ")
+      return
+    }
+    db.commitProviderSwitch(fresh)
+  }
+  function chooserPickEngine(engineId) {
+    db.markChooserChoice("engine", engineId)
+    db.chooserEngine = engineId
+    db.refreshOfferEvidence()
+  }
   property int chooserOfferRequest: 0
   property double chooserEvidenceExpiry: 0
   property string chooserEvidenceText: "Exact item availability unknown"
   function refreshOfferEvidence() {
-    if (!db.chooserOpen)
+    if (!db.chooserOpen || db.chooserApplying)
       return
+    db.chooserPendingSwitch = null
     db.chooserEvidenceText = "Checking item availability…"
     db.chooserEvidenceExpiry = 0
     try {
-      db.chooserOfferRequest = waves.requestCatalogOffers(db.mediaId, db.chooserKind, db.chooserTier, db.chooserAudio)
+      db.chooserOfferRequest = waves.requestCatalogOffers(db.mediaId, db.chooserKind, db.chooserTier, db.chooserAudio, db.chooserProviderPinned ? db.chooserProvider : "", db.chooserEngine)
     } catch (e) {
       db.chooserEvidenceText = "Exact item availability unknown"
     }
@@ -159,23 +240,24 @@ Rectangle {
       d = ({})
     }
     db.chooserProvider = "" + (d.provider || "")
-    db.chooserTier = "" + (d.tier || "")
-    db.chooserAudio = "" + (d.audioType || "stereo")
-    db.chooserAtmosOnly = d.atmosOnly === true
-    if (db.chooserAtmosOnly)
-      db.chooserAudio = "atmos"
-    db.chooserTiers = d.tiers || []
-    var audios = d.audioOptions || []
-    db.chooserAudioOptions = audios.length > 0 ? audios : ["stereo"]
-    db.chooserShowLyrics = d.showLyrics === true
-    db.chooserShowTtml = d.showLyricsTtml === true
-    db.chooserShowArt = d.showArt === true
-    db.chooserLyricsEmbed = d.lyricsEmbed === true
-    db.chooserLyricsFile = d.lyricsFile === true
-    db.chooserLyricsTtml = d.lyricsTtml === true && db.chooserShowTtml
-    db.chooserCoverEmbed = d.coverEmbed !== false
-    db.chooserCoverFile = d.coverFile !== false
-    db.chooserAllowFallback = false
+    db.chooserExplicit = ({})
+    db.chooserProviderPinned = false
+    db.chooserPendingSwitch = null
+    db.chooserNotice = ""
+    db.chooserAllowProviderFallback = false
+    db.chooserAllowEngineFallback = false
+    db.applyChooserOptions(d, d)
+    db.chooserOffers = [
+      {
+        provider_id: db.chooserProvider,
+        media_id: db.mediaId,
+        match_state: "origin",
+        readiness: "unknown",
+        summary: "Checking item availability…",
+        descriptor: db.chooserProviderDescriptor,
+        options: d
+      }
+    ]
   }
   // What a click does, without the pointer: the same decision the tap
   // area and the keyboard/accessibility press action take (the gates
@@ -308,48 +390,64 @@ Rectangle {
       return
     }
     var k = "" + (db.chooserKind || "")
-    var tier = db.chooserAtmosOnly ? "" : ("" + (db.chooserTier || ""))
-    var audio = db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || ""))
+    var tier = db.chooserExplicit.tier !== undefined ? db.chooserTier : ""
+    var audio = db.chooserAtmosOnly ? "atmos" : (db.chooserExplicit.audioType !== undefined ? db.chooserAudio : "")
     var toggles = {
-      allow_fallback: db.chooserAllowFallback,
-      lyrics_embed: db.chooserLyricsEmbed,
-      lyrics_file: db.chooserLyricsFile,
-      lyrics_ttml_file: db.chooserLyricsTtml,
-      metadata_cover_embed: db.chooserCoverEmbed,
-      cover_album_file: db.chooserCoverFile
+      provider_pin: db.chooserProviderPinned ? db.chooserProvider : "",
+      allow_provider_fallback: db.chooserAllowProviderFallback,
+      allow_engine_fallback: db.chooserAllowEngineFallback
     }
+    var assetKeys = {
+      lyricsEmbed: "lyrics_embed",
+      lyricsFile: "lyrics_file",
+      lyricsTtml: "lyrics_ttml_file",
+      coverEmbed: "metadata_cover_embed",
+      coverFile: "cover_album_file"
+    }
+    for (var key in assetKeys) {
+      if (db.chooserExplicit[key] !== undefined)
+        toggles[assetKeys[key]] = db.chooserExplicit[key]
+    }
+    if (db.chooserExplicit.engine !== undefined)
+      toggles.engine = db.chooserExplicit.engine
     try {
-      waves.downloadWithChooser(db.mediaId, k, tier, audio, toggles)
+      if (!waves.downloadCatalogOffer(db.chooserOfferRequest, db.chooserProvider, tier, audio, toggles)) {
+        db.chooserNotice = "Offers changed or the delivery is unsupported. Check offers and review the options."
+        return
+      }
     } catch (e) {
       try {
         waves.uiLog("chooser", "downloadWithChooser failed: " + e, -1)
       } catch (e2) {}
-      try {
-        db.onTap()
-      } catch (e3) {}
+      db.chooserNotice = "Could not enqueue this offer. Check offers and try again."
+      return
     }
     db.closeChooser()
   }
   // The Chooser's rows are real controls: the pointer, the
   // keyboard and a screen reader all take these one paths.
   function chooserPickTier(word) {
+    db.markChooserChoice("tier", "" + word)
     db.chooserTier = "" + word
   }
   function chooserPickAudio(word) {
+    db.markChooserChoice("audioType", "" + word)
     db.chooserAudio = "" + word
   }
   function chooserToggle(key) {
-    if (key === "lyrics_embed")
-      db.chooserLyricsEmbed = !db.chooserLyricsEmbed
-    else if (key === "lyrics_file")
-      db.chooserLyricsFile = !db.chooserLyricsFile
-    else if (key === "lyrics_ttml_file") {
-      if (db.chooserShowTtml)
-        db.chooserLyricsTtml = !db.chooserLyricsTtml
-    } else if (key === "cover_embed")
-      db.chooserCoverEmbed = !db.chooserCoverEmbed
-    else if (key === "cover_file")
-      db.chooserCoverFile = !db.chooserCoverFile
+    var names = {
+      lyrics_embed: "lyricsEmbed",
+      lyrics_file: "lyricsFile",
+      lyrics_ttml_file: "lyricsTtml",
+      cover_embed: "coverEmbed",
+      cover_file: "coverFile"
+    }
+    var name = names[key]
+    if (!name || (name === "lyricsTtml" && !db.chooserShowTtml))
+      return
+    var prop = "chooser" + name.charAt(0).toUpperCase() + name.slice(1)
+    db[prop] = !db[prop]
+    db.markChooserChoice(name, db[prop])
   }
   function saveChooserAsDefaults() {
     var vals = {
@@ -639,6 +737,7 @@ Rectangle {
     function onCatalogOffersLoaded(requestId, offers) {
       if (requestId !== db.chooserOfferRequest)
         return
+      db.chooserOffers = offers
       for (var i = 0; i < offers.length; i++) {
         if (offers[i].provider_id === db.chooserProvider) {
           db.chooserEvidenceText = offers[i].summary || "Exact item availability unknown"
@@ -649,9 +748,22 @@ Rectangle {
       db.chooserEvidenceText = "Exact item availability unknown"
     }
     function onProviderStateChanged(providerId) {
-      if (providerId === db.chooserProvider) {
+      if (db.chooserOpen) {
+        db.chooserPendingSwitch = null
+        db.chooserNotice = "Provider state changed. Check offers again."
         db.chooserEvidenceExpiry = 0
         db.chooserEvidenceText = "Availability stale; check again"
+        db.chooserOffers = db.chooserOffers.map(function (offer) {
+          return Object.assign({}, offer, {
+            readiness: "unknown",
+            match_state: "unresolved",
+            evidence_state: "stale",
+            summary: "Availability stale; check again",
+            owned: null,
+            library_present: null,
+            delivered: []
+          })
+        })
       }
     }
   }
@@ -1296,718 +1408,8 @@ Rectangle {
   }
   Component {
     id: chooserComp
-    Popup {
-      id: chooserPop
-      objectName: "chooserPopover"
-      parent: db
-      // Right edge aligned with the control, and clamped inside the
-      // window: the popover is wider than the download button.
-      x: db.width - width
-      y: db.height + 4
-      margins: 8
-      width: 320
-      padding: 12
-      modal: false
-      focus: true
-      closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
-      // Focus the popover's own scope on open: Tab then walks its
-      // rows in draw order, and Escape closes from anywhere in it.
-      onOpened: {
-        contentItem.forceActiveFocus()
-        db.refreshOfferEvidence()
-      }
-      onClosed: {
-        try {
-          waves.cancelCatalogOffers(db.chooserOfferRequest)
-        } catch (e) {}
-        db.chooserEvidenceText = "Exact item availability unknown"
-        db.chooserEvidenceExpiry = 0
-      }
-      background: Rectangle {
-        radius: 10
-        color: surfaceHi
-        border.color: outline
-      }
-      contentItem: Column {
-        spacing: 10
-        Text {
-          textFormat: Text.PlainText
-          text: "DOWNLOAD WITH"
-          color: textDim
-          font.family: uiFont
-          font.pixelSize: 10
-          font.bold: true
-          font.letterSpacing: 1
-        }
-        Column {
-          visible: db.chooserProviderDescriptor !== null
-          spacing: 4
-          Text {
-            textFormat: Text.PlainText
-            text: "PROVIDER"
-            color: textDim
-            font.family: mono
-            font.pixelSize: 9
-          }
-          // The row's own provider, stated: one static chip, never a
-          // pick. ProviderBadge renders the descriptor's mark and the
-          // label its name, so a third provider chips like the first
-          // two with no provider id or asset path in QML.
-          Row {
-            spacing: 6
-            ProviderBadge {
-              descriptor: db.chooserProviderDescriptor
-              anchors.verticalCenter: parent.verticalCenter
-            }
-            Text {
-              textFormat: Text.PlainText
-              text: ("" + (db.chooserProviderDescriptor ? (db.chooserProviderDescriptor.name || db.chooserProviderDescriptor.id) : "")).toUpperCase()
-              color: textLo
-              font.family: uiFont
-              font.pixelSize: 10
-              font.bold: true
-              anchors.verticalCenter: parent.verticalCenter
-            }
-          }
-        }
-        Column {
-          visible: db.chooserTiers.length > 0
-          spacing: 4
-          Text {
-            textFormat: Text.PlainText
-            text: "AUDIO QUALITY REQUIREMENT"
-            color: textDim
-            font.family: mono
-            font.pixelSize: 9
-          }
-          Text {
-            objectName: "chooserAvailabilityEvidence"
-            width: 296
-            textFormat: Text.PlainText
-            text: db.chooserEvidenceText
-            wrapMode: Text.WordWrap
-            color: textDim
-            font.family: uiFont
-            font.pixelSize: 10
-          }
-          Repeater {
-            model: db.chooserTiers
-            delegate: Rectangle {
-              id: tierRow
-              objectName: "chooserTierRow"
-              required property var modelData
-              readonly property bool picked: ("" + modelData.word) === ("" + db.chooserTier)
-              width: 296
-              height: 26
-              radius: 5
-              color: tierRow.picked ? host.qualTint(modelData.word) : "transparent"
-              border.color: tierRow.activeFocus ? accent : tierRow.picked ? host.qualBorder(modelData.word) : "transparent"
-              border.width: 1
-              // A picker row a keyboard or reader user can
-              // take.
-              activeFocusOnTab: chooserPop.visible
-              Accessible.role: Accessible.RadioButton
-              Accessible.name: db.chooserKind + " in " + modelData.word
-              Accessible.checkable: true
-              Accessible.checked: tierRow.picked
-              Accessible.onPressAction: function () {
-                db.chooserPickTier(modelData.word)
-              }
-              Accessible.onToggleAction: function () {
-                db.chooserPickTier(modelData.word)
-              }
-              Keys.onReturnPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserPickTier(modelData.word)
-                }
-              }
-              Keys.onEnterPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserPickTier(modelData.word)
-                }
-              }
-              Keys.onSpacePressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserPickTier(modelData.word)
-                }
-              }
-              Row {
-                anchors.left: parent.left
-                anchors.leftMargin: 8
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 6
-                Rectangle {
-                  width: 6
-                  height: 6
-                  radius: 3
-                  color: host.qualDot(modelData.word)
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                  textFormat: Text.PlainText
-                  text: "" + modelData.word
-                  color: host.qualFg(modelData.word)
-                  font.family: mono
-                  font.pixelSize: 10
-                  font.bold: true
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                  textFormat: Text.PlainText
-                  text: "" + (modelData.detail || "")
-                  color: textLo
-                  font.family: mono
-                  font.pixelSize: 10
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: db.chooserPickTier(modelData.word)
-              }
-            }
-          }
-        }
-        Column {
-          spacing: 4
-          Text {
-            textFormat: Text.PlainText
-            text: "AUDIO TYPE"
-            color: textDim
-            font.family: mono
-            font.pixelSize: 9
-          }
-          Text {
-            visible: db.chooserAtmosOnly
-            textFormat: Text.PlainText
-            text: "ATMOS ONLY"
-            color: textHi
-            font.family: mono
-            font.pixelSize: 10
-            font.bold: true
-          }
-          Row {
-            visible: !db.chooserAtmosOnly
-            spacing: 6
-            // The provider's own words: a
-            // stereo-only provider offers one option, however
-            // many the Chooser would carry elsewhere.
-            Repeater {
-              model: db.chooserAudioOptions
-              delegate: Rectangle {
-                id: audioTile
-                objectName: "chooserAudioTile"
-                required property string modelData
-                readonly property bool picked: db.chooserAudio === modelData
-                width: 94
-                height: 26
-                radius: 6
-                color: audioTile.picked ? accentCont : surface3
-                border.color: audioTile.activeFocus ? accent : audioTile.picked ? accentDim : outline
-                border.width: 1
-                activeFocusOnTab: chooserPop.visible
-                Accessible.role: Accessible.RadioButton
-                Accessible.name: "Audio type: " + modelData.toUpperCase()
-                Accessible.checkable: true
-                Accessible.checked: audioTile.picked
-                Accessible.onPressAction: function () {
-                  db.chooserPickAudio(modelData)
-                }
-                Accessible.onToggleAction: function () {
-                  db.chooserPickAudio(modelData)
-                }
-                Keys.onReturnPressed: function (event) {
-                  if (!event.isAutoRepeat) {
-                    event.accepted = true
-                    db.chooserPickAudio(modelData)
-                  }
-                }
-                Keys.onEnterPressed: function (event) {
-                  if (!event.isAutoRepeat) {
-                    event.accepted = true
-                    db.chooserPickAudio(modelData)
-                  }
-                }
-                Keys.onSpacePressed: function (event) {
-                  if (!event.isAutoRepeat) {
-                    event.accepted = true
-                    db.chooserPickAudio(modelData)
-                  }
-                }
-                Text {
-                  textFormat: Text.PlainText
-                  text: modelData.toUpperCase()
-                  color: audioTile.picked ? accentContTx : textLo
-                  font.family: uiFont
-                  font.pixelSize: 10
-                  font.bold: true
-                  anchors.centerIn: parent
-                }
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: db.chooserPickAudio(modelData)
-                }
-              }
-            }
-          }
-        }
-        Row {
-          spacing: 8
-          Check {
-            objectName: "chooserAllowFallback"
-            checked: db.chooserAllowFallback
-            accessibleLabel: "Allow fallback"
-            onToggled: db.chooserAllowFallback = !db.chooserAllowFallback
-          }
-          Text {
-            textFormat: Text.PlainText
-            text: "Allow provider / engine fallback"
-            color: textLo
-            font.family: uiFont
-            font.pixelSize: 10
-            anchors.verticalCenter: parent.verticalCenter
-          }
-        }
-        Column {
-          visible: db.chooserShowLyrics
-          spacing: 4
-          Text {
-            textFormat: Text.PlainText
-            text: "LYRICS"
-            color: textDim
-            font.family: mono
-            font.pixelSize: 9
-          }
-          Row {
-            spacing: 8
-            Rectangle {
-              id: lyricsEmbedTile
-              objectName: "chooserLyricsEmbed"
-              width: 90
-              height: 24
-              radius: 5
-              color: db.chooserLyricsEmbed ? accentCont : surface3
-              border.color: lyricsEmbedTile.activeFocus ? accent : db.chooserLyricsEmbed ? accentDim : outline
-              border.width: 1
-              activeFocusOnTab: chooserPop.visible
-              Accessible.role: Accessible.CheckBox
-              Accessible.name: "Embed lyrics"
-              Accessible.checkable: true
-              Accessible.checked: db.chooserLyricsEmbed
-              Accessible.onPressAction: function () {
-                db.chooserToggle("lyrics_embed")
-              }
-              Accessible.onToggleAction: function () {
-                db.chooserToggle("lyrics_embed")
-              }
-              Keys.onReturnPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_embed")
-                }
-              }
-              Keys.onEnterPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_embed")
-                }
-              }
-              Keys.onSpacePressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_embed")
-                }
-              }
-              Text {
-                textFormat: Text.PlainText
-                text: db.chooserLyricsEmbed ? "EMBED ON" : "EMBED OFF"
-                color: db.chooserLyricsEmbed ? accentContTx : textLo
-                font.family: mono
-                font.pixelSize: 9
-                anchors.centerIn: parent
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: db.chooserToggle("lyrics_embed")
-              }
-            }
-            Rectangle {
-              id: lyricsLrcTile
-              objectName: "chooserLyricsFile"
-              width: 70
-              height: 24
-              radius: 5
-              color: db.chooserLyricsFile ? accentCont : surface3
-              border.color: lyricsLrcTile.activeFocus ? accent : db.chooserLyricsFile ? accentDim : outline
-              border.width: 1
-              activeFocusOnTab: chooserPop.visible
-              Accessible.role: Accessible.CheckBox
-              Accessible.name: "Save the .lrc lyrics file"
-              Accessible.checkable: true
-              Accessible.checked: db.chooserLyricsFile
-              Accessible.onPressAction: function () {
-                db.chooserToggle("lyrics_file")
-              }
-              Accessible.onToggleAction: function () {
-                db.chooserToggle("lyrics_file")
-              }
-              Keys.onReturnPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_file")
-                }
-              }
-              Keys.onEnterPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_file")
-                }
-              }
-              Keys.onSpacePressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_file")
-                }
-              }
-              Text {
-                textFormat: Text.PlainText
-                text: db.chooserLyricsFile ? ".LRC ON" : ".LRC OFF"
-                color: db.chooserLyricsFile ? accentContTx : textLo
-                font.family: mono
-                font.pixelSize: 9
-                anchors.centerIn: parent
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: db.chooserToggle("lyrics_file")
-              }
-            }
-            Rectangle {
-              id: lyricsTtmlTile
-              objectName: "chooserLyricsTtml"
-              width: 80
-              height: 24
-              radius: 5
-              color: db.chooserLyricsTtml ? accentCont : surface3
-              border.color: lyricsTtmlTile.activeFocus ? accent : db.chooserLyricsTtml ? accentDim : outline
-              border.width: 1
-              opacity: db.chooserShowTtml ? 1 : 0.4
-              // Enabled only where the provider serves TTML:
-              // an inert tile leaves the tab order.
-              activeFocusOnTab: chooserPop.visible && db.chooserShowTtml
-              enabled: db.chooserShowTtml
-              Accessible.role: Accessible.CheckBox
-              Accessible.name: "Save the verbatim .ttml lyrics file"
-              Accessible.checkable: true
-              Accessible.checked: db.chooserLyricsTtml
-              Accessible.onPressAction: function () {
-                db.chooserToggle("lyrics_ttml_file")
-              }
-              Accessible.onToggleAction: function () {
-                db.chooserToggle("lyrics_ttml_file")
-              }
-              Keys.onReturnPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_ttml_file")
-                }
-              }
-              Keys.onEnterPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_ttml_file")
-                }
-              }
-              Keys.onSpacePressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("lyrics_ttml_file")
-                }
-              }
-              Text {
-                textFormat: Text.PlainText
-                text: db.chooserLyricsTtml ? ".TTML ON" : ".TTML OFF"
-                color: db.chooserLyricsTtml ? accentContTx : textLo
-                font.family: mono
-                font.pixelSize: 9
-                anchors.centerIn: parent
-              }
-              MouseArea {
-                anchors.fill: parent
-                enabled: db.chooserShowTtml
-                cursorShape: Qt.PointingHandCursor
-                onClicked: db.chooserToggle("lyrics_ttml_file")
-              }
-            }
-          }
-        }
-        Column {
-          visible: db.chooserShowArt
-          spacing: 4
-          Text {
-            textFormat: Text.PlainText
-            text: "ALBUM ART"
-            color: textDim
-            font.family: mono
-            font.pixelSize: 9
-          }
-          Row {
-            spacing: 8
-            Rectangle {
-              id: coverFileTile
-              objectName: "chooserCoverFile"
-              width: 130
-              height: 24
-              radius: 5
-              color: db.chooserCoverFile ? accentCont : surface3
-              border.color: coverFileTile.activeFocus ? accent : db.chooserCoverFile ? accentDim : outline
-              border.width: 1
-              activeFocusOnTab: chooserPop.visible
-              Accessible.role: Accessible.CheckBox
-              Accessible.name: "Save the cover as a sidecar file"
-              Accessible.checkable: true
-              Accessible.checked: db.chooserCoverFile
-              Accessible.onPressAction: function () {
-                db.chooserToggle("cover_file")
-              }
-              Accessible.onToggleAction: function () {
-                db.chooserToggle("cover_file")
-              }
-              Keys.onReturnPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("cover_file")
-                }
-              }
-              Keys.onEnterPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("cover_file")
-                }
-              }
-              Keys.onSpacePressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("cover_file")
-                }
-              }
-              Text {
-                textFormat: Text.PlainText
-                text: db.chooserCoverFile ? "SIDECAR ON" : "SIDECAR OFF"
-                color: db.chooserCoverFile ? accentContTx : textLo
-                font.family: mono
-                font.pixelSize: 9
-                anchors.centerIn: parent
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: db.chooserToggle("cover_file")
-              }
-            }
-            Rectangle {
-              id: coverEmbedTile
-              objectName: "chooserCoverEmbed"
-              width: 110
-              height: 24
-              radius: 5
-              color: db.chooserCoverEmbed ? accentCont : surface3
-              border.color: coverEmbedTile.activeFocus ? accent : db.chooserCoverEmbed ? accentDim : outline
-              border.width: 1
-              activeFocusOnTab: chooserPop.visible
-              Accessible.role: Accessible.CheckBox
-              Accessible.name: "Embed the cover art"
-              Accessible.checkable: true
-              Accessible.checked: db.chooserCoverEmbed
-              Accessible.onPressAction: function () {
-                db.chooserToggle("cover_embed")
-              }
-              Accessible.onToggleAction: function () {
-                db.chooserToggle("cover_embed")
-              }
-              Keys.onReturnPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("cover_embed")
-                }
-              }
-              Keys.onEnterPressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("cover_embed")
-                }
-              }
-              Keys.onSpacePressed: function (event) {
-                if (!event.isAutoRepeat) {
-                  event.accepted = true
-                  db.chooserToggle("cover_embed")
-                }
-              }
-              Text {
-                textFormat: Text.PlainText
-                text: db.chooserCoverEmbed ? "EMBED ON" : "EMBED OFF"
-                color: db.chooserCoverEmbed ? accentContTx : textLo
-                font.family: mono
-                font.pixelSize: 9
-                anchors.centerIn: parent
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: db.chooserToggle("cover_embed")
-              }
-            }
-          }
-        }
-        Row {
-          spacing: 8
-          Rectangle {
-            id: chooserDefaultsBtn
-            objectName: "chooserSetDefaults"
-            width: 150
-            height: 30
-            radius: 6
-            color: "transparent"
-            border.color: chooserDefaultsBtn.activeFocus ? accent : accentDim
-            border.width: chooserDefaultsBtn.activeFocus ? 2 : 1
-            activeFocusOnTab: chooserPop.visible
-            Accessible.role: Accessible.Button
-            Accessible.name: "Set as defaults"
-            Accessible.onPressAction: function () {
-              db.saveChooserAsDefaults()
-            }
-            Keys.onReturnPressed: function (event) {
-              if (!event.isAutoRepeat) {
-                event.accepted = true
-                db.saveChooserAsDefaults()
-              }
-            }
-            Keys.onEnterPressed: function (event) {
-              if (!event.isAutoRepeat) {
-                event.accepted = true
-                db.saveChooserAsDefaults()
-              }
-            }
-            Keys.onSpacePressed: function (event) {
-              if (!event.isAutoRepeat) {
-                event.accepted = true
-                db.saveChooserAsDefaults()
-              }
-            }
-            Text {
-              textFormat: Text.PlainText
-              text: "SET AS DEFAULTS"
-              color: accentContTx
-              font.family: uiFont
-              font.pixelSize: 10
-              font.bold: true
-              anchors.centerIn: parent
-            }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: db.saveChooserAsDefaults()
-            }
-          }
-          Rectangle {
-            id: chooserConfirmBtn
-            objectName: "chooserConfirm"
-            width: 120
-            height: 30
-            radius: 6
-            color: accent
-            border.color: chooserConfirmBtn.activeFocus ? textHi : "transparent"
-            border.width: 2
-            activeFocusOnTab: chooserPop.visible
-            Accessible.role: Accessible.Button
-            Accessible.name: "Download with these options"
-            Accessible.onPressAction: function () {
-              db.confirmChooser()
-            }
-            Keys.onReturnPressed: function (event) {
-              if (!event.isAutoRepeat) {
-                event.accepted = true
-                db.confirmChooser()
-              }
-            }
-            Keys.onEnterPressed: function (event) {
-              if (!event.isAutoRepeat) {
-                event.accepted = true
-                db.confirmChooser()
-              }
-            }
-            Keys.onSpacePressed: function (event) {
-              if (!event.isAutoRepeat) {
-                event.accepted = true
-                db.confirmChooser()
-              }
-            }
-            Text {
-              textFormat: Text.PlainText
-              text: "DOWNLOAD"
-              color: accentText
-              font.family: uiFont
-              font.pixelSize: 10
-              font.bold: true
-              anchors.centerIn: parent
-            }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: db.confirmChooser()
-            }
-          }
-        }
-        Text {
-          textFormat: Text.PlainText
-          text: "Defaults come from Settings. Tier, audio, lyrics and art apply to this click only. SET AS DEFAULTS saves them."
-          color: textDim
-          font.pixelSize: 9
-          wrapMode: Text.WordWrap
-          width: 296
-        }
-      }
-      enter: Transition {
-        ParallelAnimation {
-          NumberAnimation {
-            property: "opacity"
-            from: 0
-            to: 1
-            duration: host.hoverMotion ? 120 : 0
-          }
-          NumberAnimation {
-            property: "scale"
-            from: 0.8
-            to: 1
-            duration: host.hoverMotion ? 260 : 0
-            easing.type: Easing.OutBack
-          }
-        }
-      }
-      exit: Transition {
-        ParallelAnimation {
-          NumberAnimation {
-            property: "opacity"
-            from: 1
-            to: 0
-            duration: host.hoverMotion ? 110 : 0
-          }
-          NumberAnimation {
-            property: "scale"
-            from: 1
-            to: 0.9
-            duration: host.hoverMotion ? 110 : 0
-            easing.type: Easing.InQuad
-          }
-        }
-      }
+    DownloadChooser {
+      control: db
     }
   }
   // Always enabled: a HoverHandler whose enabled flips false UNDER the

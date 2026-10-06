@@ -456,6 +456,18 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
     host.threadpool = Pool()
     host._ownership = SimpleNamespace(ownership_of=lambda *args, **kwargs: None)
     host._catalog_offer_presence = WavesBridge._catalog_offer_presence.__get__(host)
+    for method in (
+        "providerDescriptor",
+        "chooserDefaults",
+        "_provider_meta",
+        "_chooser_provider_of",
+        "_chooser_default_tier_word",
+        "_chooser_default_audio",
+        "_chooser_tier_entries",
+        "_chooser_atmos_only",
+        "_psetting",
+    ):
+        setattr(host, method, getattr(WavesBridge, method).__get__(host))
     request = WavesBridge.requestCatalogOffers(host, "origin:1", "track", "LOSSLESS", "stereo")
     assert not a.calls and not b.calls
     host.threadpool.worker.run()
@@ -501,6 +513,20 @@ def test_dual_download_probes_separate_stereo_and_atmos_constraints():
     assert {fact["audio_type"] for fact in payload["probed"]} == {"stereo", "atmos"}
     assert "Stereo: Manifest" in payload["summary"] and "Atmos: Manifest" in payload["summary"]
     assert payload["selected"]["audio_type"] == "both"
+
+
+def test_engine_readiness_is_scoped_without_requiring_a_provider_pin():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    observed = []
+    for provider in (a, b):
+        provider.offer_readiness = lambda identity, ask, live, provider=provider: (
+            observed.append((provider.id, ask.engine_pin)) or live.for_operation(Capability.DOWNLOAD)
+        )
+    collect(bridge(a, b), ask=OfferConstraints(engine_pin="chosen-engine"))
+    assert observed == [("other", ""), ("origin", "chosen-engine")]
+    observed.clear()
+    collect(bridge(a, b), ask=OfferConstraints(provider_pin="other", engine_pin="chosen-engine"))
+    assert observed == [("other", "chosen-engine"), ("origin", "")]
 
 
 def test_ownership_sdk_numeric_defaults_are_not_published_as_delivered_evidence():

@@ -365,38 +365,53 @@ within its captured orders and constraints; a selected provider still permits
 Auto engine selection. Delivered quality includes `engine_id` and
 `runtime_id` for the actual route. Engine choices in Settings affect new jobs.
 
-The per-click Chooser's two answer-only slots are capability-driven (issue
-#235), so a provider is never named by QML: `chooserSupported(mediaId, kind)`
-says whether a control carries the split button at all (the covered kinds plus
-the row's provider metadata: a quality rung, an audio type, or a lyrics/art
-capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
-`provider` (the row's own, stated as a static chip whose mark comes from
-`providerDescriptor`), `tier`, `audioType` (clamped to `audioOptions`),
-`audioOptions`, `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt`
-and the lyrics/art quick-toggles, plus `engines` and the saved `engine` choice
-(`auto` or an engine ID). The optional `engine` in a Chooser click's toggles
-pins that request; an unknown pin fails without substitution unless the same
-click sets `allow_fallback: true`. That control explicitly relaxes the selected
-provider/engine dimensions within the captured fallback permissions; it does
-not change quality, audio type or required codecs. A Chooser selection pins its
-provider; plain Download retains origin unless its separately opted-in policy
-permits an eligible alternative. A provider whose metadata offers nothing
-per-click answers `chooserSupported` False, so no chevron renders.
+The per-click Chooser renders provider metadata and current offer evidence.
+`chooserSupported(mediaId, kind)` determines whether the split-button carries
+options. `chooserDefaults(mediaId, kind)` supplies effective provider defaults:
+`provider`, `tier`, `audioType`, `audioOptions`, `atmosOnly`, `tiers`, asset
+capability flags and toggles, plus `engines` and the saved `engine` choice.
+Shared QML branches on these facts rather than provider identity.
 
-`requestCatalogOffers(mediaId, kind, tier, audioType)` returns a request ID and
-starts bounded identity/metadata/manifest work. `catalogOffersLoaded(requestId,
-offers)` delivers neutral values after GUI-thread context validation;
-`cancelCatalogOffers(requestId)` revokes pending publication. Each offer states
-origin/fulfillment IDs, match confidence, capability/readiness/action, separate
-advertised/probed/selected/delivered facts, ownership/presence, timestamps and
-unknown/stale/checking/available/unavailable/failed evidence. Missing facts are
-null or empty, never a provider maximum. The current Chooser states origin
-availability separately from static quality requirements; provider switching is
-the next consumer. The worker coordinator also admits opt-in routing demand,
-without performing routing, media downloads or diagnostics.
-The audio choice starts at the effective shared/provider policy. Set as defaults
-writes that provider's audio override and existing quality/asset mirrors through
-the staged settings writer; the shared audio default remains independently editable.
+`requestCatalogOffers(mediaId, kind, tier, audioType[, selectedProvider, engine])`
+returns a request ID and starts bounded worker identity/metadata/manifest work.
+`catalogOffersLoaded(requestId, offers)` delivers neutral values after memory-only
+GUI-thread context validation; `cancelCatalogOffers(requestId)` revokes publication.
+Offers include origin/fulfillment IDs, confidence, readiness/action, separate
+advertised/probed/selected/delivered facts, ownership/presence, timestamps,
+explanations, the provider `descriptor` and its `options`. Missing facts stay
+unknown; Apple advertised traits do not establish exact rendition availability.
+An engine pin is applied only to its selected provider's evidence, even when
+the origin provider remains unpinned.
+
+`chooserSwitchOptions(requestId, providerId, explicitChoices)` proposes target
+`values`, retained `explicit` choices and `changes` requiring confirmation,
+with `provider`, `mediaId` and `options`; stale or unresolved alternatives return
+`error`. Explicit choices use the defaults' camelCase keys; `engineProvider`
+scopes an engine pin. Unpinned choices follow effective target defaults. The UI
+keeps its old state until incompatible changes are confirmed and revalidates the
+proposal. Unresolved rows explain their missing/conflicting identity rather than
+silently choosing candidates. `setupChooserProvider(providerId, action)` opens
+that provider's setup/sign-in or Settings, without implicitly enabling it.
+
+`downloadCatalogOffer(requestId, providerId, tier, audioType, toggles)` validates
+the current snapshot and returns whether dispatch was admitted. Known probe
+incompatibility refuses dispatch without changing the selected requirement;
+unknown exact rendition evidence remains unknown. Enqueue retains
+the origin ID independently of fulfillment identity, preserving legacy source
+keys. Toggles contain only explicit assets, optional `engine`, `provider_pin`
+(empty means unpinned), and independent `allow_provider_fallback` /
+`allow_engine_fallback` consent. They relax only their own pins within saved
+policy permissions, never delivery constraints. The compatibility
+`downloadWithChooser` slot still accepts `allow_fallback` for both dimensions.
+Changing defaults affects new requests; retry retains captured intent. Main
+Download keeps the saved policy/source-default path. Automatic fulfillment and
+recovery remain owned by #595; this UI does not add an automatic executor.
+Preview retains its own identity and provider-specific duration.
+
+The anchored Chooser stacks offers, expands only the selected offer, scrolls
+within window bounds and restores focus on close. Set as defaults writes the
+provider audio override and existing quality/assets through the staged writer;
+shared defaults remain independently editable.
 `artistDownloadSupported(artistId)` is the same kind of answer for the artist
 page's discography control: True only where the artist's provider
 declares `Capability.ARTIST_DOWNLOAD`, so an Apple artist page renders no

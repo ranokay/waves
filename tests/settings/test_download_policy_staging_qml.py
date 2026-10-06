@@ -39,7 +39,7 @@ def test_policy_edits_only_persist_after_save():
     run_scenario(Path(__file__), "--run-scenario", sandbox_prefix="waves-policy-staging-", timeout=90)
 
 
-def test_chooser_fallback_toggle_reaches_the_provider_and_resets_on_reopen():
+def test_chooser_fallback_consents_reach_the_provider_independently_and_reset_on_reopen():
     run_scenario(Path(__file__), "--run-chooser", sandbox_prefix="waves-policy-chooser-", timeout=90)
 
 
@@ -92,7 +92,11 @@ def _run_scenario():
 
 
 def _run_chooser():
+    from waves.desktop.providers.catalog_identity import CatalogSelection
+    from waves.desktop.providers.catalog_offers import OfferSnapshot
+    from waves.metadata.catalog_identity import CatalogResolution, MatchState
     from waves.providers.base import DownloadAdapter
+    from waves.providers.catalog_offers import CatalogOffer, OfferConstraints
 
     booted = _boot()
     if isinstance(booted, int):
@@ -110,23 +114,45 @@ def _run_chooser():
     seed_tidal_search(q, bridge, albums=[ROLLING_ALBUM_ROW])
     settle(500)
     button = "(" + (_FIND % 'o.mediaId === "al-roll" && typeof o.openChooser === "function"') + ")"
-    if not q(button + " !== null"):
-        return EXIT_REGRESSED
-    q(button + ".openChooser()")
-    settle(200)
-    check = "(" + (_FIND % 'o.objectName === "chooserAllowFallback"') + ")"
-    if not q(check + " !== null") or q(check + ".checked"):
-        return EXIT_REGRESSED
-    q(check + ".toggled()")
-    q(button + ".confirmChooser()")
-    if not requests or not requests[-1]["chooser_toggles"]["allow_fallback"]:
-        return EXIT_REGRESSED
-    q(button + ".openChooser()")
-    settle(200)
-    if q(check + ".checked"):
-        return EXIT_REGRESSED
-    q(button + ".confirmChooser()")
-    return EXIT_OK if not requests[-1]["chooser_toggles"]["allow_fallback"] else EXIT_REGRESSED
+    assert q(button + " !== null"), "seeded album has no Chooser"
+    provider_check = "(" + (_FIND % 'o.objectName === "chooserAllowProviderFallback"') + ")"
+    engine_check = "(" + (_FIND % 'o.objectName === "chooserAllowEngineFallback"') + ")"
+    for provider_allowed, engine_allowed in ((True, False), (False, True), (False, False)):
+        q(button + ".openChooser()")
+        settle(200)
+        assert q(provider_check + " !== null") and q(engine_check + " !== null")
+        assert not q(provider_check + ".picked") and not q(engine_check + ".picked"), "reopen retained consent"
+        if provider_allowed:
+            q(provider_check + ".clicked()")
+        if engine_allowed:
+            q(engine_check + ".clicked()")
+        # The seeded search has no catalog lookup. Admit its origin through
+        # the current guarded snapshot so this scenario owns consent dispatch.
+        bridge.threadpool.waitForDone()
+        settle(50)
+        snapshot = OfferSnapshot(
+            CatalogSelection("album", "al-roll"),
+            (
+                CatalogOffer(
+                    "tidal",
+                    "tidal:al-roll",
+                    "album",
+                    CatalogResolution("tidal:al-roll", MatchState.HIGH_CONFIDENCE),
+                    OfferConstraints(),
+                    readiness="ready",
+                ),
+            ),
+            (lambda: True,),
+        )
+        bridge._catalog_offer_snapshot = (bridge._catalog_offer_generation, snapshot)
+        previous_count = len(requests)
+        q(button + ".confirmChooser()")
+        assert len(requests) == previous_count + 1, "guarded confirmation did not reach the provider"
+        toggles = requests[-1]["chooser_toggles"]
+        assert toggles["allow_provider_fallback"] is provider_allowed
+        assert toggles["allow_engine_fallback"] is engine_allowed
+        assert "allow_fallback" not in toggles
+    return EXIT_OK
 
 
 if __name__ == "__main__":

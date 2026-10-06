@@ -62,8 +62,10 @@ _CHOOSER_ROWS_BODY = """
     // Walk the contentItem only: reading Accessible off the Popup object
     // itself is what Qt warns about, and the rows live in the content.
     var out = [];
+    var visited = [];
     function walk(o) {
-        if (!o) return;
+        if (!o || visited.indexOf(o) !== -1) return;
+        visited.push(o);
         var name = "" + (o.Accessible && o.Accessible.name ? o.Accessible.name : "");
         // Every tab-reachable row is collected, named or not: a row that loses
         // its name must fail the Python assertion, not vanish from the walk.
@@ -340,12 +342,13 @@ def test_primary_controls_carry_accessible_names_and_focus():
     )
 
 
-def test_the_handlers_behind_the_keyboard_paths_exist():
-    """The scenario proves the metadata and drives Tab; this pins the
-    activation handlers it does not drive. Every press action has its own
-    Return/Enter/Space handler, each accepts the event and ignores
-    auto-repeat, and the two extra keys (Down opens the chooser, Escape
-    clears the search box, Delete cancels a queued row) are present."""
+def test_wiring_primary_control_keyboard_handlers():
+    """Fence static adopters whose activation needs the composed QML render.
+
+    test_primary_controls_carry_accessible_names_and_focus drives those
+    controls in that render; test_chooser_offer_comparison_qml drives the
+    extracted Chooser. This fence checks the remaining adoption wiring.
+    """
     # The download control, the queue drawer, the shared action button, the
     # gate action, the paste-decode controller and the nav chrome live in
     # their own files, and the controls that adopted the shared tap area now
@@ -410,13 +413,6 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "Keys.onEscapePressed: function (event) {",
         "Accessible.checkable: true",
         "function cancel() {",
-        # The Chooser's own rows: each drawn option's key handlers
-        # call the one pick/toggle path the pointer and the reader use, and the
-        # confirm carries its press action like every other action.
-        "db.chooserPickTier(modelData.word)",
-        "db.chooserPickAudio(modelData)",
-        'db.chooserToggle("lyrics_ttml_file")',
-        "Accessible.onPressAction: function () { db.confirmChooser() }",
         # Every adopted tap area carries its spoken name, the toast's
         # following the face it draws.
         'accessibleLabel: "CANCEL"',
@@ -724,9 +720,35 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         b.chooserPickTier("LOSSLESS");
         b.chooserPickAudio("atmos");
         b.chooserToggle("cover_file");
-        b.confirmChooser();
         return true;
     """)
+    )
+    # The scenario's seeded search has no live catalog. Supply a current
+    # guarded identity snapshot at the real enqueue seam after the changed ask.
+    from waves.desktop.providers.catalog_identity import CatalogSelection
+    from waves.desktop.providers.catalog_offers import OfferSnapshot
+    from waves.metadata.catalog_identity import CatalogResolution, MatchState
+    from waves.providers.catalog_offers import CatalogOffer, OfferConstraints
+
+    snapshot = OfferSnapshot(
+        CatalogSelection("track", "t1"),
+        (
+            CatalogOffer(
+                "tidal",
+                "tidal:t1",
+                "track",
+                CatalogResolution("tidal:t1", MatchState.HIGH_CONFIDENCE),
+                OfferConstraints(),
+                readiness="ready",
+            ),
+        ),
+        (lambda: True,),
+    )
+    bridge._catalog_offer_snapshot = (bridge._catalog_offer_generation, snapshot)
+    q(
+        scene_js(
+            "var b = findFirst(root, function(o) { return o.chooserKind !== undefined && o.mediaId === 't1'; }); b.confirmChooser(); return true;"
+        )
     )
     settle(250)
     parked = getattr(bridge, "_chooser_refetch_pins", {}).get(("track", "t1"))

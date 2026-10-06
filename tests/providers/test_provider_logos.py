@@ -220,9 +220,8 @@ def _run_scenario() -> int:
         if not visible_mark(scope, asset):
             problems.append(f"the {name} search header shows no visible mark")
 
-    # 3. The Chooser's provider chip: one static mark, the row's own. A TIDAL
-    # row and an Apple row in turn prove the chip follows the row; each
-    # popover must show its own mark and never the other provider's.
+    # 3. The selected offer's mark follows its provider. Other offers now
+    # carry their own marks, so inspect only the selected row.
     if not bool(q("root.searchGroupFor('apple').isExpanded('tracks')")):
         q("root.searchGroupFor('apple').toggleExpanded('tracks')")
         settle(250)
@@ -238,9 +237,10 @@ def _run_scenario() -> int:
         if q(_js("    return " + _POPOVER_JS + ";")) is None:
             problems.append(f"the Chooser popover for {media_id} did not open")
         else:
-            if not visible_mark(_POPOVER_JS, own_asset):
+            selected_scope = f"findFirst({_POPOVER_JS}.contentItem, function(o) {{ return o.selected === true && o.descriptor !== undefined; }})"
+            if not visible_mark(selected_scope, own_asset):
                 problems.append(f"the Chooser for {media_id} shows no visible {own_name} mark")
-            if visible_mark(_POPOVER_JS, other_asset):
+            if visible_mark(selected_scope, other_asset):
                 problems.append(f"the Chooser for {media_id} shows another provider's mark ({other_name})")
         q(_chooser_js(_CLOSE_CHOOSER_BODY, media_id))
         settle(200)
