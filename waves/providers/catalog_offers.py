@@ -149,7 +149,9 @@ class CatalogOffer:
         ):
             return ()
         return tuple(
-            fact for fact in self.evidence.probed if satisfies(fact, self.selected, video=self.kind == "video")
+            fact
+            for fact in self.evidence.probed
+            if any(satisfies(fact, ask, video=self.kind == "video") for ask in requested_audio(self.selected))
         )
 
     def presentation(self, now: float | None = None) -> dict:
@@ -294,7 +296,14 @@ def choose_offer(
         fact = _best_facts(offer, now)
         if fact is None or offer.selected != origin.selected or offer.kind != origin.kind:
             continue
-        comparison = compare_quality(fact, best, video=offer.kind == "video")
+        comparisons = tuple(
+            compare_quality(left, right, video=offer.kind == "video") for left, right in zip(fact, best, strict=True)
+        )
+        # Every requested family must be comparable and non-degrading. A
+        # better stereo copy cannot conceal a worse/unknown Atmos copy.
+        if any(value is None or value < 0 for value in comparisons):
+            continue
+        comparison = 1 if any(value == 1 for value in comparisons) else 0
         if comparison == 1 or (
             comparison == 0
             and priority.get(offer.provider_id, len(priority)) < priority.get(chosen.provider_id, len(priority))
@@ -308,16 +317,20 @@ def choose_offer(
     return OfferChoice(chosen.media_id, chosen.provider_id, (reason,))
 
 
-def _best_facts(offer: CatalogOffer, now: float | None) -> DeliveryFacts | None:
+def _best_facts(offer: CatalogOffer, now: float | None) -> tuple[DeliveryFacts, ...] | None:
     facts = offer.comparable_facts(now)
-    if not facts:
-        return None
-    best = facts[0]
-    for fact in facts[1:]:
-        comparison = compare_quality(fact, best, video=offer.kind == "video")
-        if comparison is None:
-            # Different families/profiles cannot form one automatic maximum.
+    best_families = []
+    for ask in requested_audio(offer.selected):
+        family = tuple(fact for fact in facts if satisfies(fact, ask, video=offer.kind == "video"))
+        if not family:
             return None
-        if comparison > 0:
-            best = fact
-    return best
+        best = family[0]
+        for fact in family[1:]:
+            comparison = compare_quality(fact, best, video=offer.kind == "video")
+            if comparison is None:
+                # Different profiles cannot form one automatic maximum.
+                return None
+            if comparison > 0:
+                best = fact
+        best_families.append(best)
+    return tuple(best_families)

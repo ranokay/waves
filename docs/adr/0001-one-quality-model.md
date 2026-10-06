@@ -57,7 +57,9 @@ bounded rendition probe, so exact availability stays unknown. Collection and
 video availability also stays unknown without item rendition evidence. These
 contracts do not qualify engines, route downloads or authorize replacement.
 Dual-download probes stereo and Atmos separately, retaining the selected stereo
-resolution requirement. Best available probes the highest rung within the
+resolution requirement. Comparison requires known, comparable facts for both
+families: neither may degrade, and provider priority breaks only proven ties.
+Best available probes the highest rung within the
 requested family. Ownership rows without numeric-fact provenance contribute
 presence and codec/tier, with delivered sample rate and bit depth unknown.
 Queued publication uses memory-only context stamps; live readiness stays on

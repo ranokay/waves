@@ -90,6 +90,26 @@ def test_quality_improvement_and_explicit_provider_tie_order():
     )
 
 
+def test_dual_ranking_requires_comparable_non_degrading_facts_for_both_families():
+    ask = OfferConstraints(tier=QualityTier.LOSSLESS, audio_type="both")
+    atmos = DeliveryFacts(tier=QualityTier.HIGH, audio_type="atmos", codec="eac3", profile="joc", bitrate=768000)
+
+    def dual(pid, stereo, surround):
+        candidate = offer(pid, stereo, ask=ask)
+        return replace(candidate, evidence=replace(candidate.evidence, probed=(stereo, surround)))
+
+    origin = dual("origin", lossless(16, 44100), atmos)
+    better = dual("other", lossless(), atmos)
+    assert choose_offer((origin, better), origin_id="origin:1").provider_id == "other"
+    for surround in (replace(atmos, bitrate=640000), replace(atmos, bitrate=None)):
+        candidate = dual("other", lossless(), surround)
+        assert choose_offer((origin, candidate), origin_id="origin:1").provider_id == "origin"
+    equal = dual("other", lossless(16, 44100), atmos)
+    assert choose_offer((origin, equal), origin_id="origin:1", provider_priority=("other",)).provider_id == "other"
+    partial = replace(better, evidence=replace(better.evidence, probed=(lossless(),)))
+    assert choose_offer((origin, partial), origin_id="origin:1").provider_id == "origin"
+
+
 @pytest.mark.parametrize(
     "state",
     [
