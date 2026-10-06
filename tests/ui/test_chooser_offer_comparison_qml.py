@@ -181,7 +181,13 @@ def scenario():
     assert read("return b.chooserTier;") == "HIGH"
     assert read("return b.chooserNotice.length > 0;")
     read("b.closeChooser(); return true;")
-    # Library changes replace in-flight evidence without resetting user choices.
+    verify_library_scan_refresh(bridge, providers[0], read, settle)
+    print("Chooser switches, confirmation, many offers, long names, keyboard and bounds passed")
+    return 0
+
+
+def verify_library_scan_refresh(bridge, provider, read, settle):
+    # Partial publications coalesce until the scan finishes, preserving choices.
     for field in ("_library_gen", "_library_stamp"):
         bridge.threadpool.waitForDone()
         started, released = Event(), Event()
@@ -190,27 +196,60 @@ def scenario():
             started.set()
             assert released.wait(5)
 
-        providers[0].probe_hook = hold_probe
+        provider.probe_hook = hold_probe
         read("b.openChooser(); b.chooserPickTier('HIGH'); return true;")
         assert started.wait(3)
         request_id = read("return b.chooserOfferRequest;")
         assert read("return b.chooserEvidenceText;") == "Checking item availability…"
-        setattr(bridge, field, getattr(bridge, field) + 1)
-        providers[0].probe_hook = lambda: None
+        bridge._library_index_building = True
+        bridge.libraryScanStatusChanged.emit()
+        assert read("return b.chooserOfferRequest;") == request_id
+        assert read("return b.chooserEvidenceText;") != "Checking item availability…"
+        provider.probe_hook = lambda: None
         try:
-            bridge.libraryPresenceChanged.emit()
-            assert read("return b.chooserOfferRequest;") > request_id
+            for _ in range(4):
+                setattr(bridge, field, getattr(bridge, field) + 1)
+                bridge.libraryPresenceChanged.emit()
+                assert read("return b.chooserOfferRequest;") == request_id
+                assert read("return b.chooserEvidenceText;") != "Checking item availability…"
+                assert read("return b.chooserOffers.every(function(o){return o.library_present === null;});")
         finally:
             released.set()
         bridge.threadpool.waitForDone()
+        settle(3100)
+        assert read("return b.chooserOfferRequest;") == request_id
+        bridge._library_index_building = False
+        bridge.libraryScanStatusChanged.emit()
+        settle(3100)
+        bridge.threadpool.waitForDone()
         settle(100)
+        assert read("return b.chooserOfferRequest;") == request_id + 1
         assert read("return b.chooserOpen;")
         assert read("return b.chooserTier;") == "HIGH"
         assert read("return b.chooserEvidenceText;") != "Checking item availability…"
         assert read("return b.chooserEvidenceExpiry > 0;")
         read("b.closeChooser(); return true;")
-    print("Chooser switches, confirmation, many offers, long names, keyboard and bounds passed")
-    return 0
+    # Closing and reopening cancels a pending Library refresh from the old popup.
+    read("b.openChooser(); return true;")
+    bridge.threadpool.waitForDone()
+    settle(100)
+    bridge._library_stamp += 1
+    bridge.libraryPresenceChanged.emit()
+    read("b.closeChooser(); b.openChooser(); return true;")
+    request_id = read("return b.chooserOfferRequest;")
+    bridge.threadpool.waitForDone()
+    settle(3100)
+    assert read("return b.chooserOfferRequest;") == request_id
+    # An explicit quality choice replaces the deferred request once.
+    bridge._library_stamp += 1
+    bridge.libraryPresenceChanged.emit()
+    read("b.chooserPickTier('HIGH'); return true;")
+    request_id = read("return b.chooserOfferRequest;")
+    bridge.threadpool.waitForDone()
+    settle(3100)
+    assert read("return b.chooserOfferRequest;") == request_id
+    assert read("return b.chooserTier;") == "HIGH"
+    read("b.closeChooser(); return true;")
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:

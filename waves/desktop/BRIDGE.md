@@ -383,11 +383,17 @@ unknown; Apple advertised traits do not establish exact rendition availability.
 Track Library presence comes from the scanned match index independently of
 provider Ownership. An unbuilt index or unproven candidate stays unknown;
 an owned download outside the Library does not establish Library presence.
+An index miss stays unknown during a scan, on an unreconciled partial index,
+or after a failed/unavailable scan. A complete trusted or reconciled index can
+establish absence; matching entries can still establish presence independently.
 Separate catalog recording and release-version qualifiers participate in the
 Library match; a base Edition does not prove its Deluxe or remastered Edition.
-Library folder-generation or index-publication changes invalidate the request
-through memory-only guards. An open Chooser requests replacement evidence on
-`libraryPresenceChanged`, retaining its provider and requirement choices.
+Library folder, index-publication or scan-completeness changes invalidate the request
+through memory-only guards. An open Chooser marks Library evidence stale on
+`libraryPresenceChanged` or `libraryScanStatusChanged`, retains its choices, and coalesces replacement work
+through a three-second quiet window. It waits for an active Library scan to
+finish before restarting provider probes. Closing or an explicit offer refresh
+cancels the pending Library refresh.
 An engine pin is applied only to its selected provider's evidence, even when
 the origin provider remains unpinned.
 

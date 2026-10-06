@@ -10368,6 +10368,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         )
         library_generation = getattr(self, "_library_gen", None)
         library_stamp = getattr(self, "_library_stamp", None)
+        library_state = (
+            getattr(self, "_library_index_building", False),
+            getattr(self, "_library_scan_partial", False),
+            getattr(self, "_library_listing_reconciled", False),
+            getattr(self, "_library_scan_status", "ok"),
+        )
 
         def current() -> bool:
             return (
@@ -10375,6 +10381,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 and self.settings.data.download_policies.effective(policy_provider) == policy
                 and getattr(self, "_library_gen", None) == library_generation
                 and getattr(self, "_library_stamp", None) == library_stamp
+                and (
+                    getattr(self, "_library_index_building", False),
+                    getattr(self, "_library_scan_partial", False),
+                    getattr(self, "_library_listing_reconciled", False),
+                    getattr(self, "_library_scan_status", "ok"),
+                )
+                == library_state
             )
 
         def work() -> None:
@@ -10428,7 +10441,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if verdict.get("sure"):
                 library_present = True
             elif not verdict.get("present"):
-                library_present = False
+                complete = (
+                    not getattr(self, "_library_index_building", False)
+                    and (
+                        not getattr(self, "_library_scan_partial", False)
+                        or getattr(self, "_library_listing_reconciled", False)
+                    )
+                    and getattr(self, "_library_scan_status", "ok") == "ok"
+                )
+                if complete:
+                    library_present = False
         rec = self._ownership.ownership_of(
             identity.media_id, audio_type=audio_type if identity.kind == "track" else None
         )

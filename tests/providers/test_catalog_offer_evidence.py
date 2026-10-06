@@ -433,7 +433,18 @@ def test_broken_readiness_and_context_do_not_abort_healthy_provider():
     assert broken.calls == 0
 
 
-@pytest.mark.parametrize("change", ["provider", "library", "library_publication"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "provider",
+        "library",
+        "library_publication",
+        "library_scanning",
+        "library_partial",
+        "library_reconciled",
+        "library_status",
+    ],
+)
 def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication(change):
     from waves.desktop.backend import WavesBridge
 
@@ -484,8 +495,16 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication(ch
         host._provider_contexts.revoke(b.id)
     elif change == "library":
         host._library_gen += 1
-    else:
+    elif change == "library_publication":
         host._library_stamp += 1
+    else:
+        field, value = {
+            "library_scanning": ("_library_index_building", True),
+            "library_partial": ("_library_scan_partial", True),
+            "library_reconciled": ("_library_listing_reconciled", True),
+            "library_status": ("_library_scan_status", "error"),
+        }[change]
+        setattr(host, field, value)
     WavesBridge._on_catalog_offers(host, event)
     loaded_id, payload = host.catalogOffersLoaded.events[0]
     assert loaded_id == request and payload[1]["evidence_state"] == "stale"
@@ -685,3 +704,39 @@ def test_catalog_library_presence_preserves_separate_recording_version(version, 
     presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
     assert presence.owned is False
     assert presence.library_present is same_recording
+
+
+@pytest.mark.parametrize(
+    "state,miss",
+    [
+        ({}, False),
+        ({"_library_index_building": True}, None),
+        ({"_library_scan_partial": True}, None),
+        ({"_library_scan_partial": True, "_library_listing_reconciled": True}, False),
+        ({"_library_scan_status": "unset"}, None),
+        ({"_library_scan_status": "error"}, None),
+        ({"_library_scan_status": "missing"}, None),
+        ({"_library_scan_status": "unreadable"}, None),
+    ],
+)
+@pytest.mark.parametrize("found", [False, True])
+def test_catalog_library_misses_require_a_complete_trusted_index(state, miss, found):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    index = {}
+    if found:
+        index[track_key("Recording", "Artist")] = [
+            {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180}
+        ]
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index=index,
+        **state,
+    )
+    identity = CatalogIdentity(
+        "tidal:1", "track", title="Recording", artist="Artist", release_title="Release", release_date="2020-01-01"
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is (True if found else miss)
