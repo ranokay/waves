@@ -124,7 +124,7 @@ def _run_scenario() -> int:
     # date Text. Compare window-mapped edges.
     report = q(
         "(function(){"
-        " var grid = root.searchGroupFor('tidal').videoGridItem;"
+        " var grid = searchResultsView.videoGridItem;"
         " for (var i = 0; i < grid.children.length; i++) {"
         "  var cell = grid.children[i];"
         "  if (!cell || !cell.item) continue;"
@@ -169,7 +169,7 @@ def _run_scenario() -> int:
         "  return JSON.stringify({bad:bad, words:words(o)}); }"
         " var kids = o.children || []; for(var i=0;i<kids.length;i++) { var hit = walk(kids[i]); if(hit !== null) return hit; }"
         " if(o.item) return walk(o.item); return null; }"
-        " return walk(root.searchGroupFor('tidal').videoGridItem); })()"
+        " return walk(searchResultsView.videoGridItem); })()"
     )
     credit_report = json.loads(credit_focus) if credit_focus is not None else None
     if credit_report is None or credit_report["bad"] or credit_report["words"].startswith(", "):

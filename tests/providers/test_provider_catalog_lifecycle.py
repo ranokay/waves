@@ -323,8 +323,9 @@ def test_public_search_and_link_use_owned_rows_and_drop_revoked_gui_result(bridg
     getattr(bridge, method)(*args)
     bridge.threadpool.run_all()
     _drain_gui(bridge)
-    assert bridge.searchResults.emits[0]["groups"][0]["provider"] == "paper"
-    assert bridge.searchResults.emits[0]["groups"][0]["albums"][0]["id"] == "paper:album-1"
+    payload = bridge.searchResults.emits[-1]
+    assert [source["provider"] for source in payload["sources"]] == ["paper"]
+    assert payload["sections"]["albums"][0]["id"] == "paper:album-1"
     assert bridge.providers["tidal"].calls == []
 
 
@@ -336,7 +337,7 @@ def test_mixed_search_gui_delivery_keeps_live_provider_and_never_caches_partial_
     bridge.threadpool.run_all()
     bridge._provider_contexts.revoke("paper")
     _drain_gui(bridge)
-    assert [group["provider"] for group in bridge.searchResults.emits[0]["groups"]] == ["linen"]
+    assert [source["provider"] for source in bridge.searchResults.emits[-1]["sources"]] == ["linen"]
     assert bridge._search_cache == {}
     assert bridge._status == "1 results" and not bridge._busy
     assert bridge.providers["tidal"].calls == []

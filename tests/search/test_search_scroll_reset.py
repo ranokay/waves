@@ -7,19 +7,18 @@ The search results page is one Flickable (``results``) with every section
 position. Rendering a fresh payload without touching that position leaves the
 new results at the OLD offset: search something, scroll down to the albums,
 search again, and it looks as if each section "remembered" where you were.
-The horizontal ARTISTS strip keeps its own sideways offset the same way.
 
 HOW THIS STAYS FIXED
 --------------------
-``onSearchResults`` resets ``results.contentY`` (and ``artistStrip.contentX``)
-before filling the models. Scroll position is still deliberately KEPT in the
-two places that should keep it: leaving and re-entering the Search tab
-(``searchSaved`` in ``openSearch``), and Back navigation. Only a genuinely new
-payload rendering is a fresh page.
+``onSearchResults`` resets ``results.contentY`` before filling the models.
+Scroll position is still deliberately KEPT in the two places that should keep
+it: leaving and re-entering the Search tab (``searchSaved`` in
+``openSearch``), and Back navigation. Only a genuinely new payload rendering
+is a fresh page.
 
-This scenario boots the REAL Main.qml, renders one search, scrolls down (and
-the artist strip sideways), renders a second search exactly as the backend
-worker would, and asserts the page is back at the top.
+This scenario boots the REAL Main.qml, renders one search, scrolls down,
+renders a second search exactly as the backend worker would, and asserts the
+page is back at the top.
 
 Runs in a SUBPROCESS for the same reason as test_browse_back_scroll: building
 the bridge installs process-global handlers that must not leak into the rest
@@ -58,8 +57,8 @@ def test_new_search_resets_results_scroll():
 
 
 def _results(tag: str) -> dict:
-    """A payload tall enough to scroll at the fixed window size: full role
-    dicts so the ListModels define every role the delegates read."""
+    """A unified payload tall enough to scroll at the fixed window size: full
+    role dicts so the ListModels define every role the delegates read."""
 
     def artist(i: int) -> dict:
         return {"id": f"{tag}ar{i}", "name": f"{tag} Artist {i}", "art": "", "roles": "", "popularity": 60 - i}
@@ -110,22 +109,15 @@ def _results(tag: str) -> dict:
     def playlist(i: int) -> dict:
         return {"id": f"{tag}pl{i}", "title": f"{tag} Playlist {i}", "art": "", "tracks": 12, "creator": "Someone"}
 
-    return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "artists": [artist(i) for i in range(12)],
-                "albums": [album(i) for i in range(10)],
-                "tracks": [track(i) for i in range(10)],
-                "videos": [video(i) for i in range(6)],
-                "playlists": [playlist(i) for i in range(5)],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    from search.fakes import qml_search_payload
+
+    return qml_search_payload(
+        artists=[artist(i) for i in range(12)],
+        albums=[album(i) for i in range(10)],
+        tracks=[track(i) for i in range(10)],
+        videos=[video(i) for i in range(6)],
+        playlists=[playlist(i) for i in range(5)],
+    )
 
 
 def _run_scenario() -> int:
@@ -206,11 +198,10 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
     settle()
 
-    # 2. Scroll down the page and sideways along the artist strip.
+    # 2. Scroll down the page.
     q("results.contentY = 300")
-    q("root.searchGroupFor('tidal').scrollStrip(150)")
-    if q("results.contentY") < 250 or q("root.searchGroupFor('tidal').stripX") < 100:
-        print("could not establish non-top offsets", file=sys.stderr)
+    if q("results.contentY") < 250:
+        print("could not establish a non-top offset", file=sys.stderr)
         return EXIT_PRECONDITION
 
     # 3. A second search renders: the page must be back at the very top.
@@ -222,9 +213,8 @@ def _run_scenario() -> int:
     settle()
 
     y = q("results.contentY")
-    x = q("root.searchGroupFor('tidal').stripX")
-    reset = y <= 2 and x <= 2
-    print(f"finalY={y:.0f} finalStripX={x:.0f} reset={reset}", flush=True)
+    reset = y <= 2
+    print(f"finalY={y:.0f} reset={reset}", flush=True)
     return EXIT_OK if reset else EXIT_REGRESSED
 
 

@@ -447,7 +447,7 @@ ApplicationWindow {
         var beforeSearch = (previous.operations || ({})).search || ({})
         var afterSearch = (readiness.operations || ({})).search || ({})
         if (beforeSearch.state === "ready" && afterSearch.state !== "ready")
-          root.clearSearchGroup(String(card.id))
+          waves.dropSearchSource(String(card.id))
       }
     }
     root.refreshMyMusicSources()
@@ -639,119 +639,137 @@ ApplicationWindow {
     // comes back on appUpdatePending.
     waves.resumePendingUpdate()
   }
-  // The search payload's provider groups, in provider order.
-  // The results page renders one SearchProviderGroup per entry, and every
-  // root read of the page (counts, empty states, the sort) goes through it.
-  property var searchGroups: []
-  // Rows a payload's groups hold (the pinned top included): one sum for the
-  // empty-state gate, the build veil's total and the page count.
-  function searchRowTotal(groups, type) {
-    var total = 0
-    for (var i = 0; i < (groups || []).length; ++i) {
-      var g = groups[i]
-      if (type && type !== "all")
-        total += (g[type] || []).length
-      else
-        total += (g.artists || []).length + (g.albums || []).length + (g.tracks || []).length + (g.videos || []).length + (g.playlists || []).length + (g.mixes || []).length + (g.top ? 1 : 0)
+  // The unified search payload: kind -> folded rows (each row's own
+  // ``sources`` live in the payload; the model helpers lift them into
+  // rowSourcesById, because a QML ListModel cannot hold a nested list), the
+  // first provider's pinned row, and one state per source. Every root read
+  // of the page (counts, empty states, the sort) goes through these.
+  property var searchSections: ({})
+  property var searchTop: null
+  property var searchSources: []
+  // The source filter chip: "all" (default) or one provider id. A row shows
+  // while the chip is All, or while one of the row's own sources matches.
+  property string searchSourceFilter: "all"
+  property var rowSourcesById: ({})
+  // Marks render only when more than one source is in the search: with one
+  // provider there is nothing to disambiguate and the page stays as shipped.
+  readonly property bool sourceMarksOn: root.searchSources.length > 1
+  // The source chip row's model: All first, then one entry per source with
+  // its descriptor's name and mark (the bridge answers both, no id prefix is
+  // parsed here).
+  readonly property var searchSourceChips: {
+    var out = [
+      {
+        provider: "all",
+        name: "All",
+        logo: "",
+        error: ""
+      }
+    ]
+    var sources = root.searchSources || []
+    for (var i = 0; i < sources.length; ++i) {
+      var descriptor = waves.providerDescriptor(String(sources[i].provider || ""))
+      out.push({
+        provider: String(sources[i].provider || ""),
+        name: descriptor ? String(descriptor.name || "") : "",
+        logo: descriptor ? String(descriptor.logo || "") : "",
+        error: String(sources[i].error || "")
+      })
     }
+    return out
+  }
+  function rowMatchesSource(row) {
+    if (root.searchSourceFilter === "all")
+      return true
+    var sources = row.sources || root.rowSourcesById[row.id] || []
+    for (var i = 0; i < sources.length; ++i)
+      if (String(sources[i].provider) === root.searchSourceFilter)
+        return true
+    return false
+  }
+  // The model copies no longer carry the nested sources list; this reads the
+  // lifted map for a delegate's own row.
+  function rowMatchesSourceById(id) {
+    if (root.searchSourceFilter === "all")
+      return true
+    var sources = root.rowSourcesById[id] || []
+    for (var i = 0; i < sources.length; ++i)
+      if (String(sources[i].provider) === root.searchSourceFilter)
+        return true
+    return false
+  }
+  // Rows a payload's sections hold: one sum for a filtered section, the
+  // empty-state gate, the build veil's total and the page count. The pinned
+  // top counts in the mixed All view, as it always did.
+  function searchRowTotal(sections, type) {
+    var total = 0
+    var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
+    for (var n = 0; n < names.length; ++n) {
+      if (type && type !== "all" && type !== names[n])
+        continue
+      var rows = (sections || ({}))[names[n]] || []
+      for (var i = 0; i < rows.length; ++i)
+        if (root.rowMatchesSource(rows[i]))
+          total += 1
+    }
+    if ((!type || type === "all") && root.searchTop !== null && root.rowMatchesSource(root.searchTop))
+      total += 1
     return total
   }
   // True once a search has populated any result model. Gates the filter chips
   // and the empty-state hint, so the chips materialize only after a search.
-  readonly property bool hasResults: root.searchRowTotal(root.searchGroups) > 0
-  readonly property int filteredResultCount: root.searchRowTotal(root.searchGroups, root.filterType)
-  // True only while a payload's groups are applied in place (a refresh):
-  // each group's data handler picks reconcile over rebuild from this.
+  readonly property bool hasResults: root.searchRowTotal(root.searchSections) > 0
+  readonly property int filteredResultCount: root.searchRowTotal(root.searchSections, root.filterType)
+  // True only while a payload's sections are applied in place (a refresh):
+  // the rows handler picks reconcile over rebuild from this.
   property bool searchRefreshMode: false
-  // The honest words when the last search's failure left them in its group
-  // (the payload's `error`), shown in that group's own head and in the
-  // empty line instead of a "0 results" that reads as an
-  // empty catalog.
-  readonly property string searchGroupError: {
-    var groups = root.searchGroups || []
-    for (var i = 0; i < groups.length; ++i) {
-      var words = String(groups[i].error || "")
-      if (words !== "")
-        return words
+  // The honest words from every failed source that the active source filter
+  // leaves in view, shown with a RETRY instead of a "0 results" that reads
+  // as an empty catalog.
+  readonly property string searchSourceError: {
+    var sources = root.searchSources || []
+    for (var i = 0; i < sources.length; ++i) {
+      if (String(sources[i].error || "") === "")
+        continue
+      var provider = String(sources[i].provider || "")
+      if (root.searchSourceFilter === "all" || root.searchSourceFilter === provider)
+        return String(sources[i].error)
     }
     return ""
   }
-  function searchGroupList() {
-    var out = []
-    for (var i = 0; i < searchGroupRep.count; ++i) {
-      var g = searchGroupRep.itemAt(i)
-      if (g)
-        out.push(g)
-    }
-    return out
-  }
-  function searchGroupFor(provider) {
-    var want = String(provider || "")
-    var groups = root.searchGroupList()
-    for (var i = 0; i < groups.length; ++i)
-      if (String(groups[i].providerId) === want)
-        return groups[i]
-    return null
-  }
-  // Apply one search payload's groups. A fresh search replaces
-  // the list -- the empty step forces every group to rebuild, so the build
+  // Apply one search payload. A fresh search replaces the sections -- the
+  // empty step forces the unified results view to rebuild, so the build
   // veil's Loaders tick exactly once per row -- while a refresh swaps the
-  // rows of the groups the page already shows: it can neither mount nor
-  // unmount a provider, so a refresh after a switch-off cannot put a ghost
-  // head back.
-  function applySearchGroups(groups, refresh) {
-    groups = groups || []
+  // rows in place: a progressive provider answering, or the bridge's
+  // stale-then-revalidate correction.
+  function applySearchResults(payload, refresh) {
+    var sources = payload.sources || []
+    var top = payload.top !== undefined ? payload.top : null
     root.searchRefreshMode = refresh === true
-    if (refresh === true) {
-      var next = []
-      for (var i = 0; i < root.searchGroups.length; ++i) {
-        var current = root.searchGroups[i]
-        var match = null
-        for (var j = 0; j < groups.length; ++j)
-          if (String(groups[j].provider) === String(current.provider)) {
-            match = groups[j]
-            break
-          }
-        next.push(match || current)
-      }
-      root.searchGroups = next
+    if (refresh !== true) {
+      // The empty step is load-bearing: assigning the same-shaped object
+      // back would not force the results view's rebuild from scratch.
+      root.searchSections = {}
+      root.searchSections = payload.sections || ({})
     } else {
-      root.searchGroups = []
-      root.searchGroups = groups
+      root.searchSections = payload.sections || ({})
     }
+    root.searchSources = sources
+    root.searchTop = top
     root.searchRefreshMode = false
   }
-  // The provider's group leaves the page (Apple switching off): its rows and
-  // its fold go with it, and a later refresh cannot put it back.
-  function clearSearchGroup(provider) {
-    var next = []
-    for (var i = 0; i < root.searchGroups.length; ++i)
-      if (String(root.searchGroups[i].provider) !== String(provider))
-        next.push(root.searchGroups[i])
-    if (next.length === root.searchGroups.length)
-      return
-    root.searchGroups = next
-    if (searchBuilding)
-      _searchBuildStart(0)
-  }
-  // The pinned rows read their clickable artists from the same side map the
+  // The pinned row reads its clickable artists from the same side map the
   // section rows fill (appendMedia); the top item lands there too, but
   // register it here so a pin never depends on it. A fresh object each call:
   // the same reference assigned back notifies nothing, and every binding on
   // artistsById would keep its previous credits.
   function registerPinnedArtists() {
-    var list = root.searchGroupList()
-    var next = null
-    for (var i = 0; i < list.length; ++i) {
-      var top = list[i].topRow
-      if (top && top.artists) {
-        if (next === null)
-          next = Object.assign({}, root.artistsById)
-        next[top.id] = top.artists
-      }
-    }
-    if (next !== null)
+    var top = root.searchTop
+    if (top && top.artists) {
+      var next = Object.assign({}, root.artistsById)
+      next[top.id] = top.artists
       root.artistsById = next
+    }
   }
   // Refreshed with provider surfaces on neutral and legacy state signals;
   // signed-out catalog access is the provider's readiness decision.
@@ -771,8 +789,8 @@ ApplicationWindow {
     waves.search(q)
   }
   // ---- Search results / artist page / My Music ------------------------
-  // Result rows live in the provider groups' own ListModels (declared in
-  // SearchProviderGroup) and are replaced wholesale on each search; these
+  // Result rows live in the unified results view's own ListModels (declared
+  // in SearchResults.qml) and are replaced wholesale on each search; these
   // hold the sort order and per-page state around them.
   // Both halves of the sort control are pref-backed (search_sort by name,
   // search_sort_asc), so a launch opens on the order last chosen.
@@ -987,19 +1005,13 @@ ApplicationWindow {
   }
   // The search page (mixed All view) shows each section's first 5 results with
   // a SHOW ALL beneath it, so the page reads as a quick overview instead of a
-  // wall. The fold and the SHOW ALL state live on each provider's own group
-  // (SearchProviderGroup): pref-backed per provider and section,
-  // so they survive a restart. A specific
-  // section filter always shows everything (no cap).
+  // wall. The SHOW ALL state lives on the unified results view
+  // (SearchResults): pref-backed per section, so it survives a restart. A
+  // specific section filter always shows everything (no cap).
   //
-  // ARTISTS is the exception to the layout, and the layout is the provider's
-  // own: a strip provider (TIDAL) collapses to a horizontal scroll strip of
-  // fixed-size cards (a resize reveals more cards, never re-fits the ones on
-  // screen, which is what keeps it smooth) and SHOW ALL expands it to a fill
-  // grid; a flow provider (Apple, and the neutral default) caps its grid at
-  // the mixed view's five. The group gates the two layouts' Loaders so
-  // exactly one set is active, which keeps the build veil's
-  // one-tick-per-artist accounting balanced.
+  // ARTISTS renders as one flow grid on the unified surface: high-confidence
+  // equivalence has no automatic identity rule for names, so artist rows
+  // never fold and each card names its own source.
   // A per-section cap for the mixed All view: the section's first 5 rows, or
   // everything once it is expanded; a specific section filter is never capped.
   // `cap` is the mixed view's default row count, 5 unless the section
@@ -3085,11 +3097,14 @@ ApplicationWindow {
     resetExpandedAlbums({})
     playlistTrackCache = ({})
     expandedPlaylists = ({})
-    _searchBuildStart(0)
     // a mid-build blank must drop the veil with the cards
-    // Every provider's group goes with the blank page: the rows, the
-    // folds, the errors and the pinned tops all live on those instances.
-    searchGroups = []
+    // The unified page goes with the blank search: the sections, the
+    // sources and the pinned top all belong to the query being cleared.
+    _searchBuildStart(0)
+    searchSections = {}
+    searchSources = []
+    searchTop = null
+    searchNoResultsFor = ""
     searchField.forceActiveFocus()
   }
   // The pane's shelves are the source groups': opening My Music
@@ -4898,9 +4913,9 @@ ApplicationWindow {
     }
   }
 
-  // Models. The search result rows live on each provider's own group
-  // instance (SearchProviderGroup), one model set per group, so no set is
-  // needed here; the rest are the queue, the artist page and
+  // Models. The search result rows live on the unified results view
+  // (SearchResults), one model set for the whole page; the rest are the
+  // queue, the artist page and
   // the library's sections.
   ListModel {
     id: queueModel
@@ -4939,9 +4954,28 @@ ApplicationWindow {
   }
 
   function appendPlain(model, arr) {
+    var sources = null
     if (arr)
-      for (var i = 0; i < arr.length; ++i)
-        model.append(arr[i])
+      for (var i = 0; i < arr.length; ++i) {
+        var it = arr[i]
+        if (!it.sources) {
+          model.append(it)
+          continue
+        }
+        // Unified search rows carry their own sources: ListModel does not
+        // handle nested arrays, so they are lifted into a side map by id
+        // (the same convention as artists).
+        if (sources === null)
+          sources = Object.assign({}, root.rowSourcesById)
+        sources[it.id] = it.sources
+        var copy = {}
+        for (var k in it)
+          if (k !== "sources")
+            copy[k] = it[k]
+        model.append(copy)
+      }
+    if (sources !== null)
+      root.rowSourcesById = sources
   }
   function fill(model, arr) {
     model.clear()
@@ -5463,22 +5497,32 @@ ApplicationWindow {
     queueModelMove(i, 0)
   }
 
-  // Media rows carry an `artists` array (clickable per-artist); ListModel
-  // doesn't handle nested arrays well, so stash them in a side map by id.
+  // Media rows carry an `artists` array (clickable per-artist); unified
+  // search rows additionally carry a `sources` array (their provider marks).
+  // ListModel doesn't handle nested arrays well, so stash both in side maps
+  // by id.
   function appendMedia(model, arr) {
     var m = root.artistsById
+    var sources = null
     if (arr)
       for (var i = 0; i < arr.length; ++i) {
         var it = arr[i]
         if (it.artists)
           m[it.id] = it.artists
+        if (it.sources) {
+          if (sources === null)
+            sources = Object.assign({}, root.rowSourcesById)
+          sources[it.id] = it.sources
+        }
         var copy = {}
         for (var k in it)
-          if (k !== "artists")
+          if (k !== "artists" && k !== "sources")
             copy[k] = it[k]
         model.append(copy)
       }
     root.artistsById = m
+    if (sources !== null)
+      root.rowSourcesById = sources
   }
   function fillMedia(model, arr) {
     model.clear()
@@ -5509,14 +5553,20 @@ ApplicationWindow {
   function reconcileById(model, arr, media) {
     arr = arr || []
     var m = media ? Object.assign({}, root.artistsById) : null
+    var sources = null
     for (var j = 0; j < arr.length; ++j) {
       var it = arr[j]
       var row = {}
       for (var k in it)
-        if (!media || k !== "artists")
+        if (k !== "sources" && (!media || k !== "artists"))
           row[k] = it[k]
       if (media && it.artists)
         m[it.id] = it.artists
+      if (it.sources) {
+        if (sources === null)
+          sources = Object.assign({}, root.rowSourcesById)
+        sources[it.id] = it.sources
+      }
       var at = -1
       for (var i = j; i < model.count; ++i)
         if (model.get(i).id === it.id) {
@@ -5541,6 +5591,8 @@ ApplicationWindow {
     // is nothing else to make a stale credit list correct itself.
     if (media)
       root.artistsById = m
+    if (sources !== null)
+      root.rowSourcesById = sources
   }
 
   // My Music sort options (per category). Options adapt to the category;
@@ -5622,11 +5674,12 @@ ApplicationWindow {
     return next
   }
   // An account/enable change retires only that provider's retained rows and
-  // history. Other providers keep their models, folds and saved pages.
+  // history. Other sources keep their rows and saved pages; the bridge
+  // refolds the displayed page without the provider.
   function clearProviderViews(providerId) {
     if (root.mediaProvider(root.previewId) === providerId)
       root.stopPreview()
-    root.clearSearchGroup(providerId)
+    waves.dropSearchSource(providerId)
     var group = root.libGroupFor(providerId)
     if (group)
       group.clearPanes()
@@ -6027,27 +6080,24 @@ ApplicationWindow {
       tileArtFlush.restart()
     }
     function onSearchResults(r) {
-      // A search resolves over seconds (paginated fan-out), so its
-      // results can land AFTER the user clicked an artist or album name
-      // and left. Rendering then would yank them to the search page as
-      // if their click had searched. Accept only when nothing was
-      // navigated since the search was issued (_searchSeq snapshot) and
-      // no other surface took over meanwhile (card clicks flip these
-      // flags without a markNav; artistOpen is deliberately allowed,
-      // the search tier is live on artist pages). Dropped payloads stay
-      // in the backend's search cache, re-searching is instant.
+      // A search resolves over seconds (paginated fan-out, each provider
+      // published as it answers), so its results can land AFTER the user
+      // clicked an artist or album name and left. Rendering then would yank
+      // them to the search page as if their click had searched. Accept only
+      // when nothing was navigated since the search was issued (_searchSeq
+      // snapshot) and no other surface took over meanwhile (card clicks flip
+      // these flags without a markNav; artistOpen is deliberately allowed,
+      // the search tier is live on artist pages). Dropped payloads stay in
+      // the backend's search cache, re-searching is instant.
       if (root._searchSeq !== root._navSeq || root.browseOpen || root.libraryOpen || root.settingsOpen)
         return
-      var groups = r.groups || []
       if (r.refresh) {
-        // The wire's answer to a search painted from an older result
-        // (the backend's stale-then-revalidate, see search()): the
-        // rows swap in place and nothing else moves. No history
-        // entry, no scroll reset, no build veil, no cache reset: the
-        // page the user is already reading just becomes current.
-        // Only the groups already on the page refresh; a refresh can
-        // neither mount nor unmount a provider.
-        root.applySearchGroups(groups, true)
+        // The wire's answer to a page the user is already reading (a
+        // progressive provider landing, the stale-then-revalidate
+        // correction, or the bridge refolding after a provider left): the
+        // rows reconcile in place and nothing else moves. No history entry,
+        // no scroll reset, no build veil, no cache reset.
+        root.applySearchResults(r, true)
         root.registerPinnedArtists()
         root.searchNoResultsFor = ""
         return
@@ -6056,17 +6106,10 @@ ApplicationWindow {
       root.markRender("search render")
       root.searchSaved = null
       // a fresh search replaces the saved drill-in
-      // A fresh search always lands at the top. The page keeps one
-      // scroll position for every section (the sections stack inside
-      // the one results Flickable), so without this the new results
-      // render at the old search's scroll offset. The artist strips
-      // keep their own horizontal offsets, reset alongside.
+      // A fresh search always lands at the top: the sections stack inside
+      // the one results Flickable, so without this the new results render
+      // at the old search's scroll offset.
       results.contentY = 0
-      for (var stripIndex = 0; stripIndex < searchGroupRep.count; ++stripIndex) {
-        var stripGroup = searchGroupRep.itemAt(stripIndex)
-        if (stripGroup)
-          stripGroup.resetStripOffset()
-      }
       root.navOrigin = "search"
       root.browseOpen = false
       root.artistOpen = false
@@ -6078,26 +6121,26 @@ ApplicationWindow {
       // would show yesterday's tracks with no refetch to correct them.
       root.playlistTrackCache = ({})
       root.expandedPlaylists = ({})
-      // The type chip is a filter on ONE set of results, not a mode: left
+      // The chips are filters on ONE set of results, not a mode: left
       // sticky, an earlier Albums click hid the ARTISTS section of every
       // later search (an artist could not be found at all). Reset here,
       // where new results land, so it also covers cache-served searches.
       root.filterType = "all"
+      root.searchSourceFilter = "all"
       // A section a user expanded stays expanded on the next search (the
-      // groups' pref-backed flags), so nothing is reset here.
-      // Arm the build veil BEFORE the groups fill: the Loaders each
-      // delegate creates read searchBuilding for their asynchronous
-      // flag, and the ready ticks only ever arrive on later frames,
-      // never mid-fill. One tick per row the page will instantiate.
-      root._searchBuildStart(root.searchRowTotal(groups))
-      root.applySearchGroups(groups, false)
+      // pref-backed flags), so nothing is reset here.
+      // Arm the build veil BEFORE the sections fill: the Loaders each
+      // delegate creates read searchBuilding for their asynchronous flag,
+      // and the ready ticks only ever arrive on later frames, never
+      // mid-fill. One tick per row the page will instantiate.
+      root._searchBuildStart(root.searchRowTotal(r.sections || ({})))
+      root.applySearchResults(r, false)
       root.registerPinnedArtists()
-      var any = root.searchRowTotal(groups);
-      // A failed fetch is not an empty catalog:
-      // while the group's honest words stand, the page never also says
-      // "no results for X", which reads as a search that came back
-      // empty.
-      root.searchNoResultsFor = any === 0 && root.searchGroupError === "" ? root.lastSearchQuery : ""
+      var any = root.searchRowTotal(r.sections || ({}));
+      // A failed source is not an empty catalog: while its honest words
+      // stand, the page never also says "no results for X", which reads as
+      // a search that came back empty.
+      root.searchNoResultsFor = any === 0 && root.searchSourceError === "" ? root.lastSearchQuery : ""
     }
     // Assign a NEW object so the `var` property fires a change notification
     // (mutating + reassigning the same reference does not update bindings).
@@ -6113,10 +6156,8 @@ ApplicationWindow {
     }
     function onArtistMetaLoaded(id, pop) {
       // TIDAL enriches its search artists in the background; the row
-      // lives on that provider's group.
-      var list = root.searchGroupList()
-      for (var i = 0; i < list.length; ++i)
-        list[i].updateArtistPop(id, pop)
+      // lives in the unified results view's artists model.
+      searchResultsView.updateArtistPop(id, pop)
     }
     function onArtistLoadFailed(id) {
       // A Back-restore whose artist reload failed (offline, API error):
@@ -7185,6 +7226,90 @@ ApplicationWindow {
               }
             }
           }
+          // Source chips: All plus one per enabled capable provider that
+          // took part in this search. Shown once two sources are in play; a
+          // single-provider install has nothing to filter.
+          RowLayout {
+            objectName: "searchSourceChips"
+            Layout.fillWidth: true
+            Layout.leftMargin: 22
+            Layout.topMargin: 8
+            spacing: 8
+            visible: root.searchAvailable && root.sourceMarksOn && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && !root.browseOpen
+            Repeater {
+              model: root.searchSourceChips
+              delegate: Rectangle {
+                id: sourceChip
+                required property var modelData
+                readonly property bool on: root.searchSourceFilter === String(modelData.provider)
+                readonly property bool failed: String(modelData.error || "") !== ""
+                radius: 8
+                implicitHeight: 30
+                implicitWidth: sourceChipRow.implicitWidth + 26
+                color: on ? root.accentCont : "transparent"
+                border.color: failed ? root.gold : on ? root.accentDim : root.border1
+                Row {
+                  id: sourceChipRow
+                  anchors.centerIn: parent
+                  spacing: 7
+                  ProviderLogo {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: String(sourceChip.modelData.provider || "") !== "all"
+                    logo: String(sourceChip.modelData.logo || "")
+                    width: 16
+                    height: 12
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: true
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: String(sourceChip.modelData.name || "")
+                    color: sourceChip.failed ? root.gold : sourceChip.on ? root.accent : root.textLo
+                    font.pixelSize: 13
+                  }
+                }
+                TapAction {
+                  objectName: "searchSourceChip"
+                  anchors.fill: parent
+                  accessibleLabel: "Show " + String(sourceChip.modelData.name || "") + " results"
+                  role: Accessible.RadioButton
+                  checkable: true
+                  checked: sourceChip.on
+                  focusRadius: 8
+                  onTriggered: root.searchSourceFilter = String(sourceChip.modelData.provider)
+                }
+              }
+            }
+          }
+          // A failed source's own honest words, with the page's RETRY: a
+          // failed fetch is not an empty catalog.
+          RowLayout {
+            objectName: "searchSourceErrorRow"
+            Layout.fillWidth: true
+            Layout.leftMargin: 22
+            Layout.rightMargin: 22
+            Layout.topMargin: 4
+            spacing: 8
+            visible: root.searchSourceError !== "" && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && !root.browseOpen
+            Text {
+              objectName: "searchSourceError"
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              text: root.searchSourceError
+              color: root.gold
+              font.pixelSize: 12
+            }
+            ActionButton {
+              objectName: "searchSourceRetry"
+              compact: true
+              label: "RETRY"
+              onClicked: if (root.lastSearchQuery !== "")
+                root.submitSearch(root.lastSearchQuery)
+            }
+          }
           // bottom padding so the controls don't kiss the panel hairline
           Item {
             Layout.fillWidth: true
@@ -8014,7 +8139,7 @@ ApplicationWindow {
           // FAILED says that instead: the group's own message
           // carries the words, so the page
           // never invites a first search it already ran.
-          text: root.hasResults ? "No " + root.filterType + " among " + root.searchRowTotal(root.searchGroups) + " results" : root.searchNoResultsFor !== "" ? "No results for “" + root.searchNoResultsFor + "”" : (root.searchGroupError !== "" ? "Search failed" : "Search for an artist, album, or track to begin")
+          text: root.hasResults ? "No " + root.filterType + " among " + root.searchRowTotal(root.searchSections) + " results" : root.searchNoResultsFor !== "" ? "No results for “" + root.searchNoResultsFor + "”" : (root.searchSourceError !== "" ? "Search failed" : "Search for an artist, album, or track to begin")
           color: root.textLo
           font.pixelSize: 22
           topPadding: 96
@@ -8070,18 +8195,16 @@ ApplicationWindow {
           onScreen: root.onScreen
         }
 
-        // One group per provider that answered, in the payload's own
-        // order (TIDAL, Apple, then any later provider): the shared
-        // renderer reads each group's descriptor and rows, so a third
-        // SEARCH provider lands here with no edit to this page.
-        Repeater {
-          id: searchGroupRep
-          model: root.searchGroups.length
-          delegate: SearchProviderGroup {
-            host: root
-            resultsPane: results
-            groupData: root.searchGroups[index] || ({})
-          }
+        // The unified results surface: one section per media kind over the
+        // folded rows of every provider that answered, source marks on the
+        // rows, and a third SEARCH provider lands here with no edit to this
+        // page.
+        SearchResults {
+          id: searchResultsView
+          host: root
+          resultsPane: results
+          sections: root.searchSections
+          topRow: root.searchTop
         }
       }
     }
@@ -9356,10 +9479,10 @@ ApplicationWindow {
   }
 
   // Sort the original full search data (not a lossy model copy) so every
-  // field, including the full date, survives re-sorting. One control, every
-  // provider group: each group re-orders its own albums, tracks and videos.
-  // Artists, playlists and mixes carry no date to sort by and stay in the
-  // API's relevance order.
+  // field, including the full date, survives re-sorting. One control, one
+  // unified page: the results view re-orders its own albums, tracks and
+  // videos. Artists, playlists and mixes carry no date to sort by and stay
+  // in the API's relevance order.
   //
   // Relevance is the provider's own order, kept as it arrived. Reading it as
   // "popularity, most first" would bury exactly the result a specific
@@ -9372,12 +9495,10 @@ ApplicationWindow {
   // reconcileById). Every other caller, the sort control included, is a
   // deliberate full rebuild of a small model.
   function applySort(inPlace) {
-    var list = root.searchGroupList()
-    for (var i = 0; i < list.length; ++i)
-      list[i].applySort(inPlace === true)
+    searchResultsView.applySort(inPlace === true)
   }
-  // The order one group's raw rows land in, the sort control's rule in one
-  // place (see applySort above).
+  // The order the raw rows land in, the sort control's rule in one place
+  // (see applySort above).
   function searchOrdered(raw, hasPop) {
     var dir = root.sortAsc ? 1 : -1
     var arr = (raw || []).slice()

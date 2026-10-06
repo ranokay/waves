@@ -172,6 +172,7 @@ from waves.providers.apple.files import (
 )
 from waves.providers.apple.runner import AppleJobHooks, _JobOptions
 from waves.providers.base import validate_row
+from waves.providers.search_merge import fold_search_groups
 from waves.providers.tidal_client import quality_audio_highest
 from waves.providers.tidal_folders import FOLDER_PATH_TOKEN, apply_folder_path
 
@@ -2812,9 +2813,6 @@ class _SearchEvent:
     tokens: dict[str, ProviderToken]
     payload: dict | None
     status: str
-    cache_key: str = ""
-    cacheable: bool = False
-    paint: bool = True
     failures: tuple[ApplicationEvent, ...] = ()
 
 
@@ -3713,29 +3711,18 @@ def _search_sections(provider) -> tuple[str, ...]:
 
 
 def _search_group(provider_id: str, provider, rows: dict | None = None, *, top=None, error_text: str = "") -> dict:
-    """One provider's group in a search payload.
+    """One provider's group in the search cache payload.
 
-    The group carries its provider id (the page resolves the head's name,
-    mark and sizes through ``providerDescriptor``), the result
-    buckets the provider's search answers, its own best match, and its own
-    failure words. One builder for a fetched catalog, a resolved link and the
-    empty failure group, so no reader -- the QML's payload handler, the seam
-    tests -- ever branches on which of them produced the payload. A bucket
-    the provider does not answer is absent, which is what tells the page the
-    active type filter can never host that group's head.
+    The group carries its provider id, the result buckets the provider's
+    search answers, its own best match, and its own failure words. One
+    builder for a fetched catalog, a resolved link and the empty failure
+    group, so no reader ever branches on which of them produced the payload.
+    A bucket the provider does not answer is absent. The page folds these
+    groups into its unified sections (see ``search_merge``), which is what
+    turns each bucket into rows labelled with their source.
     """
     source = rows or {}
-    group = {
-        "provider": str(provider_id),
-        # The artists section's shape is the provider's own (TIDAL's
-        # horizontal strip vs the wrapping grid); the page renders whichever
-        # it finds, with no provider branch.
-        "artists_layout": str(getattr(provider, "search_artists_layout", "") or "flow"),
-        # A lone group's head is the provider's own call too: TIDAL-only pages
-        # stay headless, every other provider's head says whose rows these
-        # are.
-        "head_when_alone": bool(getattr(provider, "search_head_when_alone", True)),
-    }
+    group = {"provider": str(provider_id)}
     for section in _search_sections(provider):
         group[section] = list(source.get(section) or [])
     group["top"] = top
@@ -3775,22 +3762,41 @@ def _failed_search_payload(provider_id: str, provider, error_text: str) -> dict:
     return {"groups": [_search_group(provider_id, provider, error_text=error_text)]}
 
 
-def _search_same(a: dict, b: dict) -> bool:
-    """Whether two search payloads show the same page.
+def _search_group_rows(group: dict) -> int:
+    """The rows one provider group answers, the pin excluded (the same count
+    ``_search_total`` takes from the folded page)."""
+    return sum(len(group.get(section) or []) for section in _SEARCH_SECTIONS)
 
-    The popularity meters are filled in after the rows land (and written
-    back into the cached payload), so a page whose only difference is a
-    meter is the same page: swapping it in would rebuild every row for
-    nothing."""
+
+def _carry_artist_meters(previous: dict, current: dict) -> None:
+    """Copy the meters a page already shows into a fresh provider answer.
+
+    The fresh answer's rows carry -1 until enrichment; the stale page's meters
+    are real, so applying them here keeps the swapped-in rows from blanking
+    the cards' meters for the moment between the paint and the enrichment."""
+    known = {str(card.get("id", "")): card.get("popularity") for card in previous.get("artists") or []}
+    if not known:
+        return
+    for card in current.get("artists") or []:
+        value = known.get(str(card.get("id", "")), -1)
+        card["popularity"] = -1 if value is None else int(value)
+
+
+def _search_same(a: dict, b: dict) -> bool:
+    """Whether two unified search payloads show the same page.
+
+    The popularity meters are filled in after the rows land (and written back
+    into the cached groups), so a page whose only difference is a meter is the
+    same page: swapping it in would rebuild every row for nothing."""
 
     def strip(payload: dict) -> dict:
         out = {key: value for key, value in payload.items() if key != "refresh"}
-        groups = []
-        for group in out.get("groups") or []:
-            stripped = dict(group)
-            stripped["artists"] = [{**card, "popularity": -1} for card in group.get("artists") or []]
-            groups.append(stripped)
-        out["groups"] = groups
+        sections = {}
+        for name, rows in (out.get("sections") or {}).items():
+            if name == "artists":
+                rows = [{**card, "popularity": -1} if isinstance(card, dict) else card for card in rows]
+            sections[name] = rows
+        out["sections"] = sections
         return out
 
     return strip(a) == strip(b)
@@ -4529,6 +4535,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # the only staleness is an external edit, tolerated like the page caches).
         self._fav_ids: dict[str, tuple[float, set]] = {}
         self._search_gen = 0  # bumped per search / open-link to drop stale results
+        # The unified search page is one fold over per-provider groups. These
+        # hold the search on screen: `_search_display` (the groups the page
+        # folds, stale-seeded then replaced in place by each fresh answer),
+        # `_search_fresh` (fresh answers only, what the short cache stores),
+        # `_search_errors` (each source's own words), `_search_tokens` and
+        # `_search_painted`/`_search_last` (the generation guard and the
+        # identical-repaint skip). `_search_live` is the start-to-settle window.
+        self._search_display: dict[str, dict] = {}
+        self._search_fresh: dict[str, dict] = {}
+        self._search_errors: dict[str, str] = {}
+        self._search_tokens: dict[str, ProviderToken] = {}
+        self._search_last: dict | None = None
+        self._search_key = ""
+        self._search_painted = False
+        self._search_live = False
         # Recent search payloads by lowercased needle: an identical re-search
         # within the (short) TTL paints instantly with no network. Short on
         # purpose, search is the front door to anything newly released.
@@ -5535,6 +5556,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "popularity": _popularity(album),
                 "explicit": bool(getattr(album, "explicit", False)),
                 "added": _date_added(album),
+                # Release identifier, when TIDAL names one: cross-provider
+                # search folding evidence, never a display fact.
+                "upc": str(getattr(album, "upc", "") or ""),
             },
         )
 
@@ -5563,6 +5587,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "popularity": _popularity(track),
                 "explicit": bool(getattr(track, "explicit", False)),
                 "added": _date_added(track),
+                # Recording identifier, when TIDAL names one: cross-provider
+                # search folding evidence, never a display fact.
+                "isrc": str(getattr(track, "isrc", "") or ""),
             },
         )
 
@@ -5859,6 +5886,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         current = {pid for pid, token in event.tokens.items() if provider_contexts(self).current(token)}
         if not current:
             return
+        # A revoked provider resolves nothing further: it leaves the pending
+        # set so the sources that still exist can settle.
+        self._active_search_providers &= current
         failed = {failure.references.provider_id for failure in event.failures}
         for failure in event.failures:
             if failure.references.provider_id in current:
@@ -5871,22 +5901,33 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 )
         for pid in current - failed:
             resolve_events(self, EventDomain.SEARCH, provider_id=pid)
-        payload = event.payload
-        if payload is not None:
-            payload = {**payload, "groups": [group for group in payload["groups"] if group["provider"] in current]}
-            if event.paint:
-                self.searchResults.emit(payload)
-            if event.cacheable and len(current) == len(event.tokens):
-                self._remember_search(
-                    event.cache_key, {key: value for key, value in payload.items() if key != "refresh"}
-                )
-                self.threadpool.start(Worker(self._save_page_cache))
-        status = event.status
-        if len(current) != len(event.tokens) and payload is not None:
-            status = f"{self._search_total(payload)} results"
-        self._active_search_providers = set()
-        self._set_status(status)
-        self._set_busy(False)
+        # A source revoked after its group arrived leaves the page with it.
+        for pid in [pid for pid in self._search_display if pid not in current]:
+            self._search_display.pop(pid, None)
+            self._search_fresh.pop(pid, None)
+            self._search_errors.pop(pid, None)
+        if event.payload is not None:
+            for group in event.payload.get("groups") or []:
+                pid = str(group.get("provider") or "")
+                if pid not in current:
+                    continue
+                error_text = str(group.get("error") or "")
+                if error_text:
+                    # The provider's own words; its stale rows, if any, stay.
+                    self._search_errors[pid] = error_text
+                else:
+                    self._absorb_search_group(pid, group)
+                self._active_search_providers.discard(pid)
+            self._paint_search_display(event.tokens, current)
+        if event.status:
+            # Link resolution and friends carry their own final words.
+            self._search_live = False
+            self._active_search_providers = set()
+            self._set_status(event.status)
+            self._set_busy(False)
+            return
+        if not self._active_search_providers:
+            self._settle_search()
 
     def _warm_provider_login_cache(self, token: ProviderToken) -> None:
         """Restore on the login worker under the already-captured account epoch."""
@@ -5921,7 +5962,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         active = getattr(self, "_active_search_providers", set())
         active.discard(provider_id)
         if not active:
+            # Partial stubs that predate search state simply have nothing to
+            # settle.
+            settle = getattr(self, "_settle_search", None)
+            if settle is not None:
+                settle()
             self._search_gen += 1
+            self._active_search_providers = set()
             self._set_busy(False)
         self.providerStateChanged.emit(provider_id)
         return stopped
@@ -6277,6 +6324,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         gen = self._search_gen
         tokens = {provider.id: provider_contexts(self).capture(provider.id)}
         self._active_search_providers = {provider.id}
+        self._search_tokens = tokens
+        self._search_key = ""
+        self._search_display = {}
+        self._search_fresh = {}
+        self._search_errors = {}
+        self._search_last = None
+        self._search_painted = False
+        self._search_live = True
         self._set_busy(True)
         self._set_status("Opening link…")
         url = url if "://" in url else f"https://{url}"
@@ -6370,6 +6425,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         gen = self._search_gen
         tokens = {pid: provider_contexts(self).capture(pid) for pid in enabled_ids}
         self._active_search_providers = set(enabled_ids)
+        # The enabled set is part of the key: an Apple-only page and a
+        # TIDAL+Apple page carry different rows and must not serve each other.
+        cache_key = f"{'+'.join(enabled_ids)}:{needle.lower()}"
+        self._search_tokens = tokens
+        self._search_key = cache_key
+        self._search_display = {}
+        self._search_fresh = {}
+        self._search_errors = {}
+        self._search_last = None
+        self._search_painted = False
+        self._search_live = True
         if not hasattr(self, "_catalog_thread"):
             self._catalog_thread = local()
         scopes = {
@@ -6378,37 +6444,43 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             else contextlib.nullcontext()
             for pid in enabled_ids
         }
-        # The enabled set is part of the key: an Apple-only page and a
-        # TIDAL+Apple page carry different rows and must not serve each other.
-        cache_key = f"{'+'.join(enabled_ids)}:{needle.lower()}"
         hit = self._search_cache.get(cache_key)
         if hit is not None and time.monotonic() - hit[0] < self._SEARCH_TTL:
-            # An identical recent search: repaint from the cached payload, no
+            # An identical recent search: repaint from the cached groups, no
             # network. The live objects behind the rows may have been dropped
             # meanwhile; the download/open slots re-resolve by id on a miss.
-            payload = hit[1]
-            self.searchResults.emit(payload)
-            total = self._search_total(payload)
+            self._search_display = {group["provider"]: group for group in hit[1]["groups"]}
+            self._search_fresh = dict(self._search_display)
+            self._search_live = False
+            self._active_search_providers = set()
+            display = self._search_display_payload(tokens, set(enabled_ids))
+            self._search_last = display
+            self._search_painted = True
+            self.searchResults.emit(display)
+            total = self._search_total(display)
             self._set_status(f"{total} results")
             self._set_busy(False)
-            self._active_search_providers = set()
             devlog.event("search", "served from cache", n=total)
-            for artist_id in self._search_artist_meters(payload):
+            for artist_id in self._search_artist_meters(display):
                 pop = self._pop_cached(artist_id)
                 if pop >= 0:
                     self.artistMetaLoaded.emit(artist_id, pop)
             return
         # An older answer to the same search (this session's past its
         # window, or the last launch's, restored from disk) paints at once;
-        # the network answer then swaps rows in place only if something
-        # moved. The front door stays fresh, it just no longer stays blank
-        # while the wire is read.
+        # each provider's fresh answer then swaps its rows in place only if
+        # something moved. The front door stays fresh, it just no longer
+        # stays blank while the wire is read.
         stale = hit[1] if hit is not None else None
         devlog.event("search", f"begin needle={redaction.content(needle)}" + (" (stale shown)" if stale else ""))
         if stale is None:
             self._set_busy(True)
         else:
-            self.searchResults.emit(stale)
+            self._search_display = {group["provider"]: group for group in stale["groups"]}
+            display = self._search_display_payload(tokens, set(enabled_ids))
+            self._search_last = display
+            self._search_painted = True
+            self.searchResults.emit(display)
         self._set_status(f"Searching “{needle}”…")
         with self._objs_lock:
             for bucket in self._objs.values():
@@ -6417,246 +6489,265 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         bucket.pop(key, None)
 
         def work() -> None:
-            t0 = devlog.clock()
             provider_ids = [
                 provider_id
                 for provider_id, provider in self.providers.items()
                 if provider_id in enabled_ids and Capability.SEARCH in provider.capabilities
             ]
 
-            def fetch(provider_id: str) -> tuple[str, dict, Exception | None]:
+            def tidal_group(fetched: dict) -> tuple[dict, list]:
+                """TIDAL's reply still carries engine objects; the bridge builds
+                its rows (its legacy renderer). A malformed row raises and the
+                caller answers it as this search's visible failure."""
+                if not hasattr(self, "_catalog_thread"):
+                    self._catalog_thread = local()
+                self._catalog_thread.token = tokens.get(CTX_TIDAL)
                 try:
-                    if not provider_contexts(self).current(tokens[provider_id]):
-                        return provider_id, {}, None
-                    with scopes[provider_id]:
-                        return provider_id, self.providers[provider_id].search(needle), None
-                except Exception as exc:
-                    logger.exception("%s search failed", getattr(self.providers[provider_id], "name", provider_id))
-                    return provider_id, {}, exc
+                    artists = []
+                    artist_objs = []
+                    # 60, not a dozen: the fetch already pages the API at 300, and a
+                    # small artist sharing a famous name ranks far below the cut, so
+                    # a tight cap made them unfindable (SHOW ALL swaps Repeaters
+                    # over this same model, it cannot reveal what was never kept).
+                    # Mirrors the album cap; popularity enrichment below is bounded,
+                    # memoized for a day, and runs after the results are on screen.
+                    for artist in (fetched.get("artists") or [])[:60]:
+                        key = str(getattr(artist, "id", id(artist)))
+                        artist_objs.append((key, artist))
+                        artists.append(self._fav_artist_dict(artist))
+                    albums = [self._album_dict(a) for a in self._dedup_albums((fetched.get("albums") or [])[:60])[:40]]
+                    tracks = [self._track_dict(t) for t in self._dedup_tracks((fetched.get("tracks") or [])[:80])[:60]]
+                    videos = [self._video_dict(v) for v in self._dedup_videos((fetched.get("videos") or [])[:30])]
+                    playlists = [self._playlist_dict(p) for p in (fetched.get("playlists") or [])[:20]]
+                    mixes = [self._mix_dict(m) for m in (fetched.get("mixes") or [])[:20]]
+                    top = self._top_hit_dict(fetched.get("top_hit"))
+                finally:
+                    self._catalog_thread.token = None
+                rows = {
+                    "artists": artists,
+                    "albums": albums,
+                    "tracks": tracks,
+                    "videos": videos,
+                    "playlists": playlists,
+                    "mixes": mixes,
+                }
+                return _search_group(CTX_TIDAL, self.providers[CTX_TIDAL], rows, top=top), artist_objs
 
-            if len(provider_ids) == 1:
-                provider_id = provider_ids[0]
-                _, fetched, error = fetch(provider_id)
-                provider_results = {provider_id: fetched}
-                provider_errors = {provider_id: error} if error is not None else {}
-            else:
-                # TIDAL and Apple have independent clients. Waiting for one
-                # before starting the other doubles the search's network time.
-                with ThreadPoolExecutor(max_workers=len(provider_ids)) as pool:
-                    fetched = [
-                        future.result() for future in as_completed(pool.submit(fetch, pid) for pid in provider_ids)
-                    ]
-                provider_results = {provider_id: result for provider_id, result, _error in fetched}
-                provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
-            failures = tuple(
-                provider_failure_event(self.providers[pid], EventDomain.SEARCH, error, provider_id=pid)
-                for pid, error in provider_errors.items()
-            )
-            safe_errors = {event.references.provider_id: event.summary for event in failures}
-            # The first failing provider's words, in registry order: the
-            # status line's honest answer when a fetch failed (see below).
-            status_error = next(
-                (provider_errors[provider_id] for provider_id in provider_ids if provider_id in provider_errors),
-                None,
-            )
-            if provider_errors and len(provider_errors) == len(provider_ids):
-                # Every enabled fetch raised: a failure, never "0 results",
-                # which reads as a search that found nothing. A LONE enabled
-                # provider's failure answers its own group: no second
-                # provider can carry the words, so a blank
-                # page would be the only answer. With two providers failing,
-                # one provider's words would blame it for both failures, so
-                # the plain failure stays. A page that already holds rows is
-                # never blanked by a failure, and nothing here is cached.
-                stale_rows = bool(stale is not None and self._search_total(stale))
-                if len(provider_ids) == 1 and not stale_rows:
-                    only = provider_ids[0]
+            def run(provider_id: str) -> None:
+                """Fetch one provider, build its group and publish it at once:
+                the page paints each source as it answers, not the slowest."""
+                provider = self.providers[provider_id]
+                t0 = devlog.clock()
+                if not provider_contexts(self).current(tokens[provider_id]):
+                    return
+                try:
+                    with scopes[provider_id]:
+                        fetched = provider.search(needle)
+                except Exception as exc:
+                    logger.exception("%s search failed", getattr(provider, "name", provider_id))
+                    failure = provider_failure_event(provider, EventDomain.SEARCH, exc, provider_id=provider_id)
+                    if gen != self._search_gen:
+                        return  # a newer search superseded this one; drop its failure
                     _publish_search(
                         self,
                         _SearchEvent(
                             gen,
                             tokens,
-                            _failed_search_payload(only, self.providers[only], safe_errors[only]),
-                            safe_errors[only],
-                            failures=failures,
+                            _failed_search_payload(provider_id, provider, failure.summary),
+                            "",
+                            failures=(failure,),
                         ),
                     )
-                else:
-                    _publish_search(self, _SearchEvent(gen, tokens, None, "Search failed", failures=failures))
-                return
-            # TIDAL's reply is the one that still carries engine objects; the
-            # bridge builds its rows (its legacy renderer). Every other
-            # provider hands over the row dicts themselves, so its group is
-            # built straight from the reply.
-            results = provider_results.get(CTX_TIDAL, {})
-            if CTX_TIDAL in tokens and not provider_contexts(self).current(tokens[CTX_TIDAL]):
-                results = {}
-            api = devlog.clock() - t0
-            if gen != self._search_gen:
-                return  # a newer search superseded this one; drop its results
-
-            try:
-                if not hasattr(self, "_catalog_thread"):
-                    self._catalog_thread = local()
-                self._catalog_thread.token = tokens.get(CTX_TIDAL)
-                artists = []
-                artist_objs = []
-                # 60, not a dozen: the fetch already pages the API at 300, and a
-                # small artist sharing a famous name ranks far below the cut, so
-                # a tight cap made them unfindable (SHOW ALL swaps Repeaters
-                # over this same model, it cannot reveal what was never kept).
-                # Mirrors the album cap; popularity enrichment below is bounded,
-                # memoized for a day, and runs after the results are on screen.
-                for artist in (results.get("artists") or [])[:60]:
-                    key = str(getattr(artist, "id", id(artist)))
-                    artist_objs.append((key, artist))
-                    artists.append(self._fav_artist_dict(artist))
-
-                albums = [self._album_dict(a) for a in self._dedup_albums((results.get("albums") or [])[:60])[:40]]
-                tracks = [self._track_dict(t) for t in self._dedup_tracks((results.get("tracks") or [])[:80])[:60]]
-
-                videos = [self._video_dict(v) for v in self._dedup_videos((results.get("videos") or [])[:30])]
-                playlists = [self._playlist_dict(p) for p in (results.get("playlists") or [])[:20]]
-                mixes = [self._mix_dict(m) for m in (results.get("mixes") or [])[:20]]
-                top = self._top_hit_dict(results.get("top_hit"))
-            except Exception as exc:
-                # One malformed result row must fail THIS search visibly, not
-                # latch the spinner: Worker.run only logs an escape and nothing
-                # else clears busy or the "Searching" status.
-                logger.exception("Search results build failed")
-                failure = application_event(
-                    EventDomain.SEARCH,
-                    "Search results could not be displayed. Try again or open the logs.",
-                    key="result-build",
-                    exception=exc,
-                    references=EventReferences(provider_id=CTX_TIDAL),
-                    actions=(EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
-                )
-                _publish_search(self, _SearchEvent(gen, tokens, None, "Search failed", failures=(*failures, failure)))
-                return
-            finally:
-                self._catalog_thread.token = None
-
-            if gen != self._search_gen:
-                return  # superseded while building the payload
-            tidal_rows = {
-                "artists": artists,
-                "albums": albums,
-                "tracks": tracks,
-                "videos": videos,
-                "playlists": playlists,
-                "mixes": mixes,
-            }
-            # One group per provider that answered, in registry order (TIDAL
-            # then Apple, then any later provider): the page's Repeater renders
-            # exactly this list, head and sections included. A failed fetch
-            # says so in its OWN group: the provider's honest words ride the
-            # payload, so the group head can show them instead of painting
-            # "0 results" as if the catalog were empty.
-            groups = []
-            for provider_id in provider_ids:
-                provider = self.providers[provider_id]
-                if provider_id == CTX_TIDAL:
-                    group_rows: dict = tidal_rows
-                    group_top = top
-                else:
-                    group_rows = provider_results.get(provider_id, {}) or {}
-                    group_top = group_rows.get("top")
-                groups.append(
-                    _search_group(
-                        provider_id,
-                        provider,
-                        group_rows,
-                        top=group_top,
-                        error_text=safe_errors.get(provider_id, ""),
-                    )
-                )
-            payload = {"groups": groups}
-            total = self._search_total(payload)
-            if stale is not None and total:
-                # The meters the stale page already shows: carried over so
-                # the swap does not blank them while the enrichment below
-                # fills them again.
-                known = self._search_artist_meters(stale)
-                for card in artists:
-                    card["popularity"] = known.get(card["id"], -1)
-            published = None
-            if stale is not None and _search_same(payload, stale):
-                devlog.event("search", "stale page confirmed, nothing moved")
-            elif stale is not None and total:
-                published = {**payload, "refresh": True}
-            elif stale is None:
-                published = payload
-            # A failed or empty answer never replaces a page that had rows.
-            # Provider failures retry instead of entering the short search cache.
-            _publish_search(
-                self,
-                _SearchEvent(
-                    gen,
-                    tokens,
-                    published or payload,
-                    next(iter(safe_errors.values())) if status_error is not None else f"{total} results",
-                    cache_key,
-                    bool(total and not provider_errors),
-                    published is not None,
-                    failures=failures,
-                ),
-            )
-            elapsed = devlog.clock() - t0
-            devlog.done(
-                "search",
-                f"needle={redaction.content(needle)}",
-                elapsed,
-                api=devlog.fmt_dur(api),
-                proc=devlog.fmt_dur(elapsed - api),
-                n=total,
-                artists=len(artists),
-                albums=len(albums),
-                tracks=len(tracks),
-            )
-
-            # Enrich artist cards with popularity after results are on screen,
-            # so the search itself stays fast. Each artist needs its own HTTP
-            # request, so fan them out (bounded) rather than walking the list
-            # serially, the badges then fill near-together instead of one slow
-            # round-trip at a time. Emits are thread-safe (queued to the GUI).
-            card_of = {c["id"]: c for c in artists}
-
-            def _enrich(item) -> None:
-                token = tokens[CTX_TIDAL]
-                if not provider_contexts(self).current(token):
                     return
-                previous = getattr(self._catalog_thread, "token", None)
-                self._catalog_thread.token = token
+                if gen != self._search_gen:
+                    return  # a newer search superseded this one; drop its results
+                artist_objs: list = []
                 try:
-                    key, artist = item
-                    with POP_GAUGE.working():
-                        pop = self._pop_cached(key)
-                        if pop < 0:
-                            pop = _artist_popularity(artist)
-                            if pop >= 0:
-                                self._remember_capped(
-                                    self._artist_pop_cache, key, (time.monotonic(), pop), self._ARTIST_POP_MAX
-                                )
-                    if pop >= 0:
-                        _cache_commit(self, lambda: card_of[key].__setitem__("popularity", pop))
+                    if provider_id == CTX_TIDAL:
+                        group, artist_objs = tidal_group(fetched or {})
+                    else:
+                        # Every other provider hands over the row dicts
+                        # themselves, so its group is built straight from the
+                        # reply.
+                        group = _search_group(provider_id, provider, fetched or {}, top=(fetched or {}).get("top"))
+                except Exception as exc:
+                    # One malformed result row must fail THIS search visibly,
+                    # not latch the spinner: Worker.run only logs an escape and
+                    # nothing else clears busy or the "Searching" status.
+                    logger.exception("Search results build failed")
+                    failure = application_event(
+                        EventDomain.SEARCH,
+                        "Search results could not be displayed. Try again or open the logs.",
+                        key="result-build",
+                        exception=exc,
+                        references=EventReferences(provider_id=provider_id),
+                        actions=(EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
+                    )
+                    _publish_search(self, _SearchEvent(gen, tokens, None, "Search failed", failures=(failure,)))
+                    return
+                # A success says nothing; the page counts it. A failure's own
+                # words ride its own group (the branch above).
+                _publish_search(self, _SearchEvent(gen, tokens, {"groups": [group]}, ""))
+                devlog.done(
+                    "search",
+                    f"needle={redaction.content(needle)} provider={provider_id}",
+                    devlog.clock() - t0,
+                    n=_search_group_rows(group),
+                )
+                if provider_id == CTX_TIDAL and artist_objs:
+                    self._enrich_search_artists(gen, tokens[CTX_TIDAL], group, artist_objs)
 
-                        def publish_meter() -> None:
-                            if gen == self._search_gen:
-                                self.artistMetaLoaded.emit(key, pop)
-
-                        _deliver_catalog(self, publish_meter)
-                finally:
-                    self._catalog_thread.token = previous
-
-            if artist_objs and gen == self._search_gen:
-                POP_GAUGE.limit(min(_POP_WORKERS, len(artist_objs)))
-                with ThreadPoolExecutor(max_workers=min(_POP_WORKERS, len(artist_objs))) as pool:
-                    list(pool.map(_enrich, artist_objs))
-                if total and gen == self._search_gen:
-                    self._save_page_cache()
+            # TIDAL and Apple have independent clients. Each provider's answer
+            # publishes the moment it lands, so the page paints progressively
+            # instead of holding every group for the slowest fetch.
+            with ThreadPoolExecutor(max_workers=max(1, len(provider_ids))) as pool:
+                list(pool.map(run, provider_ids))
 
         self.threadpool.start(Worker(work))
+
+    def _enrich_search_artists(self, gen: int, token: ProviderToken, group: dict, artist_objs: list) -> None:
+        """Artist cards enrich after the rows are on screen, so the search
+        itself stays fast. Each artist needs its own HTTP request, so fan them
+        out (bounded) rather than walking the list serially: the badges fill
+        near-together instead of one slow round-trip at a time. Emits are
+        thread-safe (queued to the GUI)."""
+        card_of = {card["id"]: card for card in group.get("artists") or []}
+
+        def _enrich(item) -> None:
+            if not provider_contexts(self).current(token):
+                return
+            previous = getattr(self._catalog_thread, "token", None)
+            self._catalog_thread.token = token
+            try:
+                key, artist = item
+                with POP_GAUGE.working():
+                    pop = self._pop_cached(key)
+                    if pop < 0:
+                        pop = _artist_popularity(artist)
+                        if pop >= 0:
+                            self._remember_capped(
+                                self._artist_pop_cache, key, (time.monotonic(), pop), self._ARTIST_POP_MAX
+                            )
+                if pop >= 0:
+                    _cache_commit(self, lambda: card_of[key].__setitem__("popularity", pop))
+
+                    def publish_meter() -> None:
+                        if gen == self._search_gen:
+                            self.artistMetaLoaded.emit(key, pop)
+
+                    _deliver_catalog(self, publish_meter)
+            finally:
+                self._catalog_thread.token = previous
+
+        POP_GAUGE.limit(min(_POP_WORKERS, len(artist_objs)))
+        with ThreadPoolExecutor(max_workers=min(_POP_WORKERS, len(artist_objs))) as pool:
+            list(pool.map(_enrich, artist_objs))
+        if gen == self._search_gen and _search_group_rows(group):
+            self._save_page_cache()
+
+    def _absorb_search_group(self, provider_id: str, group: dict) -> None:
+        """One fresh successful answer replaces its source's rows in place.
+
+        An empty fresh answer never blanks rows the page already shows: the
+        stale group stays displayed (and uncached later, because nothing fresh
+        was found), while the source still counts as answered."""
+        previous = self._search_display.get(provider_id)
+        if previous is not None and _search_group_rows(previous) > 0 and _search_group_rows(group) == 0:
+            self._search_fresh[provider_id] = group
+            return
+        if previous is not None:
+            _carry_artist_meters(previous, group)
+        self._search_display[provider_id] = group
+        self._search_fresh[provider_id] = group
+
+    def _search_display_payload(self, tokens: dict[str, ProviderToken], current: set[str]) -> dict:
+        """The unified page: which sources are in the search and what each is
+        doing, the folded sections, and the first provider's pinned row."""
+        sources = []
+        for provider_id in tokens:
+            if provider_id not in current:
+                continue
+            error = str(self._search_errors.get(provider_id) or "")
+            state = (
+                "failed"
+                if provider_id in self._search_errors
+                else "ready"
+                if provider_id in self._search_display
+                else "loading"
+            )
+            sources.append({"provider": provider_id, "state": state, "error": error})
+        groups = [group for provider_id, group in self._search_display.items() if provider_id in current]
+        folded = fold_search_groups(groups)
+        return {"sources": sources, "sections": folded["sections"], "top": folded["top"]}
+
+    def _paint_search_display(self, tokens: dict[str, ProviderToken], current: set[str]) -> None:
+        """Emit the folded page, in place, unless nothing moved.
+
+        The first paint of a generation is a fresh page for QML (navigation,
+        scroll reset, build veil); every later one is a ``refresh`` that only
+        swaps rows and source states."""
+        display = self._search_display_payload(tokens, current)
+        if self._search_painted and _search_same(display, self._search_last or {}):
+            return
+        if self._search_painted:
+            display = {**display, "refresh": True}
+        self._search_last = display
+        self._search_painted = True
+        self.searchResults.emit(display)
+
+    def _settle_search(self) -> None:
+        """Every source answered or failed: final status, busy drops, and the
+        fresh groups enter the short cache. Failed sources never cache, and a
+        page whose enabled set changed under it (a provider revoked mid-search)
+        is not the complete answer its cache key promises."""
+        if not getattr(self, "_search_live", False):
+            return
+        self._search_live = False
+        self._active_search_providers = set()
+        tokens = getattr(self, "_search_tokens", {})
+        still_current = all(provider_contexts(self).current(token) for token in tokens.values())
+        fresh = [self._search_fresh[pid] for pid in tokens if pid in self._search_fresh]
+        if self._search_errors:
+            live = [pid for pid, token in tokens.items() if provider_contexts(self).current(token)]
+            failed = [pid for pid in live if pid in self._search_errors]
+            if len(failed) == len(live) and len(live) > 1:
+                status = "Search failed"
+            else:
+                status = self._search_errors[failed[0]] if failed else "Search failed"
+        else:
+            current = {pid for pid, token in tokens.items() if provider_contexts(self).current(token)}
+            total = self._search_total(self._search_display_payload(tokens, current))
+            status = f"{total} results"
+            fresh_total = sum(_search_group_rows(group) for group in fresh)
+            if fresh_total and self._search_key and still_current and len(fresh) == len(tokens):
+                self._remember_search(self._search_key, {"groups": fresh})
+                self.threadpool.start(Worker(self._save_page_cache))
+        self._set_status(status)
+        self._set_busy(False)
+
+    @Slot(str)
+    def dropSearchSource(self, provider_id: str) -> None:
+        """A provider left the app (sign-out, switch-off): its source leaves
+        the page with it. The displayed groups are folded again without the
+        provider, so a merged row keeps only the sources that still exist."""
+        provider_id = str(provider_id or "")
+        if not provider_id or not self._search_painted or provider_id not in self._search_tokens:
+            return
+        self._search_display.pop(provider_id, None)
+        self._search_fresh.pop(provider_id, None)
+        self._search_errors.pop(provider_id, None)
+        self._active_search_providers.discard(provider_id)
+        current = {
+            pid
+            for pid, token in self._search_tokens.items()
+            if pid != provider_id and provider_contexts(self).current(token)
+        }
+        display = self._search_display_payload(self._search_tokens, current)
+        display["refresh"] = True
+        self._search_last = display
+        self.searchResults.emit(display)
+        if not self._active_search_providers and self._search_live:
+            self._settle_search()
 
     # Search results are re-servable for a short window (the front door to
     # anything new stays fresh); popularity drifts over days, so its memo can
@@ -6668,24 +6759,23 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     @staticmethod
     def _search_total(payload: dict) -> int:
-        """Result count for the status line: the per-type lists only."""
-        total = 0
-        for group in payload.get("groups") or []:
-            total += sum(len(group.get(section) or []) for section in _SEARCH_SECTIONS)
-        return total
+        """Result count for the status line: the per-kind lists only."""
+        return sum(len(rows or []) for rows in (payload.get("sections") or {}).values())
 
     @staticmethod
     def _search_artist_meters(payload: dict) -> dict[str, int]:
-        """Every group's artist ids (the cache-serve meter replay keys).
+        """Every artist card in the folded page (the cache-serve meter replay
+        keys).
 
         A missing or null meter reads -1; a real 0 is a meter like any other
         (a just-released item's popularity), never folded into "unknown".
         """
         meters: dict[str, int] = {}
-        for group in payload.get("groups") or []:
-            for card in group.get("artists") or []:
-                raw = card.get("popularity", -1)
-                meters[str(card.get("id", ""))] = -1 if raw is None else int(raw)
+        for card in (payload.get("sections") or {}).get("artists") or []:
+            if not isinstance(card, dict):
+                continue
+            raw = card.get("popularity", -1)
+            meters[str(card.get("id", ""))] = -1 if raw is None else int(raw)
         return meters
 
     def _top_hit_dict(self, hit) -> dict | None:
@@ -12118,15 +12208,20 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "artist_sec_tracks_collapsed": False,
             "artist_sec_albums_collapsed": False,
             "artist_sec_eps_collapsed": False,
-            # Search-page provider groups: the fold and each
-            # section's SHOW ALL state are keyed by provider id
-            # (search_provider_<id>_collapsed, <id>_search_sec_<section>_expanded),
-            # so a provider the app has never heard of saves and restores its
-            # own state. The two shipped folds are declared here; every
-            # provider-keyed key is otherwise accepted by shape
-            # (_is_provider_surface_pref) and materialized on first write.
+            # Search-page sections: each section's SHOW ALL state is keyed by
+            # kind (search_section_<section>_expanded), so one flag follows
+            # the section across providers. The two shipped per-provider folds
+            # are retained as stored values only (the unified surface has no
+            # per-provider fold), accepted by shape below and materialized on
+            # first write.
             "search_provider_tidal_collapsed": False,
             "search_provider_apple_collapsed": False,
+            "search_section_artists_expanded": False,
+            "search_section_albums_expanded": False,
+            "search_section_tracks_expanded": False,
+            "search_section_videos_expanded": False,
+            "search_section_playlists_expanded": False,
+            "search_section_mixes_expanded": False,
             # The search sort control, remembered across launches: the order
             # by name (relevance, date, name, popularity; a name rather than
             # an index so the option list can change) and the direction.
@@ -12163,6 +12258,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 legacy = f"search_sec_{section}_expanded"
                 if legacy in stored:
                     prefs.setdefault(f"tidal_search_sec_{section}_expanded", bool(stored[legacy]))
+            prefs.update({k: v for k, v in stored.items() if k in prefs or _is_provider_surface_pref(k)})
+            # The per-provider SHOW ALL state then carries over into the
+            # unified section flag, so a user's expanded sections survive the
+            # grouped-search retirement (TIDAL was the primary group). An
+            # explicit unified value already in the file wins.
+            for section in _SEARCH_SECTIONS:
+                provider_keyed = f"tidal_search_sec_{section}_expanded"
+                unified = f"search_section_{section}_expanded"
+                if provider_keyed in prefs and unified not in stored:
+                    prefs[unified] = bool(prefs[provider_keyed])
             prefs.update({k: v for k, v in stored.items() if k in prefs or _is_provider_surface_pref(k)})
         except FileNotFoundError:
             # A fresh install (or a config folder someone moved): defaults are

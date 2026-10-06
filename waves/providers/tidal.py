@@ -140,12 +140,6 @@ class TidalProvider(Provider):
     name = "TIDAL"
     capabilities = frozenset(Capability)
     identity_kinds = frozenset({"track", "album"})
-    # TIDAL's search reply can carry dozens of artists, so its group keeps the
-    # horizontal strip the page has always shown.
-    search_artists_layout = "strip"
-    # A TIDAL-only page is the search page itself: its group head exists to
-    # separate providers, so alone it stays off.
-    search_head_when_alone = False
 
     # ----- chooser metadata
 
@@ -173,7 +167,6 @@ class TidalProvider(Provider):
             logo_width=24,
             logo_header_width=18,
             logo_header_height=12,
-            head_style="accent",
             capability_summary="Sign in to search, browse and download.",
             card_desc=(
                 "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."

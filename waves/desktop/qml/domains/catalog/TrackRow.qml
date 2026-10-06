@@ -6,6 +6,7 @@ import "../downloads"
 import "../library"
 import "../playback"
 import "../providers"
+import "../search"
 
 // Full track row (search results + artist top tracks)
 // `host` is Main.qml's root object, bound at every instantiation and
@@ -55,6 +56,10 @@ Rectangle {
   property string providerLogo: ""
   // The album folder on disk: where a local row's reveal lands.
   property string folderPath: ""
+  // The unified search page's folded sources for this row (one for an
+  // unmerged result, several once equivalents from other providers fold in);
+  // empty everywhere else, and then the row draws no marks.
+  property var sources: []
   readonly property bool revealable: local && folderPath !== ""
   height: 62
   color: "transparent"
@@ -252,6 +257,10 @@ Rectangle {
           suffix: album
           albumId: trow.albumId
         }
+      }
+      SourceMarks {
+        Layout.alignment: Qt.AlignVCenter
+        sources: trow.sources
       }
       PopularityMeter {
         host: trow.host

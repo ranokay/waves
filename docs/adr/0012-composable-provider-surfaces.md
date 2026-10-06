@@ -4,7 +4,7 @@
 - Decided: 2026-10-03
 - Scope: Search, Browse, My Music, Chooser, Providers, queue and Settings
 - Supersedes: ADR 0007's fixed layout/order/empty-state rules and ADR 0008's header/Browse presentation
-- Amended: 2026-10-06; Chooser offer comparison implemented, other surface redesigns remain planned
+- Amended: 2026-10-07; unified All-Providers Search (merged equivalents, progressive sources) and Chooser offer comparison implemented, other surface redesigns remain planned
 
 ## Decision
 

@@ -241,25 +241,9 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, four legs)
     q("openSearch()")
     settle(200)
     q("root._searchSeq = root._navSeq")
-    bridge.searchResults.emit(
-        {
-            "groups": [
-                {
-                    "provider": "tidal",
-                    "artists_layout": "strip",
-                    "head_when_alone": False,
-                    "artists": [],
-                    "albums": [],
-                    "tracks": [TRACK],
-                    "videos": [],
-                    "playlists": [],
-                    "mixes": [],
-                    "top": None,
-                    "error": "",
-                }
-            ]
-        }
-    )
+    from search.fakes import qml_search_payload
+
+    bridge.searchResults.emit(qml_search_payload(tracks=[TRACK]))
     settle(400)
     chooser_open = bool(
         q(

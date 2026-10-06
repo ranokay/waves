@@ -126,6 +126,7 @@ def test_search_converts_the_public_catalog_to_waves_rows_without_account_setup(
                 "popularity": -1,
                 "explicit": True,
                 "added": "",
+                "upc": "",
             }
         ],
         "tracks": [
@@ -148,6 +149,7 @@ def test_search_converts_the_public_catalog_to_waves_rows_without_account_setup(
                 "popularity": -1,
                 "explicit": False,
                 "added": "",
+                "isrc": "",
             }
         ],
         "videos": [],

@@ -2,9 +2,10 @@
 
 The picker promises "Search works with no account": the row gates on
 "TIDAL signed in or Apple enabled", and the placeholder names both link
-types instead of TIDAL's alone. An Apple-only search that fails or finds
-nothing says so in Apple's own group instead of leaving a page that reads
-as an empty catalog.
+types instead of TIDAL's alone. An Apple-only search paints the unified
+page with Apple as its one source; a fetch that fails puts Apple's own
+honest words on the page with a RETRY, a search that finds nothing says
+so, and switching Apple off retires its source and rows in place.
 """
 
 from __future__ import annotations
@@ -121,21 +122,19 @@ def _apple_answer(artists=None) -> dict:
     }
 
 
-def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
-    """(loading hint, in-group error + retry, empty state, no ghost head) for
-    an Apple-only signed-out user.
+def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool, bool]:
+    """(loading hint + chips, source error + retry, empty state, blank page,
+    switch-off ghost) for an Apple-only signed-out user.
 
     No account can answer in this sandbox, so the Apple catalog is stubbed;
     every step below still goes through the bridge's real search slot and the
     QML's real payload handler, so the states are the states a user gets. The
     stub answers rows, fails once for "flaky" (classified by Apple's owner),
-    and finds nothing for "nothingmatches". The
-    group lives on the page's provider groups and is read through
-    root.searchGroupFor('apple').
+    and finds nothing for "nothingmatches". The page is the unified results
+    view, read through root.searchSources and searchResultsView.
     """
     from waves.providers.apple import AppleCatalogUnavailable
 
-    apple = "root.searchGroupFor('apple')"
     bridge.settings.data.apple_enabled = True
     bridge.appleStatusChanged.emit()
     _settle_until(q, settle, lambda: q("appleEnabled"), timeout_ms=2000, step_ms=10)
@@ -150,27 +149,31 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
 
     bridge.providers["apple"].search = catalog
 
+    def sources() -> str:
+        return q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')")
+
     # The loading hint follows the providers that can issue a search, and the
     # veil's build total counts the Apple rows: an Apple-only signed-out
     # search has to enter the building state (a total of 0 raises no veil at
-    # all, so the hint would never show).
+    # all, so the hint would never show). The one source is listed, and its
+    # rows stand in the unified sections.
     q("root.submitSearch('hello')")
     hint_seen = False
 
     def _rows_landed() -> bool:
         nonlocal hint_seen
         hint_seen = hint_seen or bool(q("searchBuildHint.active"))
-        return bool(q(apple)) and q(apple + ".rowCount") == len(_ARTISTS)
+        return q("searchResultsView.countFor('artists')") == len(_ARTISTS)
 
     rows_landed = _settle_until(q, settle, _rows_landed, step_ms=0)
     # The veil's total is what holds it up until every Apple card has loaded:
     # the rendered hint proves it rose, this proves it counted the rows.
     build_total_ok = q("root._searchBuildTotal") == len(_ARTISTS)
     veil_down = _settle_until(q, settle, lambda: not bool(q("searchBuildHint.active")))
-    loading_ok = rows_landed and build_total_ok and hint_seen and veil_down
+    loading_ok = rows_landed and build_total_ok and hint_seen and veil_down and sources() == "apple"
 
     # The type chips show for an Apple-only signed-out search with results,
-    # and clicking one filters the Apple groups.
+    # and clicking one filters the unified sections.
     chips_visible = bool(_find_visible(q, "searchTypeChips"))
     if chips_visible:
         _click_chip(q, "Videos")
@@ -179,7 +182,7 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
             settle,
             lambda: (
                 q("root.filterType") == "videos"
-                and not bool(q(apple + ".headVisible"))
+                and not bool(q("searchResultsView.sectionVisible('artists')"))
                 and bool(q("emptyHint.visible"))
             ),
             timeout_ms=1000,
@@ -196,7 +199,9 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
             q,
             settle,
             lambda: (
-                q("root.filterType") == "all" and bool(q(apple + ".headVisible")) and not bool(q("emptyHint.visible"))
+                q("root.filterType") == "all"
+                and bool(q("searchResultsView.sectionVisible('artists')"))
+                and not bool(q("emptyHint.visible"))
             ),
             timeout_ms=1000,
             step_ms=5,
@@ -205,88 +210,76 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
         chip_click_ok = False
     loading_ok = loading_ok and chips_visible and chip_click_ok
 
-    # A failed Apple fetch shows the honest words in its own group with a
-    # RETRY, and the RETRY issues the search again: the words give way to the
-    # rows when the fetch answers.
+    # A second Search press is the blank page: the sections and the sources
+    # of the query being cleared go with it, and the rows go with the models.
+    q("root.openSearch()")
+    settle(120)
+    blank_ok = (
+        q("root.searchSources.length") == 0
+        and q("Object.keys(root.searchSections).length") == 0
+        and not bool(q("root.hasResults"))
+        and q("searchResultsView.countFor('artists')") == 0
+    )
+
+    # A failed Apple fetch names itself on the page with a RETRY, and the
+    # RETRY issues the search again: the words give way to the rows when the
+    # fetch answers.
     q("root.submitSearch('flaky')")
-    error_shown = _settle_until(q, settle, lambda: q(apple + ".errorText") == APPLE_WORDS)
+    error_shown = _settle_until(q, settle, lambda: q("root.searchSourceError") == APPLE_WORDS)
+    states = q("JSON.stringify((root.searchSources || []).map(function (s) { return [s.provider, s.state]; }))")
     error_ok = (
         error_shown
-        and bool(_find_visible(q, "searchGroupError"))
-        and bool(_find_visible(q, "searchGroupRetry"))
+        and bool(_find_visible(q, "searchSourceError"))
+        and bool(_find_visible(q, "searchSourceRetry"))
         # A failed fetch is not an empty catalog: the page never reports the
         # query as having found nothing, and its own line names the failure
         # instead of inviting a first search it already ran.
         and q("root.searchNoResultsFor") == ""
-        and q("root.searchGroupError") == APPLE_WORDS
         and q("emptyHint.text") == "Search failed"
+        and states == '[["apple","failed"]]'
     )
-    # The head answers to the same type filter as the group's rows: Apple
-    # serves no videos or mixes, so that filter never shows its head -- error
-    # or not -- while the filters it does answer under keep it.
-    q("root.filterType = 'videos'")
-    filter_ok = _settle_until(q, settle, lambda: not bool(q(apple + ".headVisible")), timeout_ms=1000, step_ms=5)
-    q("root.filterType = 'tracks'")
-    filter_ok = filter_ok and _settle_until(
-        q, settle, lambda: bool(q(apple + ".headVisible")), timeout_ms=1000, step_ms=5
-    )
-    q("root.filterType = 'all'")
-    q("(" + (_FIND_VISIBLE % "searchGroupRetry") + ").clicked()")
+    q("(" + (_FIND_VISIBLE % "searchSourceRetry") + ").clicked()")
     retried = _settle_until(
-        q, settle, lambda: q(apple + ".errorText") == "" and q(apple + ".rowCount") == len(_ARTISTS)
+        q,
+        settle,
+        lambda: q("root.searchSourceError") == "" and q("searchResultsView.countFor('artists')") == len(_ARTISTS),
     )
-    error_ok = error_ok and filter_ok and retried and searches.count("flaky") == 2
+    error_ok = error_ok and retried and searches.count("flaky") == 2
 
     # An Apple-only signed-out search that finds nothing shows its own empty
-    # state: the payload was accepted (the group is mounted, no stale error
-    # stands) and the page names the query instead of reading as a blank one.
+    # state: the payload was accepted (the source is listed as ready, no
+    # stale error stands) and the page names the query instead of reading as
+    # a blank one.
     q("root.submitSearch('nothingmatches')")
     empty_shown = _settle_until(q, settle, lambda: q("root.searchNoResultsFor") == "nothingmatches")
     empty_ok = (
         empty_shown
         and bool(q("emptyHint.visible"))
-        and q(apple + ".errorText") == ""
-        and bool(q(apple))
-        and q(apple + ".rowCount") == 0
+        and q("root.searchSourceError") == ""
+        and sources() == "apple"
+        and q("searchResultsView.countFor('artists')") == 0
     )
 
-    # Switching Apple off clears the group; a refresh landing afterwards (the
-    # in-place revalidation of a page built with Apple on) still carries the
-    # group, and must not resurrect a head for a provider that is off.
+    # Switching Apple off retires its source and its rows; a later refresh
+    # from the refold the bridge runs for an in-place repaint cannot bring a
+    # revoked source back.
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
-    cleared = _settle_until(q, settle, lambda: not bool(q(apple)), timeout_ms=2000, step_ms=10)
-    q("root._searchSeq = root._navSeq")
-    bridge.searchResults.emit({**_payload(error=APPLE_WORDS), "refresh": True})
+    bridge.providerStateChanged.emit("apple")
+    cleared = _settle_until(q, settle, lambda: sources() == "" and q("searchResultsView.countFor('artists')") == 0)
+    bridge.dropSearchSource("apple")
     settle(150)
-    # The refresh cannot mount the provider's group, so there is no head, no
-    # words and no retry anywhere.
+    # The refolded page has no source, no rows, no words and no retry
+    # anywhere.
     ghost_ok = (
         cleared
-        and not bool(q(apple))
-        and q("root.searchGroupError") == ""
-        and not bool(_find_visible(q, "searchGroupError"))
-        and not bool(_find_visible(q, "searchGroupRetry"))
+        and sources() == ""
+        and q("root.searchSourceError") == ""
+        and not bool(q("root.hasResults"))
+        and not bool(_find_visible(q, "searchSourceError"))
+        and not bool(_find_visible(q, "searchSourceRetry"))
     )
-    return loading_ok, error_ok, empty_ok, ghost_ok
-
-
-def _payload(*, error: str) -> dict:
-    """A one-group Apple payload, shaped like the bridge's own."""
-    return {
-        "groups": [
-            {
-                "provider": "apple",
-                "artists_layout": "flow",
-                "artists": [],
-                "albums": [],
-                "tracks": [],
-                "playlists": [],
-                "top": None,
-                "error": error,
-            }
-        ]
-    }
+    return loading_ok, error_ok, empty_ok, blank_ok, ghost_ok
 
 
 def _check_row_gate(bridge, q, settle) -> tuple[bool, bool, bool]:
@@ -388,7 +381,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle()
 
     off_ok, on_ok, back_off_ok = _check_row_gate(bridge, q, settle)
-    loading_ok, error_ok, empty_ok, ghost_ok = _check_states(bridge, q, settle)
+    loading_ok, error_ok, empty_ok, blank_ok, ghost_ok = _check_states(bridge, q, settle)
 
     if not off_ok:
         print("with TIDAL signed out and Apple off the search row is not inert", file=sys.stderr)
@@ -399,14 +392,16 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     if not loading_ok:
         print("the build hint ignored an Apple-only signed-out search", file=sys.stderr)
     if not error_ok:
-        print("a failed Apple fetch did not show its own group error and a retry that re-searches", file=sys.stderr)
+        print("a failed Apple fetch did not show its own words and a retry that re-searches", file=sys.stderr)
     if not empty_ok:
         print("an Apple-only signed-out empty search showed no empty state", file=sys.stderr)
+    if not blank_ok:
+        print("a second Search press left the previous search's sections or sources behind", file=sys.stderr)
     if not ghost_ok:
-        print("a refresh after Apple was switched off put the group head back", file=sys.stderr)
+        print("a refresh after Apple was switched off put the retired source back", file=sys.stderr)
     return (
         EXIT_OK
-        if off_ok and on_ok and back_off_ok and loading_ok and error_ok and empty_ok and ghost_ok
+        if off_ok and on_ok and back_off_ok and loading_ok and error_ok and empty_ok and blank_ok and ghost_ok
         else EXIT_REGRESSED
     )
 

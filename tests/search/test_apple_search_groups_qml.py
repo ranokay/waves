@@ -1,78 +1,110 @@
+"""Apple and TIDAL answer one unified search page as two sources.
+
+WHAT THIS FENCES OFF
+--------------------
+The search page used to render one provider group per provider, with a head
+per group and per-group folds. The unified surface folds every provider's
+rows into single sections and lists the sources that took part in
+``root.searchSources``: both sources render their rows, the type chips
+filter the sections, a second Search press clears the whole page, and a
+source switched off leaves both the source list and its rows.
+
+This drives the bridge's real fan-out with both providers stubbed, so the
+payload is composed exactly as the worker composes it.
+"""
+
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario, sandbox_qml_settings
+from support.qml import (
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 
-def _video(media_id: str) -> dict:
-    return {
-        "id": media_id,
-        "title": "T69 Collapse",
-        "artist": "Aphex Twin",
-        "artists": [],
-        "art": "",
-        "art_big": "",
-        "duration": "5:10",
-        "explicit": False,
-        "added": "",
-        "date": "2018-08-07",
-        "quality": "1080p",
-    }
+class _TidalAlbum:
+    id = "tidal-al1"
+    name = "Tidal Album"
 
 
-def _album(media_id: str) -> dict:
-    return {
-        "id": media_id,
-        "title": "Selected Ambient Works 85-92",
-        "artist": "Aphex Twin",
-        "artist_id": "",
-        "artists": [],
-        "art": "",
-        "year": "1992",
-        "date": "1992-02-12",
-        "tracks": 13,
-        "duration_sec": 4455,
-        "quality": "LOSSLESS",
-        "popularity": -1,
-        "explicit": False,
-        "added": "",
-    }
+class _TidalVideo:
+    id = "tidal-vd1"
+    name = "Tidal Video"
+    artists = ()
 
 
-def _payload(grouped: bool) -> dict:
-    groups = [
-        {
-            "provider": "tidal",
-            "artists_layout": "strip",
-            "head_when_alone": False,
-            "artists": [],
-            "albums": [_album("tidal:1")],
-            "tracks": [],
-            "videos": [_video("tidal:2")],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-            "error": "",
-        }
-    ]
-    if grouped:
-        groups.append(
-            {
-                "provider": "apple",
-                "artists_layout": "flow",
-                "artists": [],
-                "albums": [_album("apple:1")],
-                "tracks": [],
-                "playlists": [],
-                "top": None,
-                "error": "",
-            }
-        )
-    return {"groups": groups}
+_TIDAL_ALBUM_ROW = {
+    "title": "Tidal Album",
+    "artist": "Tidal Artist",
+    "artist_id": "",
+    "artists": [],
+    "art": "",
+    "year": "2026",
+    "date": "2026-01-01",
+    "listed": "",
+    "tracks": 3,
+    "duration_sec": 900,
+    "quality": "LOSSLESS",
+    "popularity": -1,
+    "explicit": False,
+    "added": "",
+}
+
+_TIDAL_VIDEO_ROW = {
+    "title": "Tidal Video",
+    "artist": "Tidal Artist",
+    "art": "",
+    "art_big": "",
+    "duration": "5:10",
+    "explicit": False,
+    "added": "",
+    "date": "2018-08-07",
+    "quality": "1080p",
+}
+
+_APPLE_ALBUM_ROW = {
+    "id": "apple-al1",
+    "title": "Apple Album",
+    "artist": "Apple Artist",
+    "artist_id": "apple-ar1",
+    "artists": [],
+    "art": "",
+    "year": "2026",
+    "date": "2026-01-01",
+    "tracks": 2,
+    "duration_sec": 600,
+    "quality": "LOSSLESS",
+    "popularity": -1,
+    "explicit": False,
+    "added": "",
+}
+
+
+def _settle_until(q, settle, predicate, *, timeout_ms: int = 5000, step_ms: int = 20) -> bool:
+    waited = 0
+    while not predicate():
+        if waited >= timeout_ms:
+            return False
+        settle(step_ms)
+        waited += max(step_ms, 1)
+    return True
+
+
+def _sources(q) -> str:
+    return q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')")
+
+
+def _album_ids(q) -> list:
+    model = "searchResultsView.modelFor('albums')"
+    return [q(f"{model}.get({i}).id") for i in range(int(q(f"{model}.count")))]
 
 
 def _scenario() -> int:
@@ -118,72 +150,122 @@ def _scenario() -> int:
     q("openSearch()")
     settle()
 
-    q("_searchSeq = _navSeq")
+    # Both provider gates open: TIDAL's session flag and Apple's switch. The
+    # replies are stubbed at the providers (TIDAL's engine objects through
+    # the bridge's own row builders, Apple's dicts as its provider answers).
+    bridge._logged_in = True
+    bridge.loggedInChanged.emit()
     bridge.settings.data.apple_enabled = True
     bridge.appleStatusChanged.emit()
-    bridge.searchResults.emit(_payload(grouped=True))
-    settle(500)
-    tidal = "root.searchGroupFor('tidal')"
-    apple = "root.searchGroupFor('apple')"
+    settle(300)
+
+    bridge.providers["tidal"].search = lambda needle: {
+        "albums": [_TidalAlbum()],
+        "videos": [_TidalVideo()],
+        "top_hit": None,
+    }
+    bridge._album_dict = lambda album: dict(_TIDAL_ALBUM_ROW, id=str(album.id), title=str(album.name))
+    bridge._video_dict = lambda video: dict(_TIDAL_VIDEO_ROW, id=str(video.id), title=str(video.name))
+    bridge.providers["apple"].search = lambda needle: {
+        "artists": [],
+        "albums": [dict(_APPLE_ALBUM_ROW)],
+        "tracks": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+    }
+
+    q("root.submitSearch('groups')")
+    landed = _settle_until(q, settle, lambda: _sources(q) == "tidal,apple" and len(_album_ids(q)) == 2)
+    if not landed:
+        print(f"the two sources never landed ({_sources(q)}, albums={_album_ids(q)})", file=sys.stderr)
+        return EXIT_PRECONDITION
+
+    # Both sources are listed in registry order, their rows share the unified
+    # sections, and each row carries its own source.
     grouped_ok = (
-        q(tidal + ".headVisible")
-        and q(apple + ".headVisible")
-        and q(tidal + ".y") < q(apple + ".y")
-        and q(tidal + ".modelFor('albums').count") == 1
-        and q(apple + ".modelFor('albums').count") == 1
+        q("root.sourceMarksOn")
+        and len(_album_ids(q)) == 2
+        and q("searchResultsView.countFor('videos')") == 1
+        and json.loads(q("JSON.stringify(searchResultsView.rowSources('tidal-al1'))"))
+        == [{"provider": "tidal", "id": "tidal-al1"}]
+        and json.loads(q("JSON.stringify(searchResultsView.rowSources('apple-al1'))"))
+        == [{"provider": "apple", "id": "apple-al1"}]
     )
 
-    # Filtered views show a provider header only when that provider still has
-    # rows under the filter: albums keeps both, tracks has none anywhere, and
-    # videos belongs to TIDAL alone in this slice.
+    # Filtered views show only the sections that still have rows: albums
+    # keeps both sources' rows, tracks has none anywhere, and videos belongs
+    # to TIDAL alone in this slice.
     q('filterType = "albums"')
     settle(50)
-    filter_ok = q(tidal + ".headVisible") and q(apple + ".headVisible")
+    filter_ok = (
+        q("searchResultsView.sectionVisible('albums')")
+        and not q("searchResultsView.sectionVisible('videos')")
+        and q("root.filteredResultCount") == 2
+    )
     q('filterType = "tracks"')
     settle(50)
-    filter_ok = filter_ok and not q(tidal + ".headVisible") and not q(apple + ".headVisible")
+    filter_ok = (
+        filter_ok
+        and not q("searchResultsView.sectionVisible('albums')")
+        and not q("searchResultsView.sectionVisible('videos')")
+        and q("root.filteredResultCount") == 0
+    )
     q('filterType = "videos"')
     settle(50)
-    filter_ok = filter_ok and q(tidal + ".headVisible") and not q(apple + ".headVisible")
+    filter_ok = (
+        filter_ok
+        and q("searchResultsView.sectionVisible('videos')")
+        and not q("searchResultsView.sectionVisible('albums')")
+        and q("root.filteredResultCount") == 1
+    )
     q('filterType = "all"')
     settle(50)
-    filter_ok = filter_ok and q(tidal + ".headVisible") and q(apple + ".headVisible")
+    filter_ok = (
+        filter_ok
+        and q("searchResultsView.sectionVisible('albums')")
+        and q("searchResultsView.sectionVisible('videos')")
+    )
 
-    q(apple + ".toggleExpanded('albums')")
-    expansion_ok = not q(tidal + ".isExpanded('albums')") and q(apple + ".isExpanded('albums')")
-    q(apple + ".toggleExpanded('albums')")
-
+    # A second Search press is the blank page: the sections and the sources
+    # of the query being cleared go with it.
     q("openSearch()")
     settle(200)
     blank_ok = (
-        q("root.searchGroupList().length") == 0
-        and q("root.searchGroupFor('apple')") is None
-        and not q(apple + " ? " + apple + ".headVisible : false")
+        q("root.searchSources.length") == 0
+        and q("Object.keys(root.searchSections).length") == 0
+        and not q("root.hasResults")
+        and int(q("searchResultsView.countFor('albums')")) == 0
     )
 
-    q("_searchSeq = _navSeq")
-    bridge.searchResults.emit(_payload(grouped=True))
-    settle(500)
+    # Repaint the page (the identical query is served from the bridge's short
+    # cache), then switch Apple off: its source and its rows leave the page
+    # while TIDAL's stay.
+    q("root.submitSearch('groups')")
+    if not _settle_until(q, settle, lambda: _sources(q) == "tidal,apple" and len(_album_ids(q)) == 2):
+        print("the page did not repaint before the Apple switch-off", file=sys.stderr)
+        return EXIT_PRECONDITION
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
-    settle(500)
-    # A TIDAL-only page is the search page itself: the group head (which
-    # exists to separate providers) goes with Apple, the rows stay.
+    bridge.providerStateChanged.emit("apple")
+    settle(300)
     tidal_only_ok = (
-        q("root.searchGroupFor('apple')") is None
-        and not q(tidal + ".headVisible")
-        and q(tidal + ".modelFor('albums').count") == 1
+        not q("root.sourceMarksOn")
+        and _sources(q) == "tidal"
+        and _album_ids(q) == ["tidal-al1"]
+        and q("searchResultsView.countFor('videos')") == 1
     )
-    if not (grouped_ok and filter_ok and expansion_ok and blank_ok and tidal_only_ok):
+
+    if not (grouped_ok and filter_ok and blank_ok and tidal_only_ok):
         print(
-            f"legs grouped={grouped_ok} filter={filter_ok} expansion={expansion_ok} blank={blank_ok} tidal_only={tidal_only_ok}",
+            f"legs grouped={grouped_ok} filter={filter_ok} blank={blank_ok} tidal_only={tidal_only_ok}",
             file=sys.stderr,
         )
-    return 0 if grouped_ok and filter_ok and expansion_ok and blank_ok and tidal_only_ok else 1
+    return EXIT_OK if grouped_ok and filter_ok and blank_ok and tidal_only_ok else EXIT_REGRESSED
 
 
 @pytest.mark.qml
-def test_enabled_apple_search_renders_provider_groups_and_disabled_apple_keeps_the_old_page():
+def test_unified_search_lists_both_sources_and_disabled_apple_drops_its_rows():
     run_scenario(Path(__file__), "--run-scenario", timeout=120, sandbox_prefix="waves-apple-search-test-")
 
 

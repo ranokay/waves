@@ -71,16 +71,17 @@ from urllib.parse import urlsplit
 #   mix row:      {id, title, art, subtitle, added}
 #
 # Payloads built from those rows:
-#   search payload:
-#     {groups: [{provider, artists_layout, head_when_alone, artists, albums,
-#                tracks, videos, playlists, mixes, top, error}, ...]}
-#     One group per provider that answered, in registry order, carrying the
+#   search payload (the short-lived cache's provider groups; the page folds
+#   them into its unified sections):
+#     {groups: [{provider, artists, albums, tracks, videos, playlists, mixes,
+#                top, error}, ...]}
+#     One group per provider that answered, in arrival order, carrying the
 #     buckets its ``search_sections`` declares (a bucket it does not answer is
 #     absent), its best match (``top``: a row dict tagged with its kind
-#     ("album"/"track"/"video"/"playlist"; an artist top hit is dropped, the
-#     artist strip already leads with it) or None) and its own failure words
-#     in ``error`` (empty on success). TIDAL's ``top`` comes from the reply's
-#     ``top_hit``; every other provider answers ``top`` itself.
+#     ("album"/"track"/"video"/"playlist"; an artist top hit is dropped) or
+#     None) and its own failure words in ``error`` (empty on success). TIDAL's
+#     ``top`` comes from the reply's ``top_hit``; every other provider answers
+#     ``top`` itself.
 #   album expansion rows:  {id, num, title, duration, popularity, explicit}
 #     num: 1-based position in the album.
 #   playlist expansion rows:
@@ -387,13 +388,6 @@ class ProviderDescriptor:
     logo_width: int = 20  # the card tile's mark width, px
     logo_header_width: int = 14  # the section header tile's mark width, px
     logo_header_height: int = 14  # the section header tile's mark height, px
-    # The search group head's furniture: "accent" is the shipped
-    # TIDAL look (hover-lit accent name, accent rule, compact 42px head) and
-    # "plain" is the neutral head (bright name, outline rule, 50px) Apple has
-    # always shown. It rides the descriptor because the head already renders
-    # its mark and sizes from there; a provider with no preference head is
-    # plain.
-    head_style: str = "plain"
     capability_summary: str = ""  # one honest line, for onboarding cards
     card_desc: str = ""  # the Settings card's longer blurb
     welcome_action: str = ""  # the welcome card's action label (the provider's own words)
@@ -647,24 +641,10 @@ class Provider(ABC):
 
     search_sections: tuple[str, ...] = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
     """The result sections this provider's search answers, in render order.
-    The bridge stamps them onto the provider's search group and the page
-    renders exactly those, so a provider whose catalog has no videos (Apple)
-    never grows a VIDEOS head -- or shows one under a filter it cannot host."""
-
-    search_artists_layout: str = "flow"
-    """How the search page renders this provider's ARTISTS section: "flow"
-    (the wrapping grid; a catalog that returns a handful) or "strip" (the
-    horizontal shelf TIDAL has always used for a reply that can carry
-    dozens). The bridge stamps it onto the provider's search group, so the
-    page renders the provider's own shape with no QML branch."""
-
-    search_head_when_alone: bool = True
-    """Whether this provider's group still carries a head when it is the only
-    group on the search page. True answers for every provider whose rows are
-    an additional catalog beside the page's own shape; TIDAL answers False,
-    because a TIDAL-only page has always rendered as the search page itself
-    (its head exists to separate providers, and there is nothing to separate
-    when it is alone). The bridge stamps it onto the group."""
+    The bridge stamps them onto the provider's search group and the unified
+    page renders exactly those, so a provider whose catalog has no videos
+    (Apple) never grows a VIDEOS section -- or shows one under a filter it
+    cannot host."""
 
     @classmethod
     def descriptor(cls) -> ProviderDescriptor:

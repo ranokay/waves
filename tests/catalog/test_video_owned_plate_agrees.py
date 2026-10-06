@@ -108,7 +108,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # [meta Column, DownloadButton]. The thumb is found by its videoId, the
     # button by its mediaId, so the walk survives layout moves.
     _FIND = (
-        "var grid = root.searchGroupFor('tidal').videoGridItem;"
+        "var grid = searchResultsView.videoGridItem;"
         "var thumb = null, dl = null;"
         "for (var i = 0; i < grid.children.length; i++) {"
         " var cell = grid.children[i];"

@@ -539,19 +539,9 @@ def _run_scenario() -> int:
     q("openSearch()")
     settle()
     q("_searchSeq = _navSeq")
-    bridge.searchResults.emit(
-        {
-            "groups": [
-                {
-                    **results,
-                    "provider": "tidal",
-                    "artists_layout": "strip",
-                    "head_when_alone": False,
-                    "error": "",
-                }
-            ]
-        }
-    )
+    from search.fakes import qml_search_payload
+
+    bridge.searchResults.emit(qml_search_payload(**results))
     if not pump(lambda: not q("searchBuilding")):
         print("search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION

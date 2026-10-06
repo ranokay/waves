@@ -152,11 +152,13 @@ interface and row schemas; provider-specific contracts live with
 
 ### 7.1 Shared surfaces
 
-[ADR 0012](adr/0012-composable-provider-surfaces.md) owns the planned All Providers
+[ADR 0012](adr/0012-composable-provider-surfaces.md) owns the All Providers
 Search, progressive results, safe merged offers and compact source identity.
-Apple catalog access remains possible before download setup. Missing requested
+Search implements that surface: one unified section per media kind, source
+marks and filter chips, and high-confidence equivalents merged into one row;
+the earlier grouped page was its baseline. Apple catalog access remains
+possible before download setup. Missing requested
 setup stays actionable; disabled providers belong to separate setup opportunities.
-The current grouped Search is a baseline, not the permanent target requirement.
 
 ### 7.2 Download With
 

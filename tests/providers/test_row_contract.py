@@ -111,6 +111,7 @@ def test_apple_rows_pass_unchanged():
             "artistName": "Aphex Twin",
             "releaseDate": "1992-02-12",
             "trackCount": 13,
+            "upc": "4006381333931",
         },
     }
     track = {
@@ -123,6 +124,7 @@ def test_apple_rows_pass_unchanged():
             "trackNumber": 1,
             "discNumber": 1,
             "durationInMillis": 294000,
+            "isrc": "USRC17607839",
         },
     }
     playlist = {"id": "pl1", "type": "playlists", "attributes": {"name": "Mix", "curatorName": "Me"}}
@@ -135,6 +137,9 @@ def test_apple_rows_pass_unchanged():
     }
     assert all(rows.values())
     assert [artist, album, track, playlist] == before  # inputs untouched, rows new dicts
+    # Cross-provider fold evidence rides the row; absent attributes stay "".
+    assert rows["track"]["isrc"] == "USRC17607839"
+    assert rows["album"]["upc"] == "4006381333931"
 
 
 def _tidal_self():
@@ -146,9 +151,17 @@ def _tidal_self():
 
 def test_tidal_rows_pass_unchanged():
     tidal_self = _tidal_self()
-    album = SimpleNamespace(id="11", name="SAW", duration=3600, explicit=False, artists=[])
+    album = SimpleNamespace(id="11", name="SAW", duration=3600, explicit=False, artists=[], upc="4006381333931")
     track = SimpleNamespace(
-        id="7", name="Xtal", track_num=1, volume_num=1, duration=294, explicit=False, album=album, artists=[]
+        id="7",
+        name="Xtal",
+        track_num=1,
+        volume_num=1,
+        duration=294,
+        explicit=False,
+        album=album,
+        artists=[],
+        isrc="USRC17607839",
     )
     video = SimpleNamespace(id="9", name="Clip", duration=180, explicit=False, artists=[])
     playlist = SimpleNamespace(id="5", name="Mix")
@@ -163,6 +176,19 @@ def test_tidal_rows_pass_unchanged():
     }
     assert all(rows.values())
     assert rows["track"]["title"] == "Xtal"  # built, hence validated, unchanged
+    # Cross-provider fold evidence rides the row; a missing fact stays "".
+    assert rows["track"]["isrc"] == "USRC17607839"
+    assert rows["album"]["upc"] == "4006381333931"
+
+
+def test_tidal_rows_without_version_identifiers_carry_empty_facts():
+    tidal_self = _tidal_self()
+    album = SimpleNamespace(id="11", name="SAW", duration=3600, explicit=False, artists=[])
+    track = SimpleNamespace(
+        id="7", name="Xtal", track_num=1, volume_num=1, duration=294, explicit=False, album=album, artists=[]
+    )
+    assert WavesBridge._track_dict(tidal_self, track)["isrc"] == ""
+    assert WavesBridge._album_dict(tidal_self, album)["upc"] == ""
 
 
 def test_the_download_engine_does_not_import_the_validator():

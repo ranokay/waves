@@ -791,6 +791,9 @@ class AppleProvider(Provider):
                 "popularity": -1,
                 "explicit": attrs.get("contentRating") == "explicit",
                 "added": "",
+                # Release identifier, when Apple names one: cross-provider
+                # search folding evidence, never a display fact.
+                "upc": str(attrs.get("upc") or ""),
             },
         )
 
@@ -820,6 +823,9 @@ class AppleProvider(Provider):
                 "popularity": -1,
                 "explicit": attrs.get("contentRating") == "explicit",
                 "added": "",
+                # Recording identifier, when Apple names one: cross-provider
+                # search folding evidence, never a display fact.
+                "isrc": str(attrs.get("isrc") or ""),
             },
         )
 

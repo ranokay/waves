@@ -6,6 +6,7 @@ import "../../primitives"
 import "../downloads"
 import "../library"
 import "../playback"
+import "../search"
 
 // Album row + inline expand. Local expanded state so it works in both the
 // search results and inside an artist page.
@@ -44,6 +45,10 @@ Column {
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
 
   property string albumId: ""
+  // The unified search page's folded sources for this row (one for an
+  // unmerged result, several once equivalents from other providers fold in);
+  // empty everywhere else, and then the row draws no marks.
+  property var sources: []
   property string title: ""
   property string artistName: ""
   property string artistId: ""
@@ -249,6 +254,10 @@ Column {
           artists: ab.leadArtists
           suffix: (listedDate !== "" ? listedDate : releaseDate !== "" ? releaseDate : year) + (trackCount > 0 ? " · " + trackCount + " trks" : "")
         }
+      }
+      SourceMarks {
+        Layout.alignment: Qt.AlignVCenter
+        sources: ab.sources
       }
       PopularityMeter {
         host: ab.host

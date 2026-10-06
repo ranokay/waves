@@ -56,13 +56,12 @@ _REQUIRE_QML = False
 
 
 def seed_tidal_search(q, bridge, *, artists=(), albums=(), tracks=(), videos=(), playlists=(), mixes=(), expanded=()):
-    """Put one TIDAL group's rows on the search page of a booted Main.qml.
+    """Put one TIDAL source's rows on the search page of a booted Main.qml.
 
     Scenarios that drive a row widget (a progress bar, a hover, a row layout)
-    need a live results page, not a real search: this emits the one-provider
-    payload a TIDAL search produces (the bridge's own group shape) and opens the
-    sections the caller asks for. The caller owns ``openSearch()`` and any
-    page state around it.
+    need a live results page, not a real search: this emits the one-source
+    unified payload a TIDAL search produces and opens the sections the caller
+    asks for. The caller owns ``openSearch()`` and any page state around it.
     """
     from search.fakes import qml_search_payload
 
@@ -78,7 +77,7 @@ def seed_tidal_search(q, bridge, *, artists=(), albums=(), tracks=(), videos=(),
         )
     )
     for section in expanded:
-        q(f"root.searchGroupFor('tidal').toggleExpanded('{section}')")
+        q(f"searchResultsView.toggleExpanded('{section}')")
 
 
 def set_require_qml(required: bool) -> None:

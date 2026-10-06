@@ -110,7 +110,7 @@ def _run_scenario() -> int:
 
     centre = q(
         "(function(){"
-        " var cell = root.searchGroupFor('tidal').videoGridItem.children[0];"
+        " var cell = searchResultsView.videoGridItem.children[0];"
         " if (!cell || !cell.item) return '';"
         " var t = cell.item.children[0];"
         " if (!t || t.videoId === undefined) return '';"

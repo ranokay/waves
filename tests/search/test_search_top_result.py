@@ -97,22 +97,14 @@ def _results(top: bool) -> dict:
         }
 
     pops = [0, 64, 58, 60, 59]  # the wanted single first, older hits behind it
-    return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "artists": [artist(i) for i in range(3)],
-                "albums": [album(i, p) for i, p in enumerate(pops)],
-                "tracks": [track(i, p) for i, p in enumerate(pops)],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": {"kind": "album", **album(0, 0)} if top else None,
-                "error": "",
-            }
-        ]
-    }
+    from search.fakes import qml_search_payload
+
+    return qml_search_payload(
+        artists=[artist(i) for i in range(3)],
+        albums=[album(i, p) for i, p in enumerate(pops)],
+        tracks=[track(i, p) for i, p in enumerate(pops)],
+        top={"kind": "album", **album(0, 0)} if top else None,
+    )
 
 
 def _run_scenario() -> int:
@@ -199,7 +191,7 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
     settle()
 
-    tidal = "root.searchGroupFor('tidal')"
+    tidal = "searchResultsView"
     if not q(tidal + ".topVisible"):
         failures.append("TOP RESULT header not visible in the All view")
     top_y = q(tidal + ".topHeadItem.y")

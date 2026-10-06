@@ -23,6 +23,12 @@ from waves.providers import Capability
 
 class SearchStub:
     search = WavesBridge.search
+    dropSearchSource = WavesBridge.dropSearchSource
+    _absorb_search_group = WavesBridge._absorb_search_group
+    _search_display_payload = WavesBridge._search_display_payload
+    _paint_search_display = WavesBridge._paint_search_display
+    _settle_search = WavesBridge._settle_search
+    _enrich_search_artists = WavesBridge._enrich_search_artists
     _fav_artist_dict = WavesBridge._fav_artist_dict
     _search_total = staticmethod(WavesBridge._search_total)
     _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
@@ -103,8 +109,6 @@ def search_group(provider="tidal", album_ids=("al1",), pop=-1) -> dict:
     """One provider's group, shaped like the bridge's own builder."""
     return {
         "provider": provider,
-        "artists_layout": "strip" if provider == "tidal" else "flow",
-        "head_when_alone": provider != "tidal",
         "artists": [{"id": "a1", "name": "Artist 1", "art": "", "roles": "", "popularity": pop}],
         "albums": [{"id": i} for i in album_ids],
         "tracks": [],
@@ -147,10 +151,12 @@ def qml_search_payload(
     error="",
     layout=None,
 ) -> dict:
-    """A one-provider search payload for QML scenarios.
+    """A one-source unified search payload for QML scenarios.
 
-    Row dicts go in untouched; only the buckets the provider's search answers
-    are carried, exactly as the bridge composes them.
+    Row dicts go in untouched except for their own ``sources`` list (the
+    fold's label); only the buckets the provider's search answers are
+    carried, exactly as the bridge composes them. ``layout`` is accepted for
+    call sites written against the grouped shape and no longer read.
     """
     rows = {
         "artists": list(artists),
@@ -161,18 +167,18 @@ def qml_search_payload(
         "mixes": list(mixes),
     }
     names = _APPLE_SECTIONS if provider == "apple" else tuple(rows)
-    group = {
-        "provider": provider,
-        "artists_layout": layout or ("strip" if provider == "tidal" else "flow"),
-        # A lone TIDAL group is the page's own shape and stays headless; any
-        # other provider's head says whose rows these are.
-        "head_when_alone": provider != "tidal",
+    sections = {
+        name: [{**row, "sources": [{"provider": provider, "id": str(row.get("id", ""))}]} for row in rows[name]]
+        for name in names
     }
-    for name in names:
-        group[name] = rows[name]
-    group["top"] = top
-    group["error"] = error
-    return {"groups": [group]}
+    top_row = None
+    if top is not None:
+        top_row = {**top, "sources": [{"provider": provider, "id": str(top.get("id", ""))}]}
+    return {
+        "sources": [{"provider": provider, "state": "failed" if error else "ready", "error": error}],
+        "sections": sections,
+        "top": top_row,
+    }
 
 
 def wire_search(monkeypatch, stub, album_ids=("al1",), pop=50):
@@ -188,8 +194,6 @@ def wire_search(monkeypatch, stub, album_ids=("al1",), pop=50):
         "tidal": SimpleNamespace(
             name="TIDAL",
             capabilities=frozenset({Capability.SEARCH}),
-            search_artists_layout="strip",
-            search_head_when_alone=False,
             search=lambda needle: {
                 "artists": [artist],
                 "albums": [SimpleNamespace(id=i) for i in album_ids],

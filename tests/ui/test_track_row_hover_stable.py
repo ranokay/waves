@@ -107,23 +107,9 @@ def _run_scenario() -> int:
         "explicit": False,
         "added": "",
     }
-    payload = {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "head_when_alone": False,
-                "artists": [],
-                "albums": [],
-                "tracks": [track],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    from search.fakes import qml_search_payload
+
+    payload = qml_search_payload(tracks=[track])
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(payload)
     settle(500)

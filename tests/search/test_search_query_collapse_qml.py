@@ -121,7 +121,7 @@ def _run_scenario() -> int:
     verdicts["decoder_sends_collapsed"] = searched[-1:] == ["tab separated words"]
 
     # An empty answer says so; an answer with rows does not.
-    empty = {"groups": []}
+    empty = {"sources": [], "sections": {}, "top": None}
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'zzz'")
     bridge.searchResults.emit(empty)
     settle(200)
@@ -129,25 +129,10 @@ def _run_scenario() -> int:
         not bool(q("root.hasResults")) and q("emptyHint.text") == "No results for \u201czzz\u201d"
     )
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'band'")
+    from search.fakes import qml_search_payload
+
     row = {"id": "a1", "name": "Band", "art": "", "roles": "", "popularity": -1}
-    bridge.searchResults.emit(
-        {
-            "groups": [
-                {
-                    "provider": "tidal",
-                    "artists_layout": "strip",
-                    "artists": [row],
-                    "albums": [],
-                    "tracks": [],
-                    "videos": [],
-                    "playlists": [],
-                    "mixes": [],
-                    "top": None,
-                    "error": "",
-                }
-            ]
-        }
-    )
+    bridge.searchResults.emit(qml_search_payload(artists=[row]))
     settle(300)
     verdicts["rows_clear_the_hint"] = q("root.searchNoResultsFor") == "" and not bool(q("emptyHint.visible"))
 

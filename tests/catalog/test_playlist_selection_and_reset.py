@@ -88,25 +88,11 @@ def test_playlist_selection_is_per_row_and_a_new_search_clears_it():
 
 
 def _results(tag: str) -> dict:
-    return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "head_when_alone": False,
-                "artists": [],
-                "albums": [],
-                "tracks": [],
-                "videos": [],
-                "mixes": [],
-                "playlists": [
-                    {"id": f"{tag}pl", "title": f"{tag} Essentials", "art": "", "tracks": 3, "creator": "TIDAL"}
-                ],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    from search.fakes import qml_search_payload
+
+    return qml_search_payload(
+        playlists=[{"id": f"{tag}pl", "title": f"{tag} Essentials", "art": "", "tracks": 3, "creator": "TIDAL"}]
+    )
 
 
 # Walks the rendered tree for the PlaylistBlock of a given id; every probe
@@ -207,7 +193,7 @@ def _run_scenario() -> int:  # (one exit per failed step, on purpose)
     if not pump(lambda: not q("searchBuilding")):
         print("first search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION
-    q("root.searchGroupFor('tidal').toggleExpanded('playlists')")
+    q("searchResultsView.toggleExpanded('playlists')")
     q("root.searchReveal = 1")
     settle(500)
     if probe("onepl", "return 1;") != 1:

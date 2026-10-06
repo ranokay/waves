@@ -307,6 +307,10 @@ def test_logout_supersedes_every_inflight_search():
     bridge._SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX
     bridge._remember_search = WavesBridge._remember_search.__get__(bridge)
     bridge._save_page_cache = lambda: None
+    bridge._absorb_search_group = WavesBridge._absorb_search_group.__get__(bridge)
+    bridge._search_display_payload = WavesBridge._search_display_payload.__get__(bridge)
+    bridge._paint_search_display = WavesBridge._paint_search_display.__get__(bridge)
+    bridge._settle_search = WavesBridge._settle_search.__get__(bridge)
     bridge.logout = WavesBridge.logout.__get__(bridge)
     bridge._end_provider_context = WavesBridge._end_provider_context.__get__(bridge)
     bridge._stop_provider_downloads = lambda provider_id, reason: 0
@@ -320,14 +324,15 @@ def test_logout_supersedes_every_inflight_search():
     bridge.search("first")
     first = bridge._searchEvent.emits.pop()[0]
     WavesBridge._on_search_event(bridge, first)
-    assert bridge.searchResults.emits[-1][0]["groups"][0]["albums"] == [{"id": "42"}]
+    assert bridge.searchResults.emits[-1][0]["sections"]["albums"] == [
+        {"id": "42", "sources": [{"provider": "tidal", "id": "42"}]}
+    ]
     assert "tidal:first" in bridge._search_cache
     bridge.searchResults.emits.clear()
 
     # Hold the next completed worker result at the GUI relay across logout.
     bridge.search("second")
     late = bridge._searchEvent.emits.pop()[0]
-    assert late.cacheable
     bridge.logout()
     WavesBridge._on_search_event(bridge, late)
 

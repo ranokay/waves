@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from search.fakes import qml_search_payload
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
@@ -151,21 +152,8 @@ _APPLE_TRACK_ROW = {
 
 
 def _apple_only_payload() -> dict:
-    """An answer carrying Apple's own group and no TIDAL rows."""
-    return {
-        "groups": [
-            {
-                "provider": "apple",
-                "artists_layout": "flow",
-                "artists": [],
-                "albums": [],
-                "tracks": [_APPLE_TRACK_ROW],
-                "playlists": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    """An answer carrying Apple's own rows and no TIDAL source."""
+    return qml_search_payload(provider="apple", tracks=[_APPLE_TRACK_ROW])
 
 
 @pytest.mark.qml
@@ -323,13 +311,20 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
     q("root.openSearch()")
     settle(300)
 
-    # Search works before setup completes: an Apple-only answer renders its
-    # group with no TIDAL session in the picture.
+    # Search works before setup completes: an Apple-only answer lands its row
+    # under Apple as the one source, with no TIDAL session in the picture.
+    # A single source draws no chips and no row marks: there is nothing to
+    # disambiguate.
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'ambient'")
     bridge.searchResults.emit(_apple_only_payload())
     settle(500)
-    if not bool(q("root.searchGroupFor('apple').headVisible")):
-        failures.append("an Apple-only signed-out search showed no Apple group")
+    track_id = str(q("searchResultsView.modelIdFor('tracks', 0)"))
+    if not bool(q("root.hasResults")) or track_id != "apple:900":
+        failures.append(f"an Apple-only signed-out search showed no Apple row ({track_id!r})")
+    if q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')") != "apple":
+        failures.append("the Apple-only answer did not name Apple as its only source")
+    if bool(q("root.sourceMarksOn")):
+        failures.append("a single-source search turned the source marks on")
     if bool(q("emptyHint.visible")):
         failures.append("the Search empty state stayed over an answered search")
 

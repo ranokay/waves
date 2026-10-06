@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 from providers.qml_auth import CallbackLoginAttempt
+from search.fakes import qml_search_payload
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
@@ -123,20 +124,8 @@ _APPLE_ROW = {
 
 
 def _search_payload_with_apple() -> dict:
-    return {
-        "groups": [
-            {
-                "provider": "apple",
-                "artists_layout": "flow",
-                "artists": [],
-                "albums": [_APPLE_ROW],
-                "tracks": [],
-                "playlists": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    """An Apple-only answer: its row, and no other source in the picture."""
+    return qml_search_payload(provider="apple", albums=[_APPLE_ROW])
 
 
 def _boot():
@@ -244,7 +233,7 @@ def _run_apple_cta_scenario() -> int:
             failures.append("the Apple action outlived the provider it set up")
 
     # Apple enabled, TIDAL still signed out: the Apple action is gone, the
-    # TIDAL one is not, and a search answer now carries Apple's own group.
+    # TIDAL one is not, and a search answer now carries Apple's own row.
     _open_search(q, settle)
     if q(_visible("results", "emptyProviderCta_apple")):
         failures.append("the Apple action came back after the enable")
@@ -253,10 +242,13 @@ def _run_apple_cta_scenario() -> int:
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'ambient'")
     bridge.searchResults.emit(_search_payload_with_apple())
     settle(500)
-    if not bool(q("root.searchGroupFor('apple').headVisible")):
-        failures.append("an Apple-only signed-out search showed no Apple group")
-    if not q(_text_visible("results", "APPLE MUSIC")):
-        failures.append("the Apple group rendered no provider header")
+    if q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')") != "apple":
+        failures.append("an Apple-only signed-out search showed no Apple source")
+    if not bool(q("root.hasResults")) or q("searchResultsView.modelIdFor('albums', 0)") != "apple:1":
+        failures.append("the Apple search rendered no Apple album row")
+    # One source: nothing to disambiguate, so no chips and no row marks.
+    if bool(q("root.sourceMarksOn")):
+        failures.append("a single-source search turned the source marks on")
     if bool(q("emptyHint.visible")) or q(_visible("results", "emptySetupCtas")):
         failures.append("the setup actions stayed over a search that returned rows")
 

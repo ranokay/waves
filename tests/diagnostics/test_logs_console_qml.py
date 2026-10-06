@@ -65,32 +65,19 @@ def _track(media_id: str) -> dict:
 
 
 def _payload() -> dict:
+    """Two sources in one unified page: TIDAL and Apple each answer one
+    album and one track."""
+    from search.fakes import qml_search_payload
+
+    tidal = qml_search_payload(provider="tidal", albums=[_album("tidal:1")], tracks=[_track("tidal:2")])
+    apple = qml_search_payload(provider="apple", albums=[_album("apple:1")], tracks=[_track("apple:2")])
     return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "head_when_alone": False,
-                "artists": [],
-                "albums": [_album("tidal:1")],
-                "tracks": [_track("tidal:2")],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            },
-            {
-                "provider": "apple",
-                "artists_layout": "flow",
-                "artists": [],
-                "albums": [_album("apple:1")],
-                "tracks": [_track("apple:2")],
-                "playlists": [],
-                "top": None,
-                "error": "",
-            },
-        ]
+        "sources": [*tidal["sources"], *apple["sources"]],
+        "sections": {
+            **tidal["sections"],
+            **{name: [*tidal["sections"].get(name, []), *rows] for name, rows in apple["sections"].items()},
+        },
+        "top": None,
     }
 
 
@@ -176,32 +163,28 @@ def _scenario() -> int:
     q("logsDrawer.logsMinLevel = 0")
     settle(100)
 
-    # Filter chips still filter rows independently of the fold: with Apple
-    # collapsed, the albums chip keeps both heads (both have albums) while
-    # Apple's rows stay hidden.
+    # The type chips keep filtering rows independently of a section's SHOW
+    # ALL state, on the unified page beside the logs drawer.
     q("openSearch()")
     settle()
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_payload())
     settle(500)
-    tidal = "root.searchGroupFor('tidal')"
-    apple = "root.searchGroupFor('apple')"
-    q(apple + ".toggleCollapsed()")
+    q("searchResultsView.toggleExpanded('tracks')")
     settle(50)
     q('filterType = "albums"')
     settle(50)
     chips_ok = (
-        q(tidal + ".headVisible")
-        and q(apple + ".headVisible")
-        and q(tidal + ".sectionVisible('albums')")
-        and not q(apple + ".sectionVisible('albums')")
-        and not q(tidal + ".sectionVisible('tracks')")
-        and not q(apple + ".sectionVisible('tracks')")
+        q("searchResultsView.sectionVisible('albums')")
+        and not q("searchResultsView.sectionVisible('tracks')")
+        and q("root.filteredResultCount") == 2
     )
     q('filterType = "all"')
     settle(50)
-    chips_ok = chips_ok and q(tidal + ".sectionVisible('albums')") and not q(apple + ".sectionVisible('albums')")
-    q(apple + ".toggleCollapsed()")
+    chips_ok = (
+        chips_ok and q("searchResultsView.sectionVisible('tracks')") and q("searchResultsView.isExpanded('tracks')")
+    )
+    q("searchResultsView.toggleExpanded('tracks')")
     settle(50)
 
     # Follow sticks to the bottom; a manual scroll up takes over.
@@ -242,20 +225,22 @@ def _scenario() -> int:
     close_ok = not q("logsDrawer.opened")
     diagnostics.set_verbose(False)
 
-    # The fold reached the persisted prefs and the file on disk...
-    q(apple + ".toggleCollapsed()")
+    # The section's SHOW ALL state reached the persisted prefs and the file
+    # on disk...
+    q("searchResultsView.toggleExpanded('tracks')")
     settle(50)
     bridge._config_writer.flush()
     settle(100)
     with open(bridge._waves_prefs_path, encoding="utf-8") as handle:
         stored = json.load(handle)
     prefs_ok = (
-        bridge._waves_prefs.get("search_provider_apple_collapsed")
-        and stored.get("search_provider_apple_collapsed")
-        and not stored.get("search_provider_tidal_collapsed")
+        bridge._waves_prefs.get("search_section_tracks_expanded")
+        and stored.get("search_section_tracks_expanded")
+        and not stored.get("search_section_albums_expanded")
     )
 
-    # ...so a fresh root starts with Apple still collapsed (the restart read).
+    # ...so a fresh root starts with the section still expanded (the restart
+    # read).
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     settle(300)
     roots = engine.rootObjects()
@@ -264,8 +249,7 @@ def _scenario() -> int:
     q("_searchSeq = _navSeq", second)
     bridge.searchResults.emit(_payload())
     settle(500)
-    restart_ok = len(roots) == 2 and q("searchGroupFor('apple').collapsed", second)
-    restart_ok = restart_ok and not q("searchGroupFor('tidal').collapsed", second)
+    restart_ok = len(roots) == 2 and q("searchResultsView.isExpanded('tracks')", second)
 
     ok = (
         button_ok

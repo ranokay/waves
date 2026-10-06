@@ -80,6 +80,7 @@ def _logout_stub(tmp_path):
     stub = SimpleNamespace()
     stub.logout = WavesBridge.logout.__get__(stub, type(stub))
     stub._end_provider_context = WavesBridge._end_provider_context.__get__(stub, type(stub))
+    stub._settle_search = WavesBridge._settle_search.__get__(stub, type(stub))
     stub._stop_provider_downloads = lambda provider_id, reason: 0
     stub._schedule_provider_cache_clear = lambda provider_id: None
     stub._start_provider_logout = lambda provider_id: None

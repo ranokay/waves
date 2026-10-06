@@ -106,6 +106,14 @@ def canon(s: str) -> str:
     return _fold_diacritics(unicodedata.normalize("NFKC", s or "").translate(_CANON_PUNCT))
 
 
+def canon_text(s: str) -> str:
+    """The comparison key for a short text field (title, artist, credit):
+    ``canon`` plus case folding and one-space whitespace collapse, the exact
+    shape both catalogs' facts are compared under. Empty text stays empty,
+    which callers read as "fact missing" rather than "matches"."""
+    return " ".join(canon(s).casefold().split())
+
+
 # --- The edition detector --------------------------------------------------------
 # gate_title keeps qualifiers verbatim, which is right about WHAT they say and
 # wrong about HOW catalogs spell it. Measured against a real 11k-album library:

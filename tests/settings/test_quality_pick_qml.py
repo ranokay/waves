@@ -26,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from search.fakes import qml_search_payload
 from support.paths import QML_MAIN
 from support.qml import (
     EXIT_NO_QT,
@@ -118,23 +119,7 @@ def _payload() -> dict:
     ]
     albums = [dict(_ROW, id="a1", title="Album One", tracks=2, duration_sec=360, quality="HI-RES")]
     videos = [dict(_ROW, id="v1", title="A video", duration="4:00", duration_sec=240, quality="1080p")]
-    return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "head_when_alone": False,
-                "artists": [],
-                "albums": albums,
-                "tracks": tracks,
-                "videos": videos,
-                "playlists": [],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    return qml_search_payload(provider="tidal", albums=albums, tracks=tracks, videos=videos)
 
 
 _FIND_PICKS = """
