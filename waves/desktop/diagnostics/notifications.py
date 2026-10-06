@@ -15,6 +15,7 @@ import os
 import time
 from urllib.parse import quote, urlencode, urlparse
 
+from waves.events import Lifecycle
 from waves.redaction import scrub_event_text
 
 logger = logging.getLogger("waves.diag")
@@ -87,15 +88,13 @@ class NotificationHistory:
             if entry.get("lifecycle") != "active":
                 del self._entries[identity]
 
-    def finish_one(self, identity: str, lifecycle: str, *, now: float | None = None) -> bool:
+    def finish_one(self, identity: str, lifecycle: Lifecycle, *, now: float | None = None) -> bool:
         """Dismiss or resolve one retained active entry; False when absent or terminal."""
         entry = self._entries.get(identity)
         if entry is None or entry.get("lifecycle") != "active":
             return False
         at = time.time() if now is None else float(now)
-        entry["lifecycle"] = lifecycle
-        entry["actions"] = []
-        entry["updated_at"] = at
+        self._finish(entry, lifecycle, at)
         self._prune(at)
         return True
 
@@ -127,13 +126,16 @@ class NotificationHistory:
                 continue
             if job_id is not None and refs.get("job_id") != job_id:
                 continue
-            entry["lifecycle"] = "resolved"
-            entry["actions"] = []
-            entry["updated_at"] = at
+            self._finish(entry, Lifecycle.RESOLVED, at)
             changed = True
         if changed:
             self._prune(at)
         return changed
+
+    def _finish(self, entry: dict, lifecycle: Lifecycle, at: float) -> None:
+        entry["lifecycle"] = lifecycle.value
+        entry["actions"] = []
+        entry["updated_at"] = at
 
     def _terminal(self) -> list[dict]:
         return [entry for entry in self._entries.values() if entry.get("lifecycle") != "active"]

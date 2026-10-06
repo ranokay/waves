@@ -172,13 +172,13 @@ def test_finish_one_dismisses_a_single_retained_active_entry(tmp_path):
     history.record(first, now=1000.0)
     history.record(second, now=1001.0)
 
-    assert history.finish_one(first["id"], "dismissed", now=1002.0) is True
+    assert history.finish_one(first["id"], Lifecycle.DISMISSED, now=1002.0) is True
     entry = history.entry(first["id"])
     assert entry["lifecycle"] == "dismissed" and entry["actions"] == []
     assert entry["updated_at"] == 1002.0
     assert history.entry(second["id"])["lifecycle"] == "active"
-    assert history.finish_one(first["id"], "dismissed", now=1003.0) is False, "already terminal"
-    assert history.finish_one("missing", "dismissed") is False
+    assert history.finish_one(first["id"], Lifecycle.DISMISSED, now=1003.0) is False, "already terminal"
+    assert history.finish_one("missing", Lifecycle.DISMISSED) is False
 
 
 def test_finish_matching_honours_provider_and_identity(tmp_path):

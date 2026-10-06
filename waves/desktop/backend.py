@@ -5297,7 +5297,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._events.finish(identity, Lifecycle.DISMISSED)
         # A retained issue restored by a restart has no live index entry, so
         # the relay emits nothing for it; the store still honors the dismissal.
-        if self._history.finish_one(identity, Lifecycle.DISMISSED.value):
+        if self._history.finish_one(identity, Lifecycle.DISMISSED):
             self._save_notification_history()
             self.notificationsChanged.emit()
 

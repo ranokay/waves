@@ -58,16 +58,18 @@ Allowed commands are `open_settings`, `open_logs`, `reconnect`, `retry_job`,
 `copy_diagnostics`. Reconnect and retry re-enter the existing provider/job
 flows; copy re-scrubs the event. Settings/log navigation emits
 `applicationEventActionRequested(action, providerId)` for Main to handle.
-`dismissEvent(id)` removes active actions and publishes `dismissed`.
+`dismissEvent(id)` removes active actions and publishes `dismissed`; a retained
+issue restored by a restart, which has no live action context, is dismissed in
+the stored history instead.
 
 ## Notification center
 
 The notification center is the structured events' product consumer. Main.qml's
 `NotificationToasts` shows at most three notices (four-second success/info,
-eight-second warning, sticky errors), merges nearby download completions into
-one aggregate, pauses dismissal while the pointer or keyboard focus rests on a
-notice, and routes anything over the limit plus every resolved notice to
-`NotificationCenter` (a right-edge drawer). The bridge owns the retained
+eight-second warning, sticky errors), merges nearby download completions per
+provider into one aggregate, pauses dismissal while the pointer or keyboard
+focus rests on a notice, and routes anything over the limit plus every resolved
+notice to `NotificationCenter` (a right-edge drawer). The bridge owns the retained
 history: one redacted entry per event identity beside the Waves prefs
 (`notifications.json`), capped by `notify_history_max` / `notify_history_days`
 (defaults 200 / 7 days; active issues stay until resolved or dismissed).

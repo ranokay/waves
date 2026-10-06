@@ -7,7 +7,8 @@ import "../primitives"
 // One notification, shared by the toast stack and the persistent center:
 // severity, plain summary, the event's allowlisted actions, and an expandable
 // detail with the safe details, the redacted advanced trace, and the
-// copy/report affordances. The card renders; its host owns timing and dismissal.
+// copy/report affordances. The card renders and calls the bridge directly; its
+// host owns only timing and placement.
 // The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {

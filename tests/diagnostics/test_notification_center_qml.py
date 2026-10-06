@@ -59,6 +59,7 @@ def test_an_active_issue_resolves_across_a_restart():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+@pytest.mark.qml
 def test_a_configured_retention_window_survives_a_restart():
     """A user-set 30-day window must be in force before the stored history is
     read; loading first would prune at the shipped 7 days and lose the rest."""
