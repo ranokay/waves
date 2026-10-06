@@ -49,13 +49,13 @@ Popup {
       view.contentY = pos.y + item.height - view.height
   }
   background: Rectangle {
-    color: "#22262e"
+    color: button.surfaceHi
     radius: 10
-    border.color: "#3a3f49"
+    border.color: button.outline
   }
   component Label: Text {
     textFormat: Text.PlainText
-    color: "#a8acb4"
+    color: button.textLo
     font.family: uiFontFamily
     font.pixelSize: 11
     wrapMode: Text.Wrap
@@ -99,14 +99,14 @@ Popup {
       textFormat: Text.PlainText
       text: option.text
       wrapMode: Text.Wrap
-      color: option.picked ? "#86ffaa" : "#e6e8ec"
+      color: option.picked ? button.accentContTx : button.textHi
       font.family: uiFontFamily
       font.pixelSize: 11
     }
     background: Rectangle {
-      color: option.picked ? "#06210f" : "#1d2128"
+      color: option.picked ? button.accentCont : button.surface3
       radius: 5
-      border.color: option.activeFocus ? Primitives.Palette.accent : option.picked ? "#22a64a" : "#3a3f49"
+      border.color: option.activeFocus ? Primitives.Palette.accent : option.picked ? button.accentDim : button.outline
       border.width: option.activeFocus ? 2 : 1
     }
     ToolTip.visible: hovered
@@ -196,14 +196,14 @@ Popup {
           Rectangle {
             width: parent.width
             height: 1
-            color: "#3a3f49"
+            color: button.outline
           }
         }
       }
       Label {
         text: button.chooserNotice
         visible: text !== ""
-        color: "#ffb01f"
+        color: button.gold
       }
       Choice {
         objectName: "chooserConfirmSwitch"
