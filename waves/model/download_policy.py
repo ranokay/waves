@@ -228,6 +228,8 @@ class DownloadIntent:
     settings_json: str = field(repr=False)
     # Atmos-only fallback keeps the original stereo placement on Retry.
     base_template: str = ""
+    # The source remains distinct when the Chooser selects a matched offer.
+    origin_media_id: str = ""
 
     def settings_data(self) -> Settings:
         from waves.model.cfg import Settings
@@ -262,6 +264,8 @@ def capture_intent(
     engine_pin: str = "",
     provider_pin: str = "",
     allow_fallback: bool = False,
+    allow_provider_fallback: bool | None = None,
+    allow_engine_fallback: bool | None = None,
     clean_album_artist: bool = False,
     library_bulk_skip: bool = True,
 ) -> DownloadIntent:
@@ -287,6 +291,8 @@ def capture_intent(
         duplicates=duplicates,
     )
     pin = "" if engine_pin in ("", "auto") else engine_pin
+    provider_fallback = allow_fallback if allow_provider_fallback is None else allow_provider_fallback
+    engine_fallback = allow_fallback if allow_engine_fallback is None else allow_engine_fallback
     return DownloadIntent(
         provider_id,
         kind,
@@ -297,9 +303,9 @@ def capture_intent(
         rules.provider_priority,
         rules.engines(provider_id),
         tuple(rules.operation_priority.get(provider_id, {}).items()),
-        rules.same_provider_fallback and (not pin or allow_fallback),
-        rules.choose_best_provider and (not provider_pin or allow_fallback),
-        rules.recover_provider and (not provider_pin or allow_fallback),
+        rules.same_provider_fallback and (not pin or engine_fallback),
+        rules.choose_best_provider and (not provider_pin or provider_fallback),
+        rules.recover_provider and (not provider_pin or provider_fallback),
         rules.upgrade_provider,
         rules.enrich_provider,
         rules.attempt_limit,

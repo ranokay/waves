@@ -412,7 +412,7 @@ def test_a_stereo_only_provider_clamps_the_stored_both_default():
     assert _bridge(default_audio_type="both").chooserDefaults("t1", "track")["audioType"] == "both"
 
 
-def test_the_chooser_qml_names_no_provider():
+def test_wiring_chooser_qml_names_no_provider():
     """Acceptance for a third provider: the popover region carries no provider
     id, name or asset, so a provider registered with a descriptor and the
     right metadata renders its chip, audio words and section gates without
@@ -421,15 +421,15 @@ def test_the_chooser_qml_names_no_provider():
 
     from waves.desktop import backend as backend_module
 
-    # The Chooser lives in DownloadButton.qml; the popover component is
-    # the last block in the file, so the region runs to the end.
-    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "domains/downloads/DownloadButton.qml").read_text(
+    # Wiring fence: provider-neutral presentation is rendered behaviorally by
+    # test_chooser_offer_comparison_qml; this pin forbids identity branches.
+    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "domains/downloads/DownloadChooser.qml").read_text(
         encoding="utf-8"
     )
-    start = qml.find("id: chooserComp")
+    start = qml.find("id: chooser")
     assert start != -1, "the guard found no chooser region to check"
     region = qml[start:]
-    assert "PROVIDER" in region, "the guard is looking at the wrong region"
+    assert "DOWNLOAD WITH" in region, "the guard is looking at the wrong region"
     for needle in ("tidal", "apple", "assets/providers", "chooserRowProvider"):
         assert needle.lower() not in region.lower(), f"the Chooser region still names a provider: {needle}"
 

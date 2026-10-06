@@ -2985,7 +2985,7 @@ def _capture_request(
     if not isinstance(data, CfgSettings):
         return None
     prefs = getattr(bridge, "_waves_pref_bool", None)
-    return capture_intent(
+    intent = capture_intent(
         data,
         provider_id,
         kind,
@@ -2996,9 +2996,12 @@ def _capture_request(
         engine_pin=engine_pin,
         provider_pin=str((toggles or {}).get("provider_pin") or ""),
         allow_fallback=bool((toggles or {}).get("allow_fallback", False)),
+        allow_provider_fallback=(toggles or {}).get("allow_provider_fallback"),
+        allow_engine_fallback=(toggles or {}).get("allow_engine_fallback"),
         clean_album_artist=prefs("clean_album_artist") if callable(prefs) else False,
         library_bulk_skip=bridge._library_bulk_skip_on(),
     )
+    return dataclasses.replace(intent, origin_media_id=str((toggles or {}).get("origin_media_id") or media_id))
 
 
 def _chooser_asset_pins(toggles: dict | None) -> dict[str, bool]:
@@ -10337,7 +10340,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         }
 
     @Slot(str, str, str, str, result=int)
-    def requestCatalogOffers(self, media_id: str, kind: str, tier: str, audio_type: str) -> int:
+    @Slot(str, str, str, str, str, str, result=int)
+    def requestCatalogOffers(
+        self, media_id: str, kind: str, tier: str, audio_type: str, selected_provider: str = "", engine: str = ""
+    ) -> int:
         """Opening/changing the Chooser requests metadata evidence on a worker."""
         from waves.desktop.providers.catalog_identity import CatalogSelection
         from waves.desktop.providers.catalog_offers import collect_offers
@@ -10346,7 +10352,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._catalog_offer_generation += 1
         generation = self._catalog_offer_generation
         provider_id = provider_of_id(media_id)
-        policy = self.settings.data.download_policies.effective(provider_id)
+        policy_provider = selected_provider or provider_id
+        policy = self.settings.data.download_policies.effective(policy_provider)
         ask = OfferConstraints(
             tier=tier_from_word(tier) or QualityTier.HIGH,
             audio_type=audio_type,
@@ -10356,14 +10363,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             video_codec=policy.video_codec,
             video_hdr=policy.video_hdr,
             video_max_fps=policy.video_max_fps,
-            provider_pin=provider_id,
-            engine_pin=str(getattr(self.providers.get(provider_id), "engine_selection", "")),
+            provider_pin=selected_provider,
+            engine_pin=engine,
         )
 
         def current() -> bool:
             return (
                 self._catalog_offer_generation == generation
-                and self.settings.data.download_policies.effective(provider_id) == policy
+                and self.settings.data.download_policies.effective(policy_provider) == policy
             )
 
         def work() -> None:
@@ -10413,7 +10420,89 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         generation, snapshot = event
         if generation == self._catalog_offer_generation:
             # Context may change between the worker's emit and this GUI hop.
-            self.catalogOffersLoaded.emit(generation, snapshot.presentation())
+            self._catalog_offer_snapshot = (generation, snapshot)
+            payload = snapshot.presentation()
+            for offer in payload:
+                offer["descriptor"] = self.providerDescriptor(offer["provider_id"])
+                offer["options"] = self.chooserDefaults(
+                    offer["media_id"] or offer["provider_id"] + ":unknown", offer["kind"]
+                )
+            self.catalogOffersLoaded.emit(generation, payload)
+
+    def _current_chooser_offer(self, request_id: int, provider_id: str):
+        """Validate only memory stamps on the GUI thread; live probes stay on workers."""
+        record = getattr(self, "_catalog_offer_snapshot", None)
+        if request_id != self._catalog_offer_generation or record is None or record[0] != request_id:
+            return None
+        return next((offer for offer in record[1].validated() if offer.provider_id == provider_id), None)
+
+    @Slot(int, str, "QVariant", result="QVariant")
+    def chooserSwitchOptions(self, request_id: int, provider_id: str, explicit) -> dict:
+        """Propose a provider switch; incompatible explicit choices require UI confirmation."""
+        from waves.desktop.providers.chooser import switch_choices
+
+        offer = self._current_chooser_offer(request_id, provider_id)
+        if offer is None or offer.evidence.effective_state() == "stale":
+            return {"error": "Catalog context changed; check offers again."}
+        origin_id = offer.match.origin_id
+        if provider_id != provider_of_id(origin_id) and (not offer.media_id or not offer.match.automatic_eligible):
+            return {"error": "Identity unresolved. " + " ".join(offer.match.explanations)}
+        if hasattr(explicit, "toVariant"):
+            explicit = explicit.toVariant()
+        choices = {
+            key: value
+            for key, value in (explicit.items() if isinstance(explicit, dict) else ())
+            if isinstance(value, str | bool)
+        }
+        media_id = offer.media_id or origin_id
+        options = self.chooserDefaults(media_id, offer.kind)
+        result = switch_choices(options, choices)
+        return {
+            **result,
+            "provider": provider_id,
+            "mediaId": media_id,
+            "options": options,
+        }
+
+    @Slot(str, str)
+    def setupChooserProvider(self, provider_id: str, action: str) -> None:
+        """Open the owning setup surface; never enable or restart a provider implicitly."""
+        if action == "signin":
+            self.providerAction(provider_id, "signin")
+        elif "setup" in self._provider_verb_flows.get(provider_id, {}):
+            self.providerAction(provider_id, "setup")
+        else:
+            self.applicationEventActionRequested.emit("open_settings", provider_id)
+
+    @Slot(int, str, str, str, "QVariant", result=bool)
+    def downloadCatalogOffer(self, request_id: int, provider_id: str, tier: str, audio_type: str, toggles) -> bool:
+        """Enqueue only the current identified offer; retain origin and separate pins."""
+        offer = self._current_chooser_offer(request_id, provider_id)
+        if offer is None or offer.evidence.effective_state() == "stale":
+            self._set_status("Catalog context changed; check offers again.")
+            return False
+        origin_id = offer.match.origin_id
+        if provider_id != provider_of_id(origin_id) and (not offer.media_id or not offer.match.automatic_eligible):
+            self._set_status("This offer's identity is unresolved; use the original or check again.")
+            return False
+        if offer.readiness == "unsupported":
+            self._set_status("This provider cannot serve the selected delivery. Change the options explicitly.")
+            return False
+        media_id = offer.media_id or origin_id
+        if self._chooser_ask_for(provider_id, tier) is None and tier:
+            self._set_status("Selected quality is unsupported; review the offer's options.")
+            return False
+        if self._chooser_normalize_audio(audio_type, provider_id) is None and audio_type:
+            self._set_status("Selected audio type is unsupported; review the offer's options.")
+            return False
+        if hasattr(toggles, "toVariant"):
+            toggles = toggles.toVariant()
+        pins = dict(toggles) if isinstance(toggles, dict) else {}
+        pins["origin_media_id"] = origin_id
+        if provider_id == provider_of_id(origin_id):
+            media_id = self._catalog_offer_snapshot[1].selection.media_id
+        self.downloadWithChooser(media_id, offer.kind, tier, audio_type, pins)
+        return True
 
     @Slot("QVariant")
     def saveChooserDefaults(self, values) -> None:
@@ -10556,10 +10645,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 values = None
         incoming = values if isinstance(values, dict) else {}
         pins: dict = {}
-        if "allow_fallback" in incoming:
-            pins["allow_fallback"] = bool(incoming["allow_fallback"])
+        for key in ("allow_fallback", "allow_provider_fallback", "allow_engine_fallback"):
+            if key in incoming:
+                pins[key] = bool(incoming[key])
         if "engine" in incoming:
             pins["engine"] = str(incoming["engine"]).strip().lower()
+        for key in ("provider_pin", "origin_media_id"):
+            if key in incoming:
+                pins[key] = str(incoming[key])
         for key in _CHOOSER_TOGGLE_KEYS:
             if key in incoming:
                 pins[key] = bool(incoming[key])
@@ -10580,7 +10673,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         pins = self._chooser_toggle_pins(toggles)
         provider_id = self._chooser_provider_of(mid)
-        pins["provider_pin"] = provider_id
+        if "provider_pin" not in pins:
+            pins["provider_pin"] = provider_id
         ask = self._chooser_ask_for(provider_id, tier)
         audio = self._chooser_normalize_audio(audio_type, provider_id)
         if _download_click(self, k, mid, chooser=True, chooser_ask=ask, chooser_audio=audio, chooser_toggles=pins):

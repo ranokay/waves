@@ -456,6 +456,18 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
     host.threadpool = Pool()
     host._ownership = SimpleNamespace(ownership_of=lambda *args, **kwargs: None)
     host._catalog_offer_presence = WavesBridge._catalog_offer_presence.__get__(host)
+    for method in (
+        "providerDescriptor",
+        "chooserDefaults",
+        "_provider_meta",
+        "_chooser_provider_of",
+        "_chooser_default_tier_word",
+        "_chooser_default_audio",
+        "_chooser_tier_entries",
+        "_chooser_atmos_only",
+        "_psetting",
+    ):
+        setattr(host, method, getattr(WavesBridge, method).__get__(host))
     request = WavesBridge.requestCatalogOffers(host, "origin:1", "track", "LOSSLESS", "stereo")
     assert not a.calls and not b.calls
     host.threadpool.worker.run()

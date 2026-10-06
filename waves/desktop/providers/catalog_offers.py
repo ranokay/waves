@@ -234,6 +234,7 @@ def _collect_one(
     if provider is not None:
         observations, readinesses = [], []
         for family in (ask,) if kind == "video" else requested_audio(ask):
+            family = replace(family, engine_pin=ask.engine_pin if ask.provider_pin == pid else "")
             observation = AvailabilityEvidence()
             try:
                 live = _live(bridge, provider)

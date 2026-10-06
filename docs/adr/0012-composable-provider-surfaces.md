@@ -4,6 +4,7 @@
 - Decided: 2026-10-03
 - Scope: Search, Browse, My Music, Chooser, Providers, queue and Settings
 - Supersedes: ADR 0007's fixed layout/order/empty-state rules and ADR 0008's header/Browse presentation
+- Amended: 2026-10-06; Chooser offer comparison implemented, other surface redesigns remain planned
 
 ## Decision
 
@@ -40,6 +41,15 @@ Unpinned options use shared/provider defaults. Main Download uses saved policies
 origin by default. Preview stays independent, preserving valid service differences.
 Use the existing intentional lyrics/art icons with labels in menus/Chooser;
 compact toolbar icons carry tooltips, accessible names and keyboard access.
+
+The Chooser keeps one guarded request snapshot. Compatible explicit options
+survive provider changes; incompatible changes are proposed and confirmed before
+the old choices are replaced. Engine pins include their provider owner. Separate
+provider/engine fallback controls relax only that dimension within saved policies.
+Unresolved alternatives explain missing evidence. Origin identity survives enqueue
+independently of fulfillment identity; automatic execution/recovery is a separate
+consumer. The bridge contract and current owners are documented in
+[BRIDGE.md](../../waves/desktop/BRIDGE.md).
 
 One Providers button replaces header marks, with a compact attention count.
 Enabled providers expose catalog/account/download readiness, relevant engines
