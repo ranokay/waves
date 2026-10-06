@@ -87,6 +87,18 @@ class NotificationHistory:
             if entry.get("lifecycle") != "active":
                 del self._entries[identity]
 
+    def finish_one(self, identity: str, lifecycle: str, *, now: float | None = None) -> bool:
+        """Dismiss or resolve one retained active entry; False when absent or terminal."""
+        entry = self._entries.get(identity)
+        if entry is None or entry.get("lifecycle") != "active":
+            return False
+        at = time.time() if now is None else float(now)
+        entry["lifecycle"] = lifecycle
+        entry["actions"] = []
+        entry["updated_at"] = at
+        self._prune(at)
+        return True
+
     def finish_matching(
         self,
         *,

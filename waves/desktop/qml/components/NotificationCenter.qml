@@ -118,18 +118,6 @@ Drawer {
         required property var modelData
         width: centerList.width
         entry: modelData
-        onActionRequested: function (identity, action) {
-          waves.eventAction(identity, action)
-        }
-        onCopyRequested: function (identity) {
-          waves.copyEventDiagnostics(identity)
-        }
-        onReportRequested: function (identity) {
-          waves.reportEventIssue(identity)
-        }
-        onDismissRequested: function (identity) {
-          waves.dismissEvent(identity)
-        }
       }
     }
   }

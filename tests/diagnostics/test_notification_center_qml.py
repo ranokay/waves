@@ -59,6 +59,27 @@ def test_an_active_issue_resolves_across_a_restart():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def test_a_configured_retention_window_survives_a_restart():
+    """A user-set 30-day window must be in force before the stored history is
+    read; loading first would prune at the shipped 7 days and lose the rest."""
+    sandbox = tempfile.mkdtemp(prefix="waves-notification-retention-")
+    try:
+        for flag in ("--seed-old-entry", "--expect-old-entry"):
+            proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, this file)
+                [sys.executable, str(Path(__file__).resolve()), flag],
+                env=scenario_env(sandbox),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if proc.returncode == EXIT_NO_QT:
+                require_qt()
+            if proc.returncode != EXIT_OK:
+                pytest.fail(f"{flag} failed\n" + (proc.stdout + proc.stderr).strip()[-1200:])
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def _run_scenario() -> int:
     boot = boot_main_qml()
     if isinstance(boot, int):
@@ -244,9 +265,48 @@ def _resolve_it() -> int:
     return EXIT_REGRESSED
 
 
+def _seed_old_entry() -> int:
+    boot = boot_main_qml()
+    if isinstance(boot, int):
+        return boot
+    _root, _q, _settle, bridge = boot
+    import time
+
+    from waves.events import EventDomain, application_event
+
+    # The configured window must be in force before the old entry is recorded,
+    # so the store itself keeps it; flush so the file is on disk for child two.
+    bridge.setWavesPref("notify_history_days", 30)
+    payload = application_event(EventDomain.LIBRARY, "Ten days old", key="retention-window").finish().payload()
+    bridge._history.record(payload, now=time.time() - 10 * 86400)
+    bridge._save_notification_history()
+    bridge._config_writer.flush()
+    bridge.shutdown()
+    return EXIT_OK
+
+
+def _expect_old_entry() -> int:
+    boot = boot_main_qml(keep_settings=True)
+    if isinstance(boot, int):
+        return boot
+    _root, _q, _settle, bridge = boot
+    from waves.events import EventDomain, application_event
+
+    identity = application_event(EventDomain.LIBRARY, "", key="retention-window").id
+    entry = bridge._history.entry(identity)
+    bridge.shutdown()
+    if entry is not None and str(entry["lifecycle"]) == "resolved":
+        return EXIT_OK
+    return EXIT_REGRESSED
+
+
 if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())
 if __name__ == "__main__" and "--publish-open" in sys.argv:
     raise SystemExit(_publish_open())
 if __name__ == "__main__" and "--resolve-it" in sys.argv:
     raise SystemExit(_resolve_it())
+if __name__ == "__main__" and "--seed-old-entry" in sys.argv:
+    raise SystemExit(_seed_old_entry())
+if __name__ == "__main__" and "--expect-old-entry" in sys.argv:
+    raise SystemExit(_expect_old_entry())

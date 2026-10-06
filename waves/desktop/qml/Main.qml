@@ -9421,7 +9421,6 @@ ApplicationWindow {
   // ====================================================================
   NotificationToasts {
     id: notificationToasts
-    host: root
     z: 400
     anchors.right: parent.right
     anchors.rightMargin: 22

@@ -11,8 +11,6 @@ from urllib.parse import parse_qs
 import pytest
 from support.qml import EXIT_OK, boot_main_qml, checkpoint, run_scenario, wait_until
 
-COMPLETION_KEY = "completions"
-
 
 @pytest.mark.qml
 def test_notification_toasts_hold_their_timing_focus_and_overflow_contract():
@@ -35,7 +33,15 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     from support.qml_probe import scene_js
 
     import waves.desktop.backend as bk
-    from waves.events import EventAction, EventCode, EventDomain, Lifecycle, Severity, application_event
+    from waves.events import (
+        EventAction,
+        EventCode,
+        EventDomain,
+        EventReferences,
+        Lifecycle,
+        Severity,
+        application_event,
+    )
     from waves.redaction import register_secret
 
     def keys() -> list:
@@ -138,27 +144,35 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     assert warning.id in keys(), "a warning outlives the success window"
     dismiss(warning.id)
 
-    checkpoint("nearby completions group into one notice and can be disabled")
-    completions = [
-        application_event(
+    checkpoint("nearby completions group per provider and can be disabled")
+
+    def completion(name: str, provider: str):
+        return application_event(
             EventDomain.DOWNLOAD,
             f"Finished Track {name}",
-            key=f"toast-job-{name}",
+            key=f"toast-job-{provider}-{name}",
             code=EventCode.COMPLETED,
             severity=Severity.SUCCESS,
             lifecycle=Lifecycle.RESOLVED,
+            references=EventReferences(provider_id=provider),
         )
-        for name in ("A", "B", "C")
-    ]
-    for event in completions:
-        publish(event)
+
+    publish(completion("A", "apple"))
+    publish(completion("B", "apple"))
     wait_until(
-        lambda: keys() == [COMPLETION_KEY] and entry(0).get("title") == "Finished 3 downloads",
+        lambda: keys() == ["completions:apple"] and entry(0).get("title") == "Finished 2 downloads",
         timeout_ms=15000,
-        message="one completion notice",
+        message="apple completions merge",
     )
-    assert entry(0)["title"] == "Finished 3 downloads"
-    assert len(entry(0)["details"]) == 3
+    publish(completion("C", "tidal"))
+    wait_until(
+        lambda: keys() == ["completions:apple", "completions:tidal"],
+        timeout_ms=15000,
+        message="the other provider stays its own notice",
+    )
+    assert entry(0)["title"] == "Finished 2 downloads"
+    assert len(entry(0)["details"]) == 2
+    assert entry(1)["title"] == "Finished Track C", "a lone completion keeps its own summary"
     q(
         scene_js(
             "findFirst(notificationToasts, function (o) { return o.objectName === 'notificationExpand'; }).triggered();"
@@ -175,18 +189,11 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         )
     ), "the completion aggregate hides the copy/report affordances that need a retained entry"
     bridge.setWavesPref("notify_completion_toasts", False)
-    quiet = application_event(
-        EventDomain.DOWNLOAD,
-        "Finished Track D",
-        key="toast-job-D",
-        code=EventCode.COMPLETED,
-        severity=Severity.SUCCESS,
-        lifecycle=Lifecycle.RESOLVED,
-    )
-    publish(quiet)
-    settle(300)
-    assert keys() == [COMPLETION_KEY], "completion toasts can be disabled"
-    wait_until(lambda: keys() == [], timeout_ms=15000, message="completion notice expires")
+    publish(completion("D", "apple"))
+    settle(400)
+    assert keys() == ["completions:apple", "completions:tidal"], "completion toasts can be disabled"
+    assert entry(0)["title"] == "Finished 2 downloads", "the disabled completion did not merge"
+    wait_until(lambda: keys() == [], timeout_ms=15000, message="completion notices expire")
 
     checkpoint("the motion pref reaches the live stack")
     bridge.setWavesPref("notification_motion", False)

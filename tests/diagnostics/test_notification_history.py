@@ -165,6 +165,22 @@ def test_finish_matching_resolves_the_stored_scope_and_only_once(tmp_path):
     assert history.finish_matching(domain="download", job_id=1, now=1003.0) is False, "already terminal"
 
 
+def test_finish_one_dismisses_a_single_retained_active_entry(tmp_path):
+    history = NotificationHistory(str(tmp_path / "notifications.json"))
+    first = _payload("job:1", "One")
+    second = _payload("job:2", "Two")
+    history.record(first, now=1000.0)
+    history.record(second, now=1001.0)
+
+    assert history.finish_one(first["id"], "dismissed", now=1002.0) is True
+    entry = history.entry(first["id"])
+    assert entry["lifecycle"] == "dismissed" and entry["actions"] == []
+    assert entry["updated_at"] == 1002.0
+    assert history.entry(second["id"])["lifecycle"] == "active"
+    assert history.finish_one(first["id"], "dismissed", now=1003.0) is False, "already terminal"
+    assert history.finish_one("missing", "dismissed") is False
+
+
 def test_finish_matching_honours_provider_and_identity(tmp_path):
     history = NotificationHistory(str(tmp_path / "notifications.json"))
     apple = application_event(

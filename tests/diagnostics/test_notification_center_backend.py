@@ -135,6 +135,22 @@ def test_a_resolution_reaches_the_retained_history_without_a_live_index_entry(ev
     assert changed
 
 
+def test_dismissing_a_restored_issue_still_reaches_the_store(event_loop, tmp_path):
+    """A retained issue restored after a restart has no live index entry, so the
+    relay emits nothing; the bridge's dismiss must close the stored entry."""
+    from waves.desktop.diagnostics.events import ApplicationEvents
+
+    stub, changed = _history_stub(tmp_path)
+    payload = application_event(EventDomain.LIBRARY, "Folder unreachable", key="restored").payload()
+    stub._record_notification(payload)
+    stub._events = ApplicationEvents()  # a fresh process: nothing active in the index
+    stub.dismissEvent = _bind(stub, "dismissEvent")
+    stub.dismissEvent(payload["id"])
+    event_loop.processEvents()
+    assert stub._history.entry(payload["id"])["lifecycle"] == "dismissed"
+    assert changed
+
+
 def test_factory_wipe_covers_the_notification_history():
     assert "notifications.json" in bk._FACTORY_WIPE_FILES
     assert "notifications.json.bak" in bk._FACTORY_WIPE_FILES

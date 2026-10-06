@@ -16,7 +16,6 @@ Rectangle {
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
-  readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property color cyan: "#56c8d8"   // HIGH tier + queued
@@ -40,11 +39,6 @@ Rectangle {
   // A synthesized aggregate (merged completions) has no retained entry behind
   // it: copy-diagnostics and report would resolve nothing, so they hide.
   property bool backendEntry: true
-
-  signal actionRequested(string identity, string action)
-  signal copyRequested(string identity)
-  signal reportRequested(string identity)
-  signal dismissRequested(string identity)
 
   readonly property string identity: String(ncard.entry.id || "")
   readonly property string severity: String(ncard.entry.severity || "info")
@@ -164,7 +158,7 @@ Rectangle {
         icon: "close"
         compact: true
         accessibleLabel: "Dismiss notification"
-        onClicked: ncard.dismissRequested(ncard.identity)
+        onClicked: waves.dismissEvent(ncard.identity)
       }
     }
     Text {
@@ -188,7 +182,7 @@ Rectangle {
           objectName: "notificationAction_" + String(modelData)
           compact: true
           label: ncard.actionLabel(String(modelData))
-          onClicked: ncard.actionRequested(ncard.identity, String(modelData))
+          onClicked: waves.eventAction(ncard.identity, String(modelData))
         }
       }
       Item {
@@ -229,7 +223,7 @@ Rectangle {
           compact: true
           label: "COPY DIAGNOSTICS"
           accessibleLabel: "Copy redacted diagnostics"
-          onClicked: ncard.copyRequested(ncard.identity)
+          onClicked: waves.copyEventDiagnostics(ncard.identity)
         }
         ActionButton {
           objectName: "notificationReportIssue"
@@ -237,7 +231,7 @@ Rectangle {
           compact: true
           label: "REPORT ISSUE"
           accessibleLabel: "Open a reviewable issue draft"
-          onClicked: ncard.reportRequested(ncard.identity)
+          onClicked: waves.reportEventIssue(ncard.identity)
         }
         Item {
           Layout.fillWidth: true

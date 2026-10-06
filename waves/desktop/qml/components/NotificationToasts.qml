@@ -4,10 +4,11 @@ import "../primitives"
 
 // The transient half of the notification center: the live toast stack.
 // It listens to the bridge's applicationEvent signal, shows at most three
-// notices, merges nearby download completions into one aggregate, updates a
-// repeated issue in place (its count rides the occurrences field), pauses each
-// notice's dismissal while the pointer or keyboard focus rests on it, and sends
-// anything over the limit, plus every resolved notice, to the persistent center.
+// notices, merges nearby download completions per provider into one aggregate,
+// updates a repeated issue in place (its count rides the occurrences field),
+// pauses each notice's dismissal while the pointer or keyboard focus rests on
+// it, and sends anything over the limit, plus every resolved notice, to the
+// persistent center.
 // The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
@@ -23,11 +24,13 @@ Item {
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
 
-  required property var host
   signal openCenterRequested
 
   readonly property int maxVisible: 3
-  readonly property string completionKey: "completions"
+  // One aggregate per provider: a completion notice groups its own provider's
+  // nearby jobs; unrelated providers stay separate notices (the event carries
+  // no richer batch identity yet).
+  readonly property string completionPrefix: "completions:"
   // Re-read on the pref's changed signal; the binding alone cannot see an
   // edit (wavesPref is a slot call, not a notifying property).
   property bool motion: waves.wavesPref("notification_motion") !== false
@@ -40,9 +43,10 @@ Item {
   // Notices the three-visible limit kept out of the stack; the pill above the
   // stack carries the count and opens the center. Reset when the center opens.
   property int overflow: 0
-  // The completion aggregate's accumulated lines; it lives beside the model
-  // (ListModel roles cannot hold a mutable JS array) and resets with the row.
-  property var completionLines: []
+  // Each completion aggregate's accumulated lines, keyed by aggregate key;
+  // it lives beside the model (ListModel roles cannot hold a mutable JS array)
+  // and resets with its row.
+  property var completionLines: ({})
 
   function lifetimeFor(severity) {
     if (severity === "error")
@@ -72,10 +76,6 @@ Item {
     return keys
   }
 
-  function toastCount() {
-    return toastModel.count
-  }
-
   function toastJson(index) {
     if (index < 0 || index >= toastModel.count)
       return ""
@@ -86,8 +86,11 @@ Item {
     var index = indexOfKey(key)
     if (index >= 0)
       toastModel.remove(index)
-    if (key === completionKey)
-      completionLines = []
+    if (String(key).indexOf(completionPrefix) === 0) {
+      var aggregates = completionLines
+      delete aggregates[key]
+      completionLines = aggregates
+    }
   }
 
   function beginLeave(key) {
@@ -106,24 +109,20 @@ Item {
     overflow = 0
   }
 
-  function dismissKey(key) {
-    if (key === completionKey) {
-      beginLeave(key)
-      return
-    }
-    waves.dismissEvent(key)
-  }
-
   function mergeCompletion(payload) {
+    var refs = payload.references || {}
+    var key = completionPrefix + String(refs.provider_id || "")
     var line = String(payload.summary || "Finished a download")
-    var lines = completionLines.slice()
+    var lines = (completionLines[key] || []).slice()
     lines.push(line)
-    completionLines = lines
+    var aggregates = completionLines
+    aggregates[key] = lines
+    completionLines = aggregates
     var shown = lines.slice(0, 12)
     if (lines.length > 12)
       shown.push("…and " + (lines.length - 12) + " more in the notification center")
     var entry = {
-      id: completionKey,
+      id: key,
       severity: "success",
       title: lines.length === 1 ? line : "Finished " + lines.length + " downloads",
       summary: "",
@@ -132,7 +131,7 @@ Item {
       actions: [],
       occurrences: 1
     }
-    var index = indexOfKey(completionKey)
+    var index = indexOfKey(key)
     if (index >= 0) {
       toastModel.setProperty(index, "entry", entry)
       return
@@ -142,7 +141,7 @@ Item {
       return
     }
     toastModel.append({
-      key: completionKey,
+      key: key,
       entry: entry,
       dismissible: false,
       lifetime: 4000
@@ -238,7 +237,7 @@ Item {
         required property var entry
         required property bool dismissible
         required property int lifetime
-        readonly property bool completion: key === notificationToasts.completionKey
+        readonly property bool completion: key.indexOf(notificationToasts.completionPrefix) === 0
         // A notice waiting its dismissal window out. Sticky errors (lifetime
         // 0) never start one; the timer leaves them alone. The window is armed
         // in Component.onCompleted, because onEntryChanged may fire while the
@@ -304,18 +303,6 @@ Item {
           entry: toast.entry
           dismissible: toast.dismissible
           backendEntry: !toast.completion
-          onActionRequested: function (identity, action) {
-            waves.eventAction(identity, action)
-          }
-          onCopyRequested: function (identity) {
-            waves.copyEventDiagnostics(identity)
-          }
-          onReportRequested: function (identity) {
-            waves.reportEventIssue(identity)
-          }
-          onDismissRequested: function (identity) {
-            notificationToasts.dismissKey(identity)
-          }
         }
       }
     }

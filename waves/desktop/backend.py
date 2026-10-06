@@ -4860,11 +4860,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # _events; this store only retains (and resolves) what was announced.
         self._history_path = os.path.join(os.path.dirname(self._waves_prefs_path), "notifications.json")
         self._history = NotificationHistory(self._history_path)
-        self._history.load()
+        # The configured window must be in force BEFORE load(): load prunes
+        # with whatever limits the store holds, and the shipped defaults would
+        # silently discard entries a wider user window keeps.
         self._history.set_limits(
             max_entries=self._waves_pref_int("notify_history_max", 200),
             max_age_days=self._waves_pref_int("notify_history_days", 7),
         )
+        self._history.load()
         self._events.changed.connect(self._record_notification)
         self._events.resolved.connect(self._resolve_notification)
         # Reality-checked record of what has actually been downloaded (see
@@ -5292,6 +5295,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(str)
     def dismissEvent(self, identity: str) -> None:
         self._events.finish(identity, Lifecycle.DISMISSED)
+        # A retained issue restored by a restart has no live index entry, so
+        # the relay emits nothing for it; the store still honors the dismissal.
+        if self._history.finish_one(identity, Lifecycle.DISMISSED.value):
+            self._save_notification_history()
+            self.notificationsChanged.emit()
 
     @Slot(result="QVariantList")
     def notificationHistory(self) -> list:
