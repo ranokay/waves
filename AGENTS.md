@@ -1,6 +1,6 @@
 # Waves
 
-> Repository precedence: this file, `CONTEXT.md` and `docs/` override any
+> Repository precedence: this file, `GLOSSARY.md` and `docs/` override any
 > global agent instructions. On a conflict, follow the repo and flag it
 > instead of guessing.
 
@@ -20,7 +20,7 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 
 ### Domain docs
 
-Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
 For feature locations, dependency direction, naming and test owners, start with
 [the architecture map](docs/architecture.md). Commands live in [DEVELOPER.md](DEVELOPER.md).
 
