@@ -136,6 +136,18 @@ def _release_version(title: str) -> tuple[frozenset[str], frozenset[str]]:
     ):
         if re.search(pattern, text):
             markers |= {marker}
+    # Edition parsing deliberately leaves free-form qualifiers literal.
+    # Retain those details whenever they declare a different performance/mix.
+    marker_pattern = r"\b(?:live|acoustic|unplugged|instrumentals?|demos?|mono|stereo|stripped|reimagined|redux|remaster(?:ed|s)?|remix(?:ed)?|re[ -]?record(?:ed|ing)?)\b|taylor'?s version"
+    phrases = re.findall(r"[\(\[]([^\)\]]+)[\)\]]", text)
+    phrases.append(re.sub(r"[\(\[][^\)\]]*[\)\]]", "", text).strip())
+    for phrase in phrases:
+        if re.search(marker_pattern, phrase):
+            base, phrase_tags, phrase_years = edition_key(f"context ({phrase})")
+            markers |= phrase_tags & sensitive
+            years |= phrase_years
+            if base != "context":
+                markers |= {f"context:{phrase}"}
     if "remaster" in markers:
         years |= frozenset(re.findall(r"\b(?:19|20)\d{2}\b", text))
     return markers, years if "remaster" in markers else frozenset()

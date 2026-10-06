@@ -56,7 +56,8 @@ matching policy changes; queued consumers retain that guard through publication.
 Raw catalog durations agree within one second, preserving subsecond facts rather
 than comparing formatted lengths. Unknown explicitness or version facts cannot
 authorize substitution. Tracks and albums have automatic identity rules; audio
-ISRCs cannot qualify videos. Review confirms only the current candidate/request.
+ISRCs cannot qualify videos. Manual confirmation applies only to the current
+snapshot and request; it never grants future automatic eligibility.
 
 Albums default to Whole release: one confidently matched Edition and ordered
 track list from one provider. Engine recovery may finish remaining tracks.

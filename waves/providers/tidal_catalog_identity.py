@@ -42,9 +42,7 @@ def _facts(
         duration_ms=duration,
         explicit=item.get("explicit") if isinstance(item.get("explicit"), bool) else None,
         version=str(item.get("version") or "") if "version" in item else None,
-        release_title=" ".join(
-            filter(None, (str(release.get("title") or ""), f"({release['version']})" if release.get("version") else ""))
-        ),
+        release_title=str(release.get("title") or ""),
         release_artist=str(release_artist.get("name") or ""),
         release_version=str(release.get("version") or "") if "version" in release else None,
         release_date=str(release.get("releaseDate") or ""),

@@ -374,3 +374,28 @@ def test_missing_native_tidal_version_facts_do_not_become_plain_master_evidence(
     result = _resolve(_bridge(tidal, apple))[0].offers[0].resolution
     assert not result.automatic_eligible
     assert result.candidates[0].missing
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        "Album (Live at Wembley)",
+        "Album Acoustic",
+        "Album (Instrumental Mix)",
+        "Album Mono",
+        "Album (Remix by Other Artist)",
+    ],
+)
+def test_declared_live_or_mix_context_blocks_original_recording_eligibility(context):
+    tidal, apple, request, _ = _providers()
+    request.album["title"] = context
+    result = _resolve(_bridge(tidal, apple))[0].offers[0].resolution
+    assert not result.automatic_eligible
+    assert "version" in " ".join(result.explanations)
+
+
+def test_different_live_venues_cannot_be_collapsed_using_the_same_isrc():
+    tidal, apple, request, catalog = _providers()
+    request.album["title"] = "Album (Live at Wembley)"
+    catalog.album["attributes"]["name"] = "Album (Live in Tokyo)"
+    assert not _resolve(_bridge(tidal, apple))[0].offers[0].resolution.automatic_eligible
