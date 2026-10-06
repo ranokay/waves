@@ -75,13 +75,21 @@ def test_completion_toast_pref_flips_to_a_bool():
     assert stub._waves_prefs["notify_completion_toasts"] is False
 
 
-def test_motion_pref_can_be_turned_off():
+def test_motion_pref_can_be_turned_off_and_notifies_the_stack():
     stub = _prefs_stub()
     stub._save_waves_prefs = lambda: None
     stub._factory_reset = False
     stub.setWavesPref = _bind(stub, "setWavesPref")
+    fired = []
+
+    class _Sig:
+        def emit(self):
+            fired.append(True)
+
+    stub.notificationMotionChanged = _Sig()
     stub.setWavesPref("notification_motion", False)
     assert stub._waves_prefs["notification_motion"] is False
+    assert fired, "the toast stack only re-reads motion when the signal fires"
 
 
 def _schema_stub():

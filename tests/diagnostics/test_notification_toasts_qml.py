@@ -94,6 +94,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     assert bool(q(scene_js("return findObject(notificationToasts, 'notificationCard').expanded;")))
     click("notificationAdvanced")
     assert bool(q(scene_js("return findObject(notificationToasts, 'notificationCard').advanced;")))
+    assert bool(
+        q(
+            scene_js(
+                "var b = findFirst(notificationToasts, function (o) { return o.objectName === 'notificationCopyDiagnostics'; });"
+                " return b !== null && b.visible === true;"
+            )
+        )
+    ), "a retained entry offers copy-diagnostics"
     q(scene_js("findObject(root, 'notificationCopyDiagnostics').clicked(); return 1;"))
     copied = QGuiApplication.clipboard().text()
     assert "Download failed" in copied
@@ -151,6 +159,21 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     )
     assert entry(0)["title"] == "Finished 3 downloads"
     assert len(entry(0)["details"]) == 3
+    q(
+        scene_js(
+            "findFirst(notificationToasts, function (o) { return o.objectName === 'notificationExpand'; }).triggered();"
+            " return 1;"
+        )
+    )
+    settle(100)
+    assert bool(
+        q(
+            scene_js(
+                "var b = findFirst(notificationToasts, function (o) { return o.objectName === 'notificationCopyDiagnostics'; });"
+                " return b !== null && b.visible === false;"
+            )
+        )
+    ), "the completion aggregate hides the copy/report affordances that need a retained entry"
     bridge.setWavesPref("notify_completion_toasts", False)
     quiet = application_event(
         EventDomain.DOWNLOAD,
@@ -164,6 +187,12 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle(300)
     assert keys() == [COMPLETION_KEY], "completion toasts can be disabled"
     wait_until(lambda: keys() == [], timeout_ms=15000, message="completion notice expires")
+
+    checkpoint("the motion pref reaches the live stack")
+    bridge.setWavesPref("notification_motion", False)
+    wait_until(lambda: q("notificationToasts.motion") is False, timeout_ms=10000, message="motion pref re-read")
+    bridge.setWavesPref("notification_motion", True)
+    wait_until(lambda: q("notificationToasts.motion") is True, timeout_ms=10000, message="motion pref restored")
 
     checkpoint("at most three visible; overflow waits in the center")
     infos = [

@@ -28,7 +28,15 @@ Item {
 
   readonly property int maxVisible: 3
   readonly property string completionKey: "completions"
-  readonly property bool motion: waves.wavesPref("notification_motion") !== false
+  // Re-read on the pref's changed signal; the binding alone cannot see an
+  // edit (wavesPref is a slot call, not a notifying property).
+  property bool motion: waves.wavesPref("notification_motion") !== false
+  Connections {
+    target: waves
+    function onNotificationMotionChanged() {
+      notificationToasts.motion = waves.wavesPref("notification_motion") !== false
+    }
+  }
   // Notices the three-visible limit kept out of the stack; the pill above the
   // stack carries the count and opens the center. Reset when the center opens.
   property int overflow: 0
@@ -295,6 +303,7 @@ Item {
           width: parent.width
           entry: toast.entry
           dismissible: toast.dismissible
+          backendEntry: !toast.completion
           onActionRequested: function (identity, action) {
             waves.eventAction(identity, action)
           }

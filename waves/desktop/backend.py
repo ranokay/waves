@@ -3924,6 +3924,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     scanningChanged = Signal()
     motionBgChanged = Signal()  # motion_background pref flipped; Main.qml re-reads it
     hoverMotionChanged = Signal()  # hover_control_motion pref flipped; Main.qml re-reads it
+    notificationMotionChanged = Signal()  # notification_motion pref flipped; the toast stack re-reads it
     artHoverTiltChanged = Signal()  # art_hover_tilt pref flipped; Main.qml re-reads it
     videoHoverPeekChanged = Signal()  # video_hover_peek pref flipped; Main.qml re-reads it
     diagnosticsExported = Signal(str)  # export finished; arg = bundle path ("" = failed)
@@ -12379,6 +12380,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self.artHoverTiltChanged.emit()
         elif key == "video_hover_peek":
             self.videoHoverPeekChanged.emit()
+        elif key == "notification_motion":
+            self.notificationMotionChanged.emit()
         elif key in ("notify_history_max", "notify_history_days") and value != old:
             self._apply_notification_limits()
         elif key == "verbose_diagnostics":

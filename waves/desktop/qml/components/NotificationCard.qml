@@ -37,6 +37,9 @@ Rectangle {
   property bool expanded: false
   // Completion aggregates have no backend identity to dismiss.
   property bool dismissible: true
+  // A synthesized aggregate (merged completions) has no retained entry behind
+  // it: copy-diagnostics and report would resolve nothing, so they hide.
+  property bool backendEntry: true
 
   signal actionRequested(string identity, string action)
   signal copyRequested(string identity)
@@ -222,6 +225,7 @@ Rectangle {
         }
         ActionButton {
           objectName: "notificationCopyDiagnostics"
+          visible: ncard.backendEntry
           compact: true
           label: "COPY DIAGNOSTICS"
           accessibleLabel: "Copy redacted diagnostics"
@@ -229,6 +233,7 @@ Rectangle {
         }
         ActionButton {
           objectName: "notificationReportIssue"
+          visible: ncard.backendEntry
           compact: true
           label: "REPORT ISSUE"
           accessibleLabel: "Open a reviewable issue draft"
