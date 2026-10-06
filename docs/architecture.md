@@ -42,12 +42,14 @@ flowchart TD
   `redaction.py` for privacy, and `events.py` for typed redacted application events. Do not borrow another domain's private
   helpers for these operations.
 
-This map names the current implementation, including subordinate engine contracts
-and captured queued intent. Remaining accepted extensions follow:
+This map names the current implementation, including subordinate engine contracts,
+captured queued intent and the notification-center consumer of
+[structured redacted events](adr/0013-redacted-event-lifecycle.md). Remaining
+accepted extensions follow:
 [Provider → Engine → Runtime](adr/0010-provider-engine-runtime-boundary.md),
 [captured fulfillment intent and catalog offers](adr/0011-captured-fulfillment-intent.md),
-[composable surfaces/Settings](adr/0012-composable-provider-surfaces.md), and the notification-center consumer of
-[structured redacted events](adr/0013-redacted-event-lifecycle.md). Add those
+and [composable surfaces/Settings](adr/0012-composable-provider-surfaces.md).
+Add those
 contracts within their existing provider, download, metadata and desktop owners;
 do not infer new implemented folders or a global manager from the target design.
 Capability release requires packaged/native, account/runtime and delivered-media

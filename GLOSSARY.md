@@ -107,3 +107,9 @@ _Avoid_: pending, paused, waiting
 **Twin**:
 Files sharing one track's attach identity (title, artist, and play length) that count as a single track — an Atmos copy attaching to its stereo canonical entry, never counted twice.
 _Avoid_: duplicate, match, copy
+
+**Notification center**:
+The application's product history of structured events: transient toasts for
+new ones and retained, redacted entries bounded by count and age. Active issues
+stay until resolved or dismissed.
+_Avoid_: alerts panel, message log
