@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import replace
+from threading import Event
 
 import pytest
 from support.qml import boot_main_qml, run_scenario, seed_tidal_search
@@ -27,6 +28,7 @@ def scenario():
     from waves.providers.catalog_offers import AvailabilityEvidence
 
     class LocalProvider(StubProvider):
+        probe_hook = staticmethod(lambda: None)
         identity_kinds = frozenset({"track"})
         quality_options = (
             QualityOption(QualityTier.LOSSLESS, "Lossless requirement"),
@@ -59,6 +61,7 @@ def scenario():
             return CatalogLookup((self.catalog_identity(origin.kind, "2"),))
 
         def probe_availability(self, identity, ask):
+            self.probe_hook()
             return AvailabilityEvidence()
 
     root, q, settle, bridge = boot_main_qml()
@@ -178,6 +181,34 @@ def scenario():
     assert read("return b.chooserTier;") == "HIGH"
     assert read("return b.chooserNotice.length > 0;")
     read("b.closeChooser(); return true;")
+    # Library changes replace in-flight evidence without resetting user choices.
+    for field in ("_library_gen", "_library_stamp"):
+        bridge.threadpool.waitForDone()
+        started, released = Event(), Event()
+
+        def hold_probe(started=started, released=released):
+            started.set()
+            assert released.wait(5)
+
+        providers[0].probe_hook = hold_probe
+        read("b.openChooser(); b.chooserPickTier('HIGH'); return true;")
+        assert started.wait(3)
+        request_id = read("return b.chooserOfferRequest;")
+        assert read("return b.chooserEvidenceText;") == "Checking item availability…"
+        setattr(bridge, field, getattr(bridge, field) + 1)
+        providers[0].probe_hook = lambda: None
+        try:
+            bridge.libraryPresenceChanged.emit()
+            assert read("return b.chooserOfferRequest;") > request_id
+        finally:
+            released.set()
+        bridge.threadpool.waitForDone()
+        settle(100)
+        assert read("return b.chooserOpen;")
+        assert read("return b.chooserTier;") == "HIGH"
+        assert read("return b.chooserEvidenceText;") != "Checking item availability…"
+        assert read("return b.chooserEvidenceExpiry > 0;")
+        read("b.closeChooser(); return true;")
     print("Chooser switches, confirmation, many offers, long names, keyboard and bounds passed")
     return 0
 

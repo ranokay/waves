@@ -747,6 +747,9 @@ Rectangle {
       }
       db.chooserEvidenceText = "Exact item availability unknown"
     }
+    function onLibraryPresenceChanged() {
+      db.refreshOfferEvidence()
+    }
     function onProviderStateChanged(providerId) {
       if (db.chooserOpen) {
         db.chooserPendingSwitch = null

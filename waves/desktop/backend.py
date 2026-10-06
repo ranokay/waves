@@ -10419,7 +10419,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 identity.explicit,
             )
             # A title-only candidate is not proof of this recording or Edition.
-            library_present = True if verdict.get("sure") else None if verdict.get("present") else False
+            if verdict.get("sure"):
+                library_present = True
+            elif not verdict.get("present"):
+                library_present = False
         rec = self._ownership.ownership_of(
             identity.media_id, audio_type=audio_type if identity.kind == "track" else None
         )

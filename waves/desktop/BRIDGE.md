@@ -384,7 +384,8 @@ Track Library presence comes from the scanned match index independently of
 provider Ownership. An unbuilt index or unproven candidate stays unknown;
 an owned download outside the Library does not establish Library presence.
 Library folder-generation or index-publication changes invalidate the request
-through memory-only guards.
+through memory-only guards. An open Chooser requests replacement evidence on
+`libraryPresenceChanged`, retaining its provider and requirement choices.
 An engine pin is applied only to its selected provider's evidence, even when
 the origin provider remains unpinned.
 
