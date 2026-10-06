@@ -163,7 +163,12 @@ def test_bridge_only_dispatches_advertised_current_actions(event_loop, monkeypat
     event_loop.processEvents()
     row = {"status": "failed"}
     retries = []
-    bridge = SimpleNamespace(_events=relay, _queue_item=lambda qid: row, retryQueueItem=retries.append)
+    bridge = SimpleNamespace(
+        _events=relay,
+        _history=SimpleNamespace(finish_one=lambda *args, **kwargs: False),
+        _queue_item=lambda qid: row,
+        retryQueueItem=retries.append,
+    )
     assert not WavesBridge.eventAction(bridge, event.id, "arbitrary_url")
     assert WavesBridge.eventAction(bridge, event.id, "copy_diagnostics")
     assert "private123" not in copied[0]
