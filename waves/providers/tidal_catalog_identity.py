@@ -41,9 +41,12 @@ def _facts(
         identifier=str(item.get("upc" if kind == "album" else "isrc") or ""),
         duration_ms=duration,
         explicit=item.get("explicit") if isinstance(item.get("explicit"), bool) else None,
-        version=str(item.get("version") or "") if "title" in item else None,
-        release_title=str(release.get("title") or ""),
+        version=str(item.get("version") or "") if "version" in item else None,
+        release_title=" ".join(
+            filter(None, (str(release.get("title") or ""), f"({release['version']})" if release.get("version") else ""))
+        ),
         release_artist=str(release_artist.get("name") or ""),
+        release_version=str(release.get("version") or "") if "version" in release else None,
         release_date=str(release.get("releaseDate") or ""),
         release_upc=str(release.get("upc") or ""),
         track_number=_positive(item.get("trackNumber")),
@@ -71,6 +74,7 @@ def read_identity(session: Session, kind: str, raw_id: str) -> CatalogIdentity:
     resources = response.get("items") or []
     tracks = tuple(_facts(track, "track", item) for track in resources[:MAX_TRACKS])
     complete = not (response.get("links") or {}).get("next") and len(resources) == _positive(item.get("numberOfTracks"))
+    complete = complete and not item.get("numberOfVideos")
     return _facts(item, kind, tracks=tracks, complete=complete)
 
 
@@ -86,11 +90,20 @@ def find_candidates(session: Session, origin: CatalogIdentity) -> CatalogLookup:
         response = session.request.request(
             "GET",
             kind,
-            params={key: origin.identifier.strip().upper().replace("-", ""), "page[limit]": MAX_CANDIDATES},
+            params={
+                key: origin.identifier.strip().upper().replace("-", ""),
+                "page[limit]": MAX_CANDIDATES,
+                "limit": MAX_CANDIDATES,
+            },
             base_url=session.config.openapi_v2_location,
         ).json()
         resources = response.get("data") or []
-        complete = not (response.get("links") or {}).get("next") and len(resources) < MAX_CANDIDATES
+        complete = (
+            "data" in response
+            and not response.get("errors")
+            and not (response.get("links") or {}).get("next")
+            and len(resources) < MAX_CANDIDATES
+        )
     else:
         response = session.request.request(
             "GET",

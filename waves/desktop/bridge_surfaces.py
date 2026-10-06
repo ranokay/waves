@@ -173,7 +173,7 @@ def _session_logged_in(bridge, provider) -> bool:
         return False
 
 
-def _provider_readiness(bridge, provider) -> ProviderReadiness:
+def provider_readiness(bridge, provider) -> ProviderReadiness:
     """One provider's live facts, refined by its registered desktop adapter."""
     compose = getattr(provider, "readiness", None)
     if compose is None:
@@ -201,6 +201,10 @@ def _provider_readiness(bridge, provider) -> ProviderReadiness:
     except Exception:
         logger.debug("Provider account read failed", exc_info=True)
     return compose(enabled=enabled, signed_in=signed_in)
+
+
+# Preserve the established backend imports and monkeypatch surface.
+_provider_readiness = provider_readiness
 
 
 def _readiness_payload(readiness: ProviderReadiness) -> dict:

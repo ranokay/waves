@@ -17,6 +17,7 @@ def recording(media_id="tidal:1", **changes):
             explicit=False,
             version="",
             release_title="Album",
+            release_version="",
         ),
         **changes,
     )
@@ -129,6 +130,7 @@ def release(media_id="tidal:album", **changes):
             explicit=False,
             version="",
             release_title="Album",
+            release_version="",
             release_artist="Artist",
             release_date="2020-01-01",
             release_upc="123456789012",
@@ -198,3 +200,31 @@ def test_remaster_year_is_identity_evidence_even_when_isrc_is_shared():
 def test_candidate_bound_does_not_hide_collisions_behind_an_eligible_first_row():
     candidates = tuple(recording(f"apple:{index}") for index in range(11))
     assert not resolve_candidates(recording(), CatalogLookup(candidates)).automatic_eligible
+
+
+def test_separate_release_version_and_unparseable_remaster_suffix_are_not_lost():
+    for candidate in (
+        recording("apple:2", release_version="2015 Remaster"),
+        recording("apple:2", release_title="Album Remastered 2015"),
+    ):
+        assert not resolve_candidates(recording(), CatalogLookup((candidate,))).automatic_eligible
+
+
+def test_album_internal_rating_contradiction_cannot_authorize_substitution():
+    origin = release(tracks=(recording(explicit=True, track_number=1, disc_number=1),))
+    candidate = release("apple:album", tracks=origin.tracks)
+    assert not resolve_candidates(origin, CatalogLookup((candidate,))).automatic_eligible
+
+
+def test_strict_edition_compares_real_release_dates_without_timestamp_decoration():
+    origin = release(release_date="2020-01-01T00:00:00Z")
+    assert resolve_candidates(origin, CatalogLookup((release("apple:album"),))).automatic_eligible
+    assert not resolve_candidates(
+        release(release_date="2020"), CatalogLookup((release("apple:album", release_date="2020"),))
+    ).automatic_eligible
+
+
+def test_strict_edition_preserves_a_separate_deluxe_version_fact():
+    origin = release()
+    candidate = release("apple:album", release_version="Deluxe")
+    assert not resolve_candidates(origin, CatalogLookup((candidate,))).automatic_eligible

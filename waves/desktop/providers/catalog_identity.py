@@ -11,7 +11,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from waves.desktop.bridge_surfaces import _provider_readiness
+from waves.desktop.bridge_surfaces import provider_readiness
 from waves.desktop.providers.lifecycle import ProviderToken, provider_contexts
 from waves.ids import namespaced_id, provider_of_id
 from waves.metadata.catalog_identity import (
@@ -64,20 +64,34 @@ def resolve_selected(
         raise ValueError(message)
     contexts = provider_contexts(bridge)
     providers = bridge.providers
-    tokens = {pid: contexts.capture(pid) for pid in providers}
-    policies = {pid: bridge.settings.data.download_policies.effective(pid).matching for pid in providers}
-    stamps = {pid: provider.catalog_identity_context() for pid, provider in providers.items()}
+    selected_ids = tuple(dict.fromkeys((*provider_ids, *(provider_of_id(item.media_id) for item in selections))))
+    selected_providers = {pid: providers[pid] for pid in selected_ids if pid in providers}
+    tokens = {pid: contexts.capture(pid) for pid in selected_providers}
+    policies = {pid: bridge.settings.data.download_policies.effective(pid).matching for pid in selected_providers}
+    stamps = {pid: _stamp(provider) for pid, provider in selected_providers.items()}
     results = tuple(
-        _resolve_entry(bridge, selection, provider_ids, current, tokens, policies) for selection in selections
+        _resolve_entry(bridge, selection, provider_ids, current, tokens, policies, stamps) for selection in selections
     )
     return tuple(_validate_entry(bridge, result, current, tokens, policies, stamps) for result in results)
 
 
 def _ready(bridge, provider: Provider, kind: str) -> bool:
-    return (
-        kind in provider.identity_kinds
-        and _provider_readiness(bridge, provider).for_operation(Capability.CATALOG).state == ReadinessState.READY
-    )
+    try:
+        return (
+            kind in provider.identity_kinds
+            and provider_readiness(bridge, provider).for_operation(Capability.CATALOG).state == ReadinessState.READY
+        )
+    except Exception:
+        logger.debug("Provider identity readiness failed", exc_info=True)
+        return False
+
+
+def _stamp(provider: Provider) -> tuple[str, ...] | None:
+    try:
+        return provider.catalog_identity_context()
+    except Exception:
+        logger.debug("Provider identity context failed", exc_info=True)
+        return None
 
 
 def _lookup(provider: Provider, origin: CatalogIdentity) -> CatalogLookup:
@@ -98,6 +112,7 @@ def _resolve_entry(
     current: Callable[[], bool],
     tokens: dict[str, ProviderToken],
     policies: dict[str, str],
+    stamps: dict[str, tuple[str, ...] | None],
 ) -> SelectedMatches:
     contexts = provider_contexts(bridge)
     providers = bridge.providers
@@ -107,7 +122,7 @@ def _resolve_entry(
     if not current() or origin_provider is None or not _ready(bridge, origin_provider, selection.kind):
         return SelectedMatches(selection, explanations=("Origin is unavailable or this media kind is unsupported.",))
     origin_token = tokens[origin_provider.id]
-    if not contexts.current(origin_token):
+    if not contexts.current(origin_token) or stamps[origin_provider.id] is None:
         return SelectedMatches(selection, explanations=("Origin context changed; resolve again.",))
     policy = policies[origin_provider.id]
     try:
@@ -125,7 +140,11 @@ def _resolve_entry(
         token = tokens[pid]
         if not current() or not contexts.current(origin_token) or not contexts.current(token):
             continue
-        lookup = _lookup(provider, origin)
+        lookup = (
+            _lookup(provider, origin)
+            if stamps[pid] is not None
+            else CatalogLookup(complete=False, explanations=("Provider catalog context is unavailable.",))
+        )
         resolution = resolve_candidates(origin, lookup, policy)
         offers.append(ProviderMatch(pid, resolution))
     return SelectedMatches(selection, tuple(offers))
@@ -137,7 +156,7 @@ def _validate_entry(
     current: Callable[[], bool],
     tokens: dict[str, ProviderToken],
     policies: dict[str, str],
-    stamps: dict[str, tuple[str, ...]],
+    stamps: dict[str, tuple[str, ...] | None],
 ) -> SelectedMatches:
     contexts = provider_contexts(bridge)
     providers = bridge.providers
@@ -153,14 +172,15 @@ def _validate_entry(
     # consistent candidates, rather than retaining confirmable old facts.
     valid = current() and contexts.current(origin_token) and _ready(bridge, origin_provider, selection.kind)
     valid = valid and bridge.settings.data.download_policies.effective(origin_provider.id).matching == policy
-    valid = valid and origin_provider.catalog_identity_context() == stamps[origin_provider.id]
+    valid = valid and stamps[origin_provider.id] is not None and _stamp(origin_provider) == stamps[origin_provider.id]
     if not valid:
         return SelectedMatches(selection, explanations=("Selected catalog context changed; resolve again.",))
     checked = tuple(
         offer
         if contexts.current(tokens[offer.provider_id])
         and _ready(bridge, providers[offer.provider_id], selection.kind)
-        and providers[offer.provider_id].catalog_identity_context() == stamps[offer.provider_id]
+        and stamps[offer.provider_id] is not None
+        and _stamp(providers[offer.provider_id]) == stamps[offer.provider_id]
         else ProviderMatch(
             offer.provider_id,
             CatalogResolution(

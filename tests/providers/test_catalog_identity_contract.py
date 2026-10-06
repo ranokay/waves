@@ -54,20 +54,30 @@ class AppleCatalog:
         self.album = _apple_album()
         self.matches = [{"id": "2"}]
         self.next = None
+        self.extra_tracks = {}
+        self.extra_albums = {}
+        self.include_meta = True
+        self.filter_matches = None
         self.on_lookup = lambda: None
 
     async def _amp_request(self, uri, params):
         self.calls.append((uri, params))
-        if uri.endswith("/songs/2"):
-            resource = deepcopy(self.track)
+        if "/songs/" in uri:
+            raw_id = uri.rsplit("/", 1)[-1]
+            resource = deepcopy(self.track if raw_id == "2" else self.extra_tracks[raw_id])
             resource["relationships"] = {"albums": {"data": [deepcopy(self.album)]}}
             return {"data": [resource]}
-        if uri.endswith("/albums/20"):
-            return {"data": [deepcopy(self.album)]}
+        if "/albums/" in uri:
+            raw_id = uri.rsplit("/", 1)[-1]
+            return {"data": [deepcopy(self.album if raw_id == "20" else self.extra_albums[raw_id])]}
         if uri.endswith("/search"):
             return {"results": {"songs": {"data": self.matches}}}
         self.on_lookup()
-        return {"data": self.matches, "next": self.next}
+        response = {"data": self.matches, "next": self.next}
+        if self.include_meta:
+            field = "upc" if "filter[upc]" in params else "isrc"
+            response["meta"] = {"filters": {field: {params[f"filter[{field}]"]: self.filter_matches or self.matches}}}
+        return response
 
 
 class TidalRequest:
@@ -79,6 +89,7 @@ class TidalRequest:
             "artist": {"name": "Artist"},
             "isrc": "USABC1200001",
             "duration": 180.123,
+            "version": None,
             "explicit": False,
             "trackNumber": 1,
             "volumeNumber": 1,
@@ -91,6 +102,7 @@ class TidalRequest:
             "upc": "123456789012",
             "releaseDate": "2020-01-01",
             "numberOfTracks": 1,
+            "version": None,
             "explicit": False,
         }
         self.matches = [{"id": "1"}]
@@ -256,6 +268,7 @@ def test_provider_failure_is_isolated_and_sdk_secrets_never_enter_explanations()
     broken.id = "broken"
     broken.catalog_candidates = Broken.catalog_candidates.__get__(broken)
     broken.readiness = lambda **kwargs: tidal.readiness(signed_in=True)
+    broken.catalog_identity_context = lambda: ()
     bridge = _bridge(tidal, apple, broken)
     results = _resolve(bridge, provider_ids=("broken", "apple"))[0].offers
     assert results[0].resolution.state == "unresolved"
@@ -278,3 +291,86 @@ def test_context_bound_is_checked_before_network_work():
     with pytest.raises(ValueError, match="bound"):
         _resolve(_bridge(tidal, apple), (CatalogSelection("track", "1"),) * 65)
     assert not request.calls and not catalog.calls
+
+
+def test_apple_filter_metadata_exposes_hidden_identifier_collision():
+    tidal, apple, _, catalog = _providers()
+    catalog.filter_matches = [{"id": "2"}, {"id": "3"}]
+    catalog.extra_tracks["3"] = _apple_track("3", contentRating="explicit")
+    result = _resolve(_bridge(tidal, apple))[0].offers[0].resolution
+    assert result.state == "ambiguous"
+    assert not result.automatic_eligible
+    assert {item.identity.media_id for item in result.candidates} == {"apple:2", "apple:3"}
+    assert "collision" in " ".join(result.explanations)
+
+
+def test_apple_missing_filter_metadata_cannot_certify_an_exhaustive_lookup():
+    tidal, apple, _, catalog = _providers()
+    catalog.include_meta = False
+    result = _resolve(_bridge(tidal, apple))[0].offers[0].resolution
+    assert not result.automatic_eligible
+    assert result.candidates
+
+
+def test_separate_tidal_album_version_blocks_original_master_substitution():
+    tidal, apple, request, _ = _providers()
+    request.album["version"] = "2015 Remaster"
+    result = _resolve(_bridge(tidal, apple))[0].offers[0].resolution
+    assert not result.automatic_eligible
+    assert "remaster" in " ".join(result.explanations)
+
+
+@pytest.mark.parametrize("selected,stage", [(False, "stamp"), (True, "stamp"), (True, "readiness")])
+def test_another_provider_context_failure_never_aborts_healthy_results(selected, stage):
+    tidal, apple, _, _ = _providers()
+    broken = TidalProvider.__new__(TidalProvider)
+    broken.id = "broken"
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("unavailable")
+
+    broken.catalog_identity_context = fail
+    broken.readiness = fail if stage == "readiness" else lambda **kwargs: tidal.readiness(signed_in=True)
+    bridge = _bridge(tidal, apple, broken)
+    provider_ids = ("broken", "apple") if selected else ("apple",)
+    result = _resolve(bridge, provider_ids=provider_ids)[0]
+    assert result.offers[-1].provider_id == "apple"
+    assert result.offers[-1].resolution.automatic_eligible
+
+
+def test_tidal_storefront_change_invalidates_request_snapshot():
+    tidal, apple, _request, catalog = _providers()
+    tidal._tidal.session.country_code = "US"
+    catalog.on_lookup = lambda: setattr(tidal._tidal.session, "country_code", "GB")
+    result = _resolve(_bridge(tidal, apple))[0]
+    assert not result.offers
+
+
+def test_tidal_album_with_unsupported_video_entries_is_incomplete():
+    tidal, apple, request, catalog = _providers()
+    request.album["numberOfVideos"] = 1
+    catalog.matches = [{"id": "20"}]
+    result = _resolve(_bridge(tidal, apple), (CatalogSelection("album", "10"),))[0].offers[0].resolution
+    assert not result.automatic_eligible
+
+
+def test_apple_upc_metadata_cannot_hide_a_conflicting_edition():
+    tidal, apple, _, catalog = _providers()
+    catalog.matches = [{"id": "20"}]
+    catalog.filter_matches = [{"id": "20"}, {"id": "21"}]
+    different = deepcopy(catalog.album)
+    different["id"] = "21"
+    different["attributes"]["name"] = "Album (Deluxe)"
+    catalog.extra_albums["21"] = different
+    result = _resolve(_bridge(tidal, apple), (CatalogSelection("album", "10"),))[0].offers[0].resolution
+    assert not result.automatic_eligible
+    assert len(result.candidates) == 2
+
+
+@pytest.mark.parametrize("missing", ["track", "album"])
+def test_missing_native_tidal_version_facts_do_not_become_plain_master_evidence(missing):
+    tidal, apple, request, _ = _providers()
+    (request.track if missing == "track" else request.album).pop("version")
+    result = _resolve(_bridge(tidal, apple))[0].offers[0].resolution
+    assert not result.automatic_eligible
+    assert result.candidates[0].missing

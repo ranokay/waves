@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, replace
+from datetime import date
 from enum import StrEnum
 from time import time
 
@@ -40,6 +41,7 @@ class CatalogIdentity:
     # None means unknown; empty means a catalog title with no extra qualifier.
     version: str | None = None
     release_title: str = ""
+    release_version: str | None = None
     release_artist: str = ""
     release_date: str = ""
     release_upc: str = ""
@@ -139,6 +141,19 @@ def _release_version(title: str) -> tuple[frozenset[str], frozenset[str]]:
     return markers, years if "remaster" in markers else frozenset()
 
 
+def _release_date(value: str) -> str:
+    try:
+        return date.fromisoformat(value[:10]).isoformat()
+    except ValueError:
+        return ""
+
+
+def _release_title(identity: CatalogIdentity) -> str:
+    return (
+        f"{identity.release_title} ({identity.release_version})" if identity.release_version else identity.release_title
+    )
+
+
 def catalog_identifier(kind: str, value: str) -> str:
     """Canonical supported identifiers; malformed values remain missing."""
     value = value.strip().upper().replace("-", "")
@@ -172,19 +187,34 @@ class _Comparison:
             self.missing.append("precise duration")
         elif abs(origin.duration_ms - candidate.duration_ms) > 1000:
             self.conflicts.append("precise duration")
-        if not origin.release_title or not candidate.release_title:
+        if (
+            not origin.release_title
+            or not candidate.release_title
+            or origin.release_version is None
+            or candidate.release_version is None
+        ):
             self.missing.append("release version context")
         else:
             # Recording equivalence may span albums, but a declared remaster
             # cannot disappear just because its ISRC was reused.
-            if _release_version(origin.release_title) != _release_version(candidate.release_title):
+            left = _release_title(origin)
+            right = _release_title(candidate)
+            if _release_version(left) != _release_version(right):
                 self.conflicts.append("release version/remaster")
 
     def release(self) -> None:
         origin, candidate = self.origin, self.candidate
-        self.fact("release title", _text(origin.release_title), _text(candidate.release_title))
+        if (
+            not origin.release_title
+            or not candidate.release_title
+            or origin.release_version is None
+            or candidate.release_version is None
+        ):
+            self.missing.append("release Edition")
+        elif edition_key(_release_title(origin)) != edition_key(_release_title(candidate)):
+            self.conflicts.append("release Edition")
         self.fact("release artist", _text(origin.release_artist), _text(candidate.release_artist))
-        self.fact("release date", origin.release_date, candidate.release_date)
+        self.fact("release date", _release_date(origin.release_date), _release_date(candidate.release_date))
         self.fact(
             "release UPC",
             catalog_identifier("album", origin.release_upc),
@@ -197,6 +227,9 @@ class _Comparison:
 
     def ordered_tracks(self) -> None:
         origin, candidate = self.origin, self.candidate
+        for release in (origin, candidate):
+            if release.explicit is False and any(track.explicit is True for track in release.tracks[:MAX_TRACKS]):
+                self.conflicts.append("release explicitness contradicts track list")
         if not origin.tracks_complete or not candidate.tracks_complete or not origin.tracks or not candidate.tracks:
             self.missing.append("complete ordered track list")
         if origin.track_count != len(origin.tracks) or candidate.track_count != len(candidate.tracks):

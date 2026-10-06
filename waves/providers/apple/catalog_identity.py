@@ -44,6 +44,7 @@ def _facts(item: dict, kind: str, album: dict | None = None) -> CatalogIdentity:
         explicit=explicit,
         version="" if attrs.get("name") else None,
         release_title=str(release.get("name") or attrs.get("albumName") or ""),
+        release_version="" if release.get("name") or attrs.get("albumName") else None,
         release_artist=str(release.get("artistName") or ""),
         release_date=str(release.get("releaseDate") or ""),
         release_upc=str(release.get("upc") or ""),
@@ -98,8 +99,7 @@ def find_candidates(provider: AppleProvider, origin: CatalogIdentity) -> Catalog
                 params={key: origin.identifier.strip().upper().replace("-", ""), "limit": MAX_CANDIDATES},
             )
         )
-        resources = response.get("data") or []
-        complete = not response.get("next") and len(resources) < MAX_CANDIDATES
+        resources, complete = _filter_resources(response, origin.kind, identifier)
     else:
         # Manual search supplies reviewable candidates; it can never certify
         # completeness of an identifier lookup or promote missing identity.
@@ -121,3 +121,25 @@ def find_candidates(provider: AppleProvider, origin: CatalogIdentity) -> Catalog
         complete = False
     candidates = tuple(read_identity(provider, origin.kind, str(item["id"])) for item in resources[:MAX_CANDIDATES])
     return CatalogLookup(candidates, complete)
+
+
+def _filter_resources(response: dict, kind: str, identifier: str) -> tuple[list[dict], bool]:
+    """Apple may put additional matches in meta.filters rather than data."""
+    resources = response.get("data") or []
+    field = "upc" if kind == "album" else "isrc"
+    filters = ((response.get("meta") or {}).get("filters") or {}).get(field) or {}
+    listed: list[dict] = []
+    known = False
+    for value, references in filters.items():
+        if catalog_identifier(kind, value) == identifier:
+            known = True
+            listed.extend(references)
+    by_id = {str(item["id"]): item for item in (*resources, *listed)}
+    complete = (
+        known
+        and "data" in response
+        and not response.get("errors")
+        and not response.get("next")
+        and len(by_id) <= MAX_CANDIDATES
+    )
+    return list(by_id.values())[:MAX_CANDIDATES], complete
