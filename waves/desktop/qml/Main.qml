@@ -579,6 +579,7 @@ ApplicationWindow {
     // them out of the welcome surface; the legacy key is cleared.
     setupSettings.migrateOnboarding()
     root.appleLight = waves.appleStatus()
+    root.refreshNoticeCount()
     // Restore the saved window frame BEFORE the first present (see the
     // block above): apply the frame, seed the normal-frame trackers, then
     // show. The try/catch guarantees the window is shown even if the
@@ -1082,6 +1083,14 @@ ApplicationWindow {
   // Count of items still waiting/downloading (excludes done/failed/cancelled),
   // drives the header badge.
   property int activeQueueCount: 0
+  // Unresolved notification count, drives the header badge. Active issues
+  // retained by the persistent center count too, so an issue persisted across
+  // a restart keeps its badge until resolved or dismissed.
+  property int noticeCount: 0
+  function refreshNoticeCount() {
+    var status = waves.notificationStatus()
+    root.noticeCount = status && status.active !== undefined ? status.active : 0
+  }
 
   // Download-queue grouping (Completed / Failed / Stopped / Downloading / Queued)
   // A finished row lingers 5s with its ✓ DONE chip, then slides up into the
@@ -6591,6 +6600,81 @@ ApplicationWindow {
             visible: parent.activeFocus
           }
         }
+        // active notifications: unresolved notices in the persistent center
+        Rectangle {
+          objectName: "noticeBtn"
+          implicitHeight: noticeBtnRow.implicitHeight + root.btnPadV * 2
+          implicitWidth: noticeBtnRow.implicitWidth + root.btnPadH * 2
+          radius: root.btnRad
+          activeFocusOnTab: true
+          Accessible.role: Accessible.Button
+          Accessible.name: "Notifications, " + root.noticeCount + (root.noticeCount === 1 ? " active item" : " active items")
+          Accessible.onPressAction: notificationCenter.open()
+          Keys.onReturnPressed: function (event) {
+            if (!event.isAutoRepeat) {
+              event.accepted = true
+              notificationCenter.open()
+            }
+          }
+          Keys.onEnterPressed: function (event) {
+            if (!event.isAutoRepeat) {
+              event.accepted = true
+              notificationCenter.open()
+            }
+          }
+          Keys.onSpacePressed: function (event) {
+            if (!event.isAutoRepeat) {
+              event.accepted = true
+              notificationCenter.open()
+            }
+          }
+          color: "transparent"
+          border.color: root.border1
+          RowLayout {
+            id: noticeBtnRow
+            anchors.centerIn: parent
+            spacing: 7
+            Text {
+              textFormat: Text.PlainText
+              text: "NOTICES"
+              color: root.textLo
+              font.pixelSize: 13
+              font.family: root.uiFont
+              font.bold: true
+              font.letterSpacing: root.btnTrack
+            }
+            Rectangle {
+              visible: root.noticeCount > 0
+              radius: 9
+              color: root.gold
+              implicitWidth: Math.max(18, nbc.implicitWidth + 10)
+              implicitHeight: 18
+              Text {
+                id: nbc
+                textFormat: Text.PlainText
+                anchors.centerIn: parent
+                text: root.noticeCount
+                color: root.bg
+                font.family: root.mono
+                font.pixelSize: 11
+                font.bold: true
+              }
+            }
+          }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: notificationCenter.open()
+          }
+          Rectangle {
+            anchors.fill: parent
+            radius: root.btnRad
+            color: "transparent"
+            border.width: 2
+            border.color: root.accent
+            visible: parent.activeFocus
+          }
+        }
         // Per-provider status lights: one compact dot
         // per provider the bridge reports. The account actions live
         // with the accounts: sign-out is on the TIDAL card in
@@ -9330,6 +9414,31 @@ ApplicationWindow {
   LogsDrawer {
     id: logsDrawer
     host: root
+  }
+
+  // ====================================================================
+  // Notification center
+  // ====================================================================
+  NotificationToasts {
+    id: notificationToasts
+    z: 400
+    anchors.right: parent.right
+    anchors.rightMargin: 22
+    anchors.bottom: parent.bottom
+    anchors.bottomMargin: 56
+    onOpenCenterRequested: notificationCenter.open()
+  }
+  NotificationCenter {
+    id: notificationCenter
+    host: root
+    onOpenedChanged: if (opened)
+      notificationToasts.clearOverflow()
+  }
+  Connections {
+    target: waves
+    function onNotificationsChanged() {
+      root.refreshNoticeCount()
+    }
   }
 
   // ====================================================================

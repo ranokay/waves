@@ -505,6 +505,16 @@ class SettingsSchema:
                 out.update(extra)
             return out
 
+        def preference_int(key: str, default: int) -> int:
+            """A Waves pref read as a plain int; a hand-edited file may hold a string."""
+            value = self.preferences.get(key, default)
+            if isinstance(value, bool):
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
         def auto_field(key: str) -> dict:
             """Build a field dict for an engine ``Settings`` key, choosing the
             control type from the registries above."""
@@ -752,6 +762,48 @@ class SettingsSchema:
                     ),
                     "type": "bool",
                     "value": self.preference_bool("video_hover_peek"),
+                },
+                {
+                    "key": "notify_completion_toasts",
+                    "label": "Completion toasts",
+                    "help": (
+                        "A short notice appears when downloads finish. Turn this off to keep "
+                        "completions in the notification center only; warnings and errors "
+                        "always appear."
+                    ),
+                    "type": "bool",
+                    "value": self.preference_bool("notify_completion_toasts"),
+                },
+                {
+                    "key": "notification_motion",
+                    "label": "Notifications animate",
+                    "help": ("Toasts slide and fade in and out. Turn this off for instant, motion-free notices."),
+                    "type": "bool",
+                    "value": self.preference_bool("notification_motion"),
+                },
+                {
+                    "key": "notify_history_max",
+                    "label": "Keep recent notifications",
+                    "help": (
+                        "How many resolved notifications the center keeps, newest first. "
+                        "Active issues stay until they are resolved or dismissed."
+                    ),
+                    "type": "int",
+                    "value": preference_int("notify_history_max", 200),
+                    "minimum": 0,
+                    "maximum": 200,
+                },
+                {
+                    "key": "notify_history_days",
+                    "label": "Keep notifications for (days)",
+                    "help": (
+                        "A resolved notification older than this leaves the center; whichever "
+                        "limit is reached first applies."
+                    ),
+                    "type": "int",
+                    "value": preference_int("notify_history_days", 7),
+                    "minimum": 1,
+                    "maximum": 30,
                 },
                 {
                     "key": "verbose_diagnostics",
@@ -1202,6 +1254,17 @@ class SettingsSchema:
                 "card": "updates",
                 "desc": "Keep Waves current. Checks are off by default and never send any of your data.",
                 "fields": ["auto_update", "update_cadence"],
+            },
+            {
+                "group": "Notifications",
+                "id": "notifications",
+                "desc": "How Waves tells you what happened. Notifications never leave your machine.",
+                "fields": [
+                    "notify_completion_toasts",
+                    "notification_motion",
+                    "notify_history_max",
+                    "notify_history_days",
+                ],
             },
             {
                 "group": "Diagnostics",

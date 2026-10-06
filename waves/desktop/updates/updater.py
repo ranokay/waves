@@ -647,6 +647,9 @@ class AppUpdater:
     def releases_url(self) -> str:
         return f"https://github.com/{self.repo}/releases" if self.repo else ""
 
+    def repository_url(self) -> str:
+        return f"https://github.com/{self.repo}" if self.repo else ""
+
     @property
     def staging_dir(self) -> Path:
         return self.app_dir / "updates"

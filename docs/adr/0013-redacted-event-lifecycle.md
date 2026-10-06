@@ -1,6 +1,6 @@
 # 0013: structured events are redacted before presentation and retention
 
-- Status: accepted; structured event boundary implemented; notification center planned
+- Status: accepted; structured event boundary and notification center implemented
 - Decided: 2026-10-03
 - Scope: application events, actionable notifications, history and diagnostics
 
@@ -15,8 +15,10 @@ Keep the Qt boundary in desktop composition without a global subsystem manager.
 The event contract is Qt-free. Desktop composition owns queued delivery and the
 active action index. Owners provide applicability guards, checked on the GUI
 thread at delivery and again at action dispatch. Terminal lifecycle updates
-remove recovery actions. Persistent history, toast timing and notification
-preferences remain planned notification-center behavior.
+remove recovery actions. The notification center consumes those events: Main's
+toast stack and retained history (one redacted entry per identity, capped by
+the configurable count/age limits, active issues kept until resolved or
+dismissed) live under the desktop diagnostics owner.
 
 Catalog owners pair failures with successful results using the same operation
 key and provider generation. Merely starting work, completing a different

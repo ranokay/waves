@@ -110,6 +110,7 @@ def test_a_mkstemp_staging_leftover_is_wiped_by_a_factory_reset():
         "settings-migrations.json",
         "token.json",
         "waves.json",
+        "notifications.json",
         "page_cache.json",
         "browse_tile_art.json",
     ):

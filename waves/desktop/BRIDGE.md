@@ -36,6 +36,7 @@ new fulfillment capabilities remain subject to their implementation and gates.
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `applicationEvent(payload)`                           | A guarded event is delivered or its lifecycle changes; payload is redacted plain data |
 | `applicationEventActionRequested(action, providerId)` | An applicable Settings or logs action asks Main to navigate                           |
+| `notificationsChanged()`                              | The retained notification history or its active count changed                         |
 
 `applicationEvent(payload)` delivers redacted plain data on the GUI thread:
 `id`, `code`, `severity`, `domain`, `scope`, `title`, `summary`, `details`,
@@ -50,15 +51,42 @@ identity and increments `occurrences`. Recovery and dismissal publish terminal
 updates with no actions. Operations sharing a legacy signal retain distinct
 event identities; a successful setup probe does not resolve an install failure.
 Provider/job/generation guards reject stale results and
-are checked again before dispatch. The bridge retains active action context;
-persistent notification history and toast behavior have their own planned owner.
+are checked again before dispatch. The bridge retains active action context.
 
 `eventAction(id, action)` returns whether an advertised, applicable action ran.
 Allowed commands are `open_settings`, `open_logs`, `reconnect`, `retry_job`,
 `copy_diagnostics`. Reconnect and retry re-enter the existing provider/job
 flows; copy re-scrubs the event. Settings/log navigation emits
 `applicationEventActionRequested(action, providerId)` for Main to handle.
-`dismissEvent(id)` removes active actions and publishes `dismissed`.
+`dismissEvent(id)` removes active actions and publishes `dismissed`; a retained
+issue restored by a restart, which has no live action context, is dismissed in
+the stored history instead.
+
+## Notification center
+
+The notification center is the structured events' product consumer. Main.qml's
+`NotificationToasts` shows at most three notices (four-second success/info,
+eight-second warning, sticky errors), merges nearby download completions per
+provider into one aggregate, pauses dismissal while the pointer or keyboard
+focus rests on a notice, and routes anything over the limit plus every resolved
+notice to `NotificationCenter` (a right-edge drawer). The bridge owns the retained
+history: one redacted entry per event identity beside the Waves prefs
+(`notifications.json`), capped by `notify_history_max` / `notify_history_days`
+(defaults 200 / 7 days; active issues stay until resolved or dismissed).
+Resolution flows through the relay, so an owner can close a retained entry
+after a restart even when the live action index no longer holds it.
+
+| Slot                         | Contract                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `notificationHistory()`      | Every retained entry, newest update first (the center's list)                                |
+| `notificationStatus()`       | `{active, count}` for the header badge; re-read on `notificationsChanged`                    |
+| `clearNotificationHistory()` | Drops resolved/dismissed history; active issues stay discoverable                            |
+| `copyEventDiagnostics(id)`   | Copies one entry's redacted text; works for terminal history too                             |
+| `reportEventIssue(id)`       | Opens a reviewable prefilled new-issue draft for the project repository; the user submits it |
+
+Toast preferences (Settings > Notifications): `notify_completion_toasts` (off
+keeps completions in the center only), `notification_motion` (off disables the
+slide/fade), `notify_history_max` (0-200), `notify_history_days` (1-30).
 
 Legacy status/error text, install/update state messages, queue failure reasons
 and log display/copy are redacted before their consumers receive them. Existing
@@ -80,6 +108,7 @@ log, diagnostics-export and update actions remain available.
 | `settingsPersistedExternally`                                                                      | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads          |
 | `forwardRequested`                                                                                 | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                        |
 | `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged`                             | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                                 |
+| `notificationMotionChanged`                                                                        | The notification motion preference flipped; the toast stack re-reads it                                          |
 | `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                    |
 | `appleStatusChanged`                                                                               | A save moved `apple_enabled` or the session; Settings re-reads `appleStatus()`; search clears when off           |
 | `appleWrapperAuthChanged`                                                                          | The wrapper guest auth snapshot moved (login, logout, 2FA, probe); the wizard form re-reads `appleWrapperAuth()` |
