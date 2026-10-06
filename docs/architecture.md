@@ -1,7 +1,8 @@
 # Architecture and domain ownership
 
 Use this map to find a feature's implementation, UI, tests and rules. Start
-with [GLOSSARY.md](../GLOSSARY.md) for domain vocabulary and
+with [domain guidance](agents/domain.md) for vocabulary and decisions, and
+[CODING_STANDARDS.md](../CODING_STANDARDS.md) for coding conventions. Read
 [DEVELOPER.md](../DEVELOPER.md) for setup and commands. The
 [documentation index](README.md) points to specifications and ADRs.
 
@@ -128,11 +129,9 @@ shared UI, and remains responsible for shared window state.
 
 Resolve resources relative to their owning file. `ProviderLogo` resolves
 descriptor logo paths from the QML root, so moving a consumer cannot change
-their meaning. Keep QML file names unique across directories to make type
-references and searches unambiguous; update imports and inline test harnesses
-when a type moves. The build recipes include the entire QML tree.
+their meaning. The build recipes include the entire QML tree.
 
-## Public contracts and naming
+## Public contracts
 
 Catalog offer evidence and comparison live in `providers/catalog_offers.py`,
 provider adapters in `providers/tidal_offers.py` and `providers/apple/catalog_offers.py`,
@@ -140,52 +139,25 @@ and lazy guarded collection/cache in `desktop/providers/catalog_offers.py`.
 The Chooser receives neutral payloads through the bridge's `requestCatalogOffers`
 and `catalogOffersLoaded` contract; source maxima remain static requirements.
 
-- Python modules/functions/properties use `snake_case`, classes use
-  `PascalCase`, constants use `UPPER_SNAKE_CASE`. Files describe their owner
-  and operation: `settings/schema.py`, `library/scan_process.py`,
-  `updates/signing.py`. Avoid generic shared/helper/manager folders.
-- Qt slots/signals/properties retain `camelCase` because QML consumes that
-  ABI. Internal Python helpers use snake case. Do not rename serialized
-  settings or payload keys as part of an internal cleanup.
-- QML component files use `PascalCase`; IDs, functions and properties use
-  `camelCase`. Use concept names such as `QualityPicker`, `QualityBadge`,
-  `SearchField`, `MusicList`, `SavedPlaylistRow`, `Icon`, `ActionButton`.
-- Use the glossary's Provider, Engine, Edition, Version, Ownership and
-  Chooser meanings. Album/track/video describe distinct catalog kinds;
-  `media` is appropriate only for code accepting several kinds. Library
-  means scanned files; provider saved shelves are separate sources in My Music.
 - A payload's `id` is its primary media identity; `album_id` or `artist_id`
   names a relation. `provider_id` names a provider; `qid` is the established
   integer queue-job key. Media IDs are namespaced strings; legacy bare IDs
   read as TIDAL. Identity/source-stream IDs remain distinct during merges.
-- Import public helpers from their owner (`ids`, `http`, `file_integrity`,
-  settings schema/persistence, provider presentation, runtime paths).
-  Underscored names are implementation details. Existing mixins share bridge
-  state and private coordination methods intentionally; do not treat these
-  as general APIs for new domains. Their remaining coupling is documented in
-  their module docstrings. `bridge_surfaces.py` retains legacy payload helpers
-  and backend monkeypatch targets until each call site can move coherently.
-- Name behavior tests `test_<behavior>.py`, use unique basenames across the
-  suite (pytest's current import mode requires them), and put fixtures beside
-  their domain. Only widely used harnesses belong in `tests/support/`.
+- Existing mixins share bridge state and private coordination methods
+  intentionally. Their remaining coupling is documented in their module
+  docstrings. These methods are not general APIs for new domains.
+  `bridge_surfaces.py` retains legacy payload helpers and backend monkeypatch
+  targets until each call site can move coherently.
 
 ## Working and validation
 
-1. Read this map and the domain's rules, narrow with the code-review graph,
-   then read implementation and tests. Graph emptiness is not evidence of
-   absence; dynamic Python and QML relationships need source verification.
-2. Run a domain suite through `uv run --locked --all-extras pytest
-tests/<domain>/`. Markers describe execution requirements, independent of
-   folder: `qml`, `ffmpeg`, `slow`, `integration`, `account`.
-3. Use `mise run format`, then `mise run check` (`lint` aliases that gate),
-   and `mise run test-strict` alone for integrated changes. Local development
-   and manual CI use the same underlying tasks. `check`'s format hooks can
-   rewrite files; validate the final formatted tree.
-4. Moves must update source imports, QML imports/assets, test harnesses,
-   resource recipes, dynamic module names, CI/tool imports and documentation.
-   Wheel inspection and strict offscreen/process tests prove source/resource
-   wiring; native bundle signatures and live-service behavior need their own
-   evidence.
+For code exploration and impact analysis, follow [the graph workflow](agents/code-review-graph.md).
+For commands, markers, and execution constraints, read [the developer guide](../DEVELOPER.md#testing-and-verification).
+For issue delivery and review gates, follow [the implementation workflow](agents/implementation-workflow.md).
+
+Wheel inspection and strict offscreen/process tests prove source/resource
+wiring; native bundle signatures and live-service behavior need their own
+evidence.
 
 Main and the bridge still coordinate several domains. Extract only a stable
 state owner or independently testable rule, preserving Qt affinity,
