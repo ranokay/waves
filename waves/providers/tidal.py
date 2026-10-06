@@ -138,6 +138,7 @@ class TidalProvider(Provider):
     id = CTX_TIDAL
     name = "TIDAL"
     capabilities = frozenset(Capability)
+    identity_kinds = frozenset({"track", "album"})
     # TIDAL's search reply can carry dozens of artists, so its group keeps the
     # horizontal strip the page has always shown.
     search_artists_layout = "strip"
@@ -338,6 +339,23 @@ class TidalProvider(Provider):
         self._tidal.settings_apply()
 
     # ----- catalog read
+
+    def catalog_identity_context(self):
+        return (
+            self.account_id(),
+            str(getattr(self._tidal.session, "country_code", "")),
+            self._tidal.session.config.openapi_v2_location,
+        )
+
+    def catalog_identity(self, kind, raw_id):
+        from waves.providers.tidal_catalog_identity import read_identity
+
+        return read_identity(self._tidal.session, kind, raw_id)
+
+    def catalog_candidates(self, origin):
+        from waves.providers.tidal_catalog_identity import find_candidates
+
+        return find_candidates(self._tidal.session, origin)
 
     def search(self, needle: str) -> dict:
         # One page: the GUI keeps a bounded head of each bucket, so the

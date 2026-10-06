@@ -117,6 +117,23 @@ def _catalog_path_id(type_seg: str, raw_id: str) -> tuple[str, str, None] | None
 class AppleProvider(Provider):
     id = CTX_APPLE
     name = "Apple Music"
+    identity_kinds = frozenset({"track", "album"})
+
+    def catalog_identity_context(self):
+        return (str(self._catalog_epoch), str(getattr(self._catalog, "storefront", "us")))
+
+    def catalog_identity(self, kind, raw_id):
+        from waves.providers.apple.catalog_identity import read_identity
+
+        with self.catalog_context():
+            return read_identity(self, kind, raw_id)
+
+    def catalog_candidates(self, origin):
+        from waves.providers.apple.catalog_identity import find_candidates
+
+        with self.catalog_context():
+            return find_candidates(self, origin)
+
     # No Capability.ARTIST_DOWNLOAD: an artist discography sweep is the one
     # verb this catalog cannot answer (`downloadArtist` refuses it with the
     # present-tense words), so the artist page renders no control for it.

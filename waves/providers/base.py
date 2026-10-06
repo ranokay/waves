@@ -109,6 +109,7 @@ from urllib.parse import urlsplit
 # the ladder (and its rank/fold helpers) from waves.constants directly.
 from waves.constants import MediaType, QualityTier
 from waves.events import Failure
+from waves.metadata.catalog_identity import CatalogIdentity, CatalogLookup
 
 logger = logging.getLogger(__name__)
 
@@ -604,6 +605,7 @@ class Provider(ABC):
     name: str
     capabilities: frozenset[Capability]
     public_operations: frozenset[Capability] = frozenset()
+    identity_kinds: frozenset[str] = frozenset()
 
     downloads: DownloadAdapter | None = None
     """This provider's download ask surface (see :class:`DownloadAdapter`),
@@ -742,6 +744,18 @@ class Provider(ABC):
     def invalidate_catalog_context(self) -> None:
         """Discard account/context-bound catalog caches without closing workers."""
         return None
+
+    def catalog_identity(self, kind: str, raw_id: str) -> CatalogIdentity:
+        """Raw identity facts for one selected item; no delivery/ownership inference."""
+        raise NotImplementedError("Catalog identity is unsupported")
+
+    def catalog_identity_context(self) -> tuple[str, ...]:
+        """Non-secret account/storefront/version stamp for a request snapshot."""
+        return ()
+
+    def catalog_candidates(self, origin: CatalogIdentity) -> CatalogLookup:
+        """One bounded identifier or manual-search page, without pagination."""
+        return CatalogLookup(complete=False, explanations=("Catalog identity lookup is unsupported.",))
 
     def session_teardown_context(self) -> AbstractContextManager:
         """Worker-only barrier before replacing resources used by old jobs."""
