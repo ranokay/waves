@@ -7,7 +7,7 @@ Ten minutes here saves an afternoon of reverse-engineering.
 
 Start with [the architecture and domain map](docs/architecture.md). It links
 Python owners, QML components, tests and domain rules for each feature. The
-[glossary](CONTEXT.md) defines the language; [ADRs](docs/adr/) explain decisions.
+[glossary](GLOSSARY.md) defines the language; [ADRs](docs/adr/) explain decisions.
 
 `waves/desktop/backend.py` composes the single `WavesBridge` context object.
 `qml/Main.qml` composes the window and routing. Domain modules own the

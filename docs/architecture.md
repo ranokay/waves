@@ -1,7 +1,7 @@
 # Architecture and domain ownership
 
 Use this map to find a feature's implementation, UI, tests and rules. Start
-with [CONTEXT.md](../CONTEXT.md) for domain vocabulary and
+with [GLOSSARY.md](../GLOSSARY.md) for domain vocabulary and
 [DEVELOPER.md](../DEVELOPER.md) for setup and commands. The
 [documentation index](README.md) points to specifications and ADRs.
 

@@ -253,7 +253,7 @@ def validate_row(kind: str, row: dict, *, strict: bool | None = None) -> dict:
 
 
 class AudioType(StrEnum):
-    """Which mix of a track a delivery carries (CONTEXT.md: audio type) --
+    """Which mix of a track a delivery carries (GLOSSARY.md: audio type) --
     orthogonal to the quality tier, never a rung on its ladder."""
 
     STEREO = "stereo"
@@ -594,7 +594,7 @@ class DownloadAdapter:
 
 
 class Provider(ABC):
-    """One music service Waves can search and save from (CONTEXT.md).
+    """One music service Waves can search and save from (GLOSSARY.md).
 
     Implementations return the app's plain dicts and neutral types; the
     row-dict schema QML already consumes IS the catalog contract, and the

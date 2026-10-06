@@ -24,7 +24,7 @@
     {
       "path": "**/*.md",
       "merge_system_rule": true,
-      "rule": "Waves documentation house rules:\n1. Decision records (docs/adr/NNNN-*.md): a NEW record states Status, Decided, Decision, Why and Consequences, plus Scope and Alternatives considered. Records that predate the convention (e.g. 0001, 0003) are not findings for the parts they never had.\n2. CONTEXT.md is a glossary only: a term with a concise meaning and, where a synonym is tempting, an _Avoid_ line. Flag implementation detail, flags, file paths or code names inside a glossary term.\n3. docs/agents/* describe the workflow the repo actually runs; if the diff changes the process, these change in the same PR.\n4. Flag claims the code in the same diff contradicts, and history narration in place of invariants or decisions."
+      "rule": "Waves documentation house rules:\n1. Decision records (docs/adr/NNNN-*.md): a NEW record states Status, Decided, Decision, Why and Consequences, plus Scope and Alternatives considered. Records that predate the convention (e.g. 0001, 0003) are not findings for the parts they never had.\n2. GLOSSARY.md is a glossary only: a term with a concise meaning and, where a synonym is tempting, an _Avoid_ line. Flag implementation detail, flags, file paths or code names inside a glossary term.\n3. docs/agents/* describe the workflow the repo actually runs; if the diff changes the process, these change in the same PR.\n4. Flag claims the code in the same diff contradicts, and history narration in place of invariants or decisions."
     }
   ]
 }

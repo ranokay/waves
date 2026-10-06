@@ -8,7 +8,7 @@ released or qualified by this document. The [architecture map](architecture.md)
 names current owners; the [ADRs](adr/) own shared product decisions. Qualification
 and delivery evidence stays in the owning issues/PRs and releases.
 
-**Vocabulary**: per `CONTEXT.md` — Provider, Engine, Runtime, catalog offer, Edition, Chooser, Audio type, Audio quality, Version, Dual-download, Quarantine, Ownership, Config-first. Used here in exactly those senses.
+**Vocabulary**: per `GLOSSARY.md` — Provider, Engine, Runtime, catalog offer, Edition, Chooser, Audio type, Audio quality, Version, Dual-download, Quarantine, Ownership, Config-first. Used here in exactly those senses.
 
 ## Ground rules
 

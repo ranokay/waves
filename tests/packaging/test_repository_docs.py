@@ -21,7 +21,7 @@ from pathlib import Path
 from support.paths import REPO_ROOT
 
 ADR_DIR = REPO_ROOT / "docs" / "adr"
-CONTEXT = REPO_ROOT / "CONTEXT.md"
+GLOSSARY = REPO_ROOT / "GLOSSARY.md"
 
 # The three settled decisions the onboarding spec asked to record.
 DECISION_SLUGS = (
@@ -57,7 +57,7 @@ def test_the_settled_onboarding_decisions_are_recorded():
 
 
 def test_the_glossary_defines_the_shared_terms():
-    text = CONTEXT.read_text(encoding="utf-8")
+    text = GLOSSARY.read_text(encoding="utf-8")
 
     for term in GLOSSARY_TERMS:
-        assert term in text, f"CONTEXT.md does not define {term!r}"
+        assert term in text, f"GLOSSARY.md does not define {term!r}"
