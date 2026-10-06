@@ -14,7 +14,7 @@ from enum import StrEnum
 from time import time
 
 from waves.ids import namespaced_id
-from waves.metadata.matching import canon, edition_key
+from waves.metadata.title_identity import canon, edition_key
 
 MAX_CANDIDATES = 10
 MAX_TRACKS = 200
@@ -109,7 +109,7 @@ def _text(value: str) -> str:
     return " ".join(canon(value).casefold().split())
 
 
-def _release_version(title: str) -> tuple[frozenset[str], frozenset[str]]:
+def _release_version(title: str) -> tuple[frozenset[str], frozenset[int]]:
     """Retain master/mix warnings even outside a parseable edition suffix."""
     _, tags, years = edition_key(title)
     text = _text(title)
@@ -149,7 +149,7 @@ def _release_version(title: str) -> tuple[frozenset[str], frozenset[str]]:
             if base != "context":
                 markers |= {f"context:{phrase}"}
     if "remaster" in markers:
-        years |= frozenset(re.findall(r"\b(?:19|20)\d{2}\b", text))
+        years |= frozenset(int(year) for year in re.findall(r"\b(?:19|20)\d{2}\b", text))
     return markers, years if markers else frozenset()
 
 
