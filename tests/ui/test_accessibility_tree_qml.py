@@ -342,12 +342,13 @@ def test_primary_controls_carry_accessible_names_and_focus():
     )
 
 
-def test_the_handlers_behind_the_keyboard_paths_exist():
-    """The scenario proves the metadata and drives Tab; this pins the
-    activation handlers it does not drive. Every press action has its own
-    Return/Enter/Space handler, each accepts the event and ignores
-    auto-repeat, and the two extra keys (Down opens the chooser, Escape
-    clears the search box, Delete cancels a queued row) are present."""
+def test_wiring_primary_control_keyboard_handlers():
+    """Fence static adopters whose activation needs the composed QML render.
+
+    test_primary_controls_carry_accessible_names_and_focus drives those
+    controls in that render; test_chooser_offer_comparison_qml drives the
+    extracted Chooser. This fence checks the remaining adoption wiring.
+    """
     # The download control, the queue drawer, the shared action button, the
     # gate action, the paste-decode controller and the nav chrome live in
     # their own files, and the controls that adopted the shared tap area now
@@ -356,7 +357,6 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "domains/downloads/DownloadButton.qml").read_text(
         encoding="utf-8"
     )
-    qml += (QML_DIR / "domains/downloads/DownloadChooser.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "domains/queue/QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "primitives/ActionButton.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "components/GateAction.qml").read_text(encoding="utf-8")
@@ -413,13 +413,6 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "Keys.onEscapePressed: function (event) {",
         "Accessible.checkable: true",
         "function cancel() {",
-        # The Chooser's own rows: each drawn option's key handlers
-        # call the one pick/toggle path the pointer and the reader use, and the
-        # confirm carries its press action like every other action.
-        "button.chooserPickTier(modelData.word)",
-        "button.chooserPickAudio(modelData)",
-        "button.chooserToggle(modelData.key)",
-        "onClicked: button.confirmChooser()",
         # Every adopted tap area carries its spoken name, the toast's
         # following the face it draws.
         'accessibleLabel: "CANCEL"',

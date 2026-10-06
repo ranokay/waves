@@ -515,6 +515,20 @@ def test_dual_download_probes_separate_stereo_and_atmos_constraints():
     assert payload["selected"]["audio_type"] == "both"
 
 
+def test_engine_readiness_is_scoped_without_requiring_a_provider_pin():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    observed = []
+    for provider in (a, b):
+        provider.offer_readiness = lambda identity, ask, live, provider=provider: (
+            observed.append((provider.id, ask.engine_pin)) or live.for_operation(Capability.DOWNLOAD)
+        )
+    collect(bridge(a, b), ask=OfferConstraints(engine_pin="chosen-engine"))
+    assert observed == [("other", ""), ("origin", "chosen-engine")]
+    observed.clear()
+    collect(bridge(a, b), ask=OfferConstraints(provider_pin="other", engine_pin="chosen-engine"))
+    assert observed == [("other", "chosen-engine"), ("origin", "")]
+
+
 def test_ownership_sdk_numeric_defaults_are_not_published_as_delivered_evidence():
     from waves.desktop.backend import WavesBridge
 

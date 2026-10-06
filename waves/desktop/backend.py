@@ -10477,6 +10477,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(int, str, str, str, "QVariant", result=bool)
     def downloadCatalogOffer(self, request_id: int, provider_id: str, tier: str, audio_type: str, toggles) -> bool:
         """Enqueue only the current identified offer; retain origin and separate pins."""
+        from waves.providers.catalog_offers import EvidenceState, requested_audio, satisfies
+
         offer = self._current_chooser_offer(request_id, provider_id)
         if offer is None or offer.evidence.effective_state() == "stale":
             self._set_status("Catalog context changed; check offers again.")
@@ -10494,6 +10496,20 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return False
         if self._chooser_normalize_audio(audio_type, provider_id) is None and audio_type:
             self._set_status("Selected audio type is unsupported; review the offer's options.")
+            return False
+        selected = dataclasses.replace(
+            offer.selected,
+            tier=tier_from_word(tier) or offer.selected.tier,
+            audio_type=audio_type or offer.selected.audio_type,
+        )
+        if offer.evidence.effective_state() == EvidenceState.UNAVAILABLE or (
+            offer.evidence.effective_state() == EvidenceState.AVAILABLE
+            and not all(
+                any(satisfies(fact, family, video=offer.kind == "video") for fact in offer.evidence.probed)
+                for family in ((selected,) if offer.kind == "video" else requested_audio(selected))
+            )
+        ):
+            self._set_status("This offer does not establish the selected delivery. Review the options or check again.")
             return False
         if hasattr(toggles, "toVariant"):
             toggles = toggles.toVariant()
@@ -13800,6 +13816,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if isinstance(policy_data, CfgSettings) and not chooser_audio and keep_ask is None:
             chooser_ver = policy_data.download_policies.effective(provider_id).audio_type or chooser_ver
         versions: list[str | None]
+        if (
+            chooser_audio
+            and type_media in ("track", "album")
+            and (
+                (chooser_ver == "both" and not _offers_both(obj))
+                or (chooser_ver == "atmos" and not _has_atmos(obj))
+                or (chooser_ver == "stereo" and _atmos_only(obj))
+            )
+        ):
+            self._set_status("This item cannot serve the selected audio type. Review the Chooser options.")
+            return False
         try:
             _atmos_on = wants_both_default(self.settings)
         except Exception:

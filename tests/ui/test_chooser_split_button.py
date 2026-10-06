@@ -28,6 +28,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+import pytest
+
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop import backend
 from waves.desktop.queue.runtime import JobRuntime
@@ -301,7 +303,7 @@ def test_download_with_chooser_both_queues_two_rows_and_empty_follows_settings(m
     assert (b2._queue[-1]["askQuality"], b2._queue[-1]["quality"]) == ("LOSSLESS", "LOSSLESS")
 
 
-def test_download_with_chooser_atmos_only_track_collapses(monkeypatch):
+def test_download_with_chooser_refuses_stereo_on_atmos_only_track(monkeypatch):
     monkeypatch.setattr(backend, "_image", lambda obj, size: "")
     monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "ATMOS")
     monkeypatch.setattr(backend, "_primary_artist_name", lambda obj: "Artist")
@@ -313,7 +315,20 @@ def test_download_with_chooser_atmos_only_track_collapses(monkeypatch):
     b = _bridge()
     b._objs["track"]["tA"] = _atmos_only_track("tA")
     b.downloadWithChooser("tA", "track", "HI-RES", "stereo")
-    assert len(b._queue) == 1
+    assert b._queue == []
+    assert "selected audio type" in b._last_status
+
+
+@pytest.mark.parametrize("audio", ["atmos", "both"])
+def test_download_with_chooser_refuses_missing_atmos_after_metadata_refetch(monkeypatch, audio):
+    monkeypatch.setattr(backend, "_offers_both", lambda obj: False)
+    monkeypatch.setattr(backend, "_atmos_only", lambda obj: False)
+    monkeypatch.setattr(backend, "_has_atmos", lambda obj: False)
+    b = _bridge()
+    b._objs["track"]["t1"] = _track("t1")
+    b.downloadWithChooser("t1", "track", "HIGH", audio)
+    assert b._queue == []
+    assert "selected audio type" in b._last_status
 
 
 def test_download_with_chooser_apple_routes_with_pins(monkeypatch):

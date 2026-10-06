@@ -8,7 +8,13 @@ from waves.desktop.providers.catalog_offers import OfferSnapshot
 from waves.metadata.catalog_identity import CatalogResolution, MatchState
 from waves.model.cfg import Settings
 from waves.model.download_policy import capture_intent
-from waves.providers.catalog_offers import AvailabilityEvidence, CatalogOffer, EvidenceState, OfferConstraints
+from waves.providers.catalog_offers import (
+    AvailabilityEvidence,
+    CatalogOffer,
+    DeliveryFacts,
+    EvidenceState,
+    OfferConstraints,
+)
 
 
 def host(offer, guard=lambda: True):
@@ -73,6 +79,23 @@ def test_ambiguous_and_expired_offers_cannot_dispatch():
 def test_unknown_exact_rendition_does_not_invent_unavailability():
     b = host(offer())
     assert WavesBridge.downloadCatalogOffer(b, 7, "apple", "HIGH", "stereo", {})
+
+
+def test_probed_stereo_cannot_silently_replace_explicit_atmos_or_dual():
+    for audio in ("atmos", "both"):
+        item = replace(
+            offer(),
+            selected=OfferConstraints(audio_type=audio),
+            evidence=AvailabilityEvidence(
+                state=EvidenceState.AVAILABLE,
+                probed=(DeliveryFacts(tier=QualityTier.HIGH, audio_type="stereo", codec="aac"),),
+            ),
+        )
+        b = host(item)
+        b._chooser_normalize_audio = lambda value, pid: value
+        assert not WavesBridge.downloadCatalogOffer(b, 7, "apple", "HIGH", audio, {})
+        assert not b.calls
+        assert "selected delivery" in b.statuses[-1]
 
 
 def test_fallback_consents_relax_only_the_selected_dimension():

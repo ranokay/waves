@@ -380,7 +380,8 @@ Offers include origin/fulfillment IDs, confidence, readiness/action, separate
 advertised/probed/selected/delivered facts, ownership/presence, timestamps,
 explanations, the provider `descriptor` and its `options`. Missing facts stay
 unknown; Apple advertised traits do not establish exact rendition availability.
-An engine pin is applied only to its selected provider's evidence.
+An engine pin is applied only to its selected provider's evidence, even when
+the origin provider remains unpinned.
 
 `chooserSwitchOptions(requestId, providerId, explicitChoices)` proposes target
 `values`, retained `explicit` choices and `changes` requiring confirmation,
@@ -393,7 +394,9 @@ silently choosing candidates. `setupChooserProvider(providerId, action)` opens
 that provider's setup/sign-in or Settings, without implicitly enabling it.
 
 `downloadCatalogOffer(requestId, providerId, tier, audioType, toggles)` validates
-the current snapshot and returns whether dispatch was admitted. Enqueue retains
+the current snapshot and returns whether dispatch was admitted. Known probe
+incompatibility refuses dispatch without changing the selected requirement;
+unknown exact rendition evidence remains unknown. Enqueue retains
 the origin ID independently of fulfillment identity, preserving legacy source
 keys. Toggles contain only explicit assets, optional `engine`, `provider_pin`
 (empty means unpinned), and independent `allow_provider_fallback` /
