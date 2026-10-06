@@ -399,3 +399,11 @@ def test_different_live_venues_cannot_be_collapsed_using_the_same_isrc():
     request.album["title"] = "Album (Live at Wembley)"
     catalog.album["attributes"]["name"] = "Album (Live in Tokyo)"
     assert not _resolve(_bridge(tidal, apple))[0].offers[0].resolution.automatic_eligible
+
+
+@pytest.mark.parametrize("context", ["Live", "Acoustic"])
+def test_different_performance_years_cannot_be_collapsed_using_the_same_isrc(context):
+    tidal, apple, request, catalog = _providers()
+    request.album["title"] = f"Album ({context} 2020)"
+    catalog.album["attributes"]["name"] = f"Album ({context} 2021)"
+    assert not _resolve(_bridge(tidal, apple))[0].offers[0].resolution.automatic_eligible

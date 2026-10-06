@@ -150,7 +150,7 @@ def _release_version(title: str) -> tuple[frozenset[str], frozenset[str]]:
                 markers |= {f"context:{phrase}"}
     if "remaster" in markers:
         years |= frozenset(re.findall(r"\b(?:19|20)\d{2}\b", text))
-    return markers, years if "remaster" in markers else frozenset()
+    return markers, years if markers else frozenset()
 
 
 def _release_date(value: str) -> str:
