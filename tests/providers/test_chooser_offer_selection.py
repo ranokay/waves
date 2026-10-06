@@ -1,6 +1,8 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from waves.constants import QualityTier
 from waves.desktop.backend import WavesBridge
 from waves.desktop.providers.catalog_identity import CatalogSelection
@@ -79,6 +81,15 @@ def test_ambiguous_and_expired_offers_cannot_dispatch():
 def test_unknown_exact_rendition_does_not_invent_unavailability():
     b = host(offer())
     assert WavesBridge.downloadCatalogOffer(b, 7, "apple", "HIGH", "stereo", {})
+
+
+@pytest.mark.parametrize("provider", ["tidal", "apple"])
+@pytest.mark.parametrize("readiness", ["disabled", "sign_in_required", "setup_required", "unknown", "unsupported"])
+def test_non_ready_offer_refuses_dispatch(provider, readiness):
+    b = host(replace(offer(provider), readiness=readiness))
+    assert not WavesBridge.downloadCatalogOffer(b, 7, provider, "HIGH", "stereo", {})
+    assert not b.calls
+    assert b.statuses
 
 
 def test_probed_stereo_cannot_silently_replace_explicit_atmos_or_dual():

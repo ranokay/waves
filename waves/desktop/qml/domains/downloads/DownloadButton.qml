@@ -108,6 +108,8 @@ Rectangle {
   readonly property bool showChooser: db.computeChooserSupported()
   property bool chooserBuilt: false
   readonly property bool chooserOpen: chooserLoader.item !== null && chooserLoader.item.visible
+  onChooserOpenChanged: if (!db.chooserOpen)
+    chooserLibraryRefresh.stop()
   property string chooserProvider: ""
   readonly property var chooserProviderDescriptor: ("" + db.chooserProvider) !== "" ? waves.providerDescriptor(db.chooserProvider) : null
   property string chooserTier: ""
@@ -213,6 +215,7 @@ Rectangle {
   function refreshOfferEvidence() {
     if (!db.chooserOpen || db.chooserApplying)
       return
+    chooserLibraryRefresh.stop()
     db.chooserPendingSwitch = null
     db.chooserEvidenceText = "Checking item availability…"
     db.chooserEvidenceExpiry = 0
@@ -222,8 +225,36 @@ Rectangle {
       db.chooserEvidenceText = "Exact item availability unknown"
     }
   }
+  function queueLibraryOfferRefresh() {
+    db.chooserPendingSwitch = null
+    db.chooserEvidenceExpiry = 0
+    db.chooserEvidenceText = "Library changed; waiting to refresh offers"
+    db.chooserOffers = db.chooserOffers.map(function (offer) {
+      return Object.assign({}, offer, {
+        library_present: null,
+        evidence_state: "stale",
+        probed: [],
+        automatic_eligible: false,
+        summary: db.chooserEvidenceText
+      })
+    })
+    chooserLibraryRefresh.restart()
+  }
   onChooserTierChanged: refreshOfferEvidence()
   onChooserAudioChanged: refreshOfferEvidence()
+  Timer {
+    id: chooserLibraryRefresh
+    interval: 3000
+    onTriggered: {
+      if (!db.chooserOpen)
+        return
+      if (waves.libraryScanStatus() === "scanning") {
+        chooserLibraryRefresh.restart()
+        return
+      }
+      db.refreshOfferEvidence()
+    }
+  }
   Timer {
     interval: Math.max(1, db.chooserEvidenceExpiry - Date.now())
     running: db.chooserOpen && db.chooserEvidenceExpiry > 0
@@ -746,6 +777,12 @@ Rectangle {
         }
       }
       db.chooserEvidenceText = "Exact item availability unknown"
+    }
+    function onLibraryPresenceChanged() {
+      db.queueLibraryOfferRefresh()
+    }
+    function onLibraryScanStatusChanged() {
+      db.queueLibraryOfferRefresh()
     }
     function onProviderStateChanged(providerId) {
       if (db.chooserOpen) {

@@ -433,7 +433,19 @@ def test_broken_readiness_and_context_do_not_abort_healthy_provider():
     assert broken.calls == 0
 
 
-def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
+@pytest.mark.parametrize(
+    "change",
+    [
+        "provider",
+        "library",
+        "library_publication",
+        "library_scanning",
+        "library_partial",
+        "library_reconciled",
+        "library_status",
+    ],
+)
+def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication(change):
     from waves.desktop.backend import WavesBridge
 
     class Signal:
@@ -450,6 +462,8 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
     a, b = OfferProvider("origin"), OfferProvider("other")
     host = bridge(a, b)
     host._catalog_offer_generation = 0
+    host._library_gen = 0
+    host._library_stamp = 0
     host._catalog_offer_cache = OfferEvidenceCache()
     host._catalogOffersEvent = Signal()
     host.catalogOffersLoaded = Signal()
@@ -477,11 +491,24 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
         raise AssertionError("Queued publication must not run live readiness probes")
 
     host._provider_readiness_probes = {a.id: forbidden, b.id: forbidden}
-    host._provider_contexts.revoke(b.id)
+    if change == "provider":
+        host._provider_contexts.revoke(b.id)
+    elif change == "library":
+        host._library_gen += 1
+    elif change == "library_publication":
+        host._library_stamp += 1
+    else:
+        field, value = {
+            "library_scanning": ("_library_index_building", True),
+            "library_partial": ("_library_scan_partial", True),
+            "library_reconciled": ("_library_listing_reconciled", True),
+            "library_status": ("_library_scan_status", "error"),
+        }[change]
+        setattr(host, field, value)
     WavesBridge._on_catalog_offers(host, event)
     loaded_id, payload = host.catalogOffersLoaded.events[0]
     assert loaded_id == request and payload[1]["evidence_state"] == "stale"
-    assert payload[0]["evidence_state"] == "available"
+    assert payload[0]["evidence_state"] == ("available" if change == "provider" else "stale")
     WavesBridge.cancelCatalogOffers(host, request)
     WavesBridge._on_catalog_offers(host, event)
     assert len(host.catalogOffersLoaded.events) == 1
@@ -562,3 +589,154 @@ def test_ownership_is_available_during_setup_without_polluting_delivery_evidence
     ).presentation()[0]
     assert payload["readiness"] == "setup_required" and payload["owned"] is True
     assert payload["delivered"][0]["codec"] == "aac" and not payload["probed"] and not b.calls
+
+
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("library_present", [None, False, True])
+def test_catalog_presence_distinguishes_download_ownership_from_scanned_library(owned, library_present):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    rec = {"quality_tier": "LOSSLESS", "audio_type": "stereo", "codecs": "FLAC"} if owned else None
+    index = None if library_present is None else {}
+    if library_present:
+        index = {
+            track_key("Recording", "Artist"): [
+                {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180, "codec": "flac"}
+            ]
+        }
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: rec), _library_track_index=index
+    )
+    identity = CatalogIdentity(
+        "apple:2", "track", title="Recording", artist="Artist", release_title="Release", release_date="2020-01-01"
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is owned
+    assert presence.library_present is library_present
+    assert bool(presence.delivered) is owned
+    assert "/library/Release" not in str(presence)
+
+
+@pytest.mark.parametrize("difference", [{"album_year": "1997"}, {"length": 270}, {"explicit": 1}])
+def test_catalog_library_presence_does_not_promote_an_unproven_recording(difference):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index={
+            track_key("Recording", "Artist"): [
+                {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180, **difference}
+            ]
+        },
+    )
+    identity = CatalogIdentity(
+        "apple:2",
+        "track",
+        title="Recording",
+        artist="Artist",
+        release_title="Release",
+        release_date="2020-01-01",
+        duration_ms=180000,
+        explicit=False,
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is None
+
+
+@pytest.mark.parametrize("release_version", ["Deluxe Edition", "Remastered", "2015 Remaster"])
+@pytest.mark.parametrize("same_edition", [False, True])
+def test_catalog_library_presence_preserves_separate_release_version(release_version, same_edition):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    album = f"Release ({release_version})" if same_edition else "Release"
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index={
+            track_key("Recording", "Artist"): [
+                {"id": "/library/Release", "album": album, "album_year": "2020", "length": 180}
+            ]
+        },
+    )
+    identity = CatalogIdentity(
+        "tidal:1",
+        "track",
+        title="Recording",
+        artist="Artist",
+        release_title="Release",
+        release_version=release_version,
+        release_date="2020-01-01",
+        duration_ms=180000,
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is (True if same_edition else None)
+
+
+@pytest.mark.parametrize("version", ["Live", "Acoustic"])
+@pytest.mark.parametrize("same_recording", [False, True])
+def test_catalog_library_presence_preserves_separate_recording_version(version, same_recording):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    title = f"Recording ({version})" if same_recording else "Recording"
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index={
+            track_key(title, "Artist"): [
+                {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180}
+            ]
+        },
+    )
+    identity = CatalogIdentity(
+        "tidal:1",
+        "track",
+        title="Recording",
+        version=version,
+        artist="Artist",
+        release_title="Release",
+        release_date="2020-01-01",
+        duration_ms=180000,
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is same_recording
+
+
+@pytest.mark.parametrize(
+    "state,miss",
+    [
+        ({}, False),
+        ({"_library_index_building": True}, None),
+        ({"_library_scan_partial": True}, None),
+        ({"_library_scan_partial": True, "_library_listing_reconciled": True}, False),
+        ({"_library_scan_status": "unset"}, None),
+        ({"_library_scan_status": "error"}, None),
+        ({"_library_scan_status": "missing"}, None),
+        ({"_library_scan_status": "unreadable"}, None),
+    ],
+)
+@pytest.mark.parametrize("found", [False, True])
+def test_catalog_library_misses_require_a_complete_trusted_index(state, miss, found):
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.matching import track_key
+
+    index = {}
+    if found:
+        index[track_key("Recording", "Artist")] = [
+            {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180}
+        ]
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
+        _library_track_index=index,
+        **state,
+    )
+    identity = CatalogIdentity(
+        "tidal:1", "track", title="Recording", artist="Artist", release_title="Release", release_date="2020-01-01"
+    )
+    presence = WavesBridge._catalog_offer_presence(host, identity, "stereo")
+    assert presence.owned is False
+    assert presence.library_present is (True if found else miss)

@@ -10366,11 +10366,28 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             provider_pin=selected_provider,
             engine_pin=engine,
         )
+        library_generation = getattr(self, "_library_gen", None)
+        library_stamp = getattr(self, "_library_stamp", None)
+        library_state = (
+            getattr(self, "_library_index_building", False),
+            getattr(self, "_library_scan_partial", False),
+            getattr(self, "_library_listing_reconciled", False),
+            getattr(self, "_library_scan_status", "ok"),
+        )
 
         def current() -> bool:
             return (
                 self._catalog_offer_generation == generation
                 and self.settings.data.download_policies.effective(policy_provider) == policy
+                and getattr(self, "_library_gen", None) == library_generation
+                and getattr(self, "_library_stamp", None) == library_stamp
+                and (
+                    getattr(self, "_library_index_building", False),
+                    getattr(self, "_library_scan_partial", False),
+                    getattr(self, "_library_listing_reconciled", False),
+                    getattr(self, "_library_scan_status", "ok"),
+                )
+                == library_state
             )
 
         def work() -> None:
@@ -10396,16 +10413,49 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self._catalog_offer_generation += 1
 
     def _catalog_offer_presence(self, identity, audio_type: str):
-        """Read existing per-provider ownership on the probe worker, without paths in QML."""
+        """Read independent Library and per-provider Ownership facts on the worker."""
+        from waves.metadata.matching import decide_track_presence
         from waves.providers.catalog_offers import DeliveryFacts, OfferPresence
 
         if identity.kind not in ("track", "video"):
             return OfferPresence()
+        library_present = None
+        index = getattr(self, "_library_track_index", None)
+        if identity.kind == "track" and index is not None and identity.title and identity.artist:
+            title = f"{identity.title} ({identity.version})" if identity.version else identity.title
+            release_title = (
+                f"{identity.release_title} ({identity.release_version})"
+                if identity.release_version
+                else identity.release_title
+            )
+            verdict = decide_track_presence(
+                title,
+                identity.artist,
+                index,
+                release_title,
+                identity.release_date[:4],
+                (identity.duration_ms or 0) // 1000,
+                identity.explicit,
+            )
+            # A title-only candidate is not proof of this recording or Edition.
+            if verdict.get("sure"):
+                library_present = True
+            elif not verdict.get("present"):
+                complete = (
+                    not getattr(self, "_library_index_building", False)
+                    and (
+                        not getattr(self, "_library_scan_partial", False)
+                        or getattr(self, "_library_listing_reconciled", False)
+                    )
+                    and getattr(self, "_library_scan_status", "ok") == "ok"
+                )
+                if complete:
+                    library_present = False
         rec = self._ownership.ownership_of(
             identity.media_id, audio_type=audio_type if identity.kind == "track" else None
         )
         if rec is None:
-            return OfferPresence(owned=False)
+            return OfferPresence(owned=False, library_present=library_present)
         facts = DeliveryFacts(
             tier=tier_from_word(rec.get("quality_tier")),
             audio_type=str(rec.get("audio_type") or ""),
@@ -10413,7 +10463,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Ownership rows have no numeric-fact provenance: TIDAL's SDK
             # can substitute depth/rate defaults before they are recorded.
         )
-        return OfferPresence(owned=True, library_present=True, delivered=(facts,))
+        return OfferPresence(owned=True, library_present=library_present, delivered=(facts,))
 
     @Slot(object)
     def _on_catalog_offers(self, event) -> None:
@@ -10489,6 +10539,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return False
         if offer.readiness == "unsupported":
             self._set_status("This provider cannot serve the selected delivery. Change the options explicitly.")
+            return False
+        if offer.readiness != "ready":
+            self._set_status("This provider is not ready. Complete its setup and check offers again.")
             return False
         media_id = offer.media_id or origin_id
         if self._chooser_ask_for(provider_id, tier) is None and tier:
