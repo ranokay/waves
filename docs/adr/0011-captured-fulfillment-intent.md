@@ -1,6 +1,6 @@
 # 0011: fulfillment follows captured intent and evidenced catalog offers
 
-- Status: accepted; persisted policies and queued intent implemented, cross-provider fulfillment planned
+- Status: accepted; persisted policies, queued intent and catalog identity implemented, cross-provider fulfillment planned
 - Decided: 2026-10-03
 - Scope: request policy, identity, collections, files and asset provenance
 
@@ -45,6 +45,18 @@ Bound lookups to enabled capable providers and requested context. Isolate source
 errors and stale results. Timestamp/cache evidence and invalidate it for relevant
 identity, account/storefront, runtime/version or request-constraint changes.
 Quality evidence and ranking belong to [ADR 0001](0001-one-quality-model.md).
+
+The catalog identity resolver owns request-lifetime, timestamped snapshots beside
+the metadata identity rules. Provider adapters read one candidate page (up to ten)
+and one ordered album track page (up to 200); a selection contains at most 64
+entries and eight requested providers. Continuations make evidence incomplete.
+No snapshot is reused across requests. The desktop coordinator discards results
+when the captured provider/account/storefront context, selected request guard or
+matching policy changes; queued consumers retain that guard through publication.
+Raw catalog durations agree within one second, preserving subsecond facts rather
+than comparing formatted lengths. Unknown explicitness or version facts cannot
+authorize substitution. Tracks and albums have automatic identity rules; audio
+ISRCs cannot qualify videos. Review confirms only the current candidate/request.
 
 Albums default to Whole release: one confidently matched Edition and ordered
 track list from one provider. Engine recovery may finish remaining tracks.
