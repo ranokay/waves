@@ -61,7 +61,7 @@ def _facts(item: dict, kind: str, album: dict | None = None) -> CatalogIdentity:
     )
 
 
-async def _request(provider: AppleProvider, kind: str, raw_id: str = "", params: dict | None = None) -> dict:
+async def request_resource(provider: AppleProvider, kind: str, raw_id: str = "", params: dict | None = None) -> dict:
     if provider._catalog is None:
         provider._catalog = await provider._catalog_factory()
     storefront = provider._catalog.storefront
@@ -73,7 +73,9 @@ async def _request(provider: AppleProvider, kind: str, raw_id: str = "", params:
 def read_identity(provider: AppleProvider, kind: str, raw_id: str) -> CatalogIdentity:
     if kind not in provider.identity_kinds:
         raise NotImplementedError("Apple catalog identity does not support this media kind")
-    response = provider._run(_request(provider, kind, raw_id, {"include": "tracks" if kind == "album" else "albums"}))
+    response = provider._run(
+        request_resource(provider, kind, raw_id, {"include": "tracks" if kind == "album" else "albums"})
+    )
     resources = response.get("data") or []
     if len(resources) != 1 or str(resources[0].get("id")) != raw_id:
         message = "Selected Apple catalog item was not returned"
@@ -93,7 +95,7 @@ def find_candidates(provider: AppleProvider, origin: CatalogIdentity) -> Catalog
     if identifier:
         key = "filter[upc]" if origin.kind == "album" else "filter[isrc]"
         response = provider._run(
-            _request(
+            request_resource(
                 provider,
                 origin.kind,
                 params={key: origin.identifier.strip().upper().replace("-", ""), "limit": MAX_CANDIDATES},

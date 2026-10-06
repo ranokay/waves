@@ -19,6 +19,7 @@ import contextlib
 import logging
 import threading
 from collections.abc import Iterator
+from importlib.metadata import version
 
 import tidalapi
 from requests import HTTPError
@@ -195,6 +196,7 @@ class TidalProvider(Provider):
 
     def __init__(self, tidal: Tidal, stream_resolver=None):
         self._tidal = tidal
+        self._availability_version = version("tidalapi")
         self._stream_resolver = stream_resolver
         # The app's row dictionaries for TIDAL objects, handed over by the
         # bridge where the providers are wired (see bind_row_vocabulary).
@@ -356,6 +358,15 @@ class TidalProvider(Provider):
         from waves.providers.tidal_catalog_identity import find_candidates
 
         return find_candidates(self._tidal.session, origin)
+
+    def availability_context(self):
+        return (*self.catalog_identity_context(), str(id(self._tidal.session)), self._availability_version)
+
+    def probe_availability(self, identity, ask):
+        from waves.providers.tidal_offers import probe
+
+        with self._tidal.stream_lock:
+            return probe(self._tidal.session, identity, ask)
 
     def search(self, needle: str) -> dict:
         # One page: the GUI keeps a bounded head of each bucket, so the

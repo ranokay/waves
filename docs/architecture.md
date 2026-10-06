@@ -134,6 +134,12 @@ when a type moves. The build recipes include the entire QML tree.
 
 ## Public contracts and naming
 
+Catalog offer evidence and comparison live in `providers/catalog_offers.py`,
+provider adapters in `providers/tidal_offers.py` and `providers/apple/catalog_offers.py`,
+and lazy guarded collection/cache in `desktop/providers/catalog_offers.py`.
+The Chooser receives neutral payloads through the bridge's `requestCatalogOffers`
+and `catalogOffersLoaded` contract; source maxima remain static requirements.
+
 - Python modules/functions/properties use `snake_case`, classes use
   `PascalCase`, constants use `UPPER_SNAKE_CASE`. Files describe their owner
   and operation: `settings/schema.py`, `library/scan_process.py`,

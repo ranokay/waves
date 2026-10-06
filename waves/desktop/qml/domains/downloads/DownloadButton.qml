@@ -127,6 +127,30 @@ Rectangle {
   property bool chooserCoverEmbed: true
   property bool chooserCoverFile: true
   property bool chooserAllowFallback: false
+  property int chooserOfferRequest: 0
+  property double chooserEvidenceExpiry: 0
+  property string chooserEvidenceText: "Exact item availability unknown"
+  function refreshOfferEvidence() {
+    if (!db.chooserOpen)
+      return
+    db.chooserEvidenceText = "Checking item availability…"
+    db.chooserEvidenceExpiry = 0
+    try {
+      db.chooserOfferRequest = waves.requestCatalogOffers(db.mediaId, db.chooserKind, db.chooserTier, db.chooserAudio)
+    } catch (e) {
+      db.chooserEvidenceText = "Exact item availability unknown"
+    }
+  }
+  onChooserTierChanged: refreshOfferEvidence()
+  onChooserAudioChanged: refreshOfferEvidence()
+  Timer {
+    interval: Math.max(1, db.chooserEvidenceExpiry - Date.now())
+    running: db.chooserOpen && db.chooserEvidenceExpiry > 0
+    onTriggered: {
+      db.chooserEvidenceExpiry = 0
+      db.chooserEvidenceText = "Availability stale; check again"
+    }
+  }
   function refreshChooser() {
     var d = ({})
     try {
@@ -594,6 +618,8 @@ Rectangle {
       rollReady = true
   }
   onMediaIdChanged: {
+    if (db.chooserOpen)
+      db.closeChooser()
     if (rollReady) {
       rollReady = false
       dbSettle.restart()
@@ -606,6 +632,29 @@ Rectangle {
   onLibAlbumChanged: refreshLibPresent()
   onLibTrackChanged: refreshLibPresent()
   onLibArtistChanged: refreshLibPresent()
+  Connections {
+    target: waves
+    ignoreUnknownSignals: true
+    enabled: db.chooserOpen
+    function onCatalogOffersLoaded(requestId, offers) {
+      if (requestId !== db.chooserOfferRequest)
+        return
+      for (var i = 0; i < offers.length; i++) {
+        if (offers[i].provider_id === db.chooserProvider) {
+          db.chooserEvidenceText = offers[i].summary || "Exact item availability unknown"
+          db.chooserEvidenceExpiry = (offers[i].expires_at || 0) * 1000
+          return
+        }
+      }
+      db.chooserEvidenceText = "Exact item availability unknown"
+    }
+    function onProviderStateChanged(providerId) {
+      if (providerId === db.chooserProvider) {
+        db.chooserEvidenceExpiry = 0
+        db.chooserEvidenceText = "Availability stale; check again"
+      }
+    }
+  }
   Connections {
     target: waves
     enabled: db.libTitle !== "" || db.libArtist !== ""
@@ -1263,7 +1312,17 @@ Rectangle {
       closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
       // Focus the popover's own scope on open: Tab then walks its
       // rows in draw order, and Escape closes from anywhere in it.
-      onOpened: contentItem.forceActiveFocus()
+      onOpened: {
+        contentItem.forceActiveFocus()
+        db.refreshOfferEvidence()
+      }
+      onClosed: {
+        try {
+          waves.cancelCatalogOffers(db.chooserOfferRequest)
+        } catch (e) {}
+        db.chooserEvidenceText = "Exact item availability unknown"
+        db.chooserEvidenceExpiry = 0
+      }
       background: Rectangle {
         radius: 10
         color: surfaceHi
@@ -1316,10 +1375,20 @@ Rectangle {
           spacing: 4
           Text {
             textFormat: Text.PlainText
-            text: "AUDIO QUALITY"
+            text: "AUDIO QUALITY REQUIREMENT"
             color: textDim
             font.family: mono
             font.pixelSize: 9
+          }
+          Text {
+            objectName: "chooserAvailabilityEvidence"
+            width: 296
+            textFormat: Text.PlainText
+            text: db.chooserEvidenceText
+            wrapMode: Text.WordWrap
+            color: textDim
+            font.family: uiFont
+            font.pixelSize: 10
           }
           Repeater {
             model: db.chooserTiers

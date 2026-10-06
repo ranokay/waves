@@ -110,6 +110,7 @@ from urllib.parse import urlsplit
 from waves.constants import MediaType, QualityTier
 from waves.events import Failure
 from waves.metadata.catalog_identity import CatalogIdentity, CatalogLookup
+from waves.providers.catalog_offers import AvailabilityEvidence, OfferConstraints
 
 logger = logging.getLogger(__name__)
 
@@ -756,6 +757,30 @@ class Provider(ABC):
     def catalog_candidates(self, origin: CatalogIdentity) -> CatalogLookup:
         """One bounded identifier or manual-search page, without pagination."""
         return CatalogLookup(complete=False, explanations=("Catalog identity lookup is unsupported.",))
+
+    def availability_context(self) -> tuple[str, ...]:
+        """Memory-only account/runtime stamp, safe during queued GUI validation.
+
+        Include enabled/setup state in this stamp or revoke the provider token
+        when it changes. Live filesystem/network readiness belongs on workers.
+        """
+        return self.catalog_identity_context()
+
+    def offer_readiness(
+        self, identity: CatalogIdentity, ask: OfferConstraints, live: ProviderReadiness
+    ) -> OperationReadiness:
+        """Readiness for this delivery, independently of catalog access."""
+        if ask.engine_pin not in ("", "auto"):
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        if identity.kind == "video" and Capability.VIDEOS not in self.capabilities:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        if identity.kind != "video" and ask.audio_type not in self.audio_types:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        return live.for_operation(Capability.DOWNLOAD)
+
+    def probe_availability(self, identity: CatalogIdentity, ask: OfferConstraints) -> AvailabilityEvidence:
+        """Bounded metadata/manifests only. Never download or decrypt media."""
+        return AvailabilityEvidence(explanations=("Item availability is unknown; no metadata probe is supported.",))
 
     def session_teardown_context(self) -> AbstractContextManager:
         """Worker-only barrier before replacing resources used by old jobs."""

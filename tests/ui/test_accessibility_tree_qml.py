@@ -653,6 +653,39 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     popover = json.loads(q(scene_js(_CHOOSER_ROWS_BODY)))
     if not popover["open"]:
         problems.append("the Chooser popover did not open")
+    # The evidence line consumes only its active request, expires visibly,
+    # and never turns a static requirement into exact item availability.
+    request_id = int(
+        q(
+            scene_js("""
+        var b = findFirst(root, function (o) { return o.chooserKind !== undefined && ('' + o.mediaId) === 't1'; });
+        return b.chooserOfferRequest;
+    """)
+        )
+    )
+    evidence_read = scene_js("""
+        var pop = findObject(root, "chooserPopover");
+        var line = pop ? findFirst(pop.contentItem, function (o) { return o.objectName === 'chooserAvailabilityEvidence' && o.visible === true; }) : null;
+        return line ? line.text : '';
+    """)
+    bridge.catalogOffersLoaded.emit(request_id, [{"provider_id": "tidal", "summary": "Exact availability unknown"}])
+    settle(50)
+    bridge.catalogOffersLoaded.emit(request_id + 1, [{"provider_id": "tidal", "summary": "Wrong request"}])
+    settle(50)
+    if q(evidence_read) != "Exact availability unknown":
+        problems.append("the Chooser accepted availability from another request")
+    import time
+
+    bridge.catalogOffersLoaded.emit(
+        request_id,
+        [{"provider_id": "tidal", "summary": "Manifest: FLAC, 24 bit, 96 kHz", "expires_at": time.time() + 0.15}],
+    )
+    settle(50)
+    if q(evidence_read) != "Manifest: FLAC, 24 bit, 96 kHz":
+        problems.append("the Chooser did not render the neutral item evidence")
+    settle(200)
+    if q(evidence_read) != "Availability stale; check again":
+        problems.append("expired Chooser availability remained exact")
     rows = popover["rows"]
     tiers = [r for r in rows if r["object"] == "chooserTierRow"]
     audio = [r for r in rows if r["object"] == "chooserAudioTile"]
