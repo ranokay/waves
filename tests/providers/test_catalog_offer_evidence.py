@@ -261,6 +261,36 @@ def test_dash_manifest_codec_profile_and_rate_are_actual_facts():
     )
 
 
+@pytest.mark.parametrize("data,mime", [(b"{", "bts"), (b"[]", "bts"), (b"<MPD>", "dash+xml")])
+def test_malformed_manifest_preserves_unknown_evidence(data, mime):
+    assert manifest_facts({"manifestMimeType": mime, "manifest": base64.b64encode(data).decode()}) == ()
+    assert manifest_facts({"manifestMimeType": mime, "manifest": "invalid base64"}) == ()
+
+
+def test_bad_dash_attribute_keeps_independent_known_rendition_facts():
+    xml = '<MPD><Period><AdaptationSet><Representation codecs="mp4a.40.2" audioSamplingRate="bad" bandwidth="256000"/><Representation codecs="mp4a.40.2" audioSamplingRate="48000" bandwidth="bad"/></AdaptationSet></Period></MPD>'
+    facts = manifest_facts({"manifestMimeType": "dash+xml", "manifest": base64.b64encode(xml.encode()).decode()})
+    assert [(fact.sample_rate, fact.bitrate) for fact in facts] == [(None, 256000), (48000, None)]
+    assert all(fact.codec == "aac" and fact.profile == "lc" for fact in facts)
+
+
+def test_native_probe_preserves_advertising_when_manifest_is_malformed():
+    from waves.providers.tidal_offers import probe
+
+    def request(method, path, params=None):
+        payload = (
+            {"id": 1, "audioQuality": "HI_RES_LOSSLESS"}
+            if path == "tracks/1"
+            else {"manifest": "invalid base64", "manifestMimeType": "bts"}
+        )
+        return SimpleNamespace(json=lambda: payload)
+
+    session = SimpleNamespace(request=SimpleNamespace(request=request))
+    evidence = probe(session, CatalogIdentity("tidal:1", "track"), OfferConstraints(tier=QualityTier.LOSSLESS))
+    assert evidence.state == EvidenceState.UNKNOWN and evidence.probed == ()
+    assert evidence.advertised[0].tier == QualityTier.HI_RES_LOSSLESS
+
+
 def test_encrypted_manifest_does_not_establish_delivery_availability():
     assert not manifest_facts(
         {

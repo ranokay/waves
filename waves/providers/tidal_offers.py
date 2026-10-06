@@ -29,23 +29,28 @@ def manifest_facts(raw: dict) -> tuple[DeliveryFacts, ...]:
     encoded = raw.get("manifest")
     if not isinstance(encoded, str) or len(encoded) > MAX_MANIFEST_BYTES * 2:
         return ()
-    data = base64.b64decode(encoded, validate=True)
-    if len(data) > MAX_MANIFEST_BYTES:
-        return ()
-    mime = str(raw.get("manifestMimeType") or "")
-    common = DeliveryFacts(
-        tier=tier_from_word(raw.get("audioQuality")),
-        audio_type={"STEREO": "stereo", "DOLBY_ATMOS": "atmos"}.get(raw.get("audioMode"), ""),
-        bit_depth=positive(raw.get("bitDepth")),
-        sample_rate=positive(raw.get("sampleRate")),
-    )
-    if "dash+xml" in mime:
-        return _dash_facts(data, common)
-    if "bts" in mime:
-        manifest = json.loads(data)
-        if manifest.get("encryptionType") not in (None, "NONE"):
+    try:
+        data = base64.b64decode(encoded, validate=True)
+        if len(data) > MAX_MANIFEST_BYTES:
             return ()
-        return (replace(common, codec=str(manifest.get("codecs") or "")),) if manifest.get("urls") else ()
+        mime = str(raw.get("manifestMimeType") or "")
+        common = DeliveryFacts(
+            tier=tier_from_word(raw.get("audioQuality")),
+            audio_type={"STEREO": "stereo", "DOLBY_ATMOS": "atmos"}.get(raw.get("audioMode"), ""),
+            bit_depth=positive(raw.get("bitDepth")),
+            sample_rate=positive(raw.get("sampleRate")),
+        )
+        if "dash+xml" in mime:
+            return _dash_facts(data, common)
+        if "bts" in mime:
+            manifest = json.loads(data)
+            if not isinstance(manifest, dict):
+                return ()
+            if manifest.get("encryptionType") not in (None, "NONE"):
+                return ()
+            return (replace(common, codec=str(manifest.get("codecs") or "")),) if manifest.get("urls") else ()
+    except (ValueError, TypeError, ET.ParseError):
+        return ()
     return ()
 
 
@@ -117,11 +122,20 @@ def _dash_facts(data: bytes, common: DeliveryFacts) -> tuple[DeliveryFacts, ...]
             facts.append(
                 replace(
                     common,
-                    sample_rate=positive(int(rate)) if rate else common.sample_rate,
+                    sample_rate=_attribute_int(rate, common.sample_rate),
                     codec=codec,
-                    bitrate=positive(int(bandwidth)) if bandwidth else None,
+                    bitrate=_attribute_int(bandwidth),
                 )
             )
             if len(facts) >= 16:
                 return tuple(facts)
     return tuple(facts)
+
+
+def _attribute_int(value: str | None, fallback: int | None = None) -> int | None:
+    if value is None:
+        return fallback
+    try:
+        return positive(int(value))
+    except ValueError:
+        return None
