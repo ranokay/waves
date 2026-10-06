@@ -381,6 +381,18 @@ not change quality, audio type or required codecs. A Chooser selection pins its
 provider; plain Download retains origin unless its separately opted-in policy
 permits an eligible alternative. A provider whose metadata offers nothing
 per-click answers `chooserSupported` False, so no chevron renders.
+
+`requestCatalogOffers(mediaId, kind, tier, audioType)` returns a request ID and
+starts bounded identity/metadata/manifest work. `catalogOffersLoaded(requestId,
+offers)` delivers neutral values after GUI-thread context validation;
+`cancelCatalogOffers(requestId)` revokes pending publication. Each offer states
+origin/fulfillment IDs, match confidence, capability/readiness/action, separate
+advertised/probed/selected/delivered facts, ownership/presence, timestamps and
+unknown/stale/checking/available/unavailable/failed evidence. Missing facts are
+null or empty, never a provider maximum. The current Chooser states origin
+availability separately from static quality requirements; provider switching is
+the next consumer. The worker coordinator also admits opt-in routing demand,
+without performing routing, media downloads or diagnostics.
 The audio choice starts at the effective shared/provider policy. Set as defaults
 writes that provider's audio override and existing quality/asset mirrors through
 the staged settings writer; the shared audio default remains independently editable.

@@ -134,6 +134,61 @@ class AppleProvider(Provider):
         with self.catalog_context():
             return find_candidates(self, origin)
 
+    def availability_context(self):
+        from hashlib import sha256
+
+        from waves.providers.apple.gamdl_engine import gamdl_version
+
+        runtime = (
+            self.wrapper_url,
+            self.wrapper_decrypt_host,
+            self.wrapper_decrypt_port,
+            self.cookies_path,
+            self.nm3u8dlre_path,
+            self.wrapper_logged_in,
+            self.engine_policy(),
+            self.engine_details(),
+            self.offer_context_probe() if self.offer_context_probe else (),
+        )
+        return (*self.catalog_identity_context(), gamdl_version(), sha256(repr(runtime).encode()).hexdigest())
+
+    def offer_readiness(self, identity, ask, live):
+        from waves.providers.base import OperationReadiness, ReadinessState
+
+        if live.enabled is not True:
+            return OperationReadiness(
+                Capability.DOWNLOAD, ReadinessState.DISABLED if live.enabled is False else ReadinessState.UNKNOWN
+            )
+        if identity.kind not in self.identity_kinds or ask.audio_type not in self.audio_types:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        lossless = ask.tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+        if lossless and ask.audio_type == AudioType.ATMOS:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        request = EngineRequest(
+            EngineOperation.AUDIO,
+            {},
+            ask.tier,
+            AudioType(ask.audio_type),
+            required_codec=ask.required_codec or ("alac" if lossless else ""),
+        )
+        policy = self.engine_policy(ask.engine_pin or None)
+        facts = self.engine_facts_probe() if self.engine_facts_probe else EngineFacts(enabled=live.enabled)
+        engines = self._engines.engines
+        order = (policy.pin,) if policy.pin else tuple(dict.fromkeys((*policy.preferences, *engines)))
+        states = [
+            engines[pid].readiness(request, facts) for pid in order if pid in engines and engines[pid].supports(request)
+        ]
+        state = next((item for item in states if item.state == ReadinessState.READY), states[0] if states else None)
+        return OperationReadiness(
+            Capability.DOWNLOAD, state.state if state else ReadinessState.UNSUPPORTED, state.action if state else ""
+        )
+
+    def probe_availability(self, identity, ask):
+        from waves.providers.apple.catalog_offers import probe
+
+        with self.catalog_context():
+            return probe(self, identity, ask)
+
     # No Capability.ARTIST_DOWNLOAD: an artist discography sweep is the one
     # verb this catalog cannot answer (`downloadArtist` refuses it with the
     # present-tense words), so the artist page renders no control for it.
@@ -231,6 +286,8 @@ class AppleProvider(Provider):
         # Composition supplies current setup facts when execution runs on a
         # worker. Direct library callers keep the engine's own validation.
         self.engine_facts_probe: Callable[[], EngineFacts] | None = None
+        # Composition supplies a memory-only stamp for queued GUI validation.
+        self.offer_context_probe: Callable[[], tuple[str, ...]] | None = None
         self._catalog = catalog
         self._catalog_factory = catalog_factory or self._create_catalog
         self._loop: asyncio.AbstractEventLoop | None = None

@@ -44,6 +44,7 @@ class SelectedMatches:
     selection: CatalogSelection
     offers: tuple[ProviderMatch, ...] = ()
     explanations: tuple[str, ...] = ()
+    origin: CatalogIdentity | None = None
 
 
 def resolve_selected(
@@ -147,7 +148,7 @@ def _resolve_entry(
         )
         resolution = resolve_candidates(origin, lookup, policy)
         offers.append(ProviderMatch(pid, resolution))
-    return SelectedMatches(selection, tuple(offers))
+    return SelectedMatches(selection, tuple(offers), origin=origin)
 
 
 def _validate_entry(
@@ -189,4 +190,4 @@ def _validate_entry(
         )
         for offer in offers
     )
-    return SelectedMatches(selection, checked, result.explanations)
+    return SelectedMatches(selection, checked, result.explanations, result.origin)

@@ -357,6 +357,17 @@ class TidalProvider(Provider):
 
         return find_candidates(self._tidal.session, origin)
 
+    def availability_context(self):
+        from importlib.metadata import version
+
+        return (*self.catalog_identity_context(), str(id(self._tidal.session)), version("tidalapi"))
+
+    def probe_availability(self, identity, ask):
+        from waves.providers.tidal_offers import probe
+
+        with self._tidal.stream_lock:
+            return probe(self._tidal.session, identity, ask)
+
     def search(self, needle: str) -> dict:
         # One page: the GUI keeps a bounded head of each bucket, so the
         # pager's serial follow-ups only ever fetched rows it discarded.

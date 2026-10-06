@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+import base64
+import json
+from dataclasses import replace
+from time import time
+from types import SimpleNamespace
+
+import pytest
+from providers.fakes import BareProvider
+
+from waves.constants import QualityTier
+from waves.desktop.providers.catalog_identity import CatalogSelection
+from waves.desktop.providers.catalog_offers import OfferEvidenceCache, collect_offers
+from waves.desktop.providers.lifecycle import ProviderContexts
+from waves.metadata.catalog_identity import CatalogIdentity, CatalogLookup
+from waves.model.download_policy import DownloadPolicies
+from waves.providers.base import AudioType, Capability
+from waves.providers.catalog_offers import (
+    AvailabilityEvidence,
+    DeliveryFacts,
+    EvidenceState,
+    OfferConstraints,
+    OfferPresence,
+)
+from waves.providers.tidal_offers import manifest_facts
+
+
+class OfferProvider(BareProvider):
+    identity_kinds = frozenset({"track", "album"})
+    capabilities = frozenset({Capability.CATALOG, Capability.DOWNLOAD})
+    audio_types = frozenset({AudioType.STEREO})
+
+    def __init__(self, pid):
+        self.id = pid
+        self.context = "us/account/runtime-v1"
+        self.enabled = True
+        self.calls = 0
+        self.on_probe = lambda: None
+        self.on_identity = lambda: None
+        self.evidence = AvailabilityEvidence(
+            probed=(
+                DeliveryFacts(
+                    tier=QualityTier.LOSSLESS, audio_type="stereo", codec="flac", bit_depth=24, sample_rate=96000
+                ),
+            ),
+            state=EvidenceState.AVAILABLE,
+        )
+
+    def catalog_identity_context(self):
+        return (self.context,)
+
+    def catalog_identity(self, kind, raw_id):
+        self.on_identity()
+        return CatalogIdentity(
+            f"{self.id}:{raw_id}",
+            kind,
+            title="Song",
+            artist="Artist",
+            identifier="USABC1200001",
+            duration_ms=180000,
+            explicit=False,
+            version="",
+            release_title="Album",
+            release_version="",
+        )
+
+    def catalog_candidates(self, origin):
+        return CatalogLookup((self.catalog_identity(origin.kind, "2"),))
+
+    def probe_availability(self, identity, ask):
+        self.calls += 1
+        self.on_probe()
+        return self.evidence
+
+
+def bridge(*providers):
+    return SimpleNamespace(
+        providers={p.id: p for p in providers},
+        settings=SimpleNamespace(data=SimpleNamespace(download_policies=DownloadPolicies())),
+        _provider_contexts=ProviderContexts(),
+        _provider_readiness_probes={
+            p.id: lambda p=p: p.readiness(enabled=p.enabled, signed_in=True) for p in providers
+        },
+    )
+
+
+def collect(b, **kwargs):
+    return collect_offers(
+        b,
+        (CatalogSelection("track", "origin:1"),),
+        provider_ids=("other",),
+        ask=kwargs.pop("ask", OfferConstraints(tier=QualityTier.LOSSLESS)),
+        request_id=kwargs.pop("request_id", "request"),
+        current=kwargs.pop("current", lambda: True),
+        **kwargs,
+    )[0]
+
+
+def test_four_quality_facts_and_presence_are_independent_neutral_values():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    b.evidence = replace(b.evidence, advertised=(DeliveryFacts(tier=QualityTier.HI_RES_LOSSLESS),))
+    payload = collect(
+        bridge(a, b), presence=lambda identity: OfferPresence(owned=False, library_present=True)
+    ).presentation()[0]
+    assert payload["advertised"][0]["sample_rate"] is None
+    assert payload["probed"][0]["sample_rate"] == 96000
+    assert payload["selected"]["tier"] == "LOSSLESS"
+    assert payload["delivered"] == [] and payload["owned"] is False and payload["library_present"] is True
+    json.dumps(payload)
+
+
+@pytest.mark.parametrize("change", ["origin", "target", "request", "runtime", "capability", "disabled", "matching"])
+def test_queued_publication_discards_context_and_identity_after_worker_returns(change):
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    host = bridge(a, b)
+    active = True
+    snapshot = collect(host, current=lambda: active)
+    if change == "origin":
+        host._provider_contexts.revoke(a.id)
+    elif change == "target":
+        host._provider_contexts.revoke(b.id)
+    elif change == "runtime":
+        b.context = "gb/account/runtime-v2"
+    elif change == "capability":
+        b.capabilities = frozenset({Capability.CATALOG})
+    elif change == "disabled":
+        b.enabled = False
+    elif change == "matching":
+        host.settings.data.download_policies.shared = replace(
+            host.settings.data.download_policies.shared, matching="release"
+        )
+    else:
+        active = False
+    payload = snapshot.presentation()[0]
+    assert payload["evidence_state"] == "stale"
+    assert payload["probed"] == [] and not payload["automatic_eligible"]
+    if change in ("target", "runtime", "capability", "disabled"):
+        assert snapshot.presentation()[1]["evidence_state"] == "available"
+
+
+def test_probe_change_is_discarded_and_never_cached():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    host = bridge(a, b)
+    b.on_probe = lambda: host._provider_contexts.revoke(b.id)
+    cache = OfferEvidenceCache()
+    assert collect(host, cache=cache).presentation()[0]["evidence_state"] == "stale"
+    b.on_probe = lambda: None
+    assert collect(host, cache=cache).presentation()[0]["evidence_state"] == "available"
+    assert b.calls == 2
+
+
+@pytest.mark.parametrize("change", ["constraints", "identity", "request", "context", "epoch", "expiry"])
+def test_cache_reuses_only_current_request_and_invalidation_dimensions(change):
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    now = time()
+    host, cache = bridge(a, b), OfferEvidenceCache(clock=lambda: now)
+    collect(host, cache=cache)
+    collect(host, cache=cache)
+    assert b.calls == 1
+    extra = {}
+    if change == "constraints":
+        extra["ask"] = OfferConstraints(tier=QualityTier.HI_RES_LOSSLESS)
+    elif change == "identity":
+        original = b.catalog_identity
+        b.catalog_identity = lambda kind, raw_id: replace(original(kind, raw_id), duration_ms=180001)
+    elif change == "request":
+        extra["request_id"] = "another-request"
+    elif change == "context":
+        b.context = "gb/account2/runtime-v2"
+    elif change == "epoch":
+        host._provider_contexts.revoke(b.id)
+    else:
+        now += 120
+    collect(host, cache=cache, **extra)
+    assert b.calls == 2
+
+
+def test_source_failure_setup_and_unknown_do_not_poison_other_provider():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+
+    def fail():
+        raise RuntimeError("private-path secret-token")
+
+    b.on_probe = fail
+    payload = collect(bridge(a, b)).presentation()
+    assert payload[0]["evidence_state"] == "failed" and "secret" not in str(payload)
+    assert payload[1]["evidence_state"] == "available"
+    b.enabled = False
+    payload = collect(bridge(a, b)).presentation()[0]
+    assert payload["readiness"] == "disabled" and b.calls == 1
+
+
+def test_opt_in_demand_bound_and_unresolved_identity_prevent_probes():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    host = bridge(a, b)
+    with pytest.raises(ValueError, match="opt-in"):
+        collect(host, trigger="auto")
+    assert a.calls == b.calls == 0
+    b.catalog_candidates = lambda origin: CatalogLookup(complete=False)
+    assert collect(host).presentation()[0]["match_state"] == "unresolved"
+    assert b.calls == 0
+    with pytest.raises(ValueError, match="bound"):
+        collect_offers(
+            host,
+            (CatalogSelection("track", "origin:1"),) * 65,
+            provider_ids=(b.id,),
+            ask=OfferConstraints(),
+            request_id="x",
+            current=lambda: True,
+        )
+
+
+def test_repeated_entries_keep_each_origins_publication_guard():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    host = bridge(a, b)
+    results = collect_offers(
+        host,
+        (CatalogSelection("track", "origin:1"), CatalogSelection("track", "other:2")),
+        provider_ids=(a.id, b.id),
+        ask=OfferConstraints(tier=QualityTier.LOSSLESS),
+        request_id="x",
+        current=lambda: True,
+    )
+    host._provider_contexts.revoke(a.id)
+    assert all(p["evidence_state"] == "stale" for p in results[0].presentation())
+    assert results[1].presentation()[1]["evidence_state"] == "available"
+
+
+def test_raw_manifest_missing_values_do_not_inherit_sdk_defaults_or_urls():
+    raw = {
+        "audioQuality": "LOSSLESS",
+        "audioMode": "STEREO",
+        "manifestMimeType": "application/vnd.tidal.bts",
+        "manifest": base64.b64encode(
+            json.dumps({"codecs": "FLAC", "urls": ["https://secret/media"]}).encode()
+        ).decode(),
+    }
+    (fact,) = manifest_facts(raw)
+    assert fact.sample_rate is None and fact.bit_depth is None
+    assert fact.codec == "flac" and "secret" not in str(fact)
+    raw.update(bitDepth=24, sampleRate=96000)
+    (fact,) = manifest_facts(raw)
+    assert (fact.bit_depth, fact.sample_rate) == (24, 96000)
+
+
+def test_dash_manifest_codec_profile_and_rate_are_actual_facts():
+    xml = '<MPD><Period><AdaptationSet audioSamplingRate="48000"><Representation codecs="mp4a.40.2" bandwidth="256000"/></AdaptationSet></Period></MPD>'
+    (fact,) = manifest_facts(
+        {"manifestMimeType": "application/dash+xml", "manifest": base64.b64encode(xml.encode()).decode()}
+    )
+    assert (fact.codec, fact.profile, fact.sample_rate, fact.bitrate, fact.bit_depth) == (
+        "aac",
+        "lc",
+        48000,
+        256000,
+        None,
+    )
+
+
+def test_real_tidal_probe_reads_only_raw_item_and_manifest_without_quality_mutation():
+    from threading import Lock
+
+    from waves.providers.tidal import TidalProvider
+
+    calls = []
+
+    def request(method, path, params=None):
+        calls.append((path, params))
+        payload = (
+            {"id": 1, "audioQuality": "HI_RES_LOSSLESS"}
+            if path == "tracks/1"
+            else {
+                "audioQuality": "LOSSLESS",
+                "audioMode": "STEREO",
+                "manifestMimeType": "application/vnd.tidal.bts",
+                "manifest": base64.b64encode(b'{"codecs":"FLAC","urls":["https://private/media"]}').decode(),
+            }
+        )
+        return SimpleNamespace(json=lambda: payload)
+
+    session = SimpleNamespace(request=SimpleNamespace(request=request), audio_quality="LOW")
+    provider = TidalProvider(SimpleNamespace(session=session, stream_lock=Lock()))
+    evidence = provider.probe_availability(
+        CatalogIdentity("tidal:1", "track"), OfferConstraints(tier=QualityTier.HI_RES_LOSSLESS)
+    )
+    assert len(calls) == 2 and calls[1][1]["audioquality"] == "HI_RES_LOSSLESS"
+    assert session.audio_quality == "LOW"
+    assert evidence.advertised[0].tier == "HI_RES_LOSSLESS"
+    assert evidence.probed[0].tier == "LOSSLESS" and evidence.probed[0].bit_depth is None
+    assert "private" not in str(evidence)
+
+
+def test_real_apple_metadata_probe_never_calls_media_or_invents_ceiling(monkeypatch):
+    from waves.providers.apple import AppleProvider
+    from waves.providers.apple.engines import EngineFacts
+
+    class Catalog:
+        storefront = "us"
+        calls = 0
+
+        async def _amp_request(self, uri, params):
+            self.calls += 1
+            return {
+                "data": [
+                    {
+                        "id": "2",
+                        "type": "songs",
+                        "attributes": {"audioTraits": ["lossless", "hi-res-lossless", "atmos"]},
+                    }
+                ]
+            }
+
+    catalog = Catalog()
+    provider = AppleProvider(catalog=catalog)
+    provider.engine_facts_probe = lambda: EngineFacts(
+        enabled=True,
+        cookies_ready=True,
+        wrapper_ready=True,
+        fetch_ready=True,
+        protocol_compatible=True,
+        wrapper_runtime_ready=True,
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Media action must be explicit")
+
+    monkeypatch.setattr(provider, "resolve_stream", forbidden)
+    identity = CatalogIdentity("apple:2", "track")
+    evidence = provider.probe_availability(identity, OfferConstraints(tier=QualityTier.LOSSLESS))
+    assert catalog.calls == 1 and evidence.state == "unknown" and not evidence.probed
+    assert all(fact.bit_depth is None and fact.sample_rate is None and not fact.codec for fact in evidence.advertised)
+    assert {fact.tier for fact in evidence.advertised} >= {QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS}
+    ask = OfferConstraints(tier=QualityTier.LOSSLESS)
+    live = provider.readiness(enabled=True)
+    provider.engine_facts_probe = lambda: EngineFacts(
+        enabled=True,
+        cookies_ready=True,
+        wrapper_ready=False,
+        fetch_ready=True,
+        protocol_compatible=False,
+        wrapper_runtime_ready=False,
+    )
+    assert provider.offer_readiness(identity, ask, live).state == "setup_required"
+
+
+def test_broken_readiness_and_context_do_not_abort_healthy_provider():
+    a, b, broken = OfferProvider("origin"), OfferProvider("other"), OfferProvider("broken")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("failure")
+
+    broken.readiness = fail
+    broken.availability_context = fail
+    host = bridge(a, b, broken)
+    payload = collect_offers(
+        host,
+        (CatalogSelection("track", "origin:1"),),
+        provider_ids=(broken.id, b.id),
+        ask=OfferConstraints(tier=QualityTier.LOSSLESS),
+        request_id="x",
+        current=lambda: True,
+    )[0].presentation()
+    assert payload[1]["evidence_state"] == "available"
+    assert broken.calls == 0
+
+
+def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
+    from waves.desktop.backend import WavesBridge
+
+    class Signal:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, *args):
+            self.events.append(args)
+
+    class Pool:
+        def start(self, worker):
+            self.worker = worker
+
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    host = bridge(a, b)
+    host._catalog_offer_generation = 0
+    host._catalog_offer_cache = OfferEvidenceCache()
+    host._catalogOffersEvent = Signal()
+    host.catalogOffersLoaded = Signal()
+    host.threadpool = Pool()
+    host._ownership = SimpleNamespace(ownership_of=lambda *args, **kwargs: None)
+    host._catalog_offer_presence = WavesBridge._catalog_offer_presence.__get__(host)
+    request = WavesBridge.requestCatalogOffers(host, "origin:1", "track", "LOSSLESS", "stereo")
+    assert not a.calls and not b.calls
+    host.threadpool.worker.run()
+    (event,) = host._catalogOffersEvent.events[0]
+    host._provider_contexts.revoke(b.id)
+    WavesBridge._on_catalog_offers(host, event)
+    loaded_id, payload = host.catalogOffersLoaded.events[0]
+    assert loaded_id == request and payload[1]["evidence_state"] == "stale"
+    assert payload[0]["evidence_state"] == "available"
+    WavesBridge.cancelCatalogOffers(host, request)
+    WavesBridge._on_catalog_offers(host, event)
+    assert len(host.catalogOffersLoaded.events) == 1
+
+
+def test_ownership_is_available_during_setup_without_polluting_delivery_evidence():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    b.offer_readiness = lambda identity, ask, live: __import__(
+        "waves.providers.base", fromlist=["OperationReadiness"]
+    ).OperationReadiness(Capability.DOWNLOAD, "setup_required")
+    payload = collect(
+        bridge(a, b),
+        presence=lambda identity: OfferPresence(
+            owned=True, library_present=True, delivered=(DeliveryFacts(tier=QualityTier.HIGH, codec="aac"),)
+        ),
+    ).presentation()[0]
+    assert payload["readiness"] == "setup_required" and payload["owned"] is True
+    assert payload["delivered"][0]["codec"] == "aac" and not payload["probed"] and not b.calls

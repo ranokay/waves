@@ -4054,6 +4054,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     _providerLoginEvent = Signal(object)
     _catalogEvent = Signal(object)
     _searchEvent = Signal(object)
+    _catalogOffersEvent = Signal(object)
+    catalogOffersLoaded = Signal(int, "QVariantList")
     # A download was HELD because FFmpeg is missing: without it the files
     # would be degraded (no FLAC extraction, no video conversion, no track
     # length repair, so strict players can read 0:00). QML shows a blocking
@@ -4187,6 +4189,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._providerLoginEvent.connect(self._on_provider_login_event, Qt.ConnectionType.QueuedConnection)
         self._catalogEvent.connect(self._on_catalog_event, Qt.ConnectionType.QueuedConnection)
         self._searchEvent.connect(self._on_search_event, Qt.ConnectionType.QueuedConnection)
+        from waves.desktop.providers.catalog_offers import OfferEvidenceCache
+
+        self._catalog_offer_generation = 0
+        self._catalog_offer_cache = OfferEvidenceCache()
+        self._catalogOffersEvent.connect(self._on_catalog_offers, Qt.ConnectionType.QueuedConnection)
         # Apple's download ask surface (clicks, retries, standalone fetches,
         # job bodies) is this bridge's own machinery, attached to the seam
         # here: every download path dispatches through the id's provider
@@ -10326,6 +10333,85 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "coverEmbed": cover_embed,
             "coverFile": cover_file,
         }
+
+    @Slot(str, str, str, str, result=int)
+    def requestCatalogOffers(self, media_id: str, kind: str, tier: str, audio_type: str) -> int:
+        """Opening/changing the Chooser requests metadata evidence on a worker."""
+        from waves.desktop.providers.catalog_identity import CatalogSelection
+        from waves.desktop.providers.catalog_offers import collect_offers
+        from waves.providers.catalog_offers import OfferConstraints
+
+        self._catalog_offer_generation += 1
+        generation = self._catalog_offer_generation
+        provider_id = provider_of_id(media_id)
+        policy = self.settings.data.download_policies.effective(provider_id)
+        ask = OfferConstraints(
+            tier=tier_from_word(tier) or QualityTier.HIGH,
+            audio_type=audio_type,
+            quality_strategy=policy.quality_strategy,
+            required_codec=policy.required_codec,
+            video_height=int(policy.video_quality or 0),
+            video_codec=policy.video_codec,
+            video_hdr=policy.video_hdr,
+            video_max_fps=policy.video_max_fps,
+            provider_pin=provider_id,
+            engine_pin=str(getattr(self.providers.get(provider_id), "engine_selection", "")),
+        )
+
+        def current() -> bool:
+            return (
+                self._catalog_offer_generation == generation
+                and self.settings.data.download_policies.effective(provider_id) == policy
+            )
+
+        def work() -> None:
+            snapshots = collect_offers(
+                self,
+                (CatalogSelection(kind, media_id),),
+                provider_ids=tuple(self.providers),
+                ask=ask,
+                request_id=str(generation),
+                current=current,
+                cache=self._catalog_offer_cache,
+                presence=lambda identity: self._catalog_offer_presence(identity, ask.audio_type),
+            )
+            if current():
+                self._catalogOffersEvent.emit((generation, snapshots[0]))
+
+        self.threadpool.start(Worker(work))
+        return generation
+
+    @Slot(int)
+    def cancelCatalogOffers(self, request_id: int) -> None:
+        if request_id == self._catalog_offer_generation:
+            self._catalog_offer_generation += 1
+
+    def _catalog_offer_presence(self, identity, audio_type: str):
+        """Read existing per-provider ownership on the probe worker, without paths in QML."""
+        from waves.providers.catalog_offers import DeliveryFacts, OfferPresence
+
+        if identity.kind not in ("track", "video"):
+            return OfferPresence()
+        rec = self._ownership.ownership_of(
+            identity.media_id, audio_type=audio_type if identity.kind == "track" else None
+        )
+        if rec is None:
+            return OfferPresence(owned=False)
+        facts = DeliveryFacts(
+            tier=tier_from_word(rec.get("quality_tier")),
+            audio_type=str(rec.get("audio_type") or ""),
+            codec=str(rec.get("codecs") or "").lower(),
+            bit_depth=rec.get("bit_depth"),
+            sample_rate=rec.get("sample_rate"),
+        )
+        return OfferPresence(owned=True, library_present=True, delivered=(facts,))
+
+    @Slot(object)
+    def _on_catalog_offers(self, event) -> None:
+        generation, snapshot = event
+        if generation == self._catalog_offer_generation:
+            # Context may change between the worker's emit and this GUI hop.
+            self.catalogOffersLoaded.emit(generation, snapshot.presentation())
 
     @Slot("QVariant")
     def saveChooserDefaults(self, values) -> None:
@@ -20917,6 +21003,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
+            provider.offer_context_probe = lambda: WavesBridge._apple_offer_context(self)
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
@@ -21638,6 +21725,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if current() and relay is not None:
             relay.emit(_CatalogEvent(token, publish))
         return facts if current() else EngineFacts(enabled=False)
+
+    def _apple_offer_context(self) -> tuple[str, ...]:
+        """Read only cached setup/account facts during queued offer validation."""
+        cache = getattr(self, "_apple_engine_facts_cache", None)
+        auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
+        return (
+            str(getattr(self, "_apple_engine_facts_gen", 0)),
+            repr(cache[2] if cache else None),
+            str(auth.get("state")),
+            str(auth.get("reachable")),
+        )
 
     def _apple_engine_details(self) -> list:
         """Serve cached setup facts; coalesce bounded refreshes on the pool."""

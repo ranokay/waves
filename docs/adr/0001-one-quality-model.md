@@ -3,7 +3,7 @@
 - Status: accepted
 - Decided: 2026-09-03 (issue #24, from the Apple Music provider spec §4.3, §9.2)
 - Supersedes: the tidalapi `Quality` type as the app's shared quality vocabulary
-- Amended: 2026-10-03; delivery evidence/ranking is accepted target, planned for offer routing
+- Amended: 2026-10-06; neutral offer evidence/ranking implemented; automatic routing remains planned
 
 ## Decision
 
@@ -44,6 +44,18 @@ or evidence of improvement. Resolution does not prove better mastering.
 
 Matching and request policy are owned by
 [ADR 0011](0011-captured-fulfillment-intent.md), not quality rank.
+
+`providers/catalog_offers.py` owns immutable advertised/probed/selected/delivered
+values and conservative comparison. `desktop/providers/catalog_offers.py`
+collects selected-context observations on demand and revalidates them through
+queued publication. The bounded in-memory cache retains at most 256 observations
+for 60 seconds, keyed by request, identity, constraints and provider/origin
+context; it grants no cross-request identity confirmation. TIDAL reads raw
+playback manifests without SDK rate/depth defaults or media fetches. Apple
+catalog traits remain advertised: the current engine lacks an independent
+bounded rendition probe, so exact availability stays unknown. Collection and
+video availability also stays unknown without item rendition evidence. These
+contracts do not qualify engines, route downloads or authorize replacement.
 
 ## Why
 
