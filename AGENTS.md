@@ -1,72 +1,14 @@
 # Waves
 
-> Repository precedence: this file, `GLOSSARY.md` and `docs/` override any
-> global agent instructions. On a conflict, follow the repo and flag it
-> instead of guessing.
-
-## Agent skills
-
-### Issue tracker
-
-Issues are tracked in this repo's GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Implementation workflow
-
-One branch per issue off `develop`, squash-merged, branches deleted after; `main` mirrors upstream and takes no PRs. See `docs/agents/implementation-workflow.md`.
-
-### Triage labels
-
-Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
-For feature locations, dependency direction, naming and test owners, start with
-[the architecture map](docs/architecture.md). Commands live in [DEVELOPER.md](DEVELOPER.md).
-
-<!-- code-review-graph MCP tools -->
-
-## MCP Tools: code-review-graph
-
-**This project has a knowledge graph. Start with the code-review-graph
-MCP tools to narrow scope, then read the source.** The graph is cheaper than scanning files and
-gives you structural context (callers, dependents, test coverage) that file search cannot.
-
-### When to use graph tools FIRST
-
-- **Exploring code**: `semantic_search_nodes_tool` or `query_graph_tool` instead of Grep
-- **Understanding impact**: `get_impact_radius_tool` instead of manually tracing imports
-- **Code review**: `detect_changes_tool` + `get_review_context_tool` instead of reading entire files
-- **Finding relationships**: `query_graph_tool` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview_tool` + `list_communities_tool`
-
-### Verify in the source
-
-- Narrow scope with the graph, then read the source. Do not change code from graph output alone.
-- For any non-trivial change, read the implementation and the relevant tests before concluding.
-- Verify the exact source when touching behavior, database logic, migrations, retries, fallbacks,
-  recovery, or compatibility code.
-- When the graph and the source disagree, the source wins. The graph may be stale or may not
-  model that relationship.
-- An empty graph result can mean "not indexed" or "not statically visible", not "does not exist".
-
-### Key Tools
-
-| Tool                             | Use when                                               |
-| -------------------------------- | ------------------------------------------------------ |
-| `detect_changes_tool`            | Reviewing code changes — gives risk-scored analysis    |
-| `get_review_context_tool`        | Need source snippets for review — token-efficient      |
-| `get_impact_radius_tool`         | Understanding blast radius of a change                 |
-| `get_affected_flows_tool`        | Finding which execution paths are impacted             |
-| `query_graph_tool`               | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes_tool`     | Finding functions/classes by name or keyword           |
-| `get_architecture_overview_tool` | Understanding high-level codebase structure            |
-| `refactor_tool`                  | Planning renames, finding dead code                    |
-
-### Workflow
-
-1. The edit hook is best-effort: when `list_graph_stats_tool` reports `head_matches_build: false`, run `mise run graph` (`uvx code-review-graph update`). Semantic search is keyword fallback until embeddings are intentionally generated.
-2. Use `detect_changes_tool` for code review.
-3. Use `get_affected_flows_tool` to understand impact.
-4. Use `query_graph_tool` pattern="tests_for" to check coverage.
-<!-- /code-review-graph MCP tools -->
+- Explore code: read [domain guidance](docs/agents/domain.md) for vocabulary
+  and decisions, then [the architecture map](docs/architecture.md) for owners
+  and dependency direction.
+- Explore code or review changes: read
+  [the graph workflow](docs/agents/code-review-graph.md) before using graph tools
+  to narrow scope.
+- Implement an issue or prepare a PR: read
+  [the implementation workflow](docs/agents/implementation-workflow.md) before starting.
+- Use GitHub: read [the issue tracker](docs/agents/issue-tracker.md) before any `gh` call.
+- Triage issues: read [triage labels](docs/agents/triage-labels.md).
+- Write or review code: read [coding standards](CODING_STANDARDS.md).
+- Set up, run, debug, build, or test: read [the developer guide](DEVELOPER.md).
