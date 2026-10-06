@@ -192,9 +192,9 @@ def test_the_exclusion_apparatus_is_fully_retired():
     qml_dir = backend.pathlib.Path(backend.__file__).parent / "qml"
     # The exclusion apparatus stays retired; "ATMOS ONLY" survives only as the
     # Chooser's audio-type collapse label on Atmos-only tracks (spec 5.1, 7.2).
-    # The Chooser lives in DownloadButton.qml. Pin that it appears exactly
-    # once, as that label, and nowhere else.
-    qml = (qml_dir / "domains/downloads/DownloadButton.qml").read_text()
+    # The label belongs to the extracted Chooser and appears exactly once.
+    qml = (qml_dir / "domains/downloads/DownloadChooser.qml").read_text()
+    assert "ATMOS ONLY" not in (qml_dir / "domains/downloads/DownloadButton.qml").read_text()
     assert "ATMOS ONLY" not in (qml_dir / "Main.qml").read_text(), (
         "ATMOS ONLY appears outside the Chooser collapse label"
     )

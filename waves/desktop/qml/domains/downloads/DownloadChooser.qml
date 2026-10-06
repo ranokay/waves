@@ -53,7 +53,7 @@ Popup {
     radius: 10
     border.color: button.outline
   }
-  component Label: Text {
+  component Caption: Text {
     textFormat: Text.PlainText
     color: button.textLo
     font.family: uiFontFamily
@@ -122,12 +122,12 @@ Popup {
       id: body
       width: scroll.availableWidth
       spacing: 8
-      Label {
+      Caption {
         text: "DOWNLOAD WITH"
         color: Primitives.Palette.textDim
         font.bold: true
       }
-      Label {
+      Caption {
         text: button.chooserProviderPinned ? "Provider pinned; engine choice is independent." : "Provider follows saved routing policy; origin is the default."
       }
       Repeater {
@@ -154,29 +154,29 @@ Popup {
             ProviderBadge {
               descriptor: offerRow.descriptor
             }
-            Label {
+            Caption {
               width: parent.width - 30
               text: "Match: " + (offerRow.modelData.match_state || "unknown").replace(/_/g, " ") + " · Delivery: " + (offerRow.modelData.readiness || "unknown").replace(/_/g, " ")
             }
           }
-          Label {
+          Caption {
             text: offerRow.selected ? button.chooserEvidenceText : (offerRow.modelData.expires_at > 0 && offerRow.modelData.expires_at * 1000 <= chooser.observedNow ? "Availability stale; check again" : (offerRow.modelData.summary || "Exact availability unknown"))
             objectName: offerRow.selected ? "chooserAvailabilityEvidence" : "chooserOfferEvidence"
           }
-          Label {
+          Caption {
             text: "Ownership: " + (offerRow.modelData.owned === true ? "Waves-owned Version" : offerRow.modelData.owned === false ? "not Waves-owned" : "unknown") + " · Library: " + (offerRow.modelData.library_present === true ? "present" : offerRow.modelData.library_present === false ? "absent" : "unknown")
           }
-          Label {
+          Caption {
             visible: (offerRow.modelData.options && offerRow.modelData.options.engines || []).length > 0
             text: "Engine: " + (offerRow.selected ? button.chooserEngine : (offerRow.modelData.options ? offerRow.modelData.options.engine : "auto"))
           }
-          Label {
+          Caption {
             visible: (offerRow.modelData.advertised || []).length > 0
             text: "Catalog advertised: " + (offerRow.modelData.advertised || []).map(function (f) {
               return (f.tier || "unknown tier") + " " + (f.audio_type || "")
             }).join(", ") + ". Exact delivery requires probe evidence."
           }
-          Label {
+          Caption {
             visible: (offerRow.modelData.explanations || []).length > 0
             text: (offerRow.modelData.explanations || []).join(" ")
           }
@@ -200,7 +200,7 @@ Popup {
           }
         }
       }
-      Label {
+      Caption {
         text: button.chooserNotice
         visible: text !== ""
         color: button.gold
@@ -235,7 +235,7 @@ Popup {
         enabled: button.chooserPendingSwitch === null
         onClicked: button.confirmChooser()
       }
-      Label {
+      Caption {
         text: "Match confidence identifies the catalog item. Advertised, probed and selected facts are separate from verified delivered media. Preview keeps its own provider and duration."
         color: Primitives.Palette.textDim
       }
@@ -246,7 +246,7 @@ Popup {
     Column {
       width: body.width
       spacing: 6
-      Label {
+      Caption {
         text: "AUDIO QUALITY REQUIREMENT"
         visible: button.chooserTiers.length > 0
       }
@@ -261,7 +261,7 @@ Popup {
           onClicked: button.chooserPickTier(modelData.word)
         }
       }
-      Label {
+      Caption {
         text: button.chooserAtmosOnly ? "ATMOS ONLY" : "AUDIO TYPE"
       }
       Repeater {
@@ -275,7 +275,7 @@ Popup {
           onClicked: button.chooserPickAudio(modelData)
         }
       }
-      Label {
+      Caption {
         text: "ENGINE · " + (button.chooserExplicit.engine !== undefined ? "request choice" : "saved default")
         visible: button.chooserEngines.length > 0
       }
@@ -299,7 +299,7 @@ Popup {
             accessibleRole: Accessible.RadioButton
             onClicked: button.chooserPickEngine(modelData.id)
           }
-          Label {
+          Caption {
             text: (modelData.requirements || []).map(function (r) {
               return r.operation + ": " + r.state + (r.action ? " · " + r.action : "")
             }).join("; ")
