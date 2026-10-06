@@ -383,7 +383,8 @@ unknown; Apple advertised traits do not establish exact rendition availability.
 Track Library presence comes from the scanned match index independently of
 provider Ownership. An unbuilt index or unproven candidate stays unknown;
 an owned download outside the Library does not establish Library presence.
-Library-generation changes invalidate the request through memory-only guards.
+Library folder-generation or index-publication changes invalidate the request
+through memory-only guards.
 An engine pin is applied only to its selected provider's evidence, even when
 the origin provider remains unpinned.
 

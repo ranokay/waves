@@ -10367,12 +10367,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             engine_pin=engine,
         )
         library_generation = getattr(self, "_library_gen", None)
+        library_stamp = getattr(self, "_library_stamp", None)
 
         def current() -> bool:
             return (
                 self._catalog_offer_generation == generation
                 and self.settings.data.download_policies.effective(policy_provider) == policy
                 and getattr(self, "_library_gen", None) == library_generation
+                and getattr(self, "_library_stamp", None) == library_stamp
             )
 
         def work() -> None:

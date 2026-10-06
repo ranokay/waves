@@ -433,7 +433,7 @@ def test_broken_readiness_and_context_do_not_abort_healthy_provider():
     assert broken.calls == 0
 
 
-@pytest.mark.parametrize("change", ["provider", "library"])
+@pytest.mark.parametrize("change", ["provider", "library", "library_publication"])
 def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication(change):
     from waves.desktop.backend import WavesBridge
 
@@ -452,6 +452,7 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication(ch
     host = bridge(a, b)
     host._catalog_offer_generation = 0
     host._library_gen = 0
+    host._library_stamp = 0
     host._catalog_offer_cache = OfferEvidenceCache()
     host._catalogOffersEvent = Signal()
     host.catalogOffersLoaded = Signal()
@@ -481,8 +482,10 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication(ch
     host._provider_readiness_probes = {a.id: forbidden, b.id: forbidden}
     if change == "provider":
         host._provider_contexts.revoke(b.id)
-    else:
+    elif change == "library":
         host._library_gen += 1
+    else:
+        host._library_stamp += 1
     WavesBridge._on_catalog_offers(host, event)
     loaded_id, payload = host.catalogOffersLoaded.events[0]
     assert loaded_id == request and payload[1]["evidence_state"] == "stale"
