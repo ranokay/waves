@@ -9,7 +9,7 @@ from dataclasses import replace
 from time import time
 from typing import TYPE_CHECKING
 
-from waves.constants import tier_from_word
+from waves.constants import QualityTier, tier_from_word
 from waves.metadata.catalog_identity import CatalogIdentity
 from waves.providers.catalog_offers import AvailabilityEvidence, DeliveryFacts, EvidenceState, OfferConstraints
 
@@ -22,16 +22,6 @@ MAX_MANIFEST_BYTES = 512 * 1024
 def positive(value) -> int | None:
     """Accept actual integral API facts, without convenient SDK defaults."""
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
-def _codec(value: str) -> tuple[str, str]:
-    word = value.lower()
-    return {
-        "mp4a.40.2": ("aac", "lc"),
-        "mp4a.40.5": ("aac", "he"),
-        "mp4a.40.29": ("aac", "he-v2"),
-        "ec-3": ("eac3", ""),
-    }.get(word, (word, ""))
 
 
 def manifest_facts(raw: dict) -> tuple[DeliveryFacts, ...]:
@@ -53,8 +43,9 @@ def manifest_facts(raw: dict) -> tuple[DeliveryFacts, ...]:
         return _dash_facts(data, common)
     if "bts" in mime:
         manifest = json.loads(data)
-        codec, profile = _codec(str(manifest.get("codecs") or ""))
-        return (replace(common, codec=codec, profile=profile),) if manifest.get("urls") else ()
+        if manifest.get("encryptionType") not in (None, "NONE"):
+            return ()
+        return (replace(common, codec=str(manifest.get("codecs") or "")),) if manifest.get("urls") else ()
     return ()
 
 
@@ -78,12 +69,21 @@ def probe(session: Session, identity: CatalogIdentity, ask: OfferConstraints) ->
         )
     # One authenticated metadata request, with per-call quality. It does not
     # change the live session's quality or fetch the manifest's media URLs.
+    tier = ask.tier
+    if ask.audio_type == "atmos":
+        tier = QualityTier.HIGH
+    elif ask.quality_strategy == "best_available":
+        tier = (
+            QualityTier.HI_RES_LOSSLESS
+            if ask.tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+            else QualityTier.HIGH
+        )
     payload = session.request.request(
         "GET",
         f"tracks/{raw_id}/playbackinfopostpaywall",
         params={
             "playbackmode": "STREAM",
-            "audioquality": str(ask.tier),
+            "audioquality": str(tier),
             "assetpresentation": "FULL",
         },
     ).json()
@@ -102,6 +102,8 @@ def _dash_facts(data: bytes, common: DeliveryFacts) -> tuple[DeliveryFacts, ...]
     if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
         return ()
     root = ET.fromstring(data)  # noqa: S314 -- bounded authenticated manifest; DTD/entity declarations rejected
+    if any(item.tag.rsplit("}", 1)[-1] == "ContentProtection" for item in root.iter()):
+        return ()
     facts = []
     for adaptation in root.iter():
         if adaptation.tag.rsplit("}", 1)[-1] != "AdaptationSet":
@@ -109,7 +111,7 @@ def _dash_facts(data: bytes, common: DeliveryFacts) -> tuple[DeliveryFacts, ...]
         for rep in adaptation:
             if rep.tag.rsplit("}", 1)[-1] != "Representation":
                 continue
-            codec, profile = _codec(rep.get("codecs") or adaptation.get("codecs") or "")
+            codec = rep.get("codecs") or adaptation.get("codecs") or ""
             rate = rep.get("audioSamplingRate") or adaptation.get("audioSamplingRate")
             bandwidth = rep.get("bandwidth")
             facts.append(
@@ -117,7 +119,6 @@ def _dash_facts(data: bytes, common: DeliveryFacts) -> tuple[DeliveryFacts, ...]
                     common,
                     sample_rate=positive(int(rate)) if rate else common.sample_rate,
                     codec=codec,
-                    profile=profile,
                     bitrate=positive(int(bandwidth)) if bandwidth else None,
                 )
             )

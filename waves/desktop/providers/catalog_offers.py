@@ -25,6 +25,7 @@ from waves.providers.catalog_offers import (
     EvidenceState,
     OfferConstraints,
     OfferPresence,
+    requested_audio,
     satisfies,
 )
 
@@ -139,7 +140,6 @@ def collect_offers(
     providers = {pid: bridge.providers[pid] for pid in pids if pid in bridge.providers}
     tokens = {pid: contexts.capture(pid) for pid in providers}
     stamps = {pid: _stamp(provider) for pid, provider in providers.items()}
-    readinesses = {pid: _live(bridge, provider) for pid, provider in providers.items()}
     matches = resolve_selected(bridge, selections, provider_ids=provider_ids, current=current)
     cache = cache or OfferEvidenceCache()
     snapshots = []
@@ -147,7 +147,7 @@ def collect_offers(
         origin_pid = provider_of_id(result.selection.media_id)
         policy = bridge.settings.data.download_policies.effective(origin_pid).matching
 
-        def valid(pid: str, identity: CatalogIdentity | None = None, *, origin_pid=origin_pid, policy=policy) -> bool:
+        def valid(pid: str, *, origin_pid=origin_pid, policy=policy) -> bool:
             try:
                 origin_provider = providers.get(origin_pid)
                 provider = providers.get(pid)
@@ -163,8 +163,6 @@ def collect_offers(
                     and stamps[pid] is not None
                     and _stamp(provider) == stamps[pid]
                     and bridge.settings.data.download_policies.effective(origin_pid).matching == policy
-                    and _live(bridge, provider) == readinesses[pid]
-                    and _live(bridge, origin_provider) == readinesses[origin_pid]
                 )
             except Exception:
                 return False
@@ -193,7 +191,7 @@ def collect_offers(
             identity = _selected_identity(resolution)
             # Bind this entry's origin/policy into a guard before moving to the
             # next selection; queued consumers must retain the original guard.
-            guard = lambda pid=pid, identity=identity, valid=valid: valid(pid, identity)
+            guard = lambda pid=pid, valid=valid: valid(pid)
             stamp = stamps.get(pid)
             offer = _collect_one(
                 pid,
@@ -234,22 +232,30 @@ def _collect_one(
     evidence = AvailabilityEvidence()
     local = OfferPresence()
     if provider is not None:
-        try:
-            live = _live(bridge, provider)
-            readiness = (
-                provider.offer_readiness(identity, ask, live)
-                if identity is not None
-                else live.for_operation(Capability.DOWNLOAD)
-            )
+        observations, readinesses = [], []
+        for family in (ask,) if kind == "video" else requested_audio(ask):
+            observation = AvailabilityEvidence()
+            try:
+                live = _live(bridge, provider)
+                readiness = (
+                    provider.offer_readiness(identity, family, live)
+                    if identity is not None
+                    else live.for_operation(Capability.DOWNLOAD)
+                )
+                readinesses.append(readiness)
+                if identity is not None and readiness.state == ReadinessState.READY and guard() and stamp is not None:
+                    key = _CacheKey(request_id, identity, family, stamp)
+                    observation = _cached_probe(provider, key, guard, cache)
+            except Exception:
+                logger.debug("Provider availability probe failed", exc_info=True)
+                observation = AvailabilityEvidence(
+                    state=EvidenceState.FAILED, explanations=("Provider availability check failed; try again.",)
+                )
+            observations.append(observation)
+        if readinesses:
+            readiness = next((item for item in readinesses if item.state != ReadinessState.READY), readinesses[0])
             state, action = readiness.state, readiness.action
-            if identity is not None and state == ReadinessState.READY and guard() and stamp is not None:
-                key = _CacheKey(request_id, identity, ask, stamp)
-                evidence = _cached_probe(provider, key, guard, cache)
-        except Exception:
-            logger.debug("Provider availability probe failed", exc_info=True)
-            evidence = AvailabilityEvidence(
-                state=EvidenceState.FAILED, explanations=("Provider availability check failed; try again.",)
-            )
+        evidence = _combined_evidence(tuple(observations))
     if identity is not None and guard() and presence is not None:
         try:
             local = presence(identity)
@@ -262,8 +268,9 @@ def _collect_one(
             if state == ReadinessState.UNSUPPORTED
             else "Provider delivery needs setup or account action.",
         )
-    elif evidence.state == EvidenceState.AVAILABLE and not any(
-        satisfies(fact, ask, video=kind == "video") for fact in evidence.probed
+    elif evidence.state == EvidenceState.AVAILABLE and not all(
+        any(satisfies(fact, family, video=kind == "video") for fact in evidence.probed)
+        for family in ((ask,) if kind == "video" else requested_audio(ask))
     ):
         explanation = ("Probed delivery does not establish the selected constraints.",)
     return CatalogOffer(
@@ -278,6 +285,24 @@ def _collect_one(
         action,
         local,
         explanation,
+    )
+
+
+def _combined_evidence(observations: tuple[AvailabilityEvidence, ...]) -> AvailabilityEvidence:
+    if len(observations) == 1:
+        return observations[0]
+    states = {item.state for item in observations}
+    return AvailabilityEvidence(
+        advertised=tuple(fact for item in observations for fact in item.advertised),
+        probed=tuple(fact for item in observations for fact in item.probed),
+        state=EvidenceState.AVAILABLE
+        if states == {EvidenceState.AVAILABLE}
+        else EvidenceState.FAILED
+        if EvidenceState.FAILED in states
+        else EvidenceState.UNKNOWN,
+        observed_at=max(item.observed_at for item in observations),
+        expires_at=min((item.expires_at for item in observations if item.expires_at), default=0),
+        explanations=tuple(word for item in observations for word in item.explanations),
     )
 
 

@@ -46,6 +46,13 @@ def test_unknown_resolution_and_incomparable_lossy_profiles_do_not_improve():
     )
 
 
+def test_aac_he_v2_aliases_have_one_neutral_comparison():
+    alias = DeliveryFacts(audio_type="stereo", codec="mp4a.40.29", bitrate=256000)
+    neutral = DeliveryFacts(audio_type="stereo", codec="aac", profile="he-v2", bitrate=256000)
+    assert alias == neutral
+    assert compare_quality(alias, neutral) == 0
+
+
 def test_constraints_precede_quality_and_never_relax_mix_or_family():
     ask = OfferConstraints(tier=QualityTier.LOSSLESS, audio_type="stereo", required_codec="flac")
     assert not satisfies(DeliveryFacts(tier=QualityTier.HIGH, audio_type="stereo", codec="aac"), ask)

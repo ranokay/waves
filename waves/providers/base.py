@@ -759,7 +759,11 @@ class Provider(ABC):
         return CatalogLookup(complete=False, explanations=("Catalog identity lookup is unsupported.",))
 
     def availability_context(self) -> tuple[str, ...]:
-        """Account/storefront/runtime/version stamp; retained only in Python."""
+        """Memory-only account/runtime stamp, safe during queued GUI validation.
+
+        Include enabled/setup state in this stamp or revoke the provider token
+        when it changes. Live filesystem/network readiness belongs on workers.
+        """
         return self.catalog_identity_context()
 
     def offer_readiness(

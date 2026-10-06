@@ -6,7 +6,7 @@ media. Missing technical facts remain None and cannot establish improvement.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from math import isfinite
 from time import time
@@ -47,9 +47,12 @@ class DeliveryFacts:
             isinstance(self.frame_rate, bool) or not isfinite(self.frame_rate) or self.frame_rate <= 0
         ):
             object.__setattr__(self, "frame_rate", None)
-        codec, profile = {"mp4a.40.2": ("aac", "lc"), "mp4a.40.5": ("aac", "he"), "ec-3": ("eac3", "")}.get(
-            self.codec.lower(), (self.codec.lower(), self.profile.lower())
-        )
+        codec, profile = {
+            "mp4a.40.2": ("aac", "lc"),
+            "mp4a.40.5": ("aac", "he"),
+            "mp4a.40.29": ("aac", "he-v2"),
+            "ec-3": ("eac3", ""),
+        }.get(self.codec.lower(), (self.codec.lower(), self.profile.lower()))
         object.__setattr__(self, "codec", codec)
         object.__setattr__(self, "profile", profile)
 
@@ -69,6 +72,28 @@ class OfferConstraints:
     video_max_fps: int = 0
     engine_pin: str = ""
     provider_pin: str = ""
+
+
+def requested_audio(ask: OfferConstraints) -> tuple[OfferConstraints, ...]:
+    """Dual-download keeps a stereo requirement plus a separate Atmos copy.
+
+    Lossless resolution/codec constraints apply to stereo; Atmos is its own
+    delivery family, rather than a lossless rendition of the same mix.
+    """
+    if ask.audio_type != "both":
+        return (ask,)
+    return (
+        replace(ask, audio_type="stereo"),
+        replace(
+            ask,
+            audio_type="atmos",
+            tier=QualityTier.HIGH,
+            required_codec="",
+            minimum_sample_rate=0,
+            minimum_bit_depth=0,
+            minimum_bitrate=0,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -153,6 +178,11 @@ class CatalogOffer:
         }
 
     def summary(self, now: float | None = None) -> str:
+        if self.selected.audio_type == "both":
+            return "; ".join(
+                f"{ask.audio_type.title()}: {replace(self, selected=ask).summary(now)}"
+                for ask in requested_audio(self.selected)
+            )
         if self.readiness != "ready":
             return (
                 "Requested format unsupported"

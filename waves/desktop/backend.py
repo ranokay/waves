@@ -4055,6 +4055,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     _catalogEvent = Signal(object)
     _searchEvent = Signal(object)
     _catalogOffersEvent = Signal(object)
+    # requestId, neutral offer dicts: current Chooser evidence after queued
+    # context validation; cancelled requests never fire.
     catalogOffersLoaded = Signal(int, "QVariantList")
     # A download was HELD because FFmpeg is missing: without it the files
     # would be degraded (no FLAC extraction, no video conversion, no track
@@ -10401,8 +10403,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             tier=tier_from_word(rec.get("quality_tier")),
             audio_type=str(rec.get("audio_type") or ""),
             codec=str(rec.get("codecs") or "").lower(),
-            bit_depth=rec.get("bit_depth"),
-            sample_rate=rec.get("sample_rate"),
+            # Ownership rows have no numeric-fact provenance: TIDAL's SDK
+            # can substitute depth/rate defaults before they are recorded.
         )
         return OfferPresence(owned=True, library_present=True, delivered=(facts,))
 
@@ -21735,6 +21737,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             repr(cache[2] if cache else None),
             str(auth.get("state")),
             str(auth.get("reachable")),
+            str(auth.get("account")),
+            str(getattr(self.settings.data, "apple_enabled", False)),
         )
 
     def _apple_engine_details(self) -> list:

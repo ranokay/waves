@@ -50,6 +50,9 @@ class OfferProvider(BareProvider):
     def catalog_identity_context(self):
         return (self.context,)
 
+    def availability_context(self):
+        return (self.context, str(self.enabled))
+
     def catalog_identity(self, kind, raw_id):
         self.on_identity()
         return CatalogIdentity(
@@ -258,7 +261,42 @@ def test_dash_manifest_codec_profile_and_rate_are_actual_facts():
     )
 
 
-def test_real_tidal_probe_reads_only_raw_item_and_manifest_without_quality_mutation():
+def test_encrypted_manifest_does_not_establish_delivery_availability():
+    assert not manifest_facts(
+        {
+            "manifestMimeType": "application/vnd.tidal.bts",
+            "manifest": base64.b64encode(
+                b'{"codecs":"FLAC","encryptionType":"OLD_AES","urls":["https://private/media"]}'
+            ).decode(),
+        }
+    )
+
+
+def test_native_tidal_publication_stamp_does_not_repeat_package_lookup(monkeypatch):
+    import waves.providers.tidal as module
+
+    session = SimpleNamespace(
+        user=SimpleNamespace(id="account"), country_code="US", config=SimpleNamespace(openapi_v2_location="v2")
+    )
+    provider = module.TidalProvider(SimpleNamespace(session=session))
+    captured = provider.availability_context()
+
+    def forbidden(*args):
+        raise AssertionError("Publication must not read installed package metadata")
+
+    monkeypatch.setattr(module, "version", forbidden)
+    assert provider.availability_context() == captured
+
+
+@pytest.mark.parametrize(
+    "tier,strategy,expected",
+    [
+        (QualityTier.LOSSLESS, "best_available", "HI_RES_LOSSLESS"),
+        (QualityTier.LOSSLESS, "minimum_required", "LOSSLESS"),
+        (QualityTier.LOW, "best_available", "HIGH"),
+    ],
+)
+def test_real_tidal_probe_reads_only_raw_item_and_manifest_without_quality_mutation(tier, strategy, expected):
     from threading import Lock
 
     from waves.providers.tidal import TidalProvider
@@ -282,9 +320,9 @@ def test_real_tidal_probe_reads_only_raw_item_and_manifest_without_quality_mutat
     session = SimpleNamespace(request=SimpleNamespace(request=request), audio_quality="LOW")
     provider = TidalProvider(SimpleNamespace(session=session, stream_lock=Lock()))
     evidence = provider.probe_availability(
-        CatalogIdentity("tidal:1", "track"), OfferConstraints(tier=QualityTier.HI_RES_LOSSLESS)
+        CatalogIdentity("tidal:1", "track"), OfferConstraints(tier=tier, quality_strategy=strategy)
     )
-    assert len(calls) == 2 and calls[1][1]["audioquality"] == "HI_RES_LOSSLESS"
+    assert len(calls) == 2 and calls[1][1]["audioquality"] == expected
     assert session.audio_quality == "LOW"
     assert evidence.advertised[0].tier == "HI_RES_LOSSLESS"
     assert evidence.probed[0].tier == "LOSSLESS" and evidence.probed[0].bit_depth is None
@@ -392,6 +430,11 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
     assert not a.calls and not b.calls
     host.threadpool.worker.run()
     (event,) = host._catalogOffersEvent.events[0]
+
+    def forbidden():
+        raise AssertionError("Queued publication must not run live readiness probes")
+
+    host._provider_readiness_probes = {a.id: forbidden, b.id: forbidden}
     host._provider_contexts.revoke(b.id)
     WavesBridge._on_catalog_offers(host, event)
     loaded_id, payload = host.catalogOffersLoaded.events[0]
@@ -400,6 +443,54 @@ def test_bridge_request_preserves_gui_hop_guard_and_close_revokes_publication():
     WavesBridge.cancelCatalogOffers(host, request)
     WavesBridge._on_catalog_offers(host, event)
     assert len(host.catalogOffersLoaded.events) == 1
+
+
+def test_dual_download_probes_separate_stereo_and_atmos_constraints():
+    a, b = OfferProvider("origin"), OfferProvider("other")
+    b.audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
+    calls = []
+
+    def probe(identity, ask):
+        calls.append(ask)
+        fact = (
+            b.evidence.probed[0]
+            if ask.audio_type == "stereo"
+            else DeliveryFacts(tier=QualityTier.HIGH, audio_type="atmos", codec="eac3")
+        )
+        return AvailabilityEvidence(probed=(fact,), state=EvidenceState.AVAILABLE)
+
+    b.probe_availability = probe
+    payload = collect(bridge(a, b), ask=OfferConstraints(tier=QualityTier.LOSSLESS, audio_type="both")).presentation()[
+        0
+    ]
+    assert [(ask.audio_type, ask.tier) for ask in calls] == [
+        ("stereo", QualityTier.LOSSLESS),
+        ("atmos", QualityTier.HIGH),
+    ]
+    assert payload["readiness"] == "ready" and payload["evidence_state"] == "available"
+    assert {fact["audio_type"] for fact in payload["probed"]} == {"stereo", "atmos"}
+    assert "Stereo: Manifest" in payload["summary"] and "Atmos: Manifest" in payload["summary"]
+    assert payload["selected"]["audio_type"] == "both"
+
+
+def test_ownership_sdk_numeric_defaults_are_not_published_as_delivered_evidence():
+    from waves.desktop.backend import WavesBridge
+
+    host = SimpleNamespace(
+        _ownership=SimpleNamespace(
+            ownership_of=lambda *args, **kwargs: {
+                "quality_tier": "LOSSLESS",
+                "audio_type": "stereo",
+                "codecs": "FLAC",
+                "bit_depth": 16,
+                "sample_rate": 44100,
+            }
+        )
+    )
+    presence = WavesBridge._catalog_offer_presence(host, CatalogIdentity("tidal:1", "track"), "stereo")
+    assert presence.owned is True
+    assert presence.delivered[0].codec == "flac"
+    assert presence.delivered[0].bit_depth is None and presence.delivered[0].sample_rate is None
 
 
 def test_ownership_is_available_during_setup_without_polluting_delivery_evidence():
