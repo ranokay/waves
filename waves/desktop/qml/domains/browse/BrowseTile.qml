@@ -406,8 +406,9 @@ Rectangle {
               anchors.fill: parent
               accessibleLabel: "Preview " + (bt.title || "category")
               onTriggered: {
-                host.catPendingPv = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider || host.legacyBrowseProvider)
+                var owner = bt.provider || host.legacyBrowseProvider
+                host.catPendingPv = host.catActionKey(owner, bt.path)
+                waves.resolvePlaylistCategory(bt.path, bt.title, owner)
               }
             }
           }
@@ -447,8 +448,9 @@ Rectangle {
               anchors.fill: parent
               accessibleLabel: "Download all in " + (bt.title || "category")
               onTriggered: {
-                host.catPendingDl = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider || host.legacyBrowseProvider)
+                var owner = bt.provider || host.legacyBrowseProvider
+                host.catPendingDl = host.catActionKey(owner, bt.path)
+                waves.resolvePlaylistCategory(bt.path, bt.title, owner)
               }
             }
           }

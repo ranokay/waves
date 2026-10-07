@@ -261,8 +261,10 @@ search badges cannot disagree.
 ## Browse (editorial pages)
 
 The landing is combined from every READY browse-capable provider's own
-recipe (`Provider.browse_landing()`), in registry order. Each section and
-chip link carries `provider_id` (its owner), the payload carries
+recipe (`Provider.browse_landing()`), in registry order, and pages render
+through the owning provider (`Provider.browse_rows` / `browse_window_rows`
+when it supplies neutral rows, else the stock TIDAL parser). Each section
+and chip link carries `provider_id` (its owner), the payload carries
 `sources: [{provider_id, name}]` of the composing providers, and every
 drill-down routes back through that owner: `openBrowsePage(apiPath, title,
 providerId)`, `openBrowsePlaylists(apiPath, title, providerId)` and

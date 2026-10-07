@@ -40,7 +40,6 @@ def _bridge(providers) -> WavesBridge:
     b.providers = dict(providers)
     b._tracked_sessions = set()
     b._provider_readiness_probes = {}
-    b._page_rows = lambda page: [dict(r) for r in page.rows]
     return b
 
 

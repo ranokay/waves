@@ -54,6 +54,19 @@ class LandingProvider(StubProvider):
             raise self._landing
         return self._landing
 
+    def browse_rows(self, page):
+        # The scripted page carries its neutral rows directly (the seam a
+        # native-object provider implements; TIDAL keeps the default and the
+        # bridge's stock parser).
+        rows = getattr(page, "rows", None)
+        return [dict(row) for row in rows] if rows is not None else []
+
+    def browse_window_rows(self, category):
+        # The bridge passes browse_window's parsed category (see _rendered_cards).
+        return [
+            {"id": str(getattr(item, "id", ""))} for item in getattr(category, "items", None) or [] if item is not None
+        ]
+
     def browse_page(self, title, api_path):
         self.calls.append(("browse_page", title, api_path))
         page = self._pages.get(api_path)

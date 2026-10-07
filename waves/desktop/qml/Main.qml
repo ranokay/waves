@@ -1272,8 +1272,11 @@ ApplicationWindow {
   // group (titles absent from the map keep their payload order after the
   // ranked ones; a provider's group order never crosses into another's).
   readonly property var browseVisibleSections: root.computeBrowseSections()
-  function computeBrowseSections() {
-    var secs = root.browseSections || []
+  // `override` lets a landing being applied measure the incoming sections
+  // before the assignment (the build veil's total must count exactly the
+  // delegates the model will create).
+  function computeBrowseSections(override) {
+    var secs = override !== undefined ? override : root.browseSections || []
     var filter = root.effectiveBrowseSourceFilter
     var groups = []
     var byProvider = ({})
@@ -1428,8 +1431,10 @@ ApplicationWindow {
     // animations.
     root._browseAsyncBuild = root.browseSections.length === 0 || !bootOverlay.done
     // +4 = the wayfinding groups (Playlists / Genres / Moods / Decades)
-    // rendered as async shelves alongside the content sections.
-    root._browseBuildStart(root._browseAsyncBuild && !p.error ? secs.length + 4 : 0)
+    // rendered as async shelves alongside the content sections. Count the
+    // VISIBLE sections: hidden/filtered ones create no delegates, so
+    // counting them would hold the veil until its stall guard.
+    root._browseBuildStart(root._browseAsyncBuild && !p.error ? root.computeBrowseSections(secs).length + 4 : 0)
     root.browseArtistsSideMap(secs)
     // Refresh of a landing already built: hold the spot across the
     // shelf rebuild (see holdScroll). The landing pane is alive even
@@ -3680,9 +3685,16 @@ ApplicationWindow {
       }
     })
   }
+  // The pending category action's key: provider AND path, so overlapping
+  // resolves for the same path spelling from two providers cannot clear or
+  // answer each other's actions.
+  function catActionKey(provider, path) {
+    return String(provider || root.legacyBrowseProvider) + "|" + String(path || "")
+  }
   function openPlaylistsFolder(path, title, provider) {
     var key = "pl:" + path
-    if (browsePageKey === key)
+    var owner = String(provider || root.legacyBrowseProvider)
+    if (browsePageKey === key && String(root.browsePageProvider || root.legacyBrowseProvider) === owner)
       return
     navPush()
     // browsePage stays set while the landing shows (the drill pane
@@ -5899,6 +5911,15 @@ ApplicationWindow {
       return String(page.provider_id)
     return String(root.browsePageProvider || root.browseNav.provider || "")
   }
+  // Whether a landed page payload belongs to the page the user is looking
+  // at: its key AND its owner (two providers may use the same path spelling,
+  // and the backend's page caches are owner-qualified for exactly that
+  // reason). An unstamped legacy payload reads as TIDAL's.
+  function browsePageMatches(payload) {
+    if (!payload || payload.key !== root.browsePageKey)
+      return false
+    return String(payload.provider_id || root.legacyBrowseProvider) === String(root.browsePageProvider || root.legacyBrowseProvider)
+  }
   function snapshotProvider(snapshot) {
     if (snapshot.v === "artist")
       return root.mediaProvider(snapshot.id)
@@ -6009,6 +6030,18 @@ ApplicationWindow {
         } else {
           waves.refreshBrowse()
         }
+      } else if (!root.browseSignedIn && root.browseSections.length > 0) {
+        // The last browse source went away: retire the landing's rows (the
+        // pane's sign-in gate takes over) instead of leaving a signed-out
+        // provider's shelves on screen.
+        root.browseSections = []
+        root.browseSources = []
+        root.browsePageKey = ""
+        root.browsePage = null
+        root.browseStack = []
+        root.browsePageProvider = ""
+        root.browsePageLoading = false
+        root.browsePageError = false
       }
     }
     function onSetupRequested() {
@@ -6088,12 +6121,13 @@ ApplicationWindow {
     // another tile was clicked still answers for ITS provider (no shared
     // pending-provider state to race).
     function onPlaylistCategoryResolved(path, title, count, firstId, providerId) {
-      if (root.catPendingPv === path) {
+      var key = root.catActionKey(providerId, path)
+      if (root.catPendingPv === key) {
         root.catPendingPv = ""
         if (firstId !== "")
           root.togglePreview("playlist", firstId, 0)
       }
-      if (root.catPendingDl !== path)
+      if (root.catPendingDl !== key)
         return
       root.catPendingDl = ""
       if (count <= 0)
@@ -6188,8 +6222,9 @@ ApplicationWindow {
         root.warmArt("" + arts[i], root.discDecode, root.discDecode)
     }
     function onBrowsePageLoaded(p) {
-      if (p.key !== root.browsePageKey)
-        // stale: user already left this page
+      if (!root.browsePageMatches(p))
+        // stale: user already left this page (or it belongs to another
+        // provider's section with the same path)
         return
       root.markRender("browse page render")
       root.browsePageLoading = false
@@ -7906,14 +7941,16 @@ ApplicationWindow {
           // Hidden landing sections: every hidden section still present in
           // the payload gets a restore chip, so a hide is one click to undo
           // without touching Settings.
-          Row {
+          Flow {
             objectName: "browseHiddenSections"
             visible: root.browseHiddenSections.length > 0
             width: parent.width
             spacing: 8
             Text {
               textFormat: Text.PlainText
-              anchors.verticalCenter: parent.verticalCenter
+              // Centred within the 26px chips beside it (a Flow cannot take
+              // per-item anchors).
+              topPadding: 5
               text: "HIDDEN"
               color: root.textDim
               font.family: root.mono

@@ -6195,7 +6195,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if anchor is not None:
 
                 def restore_root(root=stored_root) -> None:
-                    if anchor in getattr(self, "_cache_disk_revoked", {}):
+                    # Every contributor must still hold at commit time. The
+                    # callback runs under the contexts lock, so this snapshot
+                    # is atomic with the publish: a contributor revoked
+                    # between the pre-check and here cannot get a stale
+                    # mixed-account landing restored.
+                    if any(pid in getattr(self, "_cache_disk_revoked", {}) for pid in root_sources):
+                        return
+                    if any(pid in tokens and not contexts.current(tokens[pid]) for pid in root_sources):
                         return
                     if self._browse_root_cache is None:
                         self._browse_root_cache = _scrub_browse_payload(root)
@@ -8602,6 +8609,27 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         spinner that never resolves."""
         _catalog_emit(self, signal, payload)
 
+    def _rendered_rows(self, provider, page) -> list[dict]:
+        """One page's sections through its owning provider: the provider's
+        own neutral rows when it supplies them (:meth:`browse_rows`), else
+        the stock parser (TIDAL's page objects)."""
+        neutral = provider.browse_rows(page)
+        if neutral is not None:
+            return list(neutral)
+        return self._page_rows(page)
+
+    def _rendered_cards(self, provider, source) -> list[dict]:
+        """One paging window's cards the same way (see
+        :meth:`_rendered_rows`)."""
+        neutral = provider.browse_window_rows(source)
+        if neutral is not None:
+            return list(neutral)
+        return [
+            c
+            for c in (self._browse_card(o) for o in getattr(source, "items", None) or [] if o is not None)
+            if c is not None
+        ]
+
     def _home_rows(self, provider) -> list[dict]:
         """A provider's personalized home feed as landing rows ("Essentials
         to explore", "Popular playlists..."), parsed tolerantly per row: one
@@ -8616,7 +8644,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         ships without a ``more`` link (or paging handle) rather than with a
         headline that drills into an error page."""
         page = provider.browse_home()
-        rows = self._page_rows(page)
+        rows = self._rendered_rows(provider, page)
         for r in rows:
             r["more"] = ""
             r.pop("data", None)
@@ -8640,7 +8668,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             try:
                 # Through the same path validation as a drill-down: a recipe
                 # path may never steer a request off the provider's own API.
-                rows.extend(self._page_rows(self._browse_page_for(provider, title, path)))
+                rows.extend(self._rendered_rows(provider, self._browse_page_for(provider, title, path)))
             except Exception:
                 logger.exception("Browse: %s could not load %r", provider.id, path or title)
         if landing.get("home"):
@@ -9060,11 +9088,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             }
             try:
                 window = owner.browse_window(title, data_path, mod_type, offset)
-                cards = [
-                    c
-                    for c in (self._browse_card(o) for o in window.category.items or [] if o is not None)
-                    if c is not None
-                ]
+                cards = self._rendered_cards(owner, window.category)
                 new_off = offset + window.n
                 payload = {
                     "key": page_key,
@@ -9127,7 +9151,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             )
             return
         cache_key = f"browse:{provider_id}:{api_path}"
+        legacy_key = api_path if str(provider_id) == CTX_TIDAL else ""
         cached = self._browse_pages.get(cache_key)
+        if cached is None and legacy_key:
+            # A page persisted before editorial keys carried their owner.
+            cached = self._browse_pages.get(legacy_key)
         if cached is not None:
             catalog_succeeded(self, key=f"browse-page:{cache_key}")
             _catalog_emit(self, self.browsePageLoaded, cached)
@@ -9148,7 +9176,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "key": api_path,
                     "provider_id": provider_id,
                     "title": str(getattr(page, "title", "") or "") or title,
-                    "sections": self._stamp_sections(self._page_rows(page), provider_id),
+                    "sections": self._stamp_sections(self._rendered_rows(owner, page), provider_id),
                     "error": False,
                 }
             except Exception:
@@ -9222,7 +9250,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             )
             return
         key = f"pl:{provider_id}:{api_path}"
+        legacy_key = f"pl:{api_path}" if str(provider_id) == CTX_TIDAL else ""
         cached = self._browse_pages.get(key)
+        if cached is None and legacy_key:
+            # The playlists grid persisted before keys carried their owner.
+            cached = self._browse_pages.get(legacy_key)
         if cached is not None:
             catalog_succeeded(self, key=f"browse-playlists:{key}")
             _catalog_emit(self, self.browsePageLoaded, cached)
@@ -9240,7 +9272,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             try:
                 page = self._browse_page_for(owner, title, api_path)
                 sections: list[dict] = []
-                for row in self._page_rows(page):
+                for row in self._rendered_rows(owner, page):
                     if row.get("rowKind") != "cards":
                         continue
                     cards = list(row.get("items", []))

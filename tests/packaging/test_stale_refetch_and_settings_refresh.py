@@ -302,6 +302,7 @@ def test_settings_page_listens_for_external_persists():
 
 class _BrowsePageStub:
     openBrowsePage = WavesBridge.openBrowsePage
+    _rendered_rows = WavesBridge._rendered_rows
 
     def __init__(self, cached, fresh_sections):
         self._browse_pages = {"browse:tidal:pages/labels": cached}
@@ -314,6 +315,9 @@ class _BrowsePageStub:
     @staticmethod
     def browse_path_ok(path):
         return str(path or "").startswith("pages/") and "//" not in str(path or "")
+
+    def browse_rows(self, page):
+        return None
 
     def browse_page(self, title, api_path):
         return SimpleNamespace(title="Labels")

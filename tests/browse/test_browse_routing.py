@@ -47,8 +47,8 @@ def _slot_bridge(providers) -> WavesBridge:
     b._set_busy = lambda v: b.busy_log.append(v)
     b._set_status = lambda v: b.status_log.append(v)
     b._save_page_cache = lambda: None
-    b._page_rows = lambda page: [dict(r) for r in page.rows]
-    b._browse_card = lambda obj: {"id": str(getattr(obj, "id", ""))}
+    # The scripted providers supply neutral rows themselves (browse_rows /
+    # browse_window_rows), so no TIDAL parser stand-ins are needed.
     return b
 
 
@@ -72,6 +72,28 @@ def test_open_browse_page_routes_to_the_rows_owner() -> None:
     b.openBrowsePage("pages/x", "X", "stub")
     assert len(b.browsePageLoaded.emits) == 2
     assert len(stub.calls) == 2
+
+
+def test_legacy_editorial_cache_keys_still_serve() -> None:
+    # Pages persisted before keys carried their owner read as TIDAL's and
+    # must paint from cache (an offline revisit used to work).
+    legacy_page = {
+        "key": "pages/old",
+        "title": "Old",
+        "sections": [{"rowKind": "tracks", "title": "T", "items": []}],
+        "error": False,
+    }
+    tidal = LandingProvider("tidal", "TIDAL", pages={})
+    b = _slot_bridge({"tidal": tidal})
+    b._browse_pages["pages/old"] = legacy_page
+    b.openBrowsePage("pages/old", "Old", "tidal")
+    assert b.browsePageLoaded.emits and b.browsePageLoaded.emits[0]["key"] == "pages/old"
+
+    legacy_grid = {"key": "pl:pages/old", "title": "Old", "sections": [], "error": False}
+    c = _slot_bridge({"tidal": tidal})
+    c._browse_pages["pl:pages/old"] = legacy_grid
+    c.openBrowsePlaylists("pages/old", "Old", "tidal")
+    assert c.browsePageLoaded.emits and c.browsePageLoaded.emits[0]["key"] == "pl:pages/old"
 
 
 def test_open_browse_page_defaults_to_tidal_for_legacy_calls() -> None:

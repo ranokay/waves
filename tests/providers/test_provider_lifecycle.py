@@ -316,13 +316,17 @@ def test_cache_cleanup_preserves_other_providers_and_local_evidence(tmp_path, pr
 
 def test_a_browse_capable_provider_invalidates_the_combined_landing(tmp_path):
     """The landing is composed from every browse-capable provider's account:
-    clearing any one of them retires it, not just TIDAL's."""
+    clearing any one of them retires it and releases its in-flight guard, not
+    just TIDAL's."""
     bridge = _cache_bridge(tmp_path)
     bridge.providers["third"].capabilities = frozenset({Capability.BROWSE})
+    bridge._browse_loading = {"root", "pages/x"}
 
     clear_provider_caches(bridge, "third")
 
     assert bridge._browse_root_cache is None and bridge._browse_reval_ts == 0.0
+    assert "root" not in bridge._browse_loading, "a stranded root guard freezes every later landing load"
+    assert "pages/x" in bridge._browse_loading, "another owner's in-flight key is untouched"
 
 
 def test_mixed_search_is_evicted_instead_of_served_as_complete(tmp_path):

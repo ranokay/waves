@@ -186,12 +186,17 @@ def _clear_page_memory(
         _clear_search_cache(bridge, provider_id)
         # The combined landing is composed from every browse-capable
         # provider's account, so any one of them changing (sign-out, relogin,
-        # disable) invalidates it, not just TIDAL's.
+        # disable) invalidates it, not just TIDAL's. Its in-flight guard is
+        # released too: "root" is attributed to the default provider by
+        # page_provider, so the owns_page sweep above would leave it set and
+        # a stale worker's early return would strand the landing's load
+        # slot for the rest of the session.
         provider = (getattr(bridge, "providers", None) or {}).get(provider_id)
         capabilities = getattr(provider, "capabilities", frozenset()) if provider is not None else frozenset()
         if Capability.BROWSE in capabilities:
             bridge._browse_root_cache = None
             bridge._browse_reval_ts = 0.0
+            _drop_members(getattr(bridge, "_browse_loading", set()), lambda key: key == "root")
 
 
 def _clear_search_cache(bridge, provider_id: str) -> None:

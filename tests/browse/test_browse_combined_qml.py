@@ -278,10 +278,18 @@ def _run_scenario() -> int:
     q("openBrowse()")
     q("bootOverlay.done = true")  # otherwise the landing build takes the veiled path
     settle()
+    # One section pre-hidden: the build veil must count only the delegates the
+    # model will create (2 sections + the 4 wayfinding loaders), not all 3.
+    q("root.browseHidden = {'tidal|Tidal New': true}")
     bridge.browseLoaded.emit(dict(_PAYLOAD))
-    if not wait(lambda: q("browseSections.length === 3 && root.browseBuilding === false") and len(sections()) == 3):
+    if not wait(lambda: q("browseSections.length === 3 && root.browseBuilding === false") and len(sections()) == 2):
         print(f"the combined landing never built: {sections()}", file=sys.stderr)
         return EXIT_PRECONDITION
+    if q("root._browseBuildTotal") != 6:
+        return fail(f"the build veil counted hidden sections: {q('root._browseBuildTotal')}")
+    q("root.browseHidden = {}")
+    if not wait(lambda: len(titles()) == 3):
+        return fail(f"clearing the preset hide did not restore all sections: {titles()}")
     settle(200)
 
     got = sections()
@@ -369,7 +377,7 @@ def _run_scenario() -> int:
     # the stub, and the download must read the stub's cache entry.
     seen_keys: list = []
     bridge._cached_category = lambda key: (seen_keys.append(key), [])[1]
-    q("root.catPendingDl = 'pages/stub-cat'")
+    q("root.catPendingDl = root.catActionKey('stub', 'pages/stub-cat')")
     bridge.playlistCategoryResolved.emit("pages/stub-cat", "Stub cat", 1, "stub:pl1", "stub")
     settle(200)
     if q("root.catPendingDl") != "":
@@ -377,6 +385,25 @@ def _run_scenario() -> int:
     prompt_provider = q("root.catDlPrompt ? root.catDlPrompt.provider : ''")
     if prompt_provider != "stub" and seen_keys != ["cat:stub:pages/stub-cat"]:
         return fail(f"the resolve did not join the stub's owner (prompt={prompt_provider!r}, keys={seen_keys})")
+
+    # A payload for the same path from another provider is stale for the page
+    # the user is looking at; the owning provider's payload lands.
+    q("root.browsePageKey = 'pages/x'")
+    q("root.browsePageProvider = 'stub'")
+    bridge.browsePageLoaded.emit(
+        {"key": "pages/x", "provider_id": "tidal", "title": "T", "sections": [], "error": False}
+    )
+    settle(150)
+    if q("root.browsePage !== null"):
+        return fail("a same-path payload from another provider was applied")
+    bridge.browsePageLoaded.emit(
+        {"key": "pages/x", "provider_id": "stub", "title": "T", "sections": [], "error": False}
+    )
+    settle(150)
+    if q("root.browsePage === null"):
+        return fail("the owning provider's payload was dropped")
+    q("root.browsePageKey = ''")
+    q("root.browsePageProvider = ''")
 
     # A section's headline route carries its owner: opening the stub shelf
     # keys the page to stub, not to the first provider.
@@ -386,6 +413,14 @@ def _run_scenario() -> int:
         return fail(f"the headline keyed the wrong page: {q('browsePageKey')!r}")
     if q("browsePageProvider") != "stub":
         return fail(f"the headline lost its provider: {q('browsePageProvider')!r}")
+
+    # The last browse source signing out retires the landing's rows (the
+    # pane's sign-in gate takes over) instead of leaving its shelves up.
+    bridge._logged_in = False
+    bridge.providerStateChanged.emit("tidal")
+    settle(250)
+    if q("root.browseSections.length") != 0 or q("root.browseSources.length") != 0:
+        return fail("signing out left a provider's shelves on the landing")
 
     print("combined browse landing controls OK", flush=True)
     return EXIT_OK

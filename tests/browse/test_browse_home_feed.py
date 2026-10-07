@@ -185,7 +185,12 @@ def _card(kind: str, cid: str) -> dict:
 
 def test_landing_rows_dedupe_home_rows_by_title(monkeypatch):
     b = WavesBridge.__new__(WavesBridge)
-    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None, browse_path_ok=lambda path: True)
+    provider = SimpleNamespace(
+        id="tidal",
+        browse_page=lambda title, path: None,
+        browse_path_ok=lambda path: True,
+        browse_rows=lambda page: None,
+    )
     # Explore contributes no chips or quick links; For You contributes one row.
     monkeypatch.setattr(
         b,
@@ -223,7 +228,12 @@ def _row(title: str, ids, kind: str = "cards", **extra) -> dict:
 
 def test_landing_rows_drop_rows_contained_in_a_bigger_row(monkeypatch):
     b = WavesBridge.__new__(WavesBridge)
-    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None, browse_path_ok=lambda path: True)
+    provider = SimpleNamespace(
+        id="tidal",
+        browse_page=lambda title, path: None,
+        browse_path_ok=lambda path: True,
+        browse_rows=lambda page: None,
+    )
     big = [f"a{n}" for n in range(25)]
     monkeypatch.setattr(
         b,

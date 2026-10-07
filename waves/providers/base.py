@@ -919,6 +919,24 @@ class Provider(ABC):
         inherits another's editorial composition."""
         return {}
 
+    def browse_rows(self, page) -> list[dict] | None:
+        """The neutral section rows for one page object this provider's
+        ``browse_page``/``browse_home`` returned, or None when the bridge's
+        stock renderer reads it (TIDAL's page objects).
+
+        A provider whose pages are its own engine's objects implements
+        this: every row is a plain dict in the app's row vocabulary
+        (``rowKind``, ``title``, ``items``, ``more``), and the bridge stamps
+        the owner and dresses the cards. TIDAL keeps the default, so its
+        tolerant per-category parse stays where it was."""
+        return None
+
+    def browse_window_rows(self, category) -> list[dict] | None:
+        """The neutral card rows for one paging window's parsed category
+        (``browse_window``'s ``category``), or None when the bridge's stock
+        renderer reads it (TIDAL's). See :meth:`browse_rows`."""
+        return None
+
     def browse_path_ok(self, path: str) -> bool:
         """Whether an editorial path this provider handed out may be
         requested back, validated by the provider whose API receives it.
