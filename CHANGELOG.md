@@ -39,6 +39,10 @@ issue. A test enforces it.
 
 - 🔊 With "Download Dolby Atmos" on, one click now saves both the stereo and Dolby Atmos versions as separate queue rows (the Atmos row is badged ATMOS and lands in the new "Dolby Atmos files" subfolder by default, blank places it alongside), each with its own ownership, progress, cancel and retry, and the button settles only when every enabled version is owned; Atmos-only tracks still fetch Atmos alone, and every file now carries a WAVES_AUDIO_TYPE tag so recognition never sniffs codecs ([issue #29](https://github.com/ranokay/waves/issues/29)).
 
+### 🐛 Fixed
+
+- 🐧 The Linux zip and AppImage bundle Qt's X11 helper libraries, so the app starts on desktops that lack them, such as a fresh Ubuntu 22.04, instead of quitting with "could not load the Qt platform plugin xcb".
+
 ## 🗂️ v0.1.32 (2026-09-28)
 
 ### ✨ Added
