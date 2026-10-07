@@ -28,6 +28,7 @@ class SearchStub:
     _search_display_payload = WavesBridge._search_display_payload
     _paint_search_display = WavesBridge._paint_search_display
     _settle_search = WavesBridge._settle_search
+    _show_search_display = WavesBridge._show_search_display
     _enrich_search_artists = WavesBridge._enrich_search_artists
     _fav_artist_dict = WavesBridge._fav_artist_dict
     _search_total = staticmethod(WavesBridge._search_total)
@@ -149,14 +150,12 @@ def qml_search_payload(
     mixes=(),
     top=None,
     error="",
-    layout=None,
 ) -> dict:
     """A one-source unified search payload for QML scenarios.
 
     Row dicts go in untouched except for their own ``sources`` list (the
     fold's label); only the buckets the provider's search answers are
-    carried, exactly as the bridge composes them. ``layout`` is accepted for
-    call sites written against the grouped shape and no longer read.
+    carried, exactly as the bridge composes them.
     """
     rows = {
         "artists": list(artists),

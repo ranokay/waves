@@ -21,7 +21,7 @@ import "../providers"
 //   host.lastSearchQuery / host.reconcileById / host.searchBuilding /
 //   host.searchSections / host.searchOrdered / host.searchRefreshMode /
 //   host.searchReveal / host.searchRowVisible / host.sectionVisible /
-//   host.rowSourcesById / host.sourceMarksOn / host.submitSearch / host.wavesPref
+//   host.rowSourcesById / host.sourceMarksOn / host.submitSearch
 // `resultsPane` is the search results Flickable the artist strip's wheel
 // redirect drives.
 // The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
@@ -101,11 +101,8 @@ Column {
     return m ? m.count : 0
   }
   readonly property int rowCount: resultsView.countFor("artists") + resultsView.countFor("albums") + resultsView.countFor("tracks") + resultsView.countFor("videos") + resultsView.countFor("playlists") + resultsView.countFor("mixes")
-  // A section a provider answered is "hostable"; a section no arrived
-  // provider answers is absent from the payload and shows nothing.
-  function hostable(name) {
-    return resultsView.sections[name] !== undefined
-  }
+  // A section a provider answered is present in the payload; one no arrived
+  // provider answers is absent and shows nothing.
   function isExpanded(name) {
     return resultsView.expanded[name] === true
   }

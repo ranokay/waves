@@ -155,9 +155,8 @@ interface and row schemas; provider-specific contracts live with
 [ADR 0012](adr/0012-composable-provider-surfaces.md) owns the All Providers
 Search, progressive results, safe merged offers and compact source identity.
 Search implements that surface: one unified section per media kind, source
-marks and filter chips, and high-confidence equivalents merged into one row;
-the earlier grouped page was its baseline. Apple catalog access remains
-possible before download setup. Missing requested
+marks and filter chips, and high-confidence equivalents merged into one row.
+Apple catalog access remains possible before download setup. Missing requested
 setup stays actionable; disabled providers belong to separate setup opportunities.
 
 ### 7.2 Download With

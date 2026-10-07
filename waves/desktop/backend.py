@@ -6454,9 +6454,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self._search_live = False
             self._active_search_providers = set()
             display = self._search_display_payload(tokens, set(enabled_ids))
-            self._search_last = display
-            self._search_painted = True
-            self.searchResults.emit(display)
+            self._show_search_display(display)
             total = self._search_total(display)
             self._set_status(f"{total} results")
             self._set_busy(False)
@@ -6478,9 +6476,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         else:
             self._search_display = {group["provider"]: group for group in stale["groups"]}
             display = self._search_display_payload(tokens, set(enabled_ids))
-            self._search_last = display
-            self._search_painted = True
-            self.searchResults.emit(display)
+            self._show_search_display(display)
         self._set_status(f"Searching “{needle}”…")
         with self._objs_lock:
             for bucket in self._objs.values():
@@ -6691,6 +6687,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         folded = fold_search_groups(groups)
         return {"sources": sources, "sections": folded["sections"], "top": folded["top"]}
 
+    def _show_search_display(self, display: dict) -> None:
+        """Record and emit one display payload (the first paint of a page or
+        a proven correction): the identical-repaint skip reads `_search_last`."""
+        self._search_last = display
+        self._search_painted = True
+        self.searchResults.emit(display)
+
     def _paint_search_display(self, tokens: dict[str, ProviderToken], current: set[str]) -> None:
         """Emit the folded page, in place, unless nothing moved.
 
@@ -6702,15 +6705,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         if self._search_painted:
             display = {**display, "refresh": True}
-        self._search_last = display
-        self._search_painted = True
-        self.searchResults.emit(display)
+        self._show_search_display(display)
 
     def _settle_search(self) -> None:
         """Every source answered or failed: final status, busy drops, and the
-        fresh groups enter the short cache. Failed sources never cache, and a
-        page whose enabled set changed under it (a provider revoked mid-search)
-        is not the complete answer its cache key promises."""
+        groups the page shows enter the short cache. Failed sources never
+        cache, and a page whose enabled set changed under it (a provider
+        revoked mid-search) is not the complete answer its cache key
+        promises.
+
+        The cached order is the display's own fold order, so a cache replay
+        shows the same primaries and pin the live page did, and a group kept
+        because its fresh answer was empty caches as displayed rather than
+        vanishing on the next replay."""
         if not getattr(self, "_search_live", False):
             return
         self._search_live = False
@@ -6718,6 +6725,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         tokens = getattr(self, "_search_tokens", {})
         still_current = all(provider_contexts(self).current(token) for token in tokens.values())
         fresh = [self._search_fresh[pid] for pid in tokens if pid in self._search_fresh]
+        displayed = [self._search_display[pid] for pid in self._search_display if pid in self._search_fresh]
         if self._search_errors:
             live = [pid for pid, token in tokens.items() if provider_contexts(self).current(token)]
             failed = [pid for pid in live if pid in self._search_errors]
@@ -6730,8 +6738,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             total = self._search_total(self._search_display_payload(tokens, current))
             status = f"{total} results"
             fresh_total = sum(_search_group_rows(group) for group in fresh)
-            if fresh_total and self._search_key and still_current and len(fresh) == len(tokens):
-                self._remember_search(self._search_key, {"groups": fresh})
+            if fresh_total and self._search_key and still_current and len(fresh) == len(tokens) == len(displayed):
+                self._remember_search(self._search_key, {"groups": displayed})
                 self.threadpool.start(Worker(self._save_page_cache))
         self._set_status(status)
         self._set_busy(False)
@@ -6755,8 +6763,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         }
         display = self._search_display_payload(self._search_tokens, current)
         display["refresh"] = True
-        self._search_last = display
-        self.searchResults.emit(display)
+        self._show_search_display(display)
         if not self._active_search_providers and self._search_live:
             self._settle_search()
 
@@ -12233,6 +12240,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "search_section_videos_expanded": False,
             "search_section_playlists_expanded": False,
             "search_section_mixes_expanded": False,
+            # The search page's last source filter, remembered across launches
+            # ("all" or a provider id). The page falls back to All when the
+            # saved provider is not in the current search.
+            "search_source_filter": "all",
             # The search sort control, remembered across launches: the order
             # by name (relevance, date, name, popularity; a name rather than
             # an index so the option list can change) and the direction.

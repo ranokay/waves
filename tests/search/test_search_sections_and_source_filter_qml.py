@@ -152,7 +152,8 @@ def _scenario() -> int:
     settle(50)
 
     # The source chip narrows the sections and the counts to that provider's
-    # rows: Apple has one album and one track here.
+    # rows: Apple has one album and one track here. The choice is
+    # remember-last, so it is written to the prefs and survives a restart.
     q('root.searchSourceFilter = "apple"')
     settle(50)
     source_ok = (
@@ -160,6 +161,14 @@ def _scenario() -> int:
         and q("searchResultsView.sectionVisible('albums')")
         and q("searchResultsView.sectionVisible('tracks')")
         and not q("searchResultsView.sectionVisible('artists')")
+    )
+    bridge._config_writer.flush()
+    settle(100)
+    with open(bridge._waves_prefs_path, encoding="utf-8") as handle:
+        filter_stored = json.load(handle)
+    remember_ok = (
+        bridge._waves_prefs.get("search_source_filter") == "apple"
+        and filter_stored.get("search_source_filter") == "apple"
     )
     q('root.searchSourceFilter = "all"')
     settle(50)
@@ -195,7 +204,11 @@ def _scenario() -> int:
     )
 
     # ...so a fresh root starts with the section still expanded (the restart
-    # read), and the retired per-provider keys are not consulted.
+    # read) and the last source filter remembered while its provider is in
+    # the search; a payload without that provider falls back to All.
+    q('root.searchSourceFilter = "apple"')
+    bridge._config_writer.flush()
+    settle(100)
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     settle(300)
     roots = engine.rootObjects()
@@ -204,10 +217,22 @@ def _scenario() -> int:
     q("_searchSeq = _navSeq", second)
     bridge.searchResults.emit(_payload())
     settle(500)
-    restart_ok = len(roots) == 2 and q("searchResultsView.isExpanded('tracks')", second)
+    restart_ok = (
+        len(roots) == 2
+        and q("searchResultsView.isExpanded('tracks')", second)
+        and q("root.searchSourceFilter", second) == "apple"
+    )
+    q("_searchSeq = _navSeq", second)
+    bridge.searchResults.emit(qml_search_payload(provider="tidal", albums=[_album("tidal:1")]))
+    settle(400)
+    bridge._config_writer.flush()
+    settle(100)
+    with open(bridge._waves_prefs_path, encoding="utf-8") as handle:
+        filter_stored = json.load(handle)
+    fallback_ok = q("root.searchSourceFilter", second) == "all" and filter_stored.get("search_source_filter") == "all"
 
-    ok = landed_ok and chips_ok and source_ok and restored_ok and capped_ok and prefs_ok and stale_ok
-    return 0 if ok and restart_ok else 1
+    ok = landed_ok and chips_ok and source_ok and restored_ok and remember_ok and capped_ok and prefs_ok and stale_ok
+    return 0 if ok and restart_ok and fallback_ok else 1
 
 
 @pytest.mark.qml

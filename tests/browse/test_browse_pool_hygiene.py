@@ -117,6 +117,7 @@ class _SearchStub:
     _search_display_payload = WavesBridge._search_display_payload
     _paint_search_display = WavesBridge._paint_search_display
     _settle_search = WavesBridge._settle_search
+    _show_search_display = WavesBridge._show_search_display
     _enrich_search_artists = WavesBridge._enrich_search_artists
     _fav_artist_dict = WavesBridge._fav_artist_dict
     _search_total = staticmethod(WavesBridge._search_total)

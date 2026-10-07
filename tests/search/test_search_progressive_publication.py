@@ -186,6 +186,54 @@ def test_a_malformed_provider_build_fails_only_its_source() -> None:
     assert stub._search_cache == {}
 
 
+def test_a_cache_replay_keeps_the_fold_order_the_live_page_showed() -> None:
+    # Apple answers first, both providers return the equivalent track: the
+    # live page folds with Apple primary, and the replay must show the same
+    # primaries rather than a registry-order reshuffle.
+    stub = _stub(
+        {
+            "tidal": _provider(
+                "TIDAL",
+                lambda needle: (
+                    _wait_for(lambda: len(stub.searchResults.emits) >= 1),
+                    {"tracks": [SimpleNamespace(id="t1")]},
+                )[1],
+            ),
+            "apple": _provider("Apple Music", lambda needle: {"tracks": [_track_row("apple:a1")]}),
+        }
+    )
+    stub._track_dict = lambda track: _track_row(f"tidal:{track.id}")
+    stub.search("one")
+
+    live = search_payloads(stub)[-1]
+    assert [row["id"] for row in live["sections"]["tracks"]] == ["apple:a1"], "Apple answered first"
+    cached = stub._search_cache["tidal+apple:one"][1]["groups"]
+    assert [group["provider"] for group in cached] == ["apple", "tidal"]
+
+    stub.search("one")  # served from the short cache
+    replay = search_payloads(stub)[-1]
+    assert [row["id"] for row in replay["sections"]["tracks"]] == ["apple:a1"]
+    assert replay["sections"]["tracks"][0]["sources"][0]["provider"] == "apple"
+
+
+def test_rows_kept_over_an_empty_fresh_answer_are_cached_as_displayed() -> None:
+    stale = {"groups": [_tidal_group(albums=[{"id": "al1"}])]}
+    stub = _stub(
+        {
+            "tidal": _provider("TIDAL", lambda needle: {"albums": [], "artists": [], "tracks": []}),
+            "apple": _provider("Apple Music", lambda needle: {"tracks": [_track_row("apple:a1")]}),
+        }
+    )
+    stub._search_cache["tidal+apple:one"] = (_STALE, stale)
+    stub.search("one")
+
+    live = search_payloads(stub)[-1]
+    assert [a["id"] for a in live["sections"]["albums"]] == ["al1"], "the stale rows stay on screen"
+    cached = stub._search_cache["tidal+apple:one"][1]["groups"]
+    kept = next(group for group in cached if group["provider"] == "tidal")
+    assert [a["id"] for a in kept["albums"]] == ["al1"], "the cache serves the rows the page kept"
+
+
 def test_a_failed_source_on_a_stale_page_keeps_the_rows_it_had() -> None:
     stale = {"groups": [_tidal_group(albums=[{"id": "al1"}])]}
     stub = _stub({"tidal": _provider("TIDAL", lambda needle: (_ for _ in ()).throw(ValueError("offline")))})

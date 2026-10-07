@@ -647,9 +647,15 @@ ApplicationWindow {
   property var searchSections: ({})
   property var searchTop: null
   property var searchSources: []
-  // The source filter chip: "all" (default) or one provider id. A row shows
-  // while the chip is All, or while one of the row's own sources matches.
-  property string searchSourceFilter: "all"
+  // The source filter chip: "all" (default) or one provider id, remembered
+  // across launches ("remember-last"; the page falls back to All while the
+  // saved provider is not in the search). A row shows while the chip is All,
+  // or while one of the row's own sources matches.
+  property string searchSourceFilter: {
+    var saved = waves.wavesPref("search_source_filter")
+    return typeof saved === "string" && saved !== "" ? saved : "all"
+  }
+  onSearchSourceFilterChanged: waves.setWavesPref("search_source_filter", root.searchSourceFilter)
   property var rowSourcesById: ({})
   // Marks render only when more than one source is in the search: with one
   // provider there is nothing to disambiguate and the page stays as shipped.
@@ -749,6 +755,13 @@ ApplicationWindow {
   function applySearchResults(payload, refresh) {
     var sources = payload.sources || []
     var top = payload.top !== undefined ? payload.top : null
+    // Remember-last filter: a saved provider that this page does not carry
+    // cannot filter anything, so the page falls back to All (and remembers
+    // that).
+    if (root.searchSourceFilter !== "all" && !sources.some(function (source) {
+      return String(source.provider) === root.searchSourceFilter
+    }))
+      root.searchSourceFilter = "all"
     root.searchRefreshMode = refresh === true
     if (refresh !== true) {
       // The empty step is load-bearing: assigning the same-shaped object
@@ -6139,8 +6152,9 @@ ApplicationWindow {
       // sticky, an earlier Albums click hid the ARTISTS section of every
       // later search (an artist could not be found at all). Reset here,
       // where new results land, so it also covers cache-served searches.
+      // The source filter is remember-last instead: applySearchResults keeps
+      // it when the new payload still carries that provider.
       root.filterType = "all"
-      root.searchSourceFilter = "all"
       // A section a user expanded stays expanded on the next search (the
       // pref-backed flags), so nothing is reset here.
       // Arm the build veil BEFORE the sections fill: the Loaders each

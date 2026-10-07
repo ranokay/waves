@@ -162,6 +162,7 @@ class _SearchStub(_StubBase):
     _search_display_payload = WavesBridge._search_display_payload
     _paint_search_display = WavesBridge._paint_search_display
     _settle_search = WavesBridge._settle_search
+    _show_search_display = WavesBridge._show_search_display
     _enrich_search_artists = WavesBridge._enrich_search_artists
     _search_total = staticmethod(WavesBridge._search_total)
     _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
@@ -319,6 +320,7 @@ def test_logout_supersedes_every_inflight_search():
     bridge._search_display_payload = WavesBridge._search_display_payload.__get__(bridge)
     bridge._paint_search_display = WavesBridge._paint_search_display.__get__(bridge)
     bridge._settle_search = WavesBridge._settle_search.__get__(bridge)
+    bridge._show_search_display = WavesBridge._show_search_display.__get__(bridge)
     bridge.logout = WavesBridge.logout.__get__(bridge)
     bridge._end_provider_context = WavesBridge._end_provider_context.__get__(bridge)
     bridge._stop_provider_downloads = lambda provider_id, reason: 0

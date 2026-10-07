@@ -45,6 +45,15 @@ def test_the_unified_section_pref_round_trips(tmp_path):
     assert stub.wavesPref("search_section_tracks_expanded") is False
 
 
+def test_the_source_filter_pref_round_trips(tmp_path):
+    # Remember-last source filter: the provider id is stored as a string and
+    # defaults to "all".
+    stub = _PrefsStub(tmp_path)
+    assert stub.wavesPref("search_source_filter") == "all"
+    stub.setWavesPref("search_source_filter", "apple")
+    assert stub.wavesPref("search_source_filter") == "apple"
+
+
 def test_a_provider_keyed_surface_pref_still_persists_as_a_stored_value(tmp_path):
     # The provider-keyed shapes are retired from the UI but stay accepted, so
     # an upgraded waves.json keeps the values it already carries.

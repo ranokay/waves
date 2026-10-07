@@ -459,6 +459,7 @@ def _search_stub(providers):
     stub._search_display_payload = WavesBridge._search_display_payload.__get__(stub, SimpleNamespace)
     stub._paint_search_display = WavesBridge._paint_search_display.__get__(stub, SimpleNamespace)
     stub._settle_search = WavesBridge._settle_search.__get__(stub, SimpleNamespace)
+    stub._show_search_display = WavesBridge._show_search_display.__get__(stub, SimpleNamespace)
     stub._search_total = staticmethod(WavesBridge._search_total)
     stub._SEARCH_TTL = WavesBridge._SEARCH_TTL
     stub._SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX
