@@ -817,6 +817,7 @@ ColumnLayout {
         durationSec: model.duration_sec || 0
         quality: model.quality
         popularity: model.popularity
+        explicit: model.explicit === true
         albumId: model.album_id || ""
       }
     }
@@ -1132,6 +1133,7 @@ ColumnLayout {
                   durationSec: modelData.duration_sec || 0
                   quality: modelData.quality || ""
                   popularity: modelData.popularity || 0
+                  explicit: modelData.explicit === true
                   albumId: modelData.album_id || ""
                 }
               }

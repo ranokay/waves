@@ -474,12 +474,21 @@ Column {
                 Layout.alignment: Qt.AlignVCenter
               }
               Text {
+                objectName: "trackTitle"
                 textFormat: Text.PlainText
                 text: modelData.title
                 color: textHi
                 font.pixelSize: 13
                 elide: Text.ElideRight
                 Layout.fillWidth: true
+                // Same explicit mark as the album expand.
+                rightPadding: modelData.explicit === true ? pbExp.width + 6 : 0
+                ExplicitMark {
+                  id: pbExp
+                  visible: modelData.explicit === true
+                  anchors.verticalCenter: parent.verticalCenter
+                  x: Math.min(parent.contentWidth + 6, parent.width - parent.rightPadding + 6)
+                }
               }
               Text {
                 textFormat: Text.PlainText

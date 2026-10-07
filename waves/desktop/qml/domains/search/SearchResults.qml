@@ -276,6 +276,7 @@ Column {
           durationSec: topLd.modelData.duration_sec || 0
           quality: topLd.modelData.quality || ""
           popularity: topLd.modelData.popularity || 0
+          explicit: topLd.modelData.explicit === true
           albumId: topLd.modelData.album_id || ""
           sources: resultsView.rowSources(topLd.modelData.id)
         }
@@ -427,6 +428,7 @@ Column {
         durationSec: model.duration_sec || 0
         quality: model.quality
         popularity: model.popularity
+        explicit: model.explicit === true
         albumId: model.album_id || ""
         sources: resultsView.rowSources(model.id)
       }

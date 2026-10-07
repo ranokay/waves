@@ -26,6 +26,8 @@ issue. A test enforces it.
 
 ### ✨ Added
 
+- 🅴 Explicit tracks now wear an E beside their title in every track list — search, browse, saved lists, album and playlist expands included — so an explicit version and its clean twin are easy to tell apart ([issue #51](https://github.com/iamprivacy/Waves/issues/51)).
+
 - 🎛️ Download With checks item availability separately from the selected quality requirement; missing or stale evidence stays visible instead of promising a provider's maximum ([issue #589](https://github.com/ranokay/waves/issues/589)).
 
 - 📦 Linux gains a Flatpak bundle: download `waves_linux-x64.flatpak` (or `-arm64`) from the release and install it with `flatpak install`, the app defers its updates to `flatpak update`, and a music library on a NAS or external drive needs one `flatpak override` ([issue #316](https://github.com/ranokay/waves/issues/316)).
@@ -41,6 +43,7 @@ issue. A test enforces it.
 
 ### 🐛 Fixed
 
+- 🎚️ The HIGH quality badge now wears a cyan rim like the HI-RES and LOSSLESS badges wear theirs, instead of a faint grey one that only lit up under the pointer.
 - 🐧 The Linux zip and AppImage bundle Qt's X11 helper libraries, so the app starts on desktops that lack them, such as a fresh Ubuntu 22.04, instead of quitting with "could not load the Qt platform plugin xcb".
 
 ## 🗂️ v0.1.32 (2026-09-28)

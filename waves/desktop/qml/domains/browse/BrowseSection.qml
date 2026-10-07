@@ -348,6 +348,7 @@ Column {
           durationSec: btrLd.modelData.duration_sec || 0
           quality: btrLd.modelData.quality || ""
           popularity: btrLd.modelData.popularity || 0
+          explicit: btrLd.modelData.explicit === true
           // Numbers only on item pages, where they're ordered
           // (album track #s / playlist positions), editorial
           // track shelves would all read "1".

@@ -42,6 +42,10 @@ Rectangle {
   property int durationSec: 0      // raw seconds, the presence matcher's duration witness
   property string quality: ""
   property int popularity: 0
+  // The track's own advisory flag as the provider payload carries it: true
+  // is proof (an explicit twin is told apart from its clean release), false
+  // means clean, and a local row with no catalog item stays false.
+  property bool explicit: false
   property bool hi: false          // "you came here for this track" marker
   property int num: 0              // track # (album position, or playlist order); 0 hides
   property string albumId: ""      // set -> the title links to the album page
@@ -188,6 +192,7 @@ Rectangle {
         spacing: 1
         Text {
           id: trTitle
+          objectName: "trackTitle"
           textFormat: Text.PlainText
           text: title
           color: trTitleMa.containsMouse ? "#ffffff" : textHi
@@ -198,11 +203,16 @@ Rectangle {
           font.weight: Font.Medium
           elide: Text.ElideRight
           Layout.fillWidth: true
+          // The explicit mark leads the tail, so a clean twin listed
+          // beside its explicit release tells apart. Read off the flag,
+          // never the mark's `visible` (effective visibility, see
+          // LibraryTag.shown).
+          readonly property real expRoom: trow.explicit ? trExp.width + 6 : 0
           // The presence pill floats beside the rendered text,
           // inside the full-width Text, exactly like the album
           // row's pill: the title keeps its layout size and
           // elides only for real overflow.
-          rightPadding: (trPill.visible ? trPill.width + 8 : 0) + (trNew.visible ? trNew.width + (trPill.visible ? 6 : 8) : 0)
+          rightPadding: expRoom + (trPill.visible ? trPill.width + 8 : 0) + (trNew.visible ? trNew.width + (trPill.visible ? 6 : 8) : 0)
           // Title -> the track's album page (highlighting this track);
           // for a video row it opens the in-app video player instead.
           TapAction {
@@ -215,6 +225,12 @@ Rectangle {
             accessibleLabel: (trow.revealable ? "Reveal " : trow.kind === "video" ? "Play video " : "Open album for ") + trow.title
             onTriggered: trow.revealable ? waves.revealLibraryAlbum(trow.folderPath) : trow.kind === "video" ? host.openVideo(trow.tId, trow.title, trow.artistName) : host.openAlbumPage(albumId, tId, trow.album, trow.art)
           }
+          ExplicitMark {
+            id: trExp
+            visible: trow.explicit
+            anchors.verticalCenter: parent.verticalCenter
+            x: Math.min(trTitle.contentWidth + 6, trTitle.width - trTitle.rightPadding + 6)
+          }
           // Declared after the title's MouseArea so the pill sits
           // on top of it and takes its own click (reveal folder).
           // A library file needs no "in your library" pill: the
@@ -224,7 +240,7 @@ Rectangle {
             host: trow.host
             visible: !trow.local && !!(presence && presence.present)
             anchors.verticalCenter: parent.verticalCenter
-            x: Math.min(trTitle.contentWidth + 8, trTitle.width - width - (trNew.visible ? trNew.width + 6 : 0))
+            x: Math.min(trTitle.contentWidth + 8 + trTitle.expRoom, trTitle.width - width - (trNew.visible ? trNew.width + 6 : 0))
             track: trow.kind === "video" ? null : ({
                 artist: trow.artistName,
                 title: trow.title,
@@ -242,7 +258,7 @@ Rectangle {
             visible: trow.kind !== "video" && host.isNewRelease(trow.date)
             settled: trDl.st === "done"
             anchors.verticalCenter: parent.verticalCenter
-            x: trPill.visible ? trPill.x + trPill.width + 6 : Math.min(trTitle.contentWidth + 8, trTitle.width - width)
+            x: trPill.visible ? trPill.x + trPill.width + 6 : Math.min(trTitle.contentWidth + 8 + trTitle.expRoom, trTitle.width - width)
           }
         }
         ArtistLinks {

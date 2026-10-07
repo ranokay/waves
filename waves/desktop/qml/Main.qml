@@ -2526,8 +2526,11 @@ ApplicationWindow {
   function qualFg(q) {
     return (q === "HI-RES" || q === "VIDEO") ? gold : q === "LOSSLESS" ? green : q === "HIGH" ? cyan : q === "ATMOS" ? textHi : textLo
   }
+  // Every ladder tier rims its pill in its own dim ink; HIGH used to fall
+  // to the neutral outline, which read as a smaller, unrimmed badge beside
+  // the gold and green ones until the pointer lit it.
   function qualBorder(q) {
-    return (q === "HI-RES" || q === "VIDEO") ? goldDim : q === "LOSSLESS" ? greenDim : q === "ATMOS" ? textDim : outline
+    return (q === "HI-RES" || q === "VIDEO") ? goldDim : q === "LOSSLESS" ? greenDim : q === "HIGH" ? cyanDim : q === "ATMOS" ? textDim : outline
   }
   function qualDot(q) {
     return q === "LOW" ? textDim : qualFg(q)
@@ -8535,6 +8538,7 @@ ApplicationWindow {
               durationSec: model.duration_sec || 0
               quality: model.quality
               popularity: model.popularity
+              explicit: model.explicit === true
               albumId: model.album_id || ""
             }
           }

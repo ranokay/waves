@@ -603,12 +603,22 @@ Column {
                 Layout.alignment: Qt.AlignVCenter
               }
               Text {
+                objectName: "trackTitle"
                 textFormat: Text.PlainText
                 text: modelData.title
                 color: textHi
                 font.pixelSize: 13
                 elide: Text.ElideRight
                 Layout.fillWidth: true
+                // The explicit mark rides inside the title's tail, as on
+                // TrackRow, so an inline expand tells a clean twin apart too.
+                rightPadding: modelData.explicit === true ? abExp.width + 6 : 0
+                ExplicitMark {
+                  id: abExp
+                  visible: modelData.explicit === true
+                  anchors.verticalCenter: parent.verticalCenter
+                  x: Math.min(parent.contentWidth + 6, parent.width - parent.rightPadding + 6)
+                }
               }
               PopularityMeter {
                 host: ab.host
