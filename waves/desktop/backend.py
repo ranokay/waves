@@ -4537,8 +4537,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._search_gen = 0  # bumped per search / open-link to drop stale results
         # The unified search page is one fold over per-provider groups. These
         # hold the search on screen: `_search_display` (the groups the page
-        # folds, stale-seeded then replaced in place by each fresh answer),
-        # `_search_fresh` (fresh answers only, what the short cache stores),
+        # folds, stale-seeded then replaced in place by each fresh answer,
+        # and exactly what the short cache stores at settle), `_search_fresh`
+        # (fresh answers only, marking each source as answered),
         # `_search_errors` (each source's own words), `_search_tokens` and
         # `_search_painted`/`_search_last` (the generation guard and the
         # identical-repaint skip). `_search_live` is the start-to-settle window.
@@ -6656,8 +6657,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """One fresh successful answer replaces its source's rows in place.
 
         An empty fresh answer never blanks rows the page already shows: the
-        stale group stays displayed (and uncached later, because nothing fresh
-        was found), while the source still counts as answered."""
+        stale group stays displayed. What the page shows is what the short
+        cache later stores, so those kept rows survive a same-query replay
+        while any source in the search answered with rows."""
         previous = self._search_display.get(provider_id)
         if previous is not None and _search_group_rows(previous) > 0 and _search_group_rows(group) == 0:
             self._search_fresh[provider_id] = group
@@ -6738,7 +6740,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             total = self._search_total(self._search_display_payload(tokens, current))
             status = f"{total} results"
             fresh_total = sum(_search_group_rows(group) for group in fresh)
-            if fresh_total and self._search_key and still_current and len(fresh) == len(tokens) == len(displayed):
+            if fresh_total and self._search_key and still_current and len(fresh) == len(tokens):
                 self._remember_search(self._search_key, {"groups": displayed})
                 self.threadpool.start(Worker(self._save_page_cache))
         self._set_status(status)

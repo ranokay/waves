@@ -229,7 +229,23 @@ def _scenario() -> int:
     settle(100)
     with open(bridge._waves_prefs_path, encoding="utf-8") as handle:
         filter_stored = json.load(handle)
-    fallback_ok = q("root.searchSourceFilter", second) == "all" and filter_stored.get("search_source_filter") == "all"
+    # The remembered choice survives the provider's absence: rows show under
+    # All while it is gone, and the pref keeps the user's last filter.
+    fallback_ok = (
+        q("root.searchSourceFilter", second) == "apple"
+        and q("root.effectiveSourceFilter", second) == "all"
+        and filter_stored.get("search_source_filter") == "apple"
+        and q("root.filteredResultCount", second) == 1
+    )
+    # The saved provider returning brings the remembered filter back.
+    q("_searchSeq = _navSeq", second)
+    bridge.searchResults.emit(_payload())
+    settle(400)
+    fallback_ok = (
+        fallback_ok
+        and q("root.effectiveSourceFilter", second) == "apple"
+        and q("root.filteredResultCount", second) == 2
+    )
 
     ok = landed_ok and chips_ok and source_ok and restored_ok and remember_ok and capped_ok and prefs_ok and stale_ok
     return 0 if ok and restart_ok and fallback_ok else 1

@@ -216,12 +216,17 @@ def test_a_cache_replay_keeps_the_fold_order_the_live_page_showed() -> None:
     assert replay["sections"]["tracks"][0]["sources"][0]["provider"] == "apple"
 
 
-def test_rows_kept_over_an_empty_fresh_answer_are_cached_as_displayed() -> None:
+def test_rows_kept_over_an_empty_fresh_answer_survive_a_replay() -> None:
+    calls: list[str] = []
     stale = {"groups": [_tidal_group(albums=[{"id": "al1"}])]}
     stub = _stub(
         {
-            "tidal": _provider("TIDAL", lambda needle: {"albums": [], "artists": [], "tracks": []}),
-            "apple": _provider("Apple Music", lambda needle: {"tracks": [_track_row("apple:a1")]}),
+            "tidal": _provider(
+                "TIDAL", lambda needle: calls.append("tidal") or {"albums": [], "artists": [], "tracks": []}
+            ),
+            "apple": _provider(
+                "Apple Music", lambda needle: calls.append("apple") or {"tracks": [_track_row("apple:a1")]}
+            ),
         }
     )
     stub._search_cache["tidal+apple:one"] = (_STALE, stale)
@@ -229,9 +234,12 @@ def test_rows_kept_over_an_empty_fresh_answer_are_cached_as_displayed() -> None:
 
     live = search_payloads(stub)[-1]
     assert [a["id"] for a in live["sections"]["albums"]] == ["al1"], "the stale rows stay on screen"
-    cached = stub._search_cache["tidal+apple:one"][1]["groups"]
-    kept = next(group for group in cached if group["provider"] == "tidal")
-    assert [a["id"] for a in kept["albums"]] == ["al1"], "the cache serves the rows the page kept"
+    assert calls == ["tidal", "apple"]
+
+    stub.search("one")  # served from the short cache: the kept rows replay
+    replay = search_payloads(stub)[-1]
+    assert calls == ["tidal", "apple"], "the replay never reached the wire"
+    assert [a["id"] for a in replay["sections"]["albums"]] == ["al1"]
 
 
 def test_a_failed_source_on_a_stale_page_keeps_the_rows_it_had() -> None:

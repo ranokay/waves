@@ -648,14 +648,30 @@ ApplicationWindow {
   property var searchTop: null
   property var searchSources: []
   // The source filter chip: "all" (default) or one provider id, remembered
-  // across launches ("remember-last"; the page falls back to All while the
-  // saved provider is not in the search). A row shows while the chip is All,
-  // or while one of the row's own sources matches.
+  // across launches ("remember-last").
   property string searchSourceFilter: {
     var saved = waves.wavesPref("search_source_filter")
     return typeof saved === "string" && saved !== "" ? saved : "all"
   }
   onSearchSourceFilterChanged: waves.setWavesPref("search_source_filter", root.searchSourceFilter)
+  // The filter actually applied to rows, chips and counts: the remembered
+  // choice while one of the page's sources carries it, All otherwise. The
+  // remembered value survives a provider's absence, so the filter applies
+  // again when that provider returns.
+  readonly property string effectiveSourceFilter: {
+    if (root.searchSourceFilter === "all")
+      return "all"
+    return root.sourceIn(root.searchSources, root.searchSourceFilter) ? root.searchSourceFilter : "all"
+  }
+  // Whether a source list carries one provider: the one scan the row, chip
+  // and error rules all read.
+  function sourceIn(sources, provider) {
+    var list = sources || []
+    for (var i = 0; i < list.length; ++i)
+      if (String(list[i].provider) === String(provider))
+        return true
+    return false
+  }
   property var rowSourcesById: ({})
   // Marks render only when more than one source is in the search: with one
   // provider there is nothing to disambiguate and the page stays as shipped.
@@ -685,24 +701,17 @@ ApplicationWindow {
     return out
   }
   function rowMatchesSource(row) {
-    if (root.searchSourceFilter === "all")
+    if (root.effectiveSourceFilter === "all")
       return true
     var sources = row.sources || root.rowSourcesById[row.id] || []
-    for (var i = 0; i < sources.length; ++i)
-      if (String(sources[i].provider) === root.searchSourceFilter)
-        return true
-    return false
+    return root.sourceIn(sources, root.effectiveSourceFilter)
   }
   // The model copies no longer carry the nested sources list; this reads the
   // lifted map for a delegate's own row.
   function rowMatchesSourceById(id) {
-    if (root.searchSourceFilter === "all")
+    if (root.effectiveSourceFilter === "all")
       return true
-    var sources = root.rowSourcesById[id] || []
-    for (var i = 0; i < sources.length; ++i)
-      if (String(sources[i].provider) === root.searchSourceFilter)
-        return true
-    return false
+    return root.sourceIn(root.rowSourcesById[id] || [], root.effectiveSourceFilter)
   }
   // Rows a payload's sections hold: one sum for a filtered section, the
   // empty-state gate, the build veil's total and the page count. The pinned
@@ -742,7 +751,7 @@ ApplicationWindow {
       if (String(sources[i].error || "") === "")
         continue
       var provider = String(sources[i].provider || "")
-      if (root.searchSourceFilter === "all" || root.searchSourceFilter === provider)
+      if (root.effectiveSourceFilter === "all" || root.effectiveSourceFilter === provider)
         return String(sources[i].error)
     }
     return ""
@@ -755,13 +764,6 @@ ApplicationWindow {
   function applySearchResults(payload, refresh) {
     var sources = payload.sources || []
     var top = payload.top !== undefined ? payload.top : null
-    // Remember-last filter: a saved provider that this page does not carry
-    // cannot filter anything, so the page falls back to All (and remembers
-    // that).
-    if (root.searchSourceFilter !== "all" && !sources.some(function (source) {
-      return String(source.provider) === root.searchSourceFilter
-    }))
-      root.searchSourceFilter = "all"
     root.searchRefreshMode = refresh === true
     if (refresh !== true) {
       // The empty step is load-bearing: assigning the same-shaped object
@@ -7271,7 +7273,7 @@ ApplicationWindow {
               delegate: Rectangle {
                 id: sourceChip
                 required property var modelData
-                readonly property bool on: root.searchSourceFilter === String(modelData.provider)
+                readonly property bool on: root.effectiveSourceFilter === String(modelData.provider)
                 readonly property bool failed: String(modelData.error || "") !== ""
                 radius: 8
                 implicitHeight: 30
