@@ -205,6 +205,7 @@ from .bridge_surfaces import (
     _session_logged_in,
     _source_provider,
     _source_rows,
+    ready_browse_providers,
 )
 from .diagnostics import devlog
 from .diagnostics import export as diagnostics
@@ -8565,43 +8566,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         parts = urlsplit(text)
         return not parts.scheme and not parts.netloc
 
-    @staticmethod
-    def _chips_from_explore(explore) -> tuple[dict, dict]:
-        """Split the Explore page's PageLinks rows into the Genres / Moods /
-        Decades chip sets plus the untitled tail row's quick links (New / Top
-        / Videos / HiRes). Shared by the landing build and the tile-art
-        prefetch (which needs only the chip paths)."""
-        chips: dict[str, list] = {"genres": [], "moods": [], "decades": []}
-        quick: dict[str, str] = {}
-        for cat in list(explore.categories or []):
-            if not isinstance(cat, tidal_page.PageLinks):
-                continue
-            title = str(getattr(cat, "title", "") or "").strip().lower()
-            # Same Magazine rule as _page_rows: editorial articles, drills
-            # into a blank page, so it never becomes a chip or tile.
-            links = [
-                {"title": str(link.title or ""), "path": str(link.api_path or "")}
-                for link in cat.items or []
-                if getattr(link, "api_path", None)
-                and str(link.title or "").strip()
-                and "magazine" not in str(link.title or "").lower()
-            ]
-            if title == "genres":
-                chips["genres"] = links
-            elif title.startswith("moods"):
-                chips["moods"] = links
-            elif title == "decades":
-                chips["decades"] = links
-            else:
-                quick.update({link["title"]: link["path"] for link in links})
-        return chips, quick
-
-    def _home_v2_rows(self) -> list[dict]:
-        """The V2 home feed's shelves, the personalized landing the web player
-        shows ("Essentials to explore", "Popular playlists on TIDAL", "Albums
-        you'll enjoy", "Your forgotten favorites", ...). Parsed tolerantly per
-        row like ``_browse_fetch``: one module type tidalapi doesn't know is
-        dropped and logged, the rest of the feed lives.
+    def _home_rows(self, provider) -> list[dict]:
+        """A provider's personalized home feed as landing rows ("Essentials
+        to explore", "Popular playlists..."), parsed tolerantly per row: one
+        module type its parser doesn't know is dropped and logged, the rest
+        of the feed lives.
 
         Two deliberate drops: MIX rows parse to MixV2, which the engine's
         ``Download.items()`` silently rejects, so ``_browse_card`` returns
@@ -8610,7 +8579,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         ``home/...`` paths the v1 page drill-in cannot open, so every row
         ships without a ``more`` link (or paging handle) rather than with a
         headline that drills into an error page."""
-        page = self.providers[CTX_TIDAL].browse_home()
+        page = provider.browse_home()
         rows = self._page_rows(page)
         for r in rows:
             r["more"] = ""
@@ -8620,45 +8589,72 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             r.pop("modType", None)
         return rows
 
-    def _browse_root(self) -> dict:
-        """Assemble the Browse landing payload: the Genres / Moods / Decades
-        chip sets from the Explore page, the New and Top editorial pages
-        inlined as content rows, the personalized For You rows, then the V2
-        home feed's shelves (its mix rows come back as MixV2, which the engine
-        can't download, so they drop and For You keeps carrying the custom
-        mixes as real Mix objects)."""
-        explore = self._browse_fetch("Explore", "pages/explore")
-        chips, quick = self._chips_from_explore(explore)
-        sections: list[dict] = []
-        for name in ("New", "Top"):
-            path = quick.get(name)
-            if not path:
-                continue
+    def _home_v2_rows(self) -> list[dict]:
+        """TIDAL's V2 home feed rows (see :meth:`_home_rows`)."""
+        return self._home_rows(self.providers[CTX_TIDAL])
+
+    def _landing_rows(self, provider, landing: dict) -> list[dict]:
+        """One provider's landing recipe rendered into rows: its named pages
+        inlined in order (a page whose read fails is logged and skipped, the
+        rest of the recipe lives), then its home feed last, deduped by title
+        against the pages -- the provider repeats a few rows across the feed
+        and the editorial pages, and the first copy wins -- and contained
+        rows dropped. A links row would duplicate the chip sets, so it is
+        never a content row here."""
+        rows: list[dict] = []
+        for spec in landing.get("pages") or []:
+            title = str(spec.get("title") or "")
+            path = str(spec.get("path") or "")
             try:
-                sections.extend(self._page_rows(self._browse_fetch(name, path)))
+                rows.extend(self._page_rows(provider.browse_page(title, path)))
             except Exception:
-                logger.exception("Browse: could not inline the %s page", name)
-        try:
-            sections.extend(self._page_rows(self._browse_fetch("For You", "pages/for_you")))
-        except Exception:
-            logger.exception("Browse: could not load the For You page")
-        # The home feed lands last (the least editorial, most account-shaped
-        # shelves), deduped by title: TIDAL repeats a few rows across the
-        # feed and the editorial pages, and the first copy wins.
-        try:
-            seen = {str(r.get("title") or "").strip().lower() for r in sections}
-            for r in self._home_v2_rows():
-                title = str(r.get("title") or "").strip().lower()
-                if title and title in seen:
-                    continue
-                seen.add(title)
-                sections.append(r)
-        except Exception:
-            logger.exception("Browse: could not load the home feed")
-        # A links row inside the landing sections would duplicate the chip sets.
-        sections = [r for r in sections if r["rowKind"] != "links"]
-        sections = self._drop_contained_rows(sections)
-        return {"sections": sections, **chips, "error": False}
+                logger.exception("Browse: %s could not load %r", provider.id, path or title)
+        if landing.get("home"):
+            try:
+                seen = {str(r.get("title") or "").strip().lower() for r in rows}
+                for r in self._home_rows(provider):
+                    title = str(r.get("title") or "").strip().lower()
+                    if title and title in seen:
+                        continue
+                    seen.add(title)
+                    rows.append(r)
+            except Exception:
+                logger.exception("Browse: %s could not load its home feed", provider.id)
+        rows = [r for r in rows if r["rowKind"] != "links"]
+        return self._drop_contained_rows(rows)
+
+    def _browse_root(self) -> dict:
+        """Assemble the combined Browse landing from every ready browse
+        provider's own recipe (:meth:`Provider.browse_landing`), in registry
+        order.
+
+        Each section and chip link carries its owner, so every drill-down and
+        paging fetch routes back through the provider that served the row. A
+        provider whose recipe or page reads fail loses only its own rows
+        (failure isolation); the payload is an error only when every
+        attempted provider failed, and a landing with nothing attempted (no
+        ready provider) is an empty, non-error page -- the pane's sign-in
+        call to action owns that state."""
+        sections: list[dict] = []
+        chips: dict[str, list] = {"genres": [], "moods": [], "decades": []}
+        sources: list[dict] = []
+        attempted = 0
+        succeeded = 0
+        for provider in ready_browse_providers(self):
+            attempted += 1
+            try:
+                landing = provider.browse_landing() or {}
+            except Exception:
+                logger.exception("Browse: %s could not compose its landing", provider.id)
+                continue
+            for row in self._landing_rows(provider, landing):
+                row["provider_id"] = provider.id
+                sections.append(row)
+            for group, links in (landing.get("chips") or {}).items():
+                chips.setdefault(group, []).extend({**link, "provider_id": provider.id} for link in links)
+            sources.append({"provider": provider.id, "name": provider.name})
+            succeeded += 1
+        return {"sections": sections, **chips, "sources": sources, "error": attempted > 0 and succeeded == 0}
 
     # A row of fewer than this many items reads as a curated highlight rather
     # than a shelf, and a short one can sit inside a big generic row by pure
@@ -9950,7 +9946,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                chips, _ = self._chips_from_explore(self._browse_fetch("Explore", "pages/explore"))
+                chips = self.providers[CTX_TIDAL].browse_landing().get("chips") or {}
             except Exception:
                 logger.debug("Tile-art prefetch skipped (explore fetch failed)", exc_info=True)
                 return

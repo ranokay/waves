@@ -182,10 +182,10 @@ def _card(kind: str, cid: str) -> dict:
     return {"kind": kind, "id": cid}
 
 
-def test_browse_root_dedupes_home_rows_by_title(monkeypatch):
+def test_landing_rows_dedupe_home_rows_by_title(monkeypatch):
     b = WavesBridge.__new__(WavesBridge)
+    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None)
     # Explore contributes no chips or quick links; For You contributes one row.
-    monkeypatch.setattr(b, "_browse_fetch", lambda *a: SimpleNamespace(categories=[]), raising=False)
     monkeypatch.setattr(
         b,
         "_page_rows",
@@ -196,18 +196,18 @@ def test_browse_root_dedupes_home_rows_by_title(monkeypatch):
     )
     monkeypatch.setattr(
         b,
-        "_home_v2_rows",
-        lambda: [
+        "_home_rows",
+        lambda p: [
             {"rowKind": "cards", "title": "Essentials to Explore", "items": [_card("playlist", "p2")], "more": ""},
             {"rowKind": "cards", "title": "Popular playlists on TIDAL", "items": [_card("playlist", "p3")], "more": ""},
         ],
         raising=False,
     )
-    payload = b._browse_root()
-    titles = [r["title"] for r in payload["sections"]]
+    rows = b._landing_rows(provider, {"pages": [{"title": "For You", "path": "pages/for_you"}], "home": True})
+    titles = [r["title"] for r in rows]
     # Case-insensitive dedupe: the For You copy won, the new shelf appended.
     assert titles == ["Essentials to explore", "Popular playlists on TIDAL"]
-    assert payload["sections"][0]["items"] == [_card("playlist", "p1")]
+    assert rows[0]["items"] == [_card("playlist", "p1")]
 
 
 def _row(title: str, ids, kind: str = "cards", **extra) -> dict:
@@ -220,9 +220,9 @@ def _row(title: str, ids, kind: str = "cards", **extra) -> dict:
     }
 
 
-def test_browse_root_drops_rows_contained_in_a_bigger_row(monkeypatch):
+def test_landing_rows_drop_rows_contained_in_a_bigger_row(monkeypatch):
     b = WavesBridge.__new__(WavesBridge)
-    monkeypatch.setattr(b, "_browse_fetch", lambda *a: SimpleNamespace(categories=[]), raising=False)
+    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None)
     big = [f"a{n}" for n in range(25)]
     monkeypatch.setattr(
         b,
@@ -242,8 +242,9 @@ def test_browse_root_drops_rows_contained_in_a_bigger_row(monkeypatch):
         ],
         raising=False,
     )
-    monkeypatch.setattr(b, "_home_v2_rows", lambda: [], raising=False)
-    titles = [r["title"] for r in b._browse_root()["sections"]]
+    monkeypatch.setattr(b, "_home_rows", lambda p: [], raising=False)
+    rows = b._landing_rows(provider, {"pages": [{"title": "For You", "path": "pages/for_you"}], "home": True})
+    titles = [r["title"] for r in rows]
     assert titles == ["New releases for you", "The Hits", "Featured", "New tracks"]
 
 

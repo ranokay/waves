@@ -903,6 +903,22 @@ class Provider(ABC):
         input -- a parse may drop items, the offset may not rewind), and the
         collection total."""
 
+    def browse_landing(self) -> dict:
+        """This provider's own Browse landing recipe, in provider-neutral
+        descriptors the bridge renders:
+
+        ``{"chips": {group: [{"title", "path"}, ...]},  # navigation link groups
+          "pages": [{"title", "path"}, ...],            # editorial pages inlined as rows, in order
+          "home": bool}``                               # append browse_home()'s shelves last
+
+        Called on a bridge worker; a recipe may read through the provider's
+        own session (a service whose page list is discovered by reading an
+        index page does that here). Every key is optional. The neutral
+        default is an empty landing: a provider reached through its catalog
+        pages contributes nothing to the combined landing, and no service
+        inherits another's editorial composition."""
+        return {}
+
     @abstractmethod
     def favorites_page(
         self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None

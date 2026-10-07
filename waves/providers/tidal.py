@@ -524,6 +524,56 @@ class TidalProvider(Provider):
             cat = page.page_category.parse({"type": mod_type, "title": title, "pagedList": {"items": raw}})
         return BrowseWindow(category=cat, n=len(raw), total=int(j.get("totalNumberOfItems") or 0))
 
+    def browse_landing(self) -> dict:
+        """TIDAL's landing recipe: Explore names the chip groups and the
+        New/Top quick links, those pages inline as content shelves, For You
+        follows, and the personalized home feed lands last. Only Explore is
+        read here -- its quick links decide the page list; the bridge fetches
+        the named pages through ``browse_page`` and renders them. A failed
+        Explore read fails TIDAL's whole contribution (the bridge isolates
+        it from other providers); missing quick links still ship the chips
+        and the For You page."""
+        explore = self.browse_page("Explore", "pages/explore")
+        chips, quick = self._chips_from_explore(explore)
+        pages = []
+        for name in ("New", "Top"):
+            path = quick.get(name)
+            if path:
+                pages.append({"title": name, "path": path})
+        pages.append({"title": "For You", "path": "pages/for_you"})
+        return {"chips": chips, "pages": pages, "home": True}
+
+    @staticmethod
+    def _chips_from_explore(explore) -> tuple[dict, dict]:
+        """Split the Explore page's PageLinks rows into the Genres / Moods /
+        Decades chip sets plus the untitled tail row's quick links (New / Top
+        / Videos / HiRes). The bridge stamps the chip links with their owner;
+        the quick links stay TIDAL's own page list."""
+        chips: dict[str, list] = {"genres": [], "moods": [], "decades": []}
+        quick: dict[str, str] = {}
+        for cat in list(explore.categories or []):
+            if not isinstance(cat, tidal_page.PageLinks):
+                continue
+            title = str(getattr(cat, "title", "") or "").strip().lower()
+            # Same Magazine rule as the page rows: editorial articles drill
+            # into nothing, so they never become a chip or tile.
+            links = [
+                {"title": str(link.title or ""), "path": str(link.api_path or "")}
+                for link in cat.items or []
+                if getattr(link, "api_path", None)
+                and str(link.title or "").strip()
+                and "magazine" not in str(link.title or "").lower()
+            ]
+            if title == "genres":
+                chips["genres"] = links
+            elif title.startswith("moods"):
+                chips["moods"] = links
+            elif title == "decades":
+                chips["decades"] = links
+            else:
+                quick.update({link["title"]: link["path"] for link in links})
+        return chips, quick
+
     def _favorites_parts(self, kind: str) -> tuple:
         """The favorites accessor for ``kind`` plus its total-count answer
         (``None`` when the engine offers no count) -- the shared front of
