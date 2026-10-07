@@ -297,7 +297,13 @@ def _run_signout_scenario() -> int:
         lambda: "https://tidal.test/authorize", lambda payload: False
     )
     # The sign-in flip makes Main re-fetch Browse; keep the scenario offline.
-    bridge._browse_root = lambda: {"sections": [], "genres": [], "moods": [], "decades": [], "error": True}
+    bridge._browse_root = lambda _contributors=None: {
+        "sections": [],
+        "genres": [],
+        "moods": [],
+        "decades": [],
+        "error": True,
+    }
     engine.rootContext().setContextProperty("waves", bridge)
     engine.rootContext().setContextProperty("monoFont", _load_mono())
     engine.rootContext().setContextProperty("uiFontFamily", app.font().family())

@@ -613,7 +613,7 @@ def _run_scenario() -> int:
         "decades": [],
         "error": False,
     }
-    bridge._browse_root = lambda: dict(landing)
+    bridge._browse_root = lambda _contributors=None: dict(landing)
     bridge._logged_in = True
     bridge.loggedInChanged.emit()
     settle(100)

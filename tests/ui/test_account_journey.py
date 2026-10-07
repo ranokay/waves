@@ -259,7 +259,13 @@ def _run_journey(reverse: bool = False) -> int:
     )
     tidal.logout = lambda: None
     tidal.reset_session = lambda: None
-    bridge._browse_root = lambda: {"sections": [], "genres": [], "moods": [], "decades": [], "error": True}
+    bridge._browse_root = lambda _contributors=None: {
+        "sections": [],
+        "genres": [],
+        "moods": [],
+        "decades": [],
+        "error": True,
+    }
     engine.rootContext().setContextProperty("waves", bridge)
     engine.rootContext().setContextProperty("monoFont", _load_mono())
     engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
