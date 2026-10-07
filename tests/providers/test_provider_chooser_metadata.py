@@ -455,6 +455,10 @@ def _search_stub(providers):
     stub.search = WavesBridge.search.__get__(stub, SimpleNamespace)
     stub._remember_search = WavesBridge._remember_search.__get__(stub, SimpleNamespace)
     stub._top_hit_dict = WavesBridge._top_hit_dict.__get__(stub, SimpleNamespace)
+    stub._absorb_search_group = WavesBridge._absorb_search_group.__get__(stub, SimpleNamespace)
+    stub._search_display_payload = WavesBridge._search_display_payload.__get__(stub, SimpleNamespace)
+    stub._paint_search_display = WavesBridge._paint_search_display.__get__(stub, SimpleNamespace)
+    stub._settle_search = WavesBridge._settle_search.__get__(stub, SimpleNamespace)
     stub._search_total = staticmethod(WavesBridge._search_total)
     stub._SEARCH_TTL = WavesBridge._SEARCH_TTL
     stub._SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX
@@ -462,6 +466,16 @@ def _search_stub(providers):
     stub._set_status = lambda text: stub.statuses.append(text)
     stub._set_busy = lambda on: stub.busy.append(bool(on))
     stub._remember = lambda kind, key, obj: stub._objs[kind].__setitem__(key, obj)
+    # The row-build helpers the TIDAL renderer walks even for an empty reply.
+    stub._dedup_albums = lambda albums: list(albums)
+    stub._dedup_tracks = lambda tracks: list(tracks)
+    stub._dedup_videos = lambda videos: list(videos)
+    stub._album_dict = lambda album: {"id": str(getattr(album, "id", ""))}
+    stub._track_dict = lambda track: {"id": str(getattr(track, "id", ""))}
+    stub._video_dict = lambda video: {"id": str(getattr(video, "id", ""))}
+    stub._playlist_dict = lambda playlist: {"id": str(getattr(playlist, "id", ""))}
+    stub._mix_dict = lambda mix: {"id": str(getattr(mix, "id", ""))}
+    stub._fav_artist_dict = lambda artist: {"id": str(getattr(artist, "id", ""))}
     return stub
 
 

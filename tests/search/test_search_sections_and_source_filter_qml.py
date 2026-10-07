@@ -181,6 +181,19 @@ def _scenario() -> int:
         and not stored.get("search_section_albums_expanded")
     )
 
+    # A fresh search resets the lifted source map: an id the new payload does
+    # not carry cannot keep the previous page's marks or source-filter match.
+    from search.fakes import qml_search_payload
+
+    q("_searchSeq = _navSeq")
+    bridge.searchResults.emit(qml_search_payload(provider="tidal", albums=[_album("tidal:1")]))
+    settle(400)
+    stale_ok = (
+        q("searchResultsView.rowSources('apple:1').length") == 0
+        and q("root.rowSourcesById['apple:1'] === undefined") is True
+        and q("searchResultsView.countFor('albums')") == 1
+    )
+
     # ...so a fresh root starts with the section still expanded (the restart
     # read), and the retired per-provider keys are not consulted.
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
@@ -193,7 +206,7 @@ def _scenario() -> int:
     settle(500)
     restart_ok = len(roots) == 2 and q("searchResultsView.isExpanded('tracks')", second)
 
-    ok = landed_ok and chips_ok and source_ok and restored_ok and capped_ok and prefs_ok
+    ok = landed_ok and chips_ok and source_ok and restored_ok and capped_ok and prefs_ok and stale_ok
     return 0 if ok and restart_ok else 1
 
 

@@ -106,7 +106,7 @@ Column {
         // never push the dot + date past the meta column and under
         // the download button.
         readonly property real dateW: vDateTx.visible ? Math.min(width, vDot.implicitWidth + vDateTx.implicitWidth + 16) : 0
-        readonly property real marksW: vMarks.visible ? vMarks.width + 8 : 0
+        readonly property real marksW: (vMarks.visible && vMarks.width > 0) ? vMarks.width + 8 : 0
         ArtistLinks {
           id: vArtists
           host: vcell.host

@@ -6571,8 +6571,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         # reply.
                         group = _search_group(provider_id, provider, fetched or {}, top=(fetched or {}).get("top"))
                 except Exception as exc:
-                    # One malformed result row must fail THIS search visibly,
-                    # not latch the spinner: Worker.run only logs an escape and
+                    # One malformed result row must fail THIS source visibly,
+                    # not latch the spinner and not settle its peers early:
+                    # the failure rides the provider's own source exactly as
+                    # a fetch failure does. Worker.run only logs an escape and
                     # nothing else clears busy or the "Searching" status.
                     logger.exception("Search results build failed")
                     failure = application_event(
@@ -6583,7 +6585,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         references=EventReferences(provider_id=provider_id),
                         actions=(EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
                     )
-                    _publish_search(self, _SearchEvent(gen, tokens, None, "Search failed", failures=(failure,)))
+                    _publish_search(
+                        self,
+                        _SearchEvent(
+                            gen,
+                            tokens,
+                            _failed_search_payload(provider_id, provider, failure.summary),
+                            "",
+                            failures=(failure,),
+                        ),
+                    )
                     return
                 # A success says nothing; the page counts it. A failure's own
                 # words ride its own group (the branch above).

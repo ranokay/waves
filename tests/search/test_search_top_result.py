@@ -34,6 +34,7 @@ bridge installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -185,7 +186,13 @@ def _run_scenario() -> int:
 
     # 1. A search whose top hit is the pop-0 album.
     q("_searchSeq = _navSeq")
-    bridge.searchResults.emit(_results(top=True))
+    payload = _results(top=True)
+    rows = sum(len(rows) for rows in payload["sections"].values())
+    bridge.searchResults.emit(payload)
+    # The build veil counts the INCOMING pin, not the previous page's: the
+    # fresh handler arms the total before the payload is applied.
+    if q("root._searchBuildTotal") != rows + 1:
+        failures.append(f"the veil total ignored the incoming pin ({q('root._searchBuildTotal')} != {rows + 1})")
     if not pump(lambda: not q("searchBuilding")):
         print("search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION
@@ -241,15 +248,91 @@ def _run_scenario() -> int:
     q('filterType = "all"')
     settle(50)
 
-    # 5. A reply without a top hit renders no pin.
+    # 5. A reply without a top hit renders no pin, and the veil total drops
+    # the pin it counted for the previous page.
     q("_searchSeq = _navSeq")
-    bridge.searchResults.emit(_results(top=False))
+    payload = _results(top=False)
+    rows = sum(len(rows) for rows in payload["sections"].values())
+    bridge.searchResults.emit(payload)
+    if q("root._searchBuildTotal") != rows:
+        failures.append(f"the veil total kept the previous pin ({q('root._searchBuildTotal')} != {rows})")
     if not pump(lambda: not q("searchBuilding")):
         print("second search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION
     settle()
     if q(tidal + ".topVisible") or q(tidal + ".topRow") is not None:
         failures.append("a reply without a top hit still shows TOP RESULT")
+
+    # 6. A pinned row whose provider named it outside its own list rows (so it
+    # never entered the section models) still carries its source marks: the
+    # pin reads its own sources from the payload.
+    from search.fakes import qml_search_payload
+
+    pinned = {
+        "id": "apple:pin",
+        "title": "Pinned",
+        "artist": "Artist",
+        "artist_id": "",
+        "artists": [],
+        "album": "",
+        "album_id": "",
+        "num": 1,
+        "vol": 1,
+        "art": "",
+        "year": "2026",
+        "date": "2026-01-01",
+        "duration": "3:00",
+        "duration_sec": 180,
+        "quality": "LOSSLESS",
+        "popularity": 0,
+        "explicit": False,
+        "added": "",
+    }
+    apple_page = qml_search_payload(provider="apple", tracks=[], top={"kind": "track", **pinned})
+    tidal_page = qml_search_payload(
+        provider="tidal",
+        albums=[
+            {
+                "id": "tidal:al1",
+                "title": "Other album",
+                "artist": "Artist",
+                "artist_id": "",
+                "artists": [],
+                "art": "",
+                "year": "2026",
+                "date": "2026-01-01",
+                "tracks": 1,
+                "duration_sec": 200,
+                "quality": "LOSSLESS",
+                "popularity": 10,
+                "explicit": False,
+                "added": "",
+            }
+        ],
+    )
+    q("_searchSeq = _navSeq")
+    bridge.searchResults.emit(
+        {
+            "sources": [*tidal_page["sources"], *apple_page["sources"]],
+            "sections": {
+                **tidal_page["sections"],
+                **{
+                    name: [*tidal_page["sections"].get(name, []), *extra]
+                    for name, extra in apple_page["sections"].items()
+                },
+            },
+            "top": apple_page["top"],
+        }
+    )
+    if not pump(lambda: not q("searchBuilding")):
+        print("pinned-search never finished building", file=sys.stderr)
+        return EXIT_PRECONDITION
+    settle()
+    pin_sources = json.loads(q("JSON.stringify(searchResultsView.rowSources('apple:pin'))"))
+    if pin_sources != [{"provider": "apple", "id": "apple:pin"}]:
+        failures.append(f"the pinned row lost its source marks ({pin_sources})")
+    if not q(tidal + ".topVisible"):
+        failures.append("the pinned row is not visible")
 
     for f in failures:
         print(f"FAIL: {f}", flush=True)

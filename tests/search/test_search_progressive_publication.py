@@ -158,6 +158,34 @@ def test_a_failed_source_keeps_healthy_rows_and_names_itself() -> None:
     assert stub._search_cache == {}, "a failed source never enters the short cache"
 
 
+def test_a_malformed_provider_build_fails_only_its_source() -> None:
+    """A builder that chokes mid-row (TIDAL's legacy renderer) names its own
+    source and does not settle the search: the other provider still paints,
+    and the status carries the failing source's words."""
+
+    def broken_album(_album):
+        raise ValueError("malformed row")
+
+    stub = _stub(
+        {
+            "tidal": _provider("TIDAL", lambda needle: {"albums": [SimpleNamespace(id="al1")]}),
+            "apple": _provider("Apple Music", lambda needle: {"tracks": [_track_row("apple:a1")]}),
+        }
+    )
+    stub._album_dict = broken_album
+    stub.search("one")
+
+    last = search_payloads(stub)[-1]
+    sources = {source["provider"]: source for source in last["sources"]}
+    assert sources["tidal"]["state"] == "failed"
+    assert sources["tidal"]["error"] == "Search results could not be displayed. Try again or open the logs."
+    assert sources["apple"]["state"] == "ready"
+    assert [row["id"] for row in last["sections"]["tracks"]] == ["apple:a1"]
+    assert stub.statuses[-1] == sources["tidal"]["error"]
+    assert stub.busy == [True, False]
+    assert stub._search_cache == {}
+
+
 def test_a_failed_source_on_a_stale_page_keeps_the_rows_it_had() -> None:
     stale = {"groups": [_tidal_group(albums=[{"id": "al1"}])]}
     stub = _stub({"tidal": _provider("TIDAL", lambda needle: (_ for _ in ()).throw(ValueError("offline")))})

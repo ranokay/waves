@@ -13,7 +13,21 @@ Row {
   id: marks
   property var sources: []
   spacing: 5
-  visible: (marks.sources || []).length > 0
+  // Only marks whose provider is registered and carries a logo draw; a
+  // source list of unknown namespaces leaves the row invisible instead of a
+  // zero-width spacer.
+  readonly property int markCount: {
+    var list = marks.sources || []
+    var count = 0
+    for (var i = 0; i < list.length; ++i) {
+      var descriptor = waves.providerDescriptor(String(list[i].provider || ""))
+      if (descriptor !== null && String(descriptor.logo || "") !== "")
+        count += 1
+    }
+    return count
+  }
+  objectName: "searchSourceMarks"
+  visible: marks.markCount > 0
 
   Repeater {
     model: marks.sources || []

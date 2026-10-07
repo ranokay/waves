@@ -157,6 +157,12 @@ def test_an_unresolvable_artist_still_reports_failure():
 # --------------------------------------------------------------------------- #
 class _SearchStub(_StubBase):
     search = WavesBridge.search
+    dropSearchSource = WavesBridge.dropSearchSource
+    _absorb_search_group = WavesBridge._absorb_search_group
+    _search_display_payload = WavesBridge._search_display_payload
+    _paint_search_display = WavesBridge._paint_search_display
+    _settle_search = WavesBridge._settle_search
+    _enrich_search_artists = WavesBridge._enrich_search_artists
     _search_total = staticmethod(WavesBridge._search_total)
     _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
 
@@ -198,8 +204,10 @@ def test_a_choking_search_build_clears_busy_and_says_so(monkeypatch):
     stub.search("aphex")
 
     assert stub.busy == [True, False]
-    assert stub.statuses[-1] == "Search failed"
-    assert stub.searchResults.emits == []
+    assert stub.statuses[-1] == "Search results could not be displayed. Try again or open the logs."
+    (payload,) = stub.searchResults.emits[0]
+    assert payload["sources"][0]["state"] == "failed"
+    assert payload["sources"][0]["error"] == stub.statuses[-1]
     assert stub._search_cache == {}
 
 

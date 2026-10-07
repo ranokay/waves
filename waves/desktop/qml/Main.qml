@@ -701,7 +701,7 @@ ApplicationWindow {
   // Rows a payload's sections hold: one sum for a filtered section, the
   // empty-state gate, the build veil's total and the page count. The pinned
   // top counts in the mixed All view, as it always did.
-  function searchRowTotal(sections, type) {
+  function searchRowTotal(sections, type, top) {
     var total = 0
     var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
     for (var n = 0; n < names.length; ++n) {
@@ -712,7 +712,11 @@ ApplicationWindow {
         if (root.rowMatchesSource(rows[i]))
           total += 1
     }
-    if ((!type || type === "all") && root.searchTop !== null && root.rowMatchesSource(root.searchTop))
+    // The pin counts in the mixed All view. Callers that arm the build veil
+    // before the payload is applied pass the incoming top explicitly: at that
+    // moment root.searchTop still holds the previous page's pin.
+    var pinned = top === undefined ? root.searchTop : top
+    if ((!type || type === "all") && pinned !== null && root.rowMatchesSource(pinned))
       total += 1
     return total
   }
@@ -748,8 +752,11 @@ ApplicationWindow {
     root.searchRefreshMode = refresh === true
     if (refresh !== true) {
       // The empty step is load-bearing: assigning the same-shaped object
-      // back would not force the results view's rebuild from scratch.
+      // back would not force the results view's rebuild from scratch. The
+      // source side map resets with it, so a reused id cannot inherit the
+      // previous page's marks or source-filter matches.
       root.searchSections = {}
+      root.rowSourcesById = ({})
       root.searchSections = payload.sections || ({})
     } else {
       root.searchSections = payload.sections || ({})
@@ -3104,6 +3111,7 @@ ApplicationWindow {
     searchSections = {}
     searchSources = []
     searchTop = null
+    rowSourcesById = ({})
     searchNoResultsFor = ""
     searchField.forceActiveFocus()
   }
@@ -5566,6 +5574,12 @@ ApplicationWindow {
         if (sources === null)
           sources = Object.assign({}, root.rowSourcesById)
         sources[it.id] = it.sources
+      } else if (root.rowSourcesById[it.id] !== undefined) {
+        // A row that really has no sources must not keep the previous page's
+        // entry: a stale id would render dead marks and match a dead filter.
+        if (sources === null)
+          sources = Object.assign({}, root.rowSourcesById)
+        delete sources[it.id]
       }
       var at = -1
       for (var i = j; i < model.count; ++i)
@@ -6132,8 +6146,10 @@ ApplicationWindow {
       // Arm the build veil BEFORE the sections fill: the Loaders each
       // delegate creates read searchBuilding for their asynchronous flag,
       // and the ready ticks only ever arrive on later frames, never
-      // mid-fill. One tick per row the page will instantiate.
-      root._searchBuildStart(root.searchRowTotal(r.sections || ({})))
+      // mid-fill. One tick per row the page will instantiate, with the
+      // incoming pin passed explicitly (root.searchTop still holds the
+      // previous page's at this point).
+      root._searchBuildStart(root.searchRowTotal(r.sections || ({}), "all", r.top !== undefined ? r.top : null))
       root.applySearchResults(r, false)
       root.registerPinnedArtists()
       var any = root.searchRowTotal(r.sections || ({}));

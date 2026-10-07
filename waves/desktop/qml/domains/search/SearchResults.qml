@@ -152,9 +152,18 @@ Column {
   }
   // A row's source marks, gated by the page: a single-source install has
   // nothing to disambiguate and draws no marks; with two or more sources
-  // every row names its own.
+  // every row names its own. A row outside the lifted side map (the pinned
+  // top, when the provider's pin is not also one of its list rows) reads its
+  // own sources from the payload.
   function rowSources(id) {
-    return host.sourceMarksOn ? (host.rowSourcesById[id] || []) : []
+    if (!host.sourceMarksOn)
+      return []
+    var known = host.rowSourcesById[id]
+    if (known !== undefined)
+      return known
+    if (resultsView.topRow !== null && String(resultsView.topRow.id) === String(id))
+      return resultsView.topRow.sources || []
+    return []
   }
   function apply(inPlace) {
     var inPlaceSwap = inPlace === true
