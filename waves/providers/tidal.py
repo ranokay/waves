@@ -593,6 +593,12 @@ class TidalProvider(Provider):
         text = str(path or "")
         return text.startswith("pages/") and super().browse_path_ok(text)
 
+    def browse_window_path_ok(self, path: str) -> bool:
+        """TIDAL's paged handles are the ``pages/data/<id>`` endpoints only;
+        an arbitrary ``pages/`` path is not a window."""
+        text = str(path or "")
+        return text.startswith("pages/data/") and super().browse_window_path_ok(text)
+
     @staticmethod
     def _art_identity(obj) -> tuple | None:
         """Who a cover "belongs to", for per-tile dedup: one cover per artist

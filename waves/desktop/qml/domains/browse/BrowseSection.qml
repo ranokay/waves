@@ -79,7 +79,7 @@ Column {
   readonly property bool headlinable: !grid && (!!sec.more || (sec.rowKind === "cards" && (sec.items || []).length > 0))
   function openListing() {
     if (sec.more)
-      host.openBrowseLink(sec.more, sec.title || "More", String(sec.provider_id || "tidal"))
+      host.openBrowseLink(sec.more, sec.title || "More", String(sec.provider_id || bsec.host.legacyBrowseProvider))
     else
       host.openBrowseSection(sec)
   }
@@ -496,7 +496,7 @@ Column {
             host: bsec.host
             title: blinkLd.modelData.title
             path: blinkLd.modelData.path
-            provider: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || "tidal")
+            provider: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || bsec.host.legacyBrowseProvider)
             idx: blinkLd.index
             plOnly: !!blinkLd.modelData.pl
           }
@@ -535,7 +535,7 @@ Column {
               focusRadius: 8
               // The link's own owner rides along; a drilled page's links have
               // none individually and inherit the page's provider.
-              readonly property string owner: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || "tidal")
+              readonly property string owner: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || bsec.host.legacyBrowseProvider)
               onTriggered: blinkLd.modelData.pl ? host.openPlaylistsFolder(blinkLd.modelData.path, blinkLd.modelData.title, owner) : host.openBrowseLink(blinkLd.modelData.path, blinkLd.modelData.title, owner)
             }
           }

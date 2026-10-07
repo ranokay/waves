@@ -159,7 +159,8 @@ def _rows_bridge(payload: dict) -> WavesBridge:
 
 
 def test_home_feed_rows_parse_drop_mixes_and_carry_no_more():
-    rows = _rows_bridge(_feed())._home_v2_rows()
+    bridge = _rows_bridge(_feed())
+    rows = bridge._home_rows(bridge.providers[CTX_TIDAL])
     titles = [r["title"] for r in rows]
     # The mix row and the unknown module are gone; the rest survive in order.
     assert titles == ["Essentials to explore", "Recommended new tracks", "Albums you'll enjoy"]
@@ -184,7 +185,7 @@ def _card(kind: str, cid: str) -> dict:
 
 def test_landing_rows_dedupe_home_rows_by_title(monkeypatch):
     b = WavesBridge.__new__(WavesBridge)
-    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None)
+    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None, browse_path_ok=lambda path: True)
     # Explore contributes no chips or quick links; For You contributes one row.
     monkeypatch.setattr(
         b,
@@ -222,7 +223,7 @@ def _row(title: str, ids, kind: str = "cards", **extra) -> dict:
 
 def test_landing_rows_drop_rows_contained_in_a_bigger_row(monkeypatch):
     b = WavesBridge.__new__(WavesBridge)
-    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None)
+    provider = SimpleNamespace(id="tidal", browse_page=lambda title, path: None, browse_path_ok=lambda path: True)
     big = [f"a{n}" for n in range(25)]
     monkeypatch.setattr(
         b,

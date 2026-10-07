@@ -51,8 +51,9 @@ Rectangle {
   property string path: ""
   // The tile's owning provider: its click drills back through the provider
   // that served the link (a chip/cloud crossing providers keeps each link
-  // with its own owner).
-  property string provider: "tidal"
+  // with its own owner). Empty is the seam's legacy default (Main's
+  // legacyBrowseProvider resolves it at the route).
+  property string provider: ""
   property int idx: 0
   // Tile lives inside the Playlists folder view: drill into the
   // playlists-only grid instead of the full editorial page.
@@ -62,7 +63,7 @@ Rectangle {
   readonly property string era: /^\d{4}s$/.test(title) ? "'" + title.substring(2) : ""
   // The backend's tile-art key: a TIDAL path stands alone, another
   // provider's is namespaced (see _tile_art_key).
-  readonly property string artKey: provider === "" || provider === "tidal" ? path : provider + "|" + path
+  readonly property string artKey: provider === "" || provider === host.legacyBrowseProvider ? path : provider + "|" + path
   readonly property var arts: host.browseTileArt[artKey] || []
   // 4+ covers -> 2x2 mosaic; 2-3 -> two half tiles; 1 -> full bleed.
   readonly property int artN: arts.length >= 4 ? 4 : arts.length >= 2 ? 2 : arts.length
@@ -406,7 +407,7 @@ Rectangle {
               accessibleLabel: "Preview " + (bt.title || "category")
               onTriggered: {
                 host.catPendingPv = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title)
+                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider)
               }
             }
           }
@@ -447,7 +448,7 @@ Rectangle {
               accessibleLabel: "Download all in " + (bt.title || "category")
               onTriggered: {
                 host.catPendingDl = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title)
+                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider)
               }
             }
           }

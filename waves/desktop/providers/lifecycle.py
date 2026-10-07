@@ -148,7 +148,10 @@ def page_provider(key: str) -> str:
     if key.startswith("fav:"):
         source, separator, _kind = key.partition(":")[2].partition(":")
         return source if separator else DEFAULT_PROVIDER
-    if key == "root" or key.startswith("cat:"):
+    if key.startswith("cat:"):
+        # ``cat:<provider>:<path>``; a legacy bare path reads as TIDAL.
+        return provider_of_id(key.partition(":")[2])
+    if key == "root":
         return DEFAULT_PROVIDER
     return provider_of_id(key)
 

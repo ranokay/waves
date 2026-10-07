@@ -34,7 +34,7 @@ JSON.stringify((function() {
     var out = []
     function walk(o) {
         if (!o) return
-        if (o.sec !== undefined && o.arrangeable !== undefined && o.landing === true && o.sec)
+        if (o.visible === true && o.sec !== undefined && o.arrangeable !== undefined && o.landing === true && o.sec)
             out.push({ title: "" + o.sec.title, provider: "" + (o.sec.provider_id || ""), collapsed: !!o.collapsed })
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) walk(kids[i])
@@ -58,7 +58,7 @@ _SECTION = """
     var hit = null
     function find(o) {
         if (!o || hit) return
-        if (o.objectName === "%(objectName)s") { hit = o; return }
+        if (o.visible === true && o.objectName === "%(objectName)s") { hit = o; return }
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) find(kids[i])
     }
@@ -74,7 +74,7 @@ _CHIP = """
     var hit = null
     function walk(o) {
         if (!o || hit) return
-        if (o.objectName === "browseSourceChip" && ("" + (o.modelData ? o.modelData.provider : "")) === "%(provider)s") { hit = o; return }
+        if (o.visible === true && o.objectName === "browseSourceChip" && ("" + (o.modelData ? o.modelData.provider : "")) === "%(provider)s") { hit = o; return }
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) walk(kids[i])
     }
@@ -83,7 +83,7 @@ _CHIP = """
     var tap = null
     function findTap(o) {
         if (!o || tap) return
-        if (o.objectName === "browseSourceChipAction") { tap = o; return }
+        if (o.visible === true && o.objectName === "browseSourceChipAction") { tap = o; return }
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) findTap(kids[i])
     }
@@ -99,7 +99,7 @@ _RESTORE_FIRST = """
     var hit = null
     function walk(o) {
         if (!o || hit) return
-        if (o.objectName === "browseRestoreSection") { hit = o; return }
+        if (o.visible === true && o.objectName === "browseRestoreSection") { hit = o; return }
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) walk(kids[i])
     }
@@ -116,7 +116,7 @@ _SECTION_HEIGHT = """
     var section = null
     function find(o) {
         if (!o || section) return
-        if (o.sec !== undefined && o.landing === true && o.sec && ("" + o.sec.title) === "%(title)s") { section = o; return }
+        if (o.visible === true && o.sec !== undefined && o.landing === true && o.sec && ("" + o.sec.title) === "%(title)s") { section = o; return }
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) find(kids[i])
     }
@@ -131,7 +131,7 @@ _OPEN_SECTION = """
     var section = null
     function find(o) {
         if (!o || section) return
-        if (o.sec !== undefined && o.landing === true && o.sec && ("" + o.sec.title) === "%(title)s") { section = o; return }
+        if (o.visible === true && o.sec !== undefined && o.landing === true && o.sec && ("" + o.sec.title) === "%(title)s") { section = o; return }
         var kids = o.children || []
         for (var i = 0; i < kids.length; i++) find(kids[i])
     }
@@ -182,7 +182,7 @@ _PAYLOAD = {
             "provider_id": "stub",
         },
     ],
-    "sources": [{"provider": "tidal", "name": "TIDAL"}, {"provider": "stub", "name": "Stub"}],
+    "sources": [{"provider_id": "tidal", "name": "TIDAL"}, {"provider_id": "stub", "name": "Stub"}],
     "genres": [],
     "moods": [],
     "decades": [],

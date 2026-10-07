@@ -579,6 +579,20 @@ def _provider_lights(bridge) -> list[dict]:
 _CHOOSER_KINDS: tuple[str, ...] = ("track", "album", "playlist", "mix", "video")
 
 
+def _browse_capable(provider) -> bool:
+    return Capability.BROWSE in getattr(provider, "capabilities", frozenset())
+
+
+def _browse_ready(bridge, provider) -> bool:
+    return _provider_readiness(bridge, provider).for_operation(Capability.BROWSE).state == ReadinessState.READY
+
+
+def first_browse_capable(bridge):
+    """The first provider declaring ``Capability.BROWSE`` in registry order,
+    or None. The landing's call to action names it when nothing is ready."""
+    return next((provider for provider in _provider_registry(bridge) if _browse_capable(provider)), None)
+
+
 def ready_browse_providers(bridge) -> list:
     """The providers that can fill Browse right now, in registry order.
 
@@ -591,8 +605,7 @@ def ready_browse_providers(bridge) -> list:
     return [
         provider
         for provider in _provider_registry(bridge)
-        if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
-        and _provider_readiness(bridge, provider).for_operation(Capability.BROWSE).state == ReadinessState.READY
+        if _browse_capable(provider) and _browse_ready(bridge, provider)
     ]
 
 
@@ -603,12 +616,11 @@ def browse_owner(bridge, provider_id) -> object | None:
     declares ``Capability.BROWSE`` and is READY for it: capability and
     session, never provider identity or a global session flag. An unknown
     id, a catalog-only provider (Apple), a disabled or signed-out provider
-    all answer None, and the caller makes no request and emits nothing.
+    all answer None, and the caller makes no request (the page slots emit
+    their page's error payload instead).
     """
     provider = (getattr(bridge, "providers", None) or {}).get(str(provider_id or ""))
-    if provider is None or Capability.BROWSE not in getattr(provider, "capabilities", frozenset()):
-        return None
-    if _provider_readiness(bridge, provider).for_operation(Capability.BROWSE).state != ReadinessState.READY:
+    if provider is None or not _browse_capable(provider) or not _browse_ready(bridge, provider):
         return None
     return provider
 
@@ -624,16 +636,11 @@ def _browse_nav(bridge) -> dict:
     pane offers the first capable provider's sign-in call to action -- never a
     blank page.
     """
-    capable = [
-        provider
-        for provider in _provider_registry(bridge)
-        if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
-    ]
+    source = first_browse_capable(bridge)
     result = {
-        "available": bool(capable),
+        "available": source is not None,
         "signed_in": bool(ready_browse_providers(bridge)),
     }
-    source = capable[0] if capable else None
     if source is not None:
         result.update(
             {

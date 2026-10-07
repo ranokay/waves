@@ -933,6 +933,14 @@ class Provider(ABC):
         parts = urlsplit(text)
         return not parts.scheme and not parts.netloc
 
+    def browse_window_path_ok(self, path: str) -> bool:
+        """Whether a paging data path may be requested back through
+        :meth:`browse_window`. The neutral default is :meth:`browse_path_ok`
+        (a window path is one of the provider's own paths); a provider whose
+        paged handles nest under a narrower prefix tightens it (TIDAL's are
+        ``pages/data/`` only)."""
+        return self.browse_path_ok(path)
+
     def link_art_sample(self, page, want: int = 12) -> list[str]:
         """Cover URLs sampled from one of this provider's editorial pages,
         for the landing's link-tile mosaics. The neutral default samples

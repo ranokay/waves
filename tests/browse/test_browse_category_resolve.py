@@ -18,7 +18,10 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop.backend import WavesBridge
+from waves.providers.base import Capability
 
 
 class _Signal:
@@ -40,13 +43,15 @@ class _InlinePool:
 
 class _ResolveStub:
     resolvePlaylistCategory = WavesBridge.resolvePlaylistCategory
+    _browse_page_for = WavesBridge._browse_page_for
     _cached_category = WavesBridge._cached_category
     _cache_category = WavesBridge._cache_category
     _CATEGORY_PL_TTL = WavesBridge._CATEGORY_PL_TTL
     _CATEGORY_PL_MAX = WavesBridge._CATEGORY_PL_MAX
 
-    def __init__(self, page):
+    def __init__(self, page, provider_id="tidal"):
         self._page = page
+        self._provider_id = provider_id
         self._logged_in = True
         self._category_pl: dict[str, tuple[float, list]] = {}
         self._browse_loading: set[str] = set()
@@ -56,8 +61,14 @@ class _ResolveStub:
         self.threadpool = _InlinePool()
         self.statuses: list = []
         self.playlistCategoryResolved = _Signal()
+        # The resolve rides the named provider's own seam (issue #600).
+        own = StubProvider(provider_id, provider_id.title(), capabilities={Capability.BROWSE}, logged_in=True)
+        own.calls = []
+        own.browse_page = lambda title, api_path: self._answer(title, api_path)
+        self.providers = {provider_id: own}
 
-    def _browse_fetch(self, title, api_path):
+    def _answer(self, title, api_path):
+        self.providers[self._provider_id].calls.append((title, api_path))
         if isinstance(self._page, Exception):
             raise self._page
         return self._page
@@ -107,7 +118,7 @@ def test_a_resolved_category_is_cached_and_served_from_cache():
 
     stub = _ResolveStub(page)
     stub.resolvePlaylistCategory("pages/mood/focus", "Focus")
-    assert [str(p.id) for p in stub._category_pl["pages/mood/focus"][1]] == ["pl-1"]
+    assert [str(p.id) for p in stub._category_pl["cat:tidal:pages/mood/focus"][1]] == ["pl-1"]
     assert stub.statuses[-1] == ""
     assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1")
 
@@ -115,3 +126,15 @@ def test_a_resolved_category_is_cached_and_served_from_cache():
     stub._page = RuntimeError("must not be called")
     stub.resolvePlaylistCategory("pages/mood/focus", "Focus")
     assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1")
+
+
+def test_the_resolve_routes_through_the_named_provider():
+    stub = _ResolveStub(_empty_page(), provider_id="stub")
+    stub.resolvePlaylistCategory("pages/mood/chill", "Chill", "stub")
+    assert stub.providers["stub"].calls == [("Chill", "pages/mood/chill")]
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "")
+
+    # An unknown/disabled owner makes no request and emits nothing.
+    stub.resolvePlaylistCategory("pages/mood/chill", "Chill", "ghost")
+    assert stub.providers["stub"].calls == [("Chill", "pages/mood/chill")]
+    assert len(stub.playlistCategoryResolved.emits) == 1

@@ -737,7 +737,7 @@ class TestTheCatalogRoads:
         stub._provider.browse_window = window
 
         out = WavesBridge._category_page_rest.__get__(stub, type(stub))(
-            {"n": 0, "total": 9, "data": "pages/data/x", "modType": "pagedList"}, gen=1
+            {"n": 0, "total": 9, "data": "pages/data/x", "modType": "pagedList"}, 1, stub._provider
         )
 
         assert out == [pl1, pl2]  # the non-Playlist row is skipped, not counted short

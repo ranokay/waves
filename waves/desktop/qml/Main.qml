@@ -629,7 +629,7 @@ ApplicationWindow {
       browseOpen = false
       navOrigin = "search"
     }
-    if (root.signedIn && root.browseAvailable && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && root.browseAvailable && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       waves.loadBrowse()
     }
@@ -1199,6 +1199,10 @@ ApplicationWindow {
   // The providers that composed this landing (bridge payload, registry
   // order), one entry per source for the filter chips.
   property var browseSources: []
+  // The seam's legacy default owner: a payload cached or synthesized before
+  // rows carried their `provider_id` is TIDAL's (the bare-id rule ids.py
+  // applies), named once instead of sprinkled through the browse routes.
+  readonly property string legacyBrowseProvider: "tidal"
   // The Browse source filter: "all" or one provider id, remembered across
   // launches (the Search page's remember-last pattern). The remembered value
   // survives a provider's absence, so the filter applies again when that
@@ -1229,7 +1233,7 @@ ApplicationWindow {
   property var browseCollapsed: root.browsePrefObject("browse_sections_collapsed")
   property var browseOrder: root.browsePrefObject("browse_section_order")
   function browseSectionKey(sec) {
-    return String(sec.provider_id || "tidal") + "|" + String(sec.title || "")
+    return String(sec.provider_id || root.legacyBrowseProvider) + "|" + String(sec.title || "")
   }
   // The filter actually applied: the remembered choice while one of the
   // landing's sources carries it, All otherwise.
@@ -1238,7 +1242,7 @@ ApplicationWindow {
       return "all"
     var sources = root.browseSources || []
     for (var i = 0; i < sources.length; ++i)
-      if (String(sources[i].provider || "") === root.browseSourceFilter)
+      if (String(sources[i].provider_id || "") === root.browseSourceFilter)
         return root.browseSourceFilter
     return "all"
   }
@@ -1254,9 +1258,9 @@ ApplicationWindow {
     ]
     var sources = root.browseSources || []
     for (var i = 0; i < sources.length; ++i) {
-      var descriptor = waves.providerDescriptor(String(sources[i].provider || ""))
+      var descriptor = waves.providerDescriptor(String(sources[i].provider_id || ""))
       out.push({
-        provider: String(sources[i].provider || ""),
+        provider: String(sources[i].provider_id || ""),
         name: descriptor ? String(descriptor.name || "") : "",
         logo: descriptor ? String(descriptor.logo || "") : ""
       })
@@ -1275,11 +1279,11 @@ ApplicationWindow {
     var byProvider = ({})
     for (var i = 0; i < secs.length; ++i) {
       var sec = secs[i]
-      if (filter !== "all" && String(sec.provider_id || "tidal") !== filter)
+      if (filter !== "all" && String(sec.provider_id || root.legacyBrowseProvider) !== filter)
         continue
       if (root.browseHidden[root.browseSectionKey(sec)])
         continue
-      var pid = String(sec.provider_id || "tidal")
+      var pid = String(sec.provider_id || root.legacyBrowseProvider)
       if (byProvider[pid] === undefined) {
         byProvider[pid] = []
         groups.push(pid)
@@ -1313,7 +1317,7 @@ ApplicationWindow {
       if (root.browseHidden[key])
         out.push({
           key: key,
-          provider: String(secs[i].provider_id || "tidal"),
+          provider: String(secs[i].provider_id || root.legacyBrowseProvider),
           title: String(secs[i].title || "")
         })
     }
@@ -1341,27 +1345,28 @@ ApplicationWindow {
     root.browseCollapsed = m
     root.browseWritePref("browse_sections_collapsed", m)
   }
-  // Whether a move in this direction is possible within the section's own
-  // provider group (the landing's controls gray out at the ends).
-  function browseCanMove(sec, delta) {
-    var pid = String(sec.provider_id || "tidal")
+  // One provider's visible section titles, in the order on screen: the
+  // shared read behind the move controls and the move itself.
+  function browseProviderTitles(pid) {
     var list = []
     var visible = root.browseVisibleSections
     for (var i = 0; i < visible.length; ++i)
-      if (String(visible[i].provider_id || "tidal") === pid)
+      if (String(visible[i].provider_id || root.legacyBrowseProvider) === pid)
         list.push(String(visible[i].title || ""))
+    return list
+  }
+  // Whether a move in this direction is possible within the section's own
+  // provider group (the landing's controls gray out at the ends).
+  function browseCanMove(sec, delta) {
+    var list = root.browseProviderTitles(String(sec.provider_id || root.legacyBrowseProvider))
     var at = list.indexOf(String(sec.title || ""))
     return at >= 0 && at + delta >= 0 && at + delta < list.length
   }
   // Move one section up (-1) or down (+1) within its own provider's visible
   // order and persist the resulting title list for that provider.
   function browseMoveSection(sec, delta) {
-    var pid = String(sec.provider_id || "tidal")
-    var list = []
-    var visible = root.browseVisibleSections
-    for (var i = 0; i < visible.length; ++i)
-      if (String(visible[i].provider_id || "tidal") === pid)
-        list.push(String(visible[i].title || ""))
+    var pid = String(sec.provider_id || root.legacyBrowseProvider)
+    var list = root.browseProviderTitles(pid)
     var at = list.indexOf(String(sec.title || ""))
     var to = at + delta
     if (at < 0 || to < 0 || to >= list.length)
@@ -1491,7 +1496,7 @@ ApplicationWindow {
     id: browseLandingFreshTimer
     interval: 5 * 60 * 1000    // max-age: editorial rows move a few times a day
     repeat: true
-    running: root.signedIn && root.windowUp && root.browseOpen && root.browsePageKey === "" && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.browseSignedIn && root.windowUp && root.browseOpen && root.browsePageKey === "" && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: waves.refreshBrowse()   // silent, throttled; repaints only on change
   }
   // A drilled Browse page (a playlist, mix or album) and an artist page
@@ -1503,7 +1508,7 @@ ApplicationWindow {
     id: browseItemFreshTimer
     interval: 5 * 60 * 1000
     repeat: true
-    running: root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.browseSignedIn && root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: {
       var parts = root.browsePageKey.split(":")
       if (parts.length < 3 || parts[0] !== "item")
@@ -2978,11 +2983,11 @@ ApplicationWindow {
         browsePageLoading = false
         browsePageError = false
       }
-      if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+      if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
         browseLoading = true
         browseError = false
         waves.loadBrowse()
-      } else if (root.signedIn) {
+      } else if (root.browseSignedIn) {
         waves.refreshBrowse()
         // silent, throttled; repaints only on change
       }
@@ -3468,11 +3473,11 @@ ApplicationWindow {
       setupOpen = false
       artistOpen = false
       libraryOpen = false
-      if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+      if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
         browseLoading = true
         browseError = false
         waves.loadBrowse()
-      } else if (root.signedIn) {
+      } else if (root.browseSignedIn) {
         waves.refreshBrowse()
         // silent, throttled; repaints only on change
       }
@@ -3501,11 +3506,11 @@ ApplicationWindow {
     // (the pane is alive, so a plain set is exact).
     browseLanding.pendingRestoreY = -1
     browseLanding.contentY = 0
-    if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       browseError = false
       waves.loadBrowse()
-    } else if (root.signedIn) {
+    } else if (root.browseSignedIn) {
       waves.refreshBrowse()
       // silent, throttled; repaints only on change
     }
@@ -3527,7 +3532,7 @@ ApplicationWindow {
     // editorial pages have no hero
     browsePageError = false
     browsePageLoading = true
-    root.browsePageProvider = String(provider || "tidal")
+    root.browsePageProvider = String(provider || root.legacyBrowseProvider)
     waves.openBrowsePage(path, title, root.browsePageProvider)
   }
   // Re-issue the current drilled page's fetch after an error. The key alone
@@ -3539,7 +3544,7 @@ ApplicationWindow {
     var key = "" + browsePageKey
     browsePageError = false
     browsePageLoading = true
-    var provider = String(root.browsePageProvider || "tidal")
+    var provider = String(root.browsePageProvider || root.legacyBrowseProvider)
     if (key.indexOf("pl:") === 0) {
       waves.openBrowsePlaylists(key.substring(3), browseTitleHint, provider)
     } else if (key.indexOf("item:") === 0) {
@@ -3574,7 +3579,7 @@ ApplicationWindow {
     browsePage = {
       key: key,
       title: sec.title || "More",
-      provider_id: String(sec.provider_id || "tidal"),
+      provider_id: String(sec.provider_id || root.legacyBrowseProvider),
       sections: [
         {
           rowKind: sec.rowKind,
@@ -3587,11 +3592,11 @@ ApplicationWindow {
           total: sec.total || 0,
           offset: sec.offset || 0,
           modType: sec.modType || "",
-          provider_id: String(sec.provider_id || "tidal")
+          provider_id: String(sec.provider_id || root.legacyBrowseProvider)
         }
       ]
     }
-    root.browsePageProvider = String(sec.provider_id || "tidal")
+    root.browsePageProvider = String(sec.provider_id || root.legacyBrowseProvider)
   }
   // A local: page is a snapshot of its landing row taken at click time; a
   // background revalidation can deliver a fresher ordering afterwards (e.g.
@@ -3695,7 +3700,7 @@ ApplicationWindow {
     // a playlist grid has no hero
     browsePageError = false
     browsePageLoading = true
-    root.browsePageProvider = String(provider || "tidal")
+    root.browsePageProvider = String(provider || root.legacyBrowseProvider)
     waves.openBrowsePlaylists(path, title, root.browsePageProvider)
   }
   function openPlaylistsRoot() {
@@ -3752,7 +3757,7 @@ ApplicationWindow {
     browsePageLoading = false
     // A cloud aggregates links that keep their own owners; the page's
     // provider is the first link's, for the crumb's badge and snapshots.
-    root.browsePageProvider = (chips && chips.length > 0) ? String(chips[0].provider_id || "tidal") : ""
+    root.browsePageProvider = (chips && chips.length > 0) ? String(chips[0].provider_id || root.legacyBrowseProvider) : ""
     browsePage = {
       key: key,
       provider_id: root.browsePageProvider,
@@ -3781,7 +3786,7 @@ ApplicationWindow {
   // hold the row at that offset (backend keeps its caches in step).
   property var browseGrowing: ({})
   function browseGrowKey(sec) {
-    return String((sec && sec.provider_id) || root.browsePageProvider || "tidal") + "|" + String((sec && sec.data) || "")
+    return String((sec && sec.provider_id) || root.browsePageProvider || root.legacyBrowseProvider) + "|" + String((sec && sec.data) || "")
   }
   function browseCanGrow(sec) {
     return !!(sec && sec.data) && (sec.offset || 0) < (sec.total || 0)
@@ -3793,11 +3798,11 @@ ApplicationWindow {
     var g = Object.assign({}, browseGrowing)
     g[key] = true
     browseGrowing = g
-    waves.loadBrowseSectionMore(browsePageKey, sec.data, sec.offset || 0, sec.modType || "", sec.title || "", String(sec.provider_id || root.browsePageProvider || "tidal"))
+    waves.loadBrowseSectionMore(browsePageKey, sec.data, sec.offset || 0, sec.modType || "", sec.title || "", String(sec.provider_id || root.browsePageProvider || root.legacyBrowseProvider))
   }
   function browseGrew(p) {
     var g = Object.assign({}, browseGrowing)
-    delete g[String(p.provider_id || "tidal") + "|" + String(p.data || "")]
+    delete g[String(p.provider_id || root.legacyBrowseProvider) + "|" + String(p.data || "")]
     browseGrowing = g
     if (p.error || (p.items || []).length === 0)
       return
@@ -3917,7 +3922,7 @@ ApplicationWindow {
     artistOpen = false
     libraryOpen = false
     browseOpen = true
-    if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       browseError = false
       waves.loadBrowse()
@@ -3938,7 +3943,7 @@ ApplicationWindow {
     artistOpen = false
     libraryOpen = false
     browseOpen = true
-    if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       browseError = false
       waves.loadBrowse()
@@ -5994,9 +5999,16 @@ ApplicationWindow {
       root.clearProviderViews(id)
       root.refreshProviderSurfaces()
       root.refreshBrowseNav()
-      if (root.browseOpen && root.browseSignedIn && String(root.browseNav.provider) === id) {
-        root.browseLoading = true
-        waves.loadBrowse()
+      // Any browse-capable provider's state can change the combined landing
+      // (a second source signing in, the current one signing out), so the
+      // reload is gated on Browse's own readiness, never on the event's id.
+      if (root.browseOpen && root.browseSignedIn) {
+        if (root.browseSections.length === 0) {
+          root.browseLoading = true
+          waves.loadBrowse()
+        } else {
+          waves.refreshBrowse()
+        }
       }
     }
     function onSetupRequested() {
@@ -7590,11 +7602,11 @@ ApplicationWindow {
       // already on the tab); idempotent thanks to the loading flags
       // here and the in-flight guard backend-side.
       onVisibleChanged: {
-        if (visible && root.signedIn && root.browseSections.length === 0 && !root.browseLoading) {
+        if (visible && root.browseSignedIn && root.browseSections.length === 0 && !root.browseLoading) {
           root.browseLoading = true
           root.browseError = false
           waves.loadBrowse()
-        } else if (visible && root.signedIn) {
+        } else if (visible && root.browseSignedIn) {
           waves.refreshBrowse()
           // silent, throttled; repaints only on change
         }
@@ -7625,7 +7637,7 @@ ApplicationWindow {
           // The shared loading hint (WireHint.qml owns the look).
           WireHint {
             id: browseLandingHint
-            active: root.signedIn && (root.browseLoading || root.browseBuilding)
+            active: root.browseSignedIn && (root.browseLoading || root.browseBuilding)
             width: parent.width
             tint: root.textLo
             onScreen: root.onScreen
@@ -7668,7 +7680,7 @@ ApplicationWindow {
           }
 
           Column {
-            visible: root.signedIn && root.browseError
+            visible: root.browseSignedIn && root.browseError
             width: parent.width
             spacing: 12
             Text {
@@ -7713,7 +7725,7 @@ ApplicationWindow {
           // install has nothing to filter (the Search page's pattern).
           Row {
             objectName: "browseSourceChips"
-            visible: root.signedIn && root.browseSources.length > 1 && !root.browseLoading
+            visible: root.browseSignedIn && root.browseSources.length > 1 && !root.browseLoading
             spacing: 8
             Repeater {
               model: root.browseSourceChips
@@ -7838,7 +7850,7 @@ ApplicationWindow {
                           accessibleLabel: "Open " + bchip.modelData.title
                           anchors.fill: parent
                           cursorShape: Qt.PointingHandCursor
-                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || "tidal")) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || "tidal"))
+                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || root.legacyBrowseProvider)) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || root.legacyBrowseProvider))
                         }
                       }
                     }
@@ -8007,7 +8019,7 @@ ApplicationWindow {
                       required property int index
                       title: modelData.title
                       path: modelData.path
-                      provider: String(modelData.provider_id || "tidal")
+                      provider: String(modelData.provider_id || root.legacyBrowseProvider)
                       idx: index
                       plOnly: !!modelData.pl
                     }
@@ -9240,7 +9252,7 @@ ApplicationWindow {
       // Browse layout switch (art-first vs console), floating over the
       // pane's bottom-right corner so it costs the landing page no row.
       Rectangle {
-        visible: root.signedIn && root.browseOpen && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && root.browsePageKey === ""
+        visible: root.browseSignedIn && root.browseOpen && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && root.browsePageKey === ""
         anchors.right: parent.right
         anchors.bottom: parent.top
         anchors.rightMargin: 22
@@ -11788,7 +11800,7 @@ ApplicationWindow {
         return
       if (!waves.sessionResolved)
         return
-      if (root.signedIn && root.browseSections.length === 0)
+      if (root.browseSignedIn && root.browseSections.length === 0)
         return
       started = true
       bootSeq.start()
@@ -11859,7 +11871,7 @@ ApplicationWindow {
       // the fetch erroring, or the cap releases it. Without this leg the
       // gate would only cover the shelf assembly, and a slow login would
       // reveal the bare "Reading the wire…" landing.
-      if (root.signedIn && root.browseSections.length === 0 && !root.browseError && !handoverCap.expired) {
+      if (root.browseSignedIn && root.browseSections.length === 0 && !root.browseError && !handoverCap.expired) {
         handoverHeld = true
         return
       }
@@ -11889,7 +11901,7 @@ ApplicationWindow {
       // at all. The hold is taken, and only the poll below, quiet on two
       // readings in a row, can lift it; the cap the other legs answer to
       // ends the hold regardless of what the count ever says.
-      if (root.signedIn && !root.browseError && !incubationQuietPoll.settled && !handoverCap.expired) {
+      if (root.browseSignedIn && !root.browseError && !incubationQuietPoll.settled && !handoverCap.expired) {
         handoverHeld = true
         // A poll already counting is left running: ITS readings are the
         // consecutive ones. Re-arming on every re-entry (each payload,

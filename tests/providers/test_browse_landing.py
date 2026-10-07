@@ -125,6 +125,19 @@ def test_tidal_link_art_sample_has_nothing_for_a_page_without_covers() -> None:
     assert provider.link_art_sample(SimpleNamespace(categories=[])) == []
 
 
+def test_window_paths_stay_inside_the_providers_data_endpoints() -> None:
+    # The neutral rule is the page rule (a relative path, no scheme/host);
+    # TIDAL tightens it to its paging endpoints.
+    neutral = BareProvider()
+    assert neutral.browse_window_path_ok("pages/x")
+    assert not neutral.browse_window_path_ok("https://evil.test/pages/data/1")
+
+    tidal = TidalProvider.__new__(TidalProvider)
+    assert tidal.browse_window_path_ok("pages/data/123")
+    assert not tidal.browse_window_path_ok("pages/explore")
+    assert not tidal.browse_window_path_ok("https://evil.test/pages/data/1")
+
+
 def test_a_failed_explore_read_fails_the_whole_recipe() -> None:
     provider = TidalProvider.__new__(TidalProvider)
     provider._tidal = SimpleNamespace()

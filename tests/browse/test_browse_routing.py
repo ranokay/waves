@@ -102,7 +102,10 @@ def test_open_browse_page_refuses_ids_the_owner_guard_rejects() -> None:
     b.openBrowsePage("pages/x", "X", "ghost")
 
     assert catalog_only.calls == [] and signed_out.calls == []
-    assert b.browsePageLoaded.emits == []
+    # Each refusal lands as that page's own error: the QML clears its
+    # loading state and offers RETRY instead of a spinner that never ends.
+    assert [p["key"] for p in b.browsePageLoaded.emits] == ["pages/x", "pages/x", "pages/x"]
+    assert all(p["error"] for p in b.browsePageLoaded.emits)
     assert b._browse_loading == set()
 
 
@@ -145,7 +148,7 @@ def test_section_more_routes_through_the_owning_provider_and_grows_its_rows() ->
     b = _slot_bridge({"stub": stub})
     b._browse_root_cache = {
         "sections": [{"data": "pages/data/9", "offset": 0, "items": [], "provider_id": "stub"}],
-        "sources": [{"provider": "stub", "name": "Stub"}],
+        "sources": [{"provider_id": "stub", "name": "Stub"}],
     }
 
     b.loadBrowseSectionMore("local:Row", "pages/data/9", 0, "ALBUM_LIST", "Row", "stub")
@@ -158,7 +161,7 @@ def test_section_more_routes_through_the_owning_provider_and_grows_its_rows() ->
     assert b._browse_root_cache["sections"][0]["offset"] == 1
 
 
-def test_section_more_refuses_unready_or_wrong_owner_ids() -> None:
+def test_section_more_refuses_unready_owner_and_off_service_paths() -> None:
     stub = LandingProvider(
         "stub", "Stub", window=BrowseWindow(category=SimpleNamespace(items=[]), n=0, total=0), logged_in=False
     )
@@ -166,7 +169,18 @@ def test_section_more_refuses_unready_or_wrong_owner_ids() -> None:
     b.loadBrowseSectionMore("local:Row", "pages/data/9", 0, "ALBUM_LIST", "Row", "stub")
     b.loadBrowseSectionMore("local:Row", "pages/data/9", 0, "ALBUM_LIST", "Row", "ghost")
     assert stub.calls == []
-    assert b.browseSectionMore.emits == []
+    assert all(p["error"] for p in b.browseSectionMore.emits)
+
+    ready = LandingProvider("ready", "R", window=BrowseWindow(category=SimpleNamespace(items=[]), n=0, total=0))
+    c = _slot_bridge({"ready": ready})
+    c.loadBrowseSectionMore("local:Row", "https://evil.test/pages/data/9", 0, "ALBUM_LIST", "Row", "ready")
+    assert ready.calls == [], "a window path may never leave the provider's API"
+    assert c.browseSectionMore.emits[-1]["error"] is True
+
+
+def test_tile_art_keys_namespace_non_tidal_owners() -> None:
+    assert WavesBridge._tile_art_key("tidal", "pages/genres/pop") == "pages/genres/pop"
+    assert WavesBridge._tile_art_key("stub", "pages/genres/pop") == "stub|pages/genres/pop"
 
 
 def test_growth_matches_only_rows_with_the_same_owner() -> None:
@@ -193,7 +207,7 @@ def test_page_provider_parses_qualified_and_legacy_keys() -> None:
 
 
 def test_browse_root_sources_reads_the_composing_providers() -> None:
-    assert WavesBridge._browse_root_sources({"sources": [{"provider": "stub"}, {"provider": "tidal"}]}) == {
+    assert WavesBridge._browse_root_sources({"sources": [{"provider_id": "stub"}, {"provider_id": "tidal"}]}) == {
         "stub",
         "tidal",
     }

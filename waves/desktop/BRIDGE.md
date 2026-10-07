@@ -263,7 +263,7 @@ search badges cannot disagree.
 The landing is combined from every READY browse-capable provider's own
 recipe (`Provider.browse_landing()`), in registry order. Each section and
 chip link carries `provider_id` (its owner), the payload carries
-`sources: [{provider, name}]` of the composing providers, and every
+`sources: [{provider_id, name}]` of the composing providers, and every
 drill-down routes back through that owner: `openBrowsePage(apiPath, title,
 providerId)`, `openBrowsePlaylists(apiPath, title, providerId)` and
 `loadBrowseSectionMore(key, dataPath, offset, modType, title, providerId)`
@@ -275,13 +275,13 @@ page caches are keyed `browse:<provider>:<path>` / `pl:<provider>:<path>`; a
 legacy bare path — an upgraded nav snapshot or disk cache — still reads as
 TIDAL's.
 
-| Signal                          | Fires when                                                                                                              |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `browseLoaded(payload)`         | The combined landing page (sections + per-provider genre/mood/decade chips + sources)                                   |
-| `browsePageLoaded(payload)`     | One drilled-into page, keyed by its path and stamped with its owning provider                                           |
-| `browseSectionMore(payload)`    | A section's "load more" page                                                                                            |
-| `browseTileArt(apiPath, urls)`  | Cover mosaic for one genre/mood/decade tile, streamed progressively                                                     |
-| `browsePagePrefetched(payload)` | A hover-armed prefetch finished building a page; carries that page's art summary so the card can paint its hero at once |
+| Signal                          | Fires when                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `browseLoaded(payload)`         | The combined landing page (sections + per-provider genre/mood/decade chips + sources)                                                |
+| `browsePageLoaded(payload)`     | One drilled-into page, keyed by its path and stamped with its owning provider                                                        |
+| `browseSectionMore(payload)`    | A section's "load more" page                                                                                                         |
+| `browseTileArt(key, urls)`      | Cover mosaic for one genre/mood/decade tile, streamed progressively (the key is the bare path for TIDAL, `provider\|path` otherwise) |
+| `browsePagePrefetched(payload)` | A hover-armed prefetch finished building a page; carries that page's art summary so the card can paint its hero at once              |
 
 `prefetchBrowseItem(kind, mediaId)` is the hover half of the same family: a
 dwell on a card (or on a track row, for the album behind it) builds the page

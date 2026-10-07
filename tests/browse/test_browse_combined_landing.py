@@ -68,8 +68,8 @@ def test_the_combined_landing_keeps_registry_order_and_stamps_owners() -> None:
     assert payload["genres"] == [{"title": "Pop", "path": "pages/genres/pop", "provider_id": "tidal"}]
     assert payload["moods"] == [] and payload["decades"] == []
     assert payload["sources"] == [
-        {"provider": "tidal", "name": "TIDAL"},
-        {"provider": "stub", "name": "Stub"},
+        {"provider_id": "tidal", "name": "TIDAL"},
+        {"provider_id": "stub", "name": "Stub"},
     ]
 
 
@@ -84,7 +84,7 @@ def test_one_provider_failing_loses_only_its_own_rows() -> None:
     payload = _bridge({"broken": broken, "stub": stub})._browse_root()
     assert payload["error"] is False
     assert [s["provider_id"] for s in payload["sections"]] == ["stub"]
-    assert [s["provider"] for s in payload["sources"]] == ["stub"]
+    assert [s["provider_id"] for s in payload["sources"]] == ["stub"]
 
 
 def test_a_failing_page_inside_a_working_landing_keeps_the_other_pages() -> None:
@@ -157,6 +157,29 @@ def test_home_rows_land_last_deduped_by_title_and_stripped_of_paging() -> None:
     assert home_row["more"] == ""
     for key in ("data", "total", "offset", "modType"):
         assert key not in home_row
+
+
+def test_recipe_page_paths_validate_like_drill_downs() -> None:
+    # A recipe path may never steer a request off the provider's own API:
+    # the landing fetch goes through the same path validation as a click.
+    stub = LandingProvider(
+        "stub",
+        "Stub",
+        landing={
+            "pages": [
+                {"title": "Evil", "path": "https://evil.test/pages/x"},
+                {"title": "Fine", "path": "pages/fine"},
+            ],
+            "home": False,
+        },
+        pages={
+            "https://evil.test/pages/x": _page([_row("Evil shelf", "e1")]),
+            "pages/fine": _page([_row("Fine shelf", "f1")]),
+        },
+    )
+    payload = _bridge({"stub": stub})._browse_root()
+    assert [s["title"] for s in payload["sections"]] == ["Fine shelf"]
+    assert ("browse_page", "Evil", "https://evil.test/pages/x") not in stub.calls
 
 
 def test_containment_dedupe_stays_within_one_providers_rows() -> None:
