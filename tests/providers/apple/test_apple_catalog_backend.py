@@ -164,6 +164,7 @@ def test_apple_browse_item_matches_the_tidal_payload_shape():
     payload = WavesBridge._build_provider_browse_item(stub, "album", "apple:album-1", "item:album:apple:album-1")
 
     assert payload["title"] == "Selected Ambient Works 85-92"
+    assert payload["provider_id"] == "apple", "the page's owner rides the payload for the QML's stale guard"
     assert payload["header"]["id"] == "apple:album-1"
     assert payload["header"]["art"] == "https://img/album/320x320bb.jpg"
     assert payload["sections"][0]["items"][0]["id"] == "apple:song-1"

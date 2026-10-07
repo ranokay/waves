@@ -227,6 +227,8 @@ def test_page_provider_parses_qualified_and_legacy_keys() -> None:
     assert page_provider("pl:pages/x") == "tidal"  # legacy playlists grid
     assert page_provider("cat:stub:pages/x") == "stub"
     assert page_provider("cat:pages/x") == "tidal"  # legacy category resolve
+    assert page_provider("more:stub:pages/data/9") == "stub"
+    assert page_provider("more:pages/data/9") == "tidal"  # legacy growth guard
     assert page_provider("item:album:stub:7") == "stub"
 
 

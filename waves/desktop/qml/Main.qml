@@ -3621,8 +3621,11 @@ ApplicationWindow {
       return out.join("\n")
     }
     for (var i = 0; i < rows.length; i++) {
-      var r = rows[i]
-      var match = cur.data ? r.data === cur.data : (r.rowKind === cur.rowKind && r.title === cur.title)
+      var r = rows[i];
+      // Same owner too: two providers can ship a local shelf under the same
+      // title/row kind, and the page must re-snapshot from its own source.
+      var sameOwner = String(r.provider_id || root.legacyBrowseProvider) === String(pg.provider_id || root.legacyBrowseProvider)
+      var match = sameOwner && (cur.data ? r.data === cur.data : (r.rowKind === cur.rowKind && r.title === cur.title))
       if (!match)
         continue
       var head = r.items || []

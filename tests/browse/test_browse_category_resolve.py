@@ -44,6 +44,8 @@ class _InlinePool:
 class _ResolveStub:
     resolvePlaylistCategory = WavesBridge.resolvePlaylistCategory
     _browse_page_for = WavesBridge._browse_page_for
+    _neutral_category_members = WavesBridge._neutral_category_members
+    _rendered_cards = WavesBridge._rendered_cards
     _cached_category = WavesBridge._cached_category
     _cache_category = WavesBridge._cache_category
     _CATEGORY_PL_TTL = WavesBridge._CATEGORY_PL_TTL
@@ -126,6 +128,22 @@ def test_a_resolved_category_is_cached_and_served_from_cache():
     stub._page = RuntimeError("must not be called")
     stub.resolvePlaylistCategory("pages/mood/focus", "Focus")
     assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1", "tidal")
+
+
+def test_a_native_providers_category_resolves_through_its_own_rows():
+    # A provider that supplies neutral rows (browse_rows) never touches
+    # tidalapi classes: its playlist cards are the members.
+    from types import SimpleNamespace as NS
+
+    cards = [{"kind": "playlist", "id": "stub:pl1", "title": "P", "tracks": 3}]
+    page = NS(rows=[{"rowKind": "cards", "title": "P", "items": cards, "more": ""}])
+    stub = _ResolveStub(page, provider_id="stub")
+    stub.providers["stub"].browse_rows = lambda p: p.rows
+
+    stub.resolvePlaylistCategory("pages/mood/chill", "Chill", "stub")
+
+    assert stub._category_pl["cat:stub:pages/mood/chill"][1] == cards
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 1, "stub:pl1", "stub")
 
 
 def test_the_resolve_routes_through_the_named_provider():

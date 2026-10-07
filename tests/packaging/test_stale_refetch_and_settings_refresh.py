@@ -394,6 +394,9 @@ class _CategoryStub:
     def _cached_category(self, api_path):
         return [SimpleNamespace(id="p1", name="PL")]
 
+    def _remember(self, bucket, key, obj):
+        self._objs.setdefault(bucket, {})[key] = obj
+
     def _download_gate(self):
         return "ok"
 
@@ -431,6 +434,25 @@ def test_category_download_reads_the_owner_qualified_cache():
 
     assert seen == ["cat:stub:pages/mood/chill"]
     assert stub.statuses[-1] == "Nothing to download here, open the category again"
+
+
+def test_category_download_queues_neutral_cards_with_their_owner():
+    from contextlib import nullcontext
+
+    stub = _CategoryStub()
+    stub._needs_folder_tree = lambda: False
+    card = {"kind": "playlist", "id": "stub:pl1", "title": "PL", "tracks": 3}
+    stub._cached_category = lambda key: [card]
+    stub._playlist_template = lambda key: "templates/playlist"
+    stub._queue_batch = nullcontext
+    queued: list = []
+    stub._download = lambda obj, kind, name, template, collection, media_id, **kw: (
+        queued.append((obj, kind, name, media_id, kw.get("provider_id"))) or True
+    )
+
+    stub.downloadPlaylistCategory("pages/mood/chill", "stub")
+
+    assert queued == [(card, "playlist", "PL", "stub:pl1", "stub")]
 
 
 # Best-of-both publishes button state before its edition scan.

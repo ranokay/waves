@@ -104,6 +104,21 @@ def test_a_failing_page_inside_a_working_landing_keeps_the_other_pages() -> None
     assert [s["title"] for s in payload["sections"]] == ["Alive shelf"]
 
 
+def test_a_recipe_whose_every_declared_read_failed_is_a_failed_landing() -> None:
+    # The recipe ran, but every page it declared raised: the provider
+    # contributed nothing and must not count as a success that hides the
+    # failure behind an empty, error-free landing.
+    stub = LandingProvider(
+        "stub",
+        "Stub",
+        landing={"pages": [{"title": "Dead", "path": "pages/dead"}], "home": False},
+        pages={"pages/dead": RuntimeError("page is down")},
+    )
+    payload = _bridge({"stub": stub})._browse_root()
+    assert payload["error"] is True
+    assert payload["sections"] == []
+
+
 def test_the_landing_is_an_error_only_when_every_attempted_provider_failed() -> None:
     a = LandingProvider("a", "A", landing=RuntimeError("a is down"))
     b = LandingProvider("b", "B", landing=RuntimeError("b is down"))

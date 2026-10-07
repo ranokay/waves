@@ -414,6 +414,20 @@ def _run_scenario() -> int:
     if q("browsePageProvider") != "stub":
         return fail(f"the headline lost its provider: {q('browsePageProvider')!r}")
 
+    # A local: page re-snapshots only from its own provider's rows: two
+    # providers can ship a shelf under the same title.
+    owner_check = q("""
+    (function() {
+        root.openBrowseSection({title: "Top Albums", rowKind: "cards", items: [{"kind": "album", "id": "stub:a1"}], provider_id: "stub", data: "", total: 0, offset: 0, modType: ""})
+        var other = root.localPageFresh(root.browsePage, [{rowKind: "cards", title: "Top Albums", items: [{"kind": "album", "id": "tidal:a1"}], provider_id: "tidal", data: "", total: 0, offset: 0, modType: ""}])
+        var mine = root.localPageFresh(root.browsePage, [{rowKind: "cards", title: "Top Albums", items: [{"kind": "album", "id": "stub:a2"}], provider_id: "stub", data: "", total: 0, offset: 0, modType: ""}])
+        return JSON.stringify({otherIsNull: other === null, mineIsPage: mine !== null})
+    })()
+    """)
+    state = json.loads(owner_check)
+    if not state["otherIsNull"] or not state["mineIsPage"]:
+        return fail(f"a local page re-snapshotted across owners: {state}")
+
     # The last browse source signing out retires the landing's rows (the
     # pane's sign-in gate takes over) instead of leaving its shelves up.
     bridge._logged_in = False

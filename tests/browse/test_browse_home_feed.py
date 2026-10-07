@@ -209,7 +209,9 @@ def test_landing_rows_dedupe_home_rows_by_title(monkeypatch):
         ],
         raising=False,
     )
-    rows = b._landing_rows(provider, {"pages": [{"title": "For You", "path": "pages/for_you"}], "home": True})
+    rows, _reads_ok = b._landing_rows(
+        provider, {"pages": [{"title": "For You", "path": "pages/for_you"}], "home": True}
+    )
     titles = [r["title"] for r in rows]
     # Case-insensitive dedupe: the For You copy won, the new shelf appended.
     assert titles == ["Essentials to explore", "Popular playlists on TIDAL"]
@@ -254,7 +256,9 @@ def test_landing_rows_drop_rows_contained_in_a_bigger_row(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(b, "_home_rows", lambda p: [], raising=False)
-    rows = b._landing_rows(provider, {"pages": [{"title": "For You", "path": "pages/for_you"}], "home": True})
+    rows, _reads_ok = b._landing_rows(
+        provider, {"pages": [{"title": "For You", "path": "pages/for_you"}], "home": True}
+    )
     titles = [r["title"] for r in rows]
     assert titles == ["New releases for you", "The Hits", "Featured", "New tracks"]
 

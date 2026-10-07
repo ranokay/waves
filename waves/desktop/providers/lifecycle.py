@@ -139,11 +139,11 @@ def page_provider(key: str) -> str:
     """
     if key.startswith("item:"):
         return provider_of_id(key.partition(":")[2].partition(":")[2])
-    if key.startswith(("pl:", "browse:")):
-        # ``pl:<provider>:<path>`` / ``browse:<provider>:<path>`` carry their
-        # owner; a legacy bare editorial path reads as TIDAL (provider_of_id's
-        # bare-value rule), so pre-upgrade caches and nav snapshots keep
-        # resolving.
+    if key.startswith(("pl:", "browse:", "more:")):
+        # ``pl:<provider>:<path>`` / ``browse:<provider>:<path>`` /
+        # ``more:<provider>:<data>`` carry their owner; a legacy bare
+        # editorial path reads as TIDAL (provider_of_id's bare-value rule),
+        # so pre-upgrade caches, guards and nav snapshots keep resolving.
         return provider_of_id(key.partition(":")[2])
     if key.startswith("fav:"):
         source, separator, _kind = key.partition(":")[2].partition(":")

@@ -2241,6 +2241,14 @@ def _track_count(obj) -> int:
     return int(getattr(obj, "num_tracks", 0) or 0) + int(getattr(obj, "num_videos", 0) or 0)
 
 
+def _category_member_weight(member) -> int:
+    """One category member's track weight: a neutral card's own count, else
+    the engine object's."""
+    if isinstance(member, dict):
+        return max(1, int(member.get("tracks") or member.get("num_tracks") or 1))
+    return max(1, _track_count(member))
+
+
 def _album_card_flag(card: dict) -> int:
     """An album dict's explicit flag as the presence slot takes it: 1 when
     TIDAL said explicit, else -1 (unknown), never 0. The dict turns a missing
@@ -8653,7 +8661,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             r.pop("modType", None)
         return rows
 
-    def _landing_rows(self, provider, landing: dict) -> list[dict]:
+    def _landing_rows(self, provider, landing: dict) -> tuple[list[dict], bool]:
         """One provider's landing recipe rendered into rows: its named pages
         inlined in order (a page whose read fails is logged and skipped, the
         rest of the recipe lives), then its home feed last, deduped by title
@@ -8662,6 +8670,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         rows dropped. A links row would duplicate the chip sets, so it is
         never a content row here."""
         rows: list[dict] = []
+        declared = len(landing.get("pages") or []) + (1 if landing.get("home") else 0)
+        failed = 0
         for spec in landing.get("pages") or []:
             title = str(spec.get("title") or "")
             path = str(spec.get("path") or "")
@@ -8670,6 +8680,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # path may never steer a request off the provider's own API.
                 rows.extend(self._rendered_rows(provider, self._browse_page_for(provider, title, path)))
             except Exception:
+                failed += 1
                 logger.exception("Browse: %s could not load %r", provider.id, path or title)
         if landing.get("home"):
             try:
@@ -8681,14 +8692,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     seen.add(title)
                     rows.append(r)
             except Exception:
+                failed += 1
                 logger.exception("Browse: %s could not load its home feed", provider.id)
         rows = [r for r in rows if r["rowKind"] != "links"]
-        return self._drop_contained_rows(rows)
+        return self._drop_contained_rows(rows), declared == 0 or failed < declared
 
-    def _browse_root(self) -> dict:
-        """Assemble the combined Browse landing from every ready browse
-        provider's own recipe (:meth:`Provider.browse_landing`), in registry
-        order.
+    def _browse_root(self, contributors=None) -> dict:
+        """Assemble the combined Browse landing from the ready browse
+        providers' own recipes (:meth:`Provider.browse_landing`), in registry
+        order. ``contributors`` is the caller's frozen list (its context
+        tokens were captured before dispatch); None re-reads readiness for
+        direct/test callers.
 
         Each section and chip link carries its owner, so every drill-down and
         paging fetch routes back through the provider that served the row. A
@@ -8702,20 +8716,29 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         sources: list[dict] = []
         attempted = 0
         succeeded = 0
-        for provider in ready_browse_providers(self):
+        for provider in contributors if contributors is not None else ready_browse_providers(self):
             attempted += 1
             try:
                 landing = provider.browse_landing() or {}
             except Exception:
                 logger.exception("Browse: %s could not compose its landing", provider.id)
                 continue
-            for row in self._landing_rows(provider, landing):
+            rows, reads_ok = self._landing_rows(provider, landing)
+            links_added = False
+            for group, links in (landing.get("chips") or {}).items():
+                if links:
+                    links_added = True
+                chips.setdefault(group, []).extend({**link, "provider_id": provider.id} for link in links)
+            for row in rows:
                 row["provider_id"] = provider.id
                 sections.append(row)
-            for group, links in (landing.get("chips") or {}).items():
-                chips.setdefault(group, []).extend({**link, "provider_id": provider.id} for link in links)
             sources.append({"provider_id": provider.id, "name": provider.name})
-            succeeded += 1
+            # A recipe counts as succeeded when it contributed rows or chip
+            # links, needed no reads (an intentionally empty recipe), or some
+            # of its declared reads landed; a recipe whose every declared read
+            # raised contributes nothing and is a failure.
+            if rows or links_added or reads_ok:
+                succeeded += 1
         return {"sections": sections, **chips, "sources": sources, "error": attempted > 0 and succeeded == 0}
 
     # A row of fewer than this many items reads as a curated highlight rather
@@ -8984,7 +9007,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # it (and never paint another account's page after a relogin).
                 if not current() or self._browse_root_cache is not cached:
                     return
-                _catalog_emit(self, self.browseLoaded, self._dress_cards(cached))
+                dressed = self._dress_cards(cached)
+                # Dressing is per-card work: a contributor may have been
+                # revoked inside it, so the token set is re-read last.
+                if not current():
+                    return
+                _catalog_emit(self, self.browseLoaded, dressed)
                 self._start_tile_art(cached)
 
             self.threadpool.start(_catalog_worker(self, CTX_TIDAL, _emit_cached))
@@ -8999,7 +9027,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             t0 = devlog.clock()
             try:
-                payload = self._browse_root()
+                payload = self._browse_root(contributors)
             except Exception:
                 logger.exception("Could not load the browse page")
                 payload = {"sections": [], "genres": [], "moods": [], "decades": [], "sources": [], "error": True}
@@ -9024,7 +9052,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if not payload["error"] and payload["sections"] and payload != cached:
                     _cache_commit(self, lambda: setattr(self, "_browse_root_cache", payload))
                     self._save_page_cache()
-                    _catalog_emit(self, self.browseLoaded, self._dress_cards(payload))
+                    dressed = self._dress_cards(payload)
+                    if not current():
+                        return
+                    _catalog_emit(self, self.browseLoaded, dressed)
                     self._start_tile_art(payload)
                 devlog.done("browse", "root revalidate", devlog.clock() - t0, n=len(payload["sections"]))
                 return
@@ -9034,7 +9065,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # chips-only page for the rest of the session.
                 _cache_commit(self, lambda: setattr(self, "_browse_root_cache", payload))
                 self._save_page_cache()
-            _catalog_emit(self, self.browseLoaded, self._dress_cards(payload))
+            dressed = self._dress_cards(payload)
+            if not current():
+                return
+            _catalog_emit(self, self.browseLoaded, dressed)
             self._set_status(
                 f"Browse · {len(payload['sections'])} sections" if not payload["error"] else "Browse failed to load"
             )
@@ -9405,6 +9439,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             artist_id = ""
         payload = {
             "key": key,
+            "provider_id": provider_of_id(media_id),
             "title": title,
             "header": {
                 "kind": kind,
@@ -9665,7 +9700,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 payload = self._build_browse_item(kind, media_id, key)
             except Exception:
                 logger.exception("Could not open browse item %s", key)
-                payload = {"key": key, "title": "", "sections": [], "error": True}
+                payload = {
+                    "key": key,
+                    "provider_id": provider_of_id(media_id),
+                    "title": "",
+                    "sections": [],
+                    "error": True,
+                }
             if not _provider_result_current(self, gen):
                 return  # cross-account stale load, drop silently (see loadBrowse)
             _cache_commit(self, lambda: self._browse_loading.discard(key))
@@ -9743,7 +9784,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 payload = self._build_browse_item(kind, media_id, key)
             except Exception:
                 logger.exception("Could not open browse item %s", key)
-                payload = {"key": key, "title": "", "sections": [], "error": True}
+                payload = {
+                    "key": key,
+                    "provider_id": provider_of_id(media_id),
+                    "title": "",
+                    "sections": [],
+                    "error": True,
+                }
             if not _provider_result_current(self, gen):
                 return
             _cache_commit(self, lambda: self._browse_loading.discard(key))
@@ -9824,7 +9871,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     payload = self._build_browse_item(kind, media_id, key, record=False)
                 except Exception:
                     _prefetch_log.debug("prefetch failed for %s", key, exc_info=True)
-                    payload = {"key": key, "title": "", "sections": [], "error": True}
+                    payload = {
+                        "key": key,
+                        "provider_id": provider_of_id(media_id),
+                        "title": "",
+                        "sections": [],
+                        "error": True,
+                    }
                 if not _provider_result_current(self, gen):
                     released = True  # logout mid-flight: the reset already cleared our state
                     return
@@ -17684,6 +17737,49 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._save_settings()
         self.confirmCategoryDlChanged.emit()
 
+    def _neutral_category_members(self, owner, page, gen) -> list:
+        """One provider's playlist members from its own neutral rows (the
+        browse_rows contract): playlist cards from each all-playlist row,
+        paged through its window handles the same way."""
+        members: list = []
+        for row in owner.browse_rows(page) or []:
+            if row.get("rowKind") != "cards":
+                continue
+            items = [it for it in row.get("items") or [] if it.get("kind") == "playlist" and it.get("id")]
+            if not items:
+                continue
+            members.extend(items)
+            data = str(row.get("data") or "")
+            offset = int(row.get("offset") or 0)
+            total = int(row.get("total") or 0)
+            if (
+                len(items) == len(row.get("items") or [])
+                and data
+                and offset < total
+                and owner.browse_window_path_ok(data)
+            ):
+                members.extend(
+                    self._category_rest_cards(owner, data, str(row.get("modType") or ""), offset, total, gen)
+                )
+        return members
+
+    def _category_rest_cards(self, owner, data_path: str, mod_type: str, offset: int, total: int, gen: int) -> list:
+        """The remainder of one neutral row's paged list, as playlist cards.
+        Capped at 500 as the runaway guard the TIDAL loop uses."""
+        out: list = []
+        total = min(int(total or 0), 500)
+        while offset < total and _provider_result_current(self, gen):
+            window = owner.browse_window("", data_path, mod_type, offset)
+            if not window.n:
+                break
+            out.extend(
+                card
+                for card in self._rendered_cards(owner, window.category)
+                if card.get("kind") == "playlist" and card.get("id")
+            )
+            offset += window.n  # the RAW page length: the offset may not rewind
+        return out
+
     def _category_page_rest(self, pl: dict, gen: int, owner) -> list:
         """Fetch the remainder of one row's paged list (past the inline
         window) through its owning provider, returning its Playlist objects.
@@ -17772,23 +17868,34 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             failed = False
             try:
                 page = self._browse_page_for(owner, title, api_path)
-                for cat in list(getattr(page, "categories", None) or []):
-                    items = getattr(cat, "items", None)
-                    if not isinstance(items, list):
-                        continue
-                    real = [o for o in items if o is not None]
-                    kept = [o for o in real if isinstance(o, Playlist)]
-                    if not kept:
-                        continue
-                    pl = getattr(cat, "_waves_pl", None) or {}
-                    if len(kept) == len(real) and pl.get("data") and pl.get("total", 0) > pl.get("n", 0):
-                        kept = kept + self._category_page_rest(pl, gen, owner)
-                    for obj in kept:
-                        key = str(getattr(obj, "id", "") or "")
-                        if not key or key in seen:
+                if owner.browse_rows(page) is not None:
+                    # A native-object provider supplies its own neutral rows;
+                    # no tidalapi class is consulted for its members.
+                    candidates = self._neutral_category_members(owner, page, gen)
+                else:
+                    # TIDAL's page objects: the tolerant category parse plus
+                    # the object-typed member extraction (the stock renderer's
+                    # half of the same contract).
+                    candidates = []
+                    for cat in list(getattr(page, "categories", None) or []):
+                        items = getattr(cat, "items", None)
+                        if not isinstance(items, list):
                             continue
-                        seen.add(key)
-                        playlists.append(obj)
+                        real = [o for o in items if o is not None]
+                        kept = [o for o in real if isinstance(o, Playlist)]
+                        if not kept:
+                            continue
+                        pl = getattr(cat, "_waves_pl", None) or {}
+                        if len(kept) == len(real) and pl.get("data") and pl.get("total", 0) > pl.get("n", 0):
+                            kept = kept + self._category_page_rest(pl, gen, owner)
+                        candidates.extend(kept)
+                for obj in candidates:
+                    raw_id = obj.get("id") if isinstance(obj, dict) else getattr(obj, "id", "")
+                    key = str(raw_id or "")
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    playlists.append(obj)
             except Exception:
                 logger.exception("Could not resolve playlist category %s", api_path)
                 failed = True
@@ -17797,7 +17904,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return  # cross-account stale load, drop silently (see loadBrowse)
             _cache_commit(self, lambda: self._browse_loading.discard(load_key))
             for obj in playlists:
-                self._remember("playlist", str(obj.id), obj)
+                raw_id = obj.get("id") if isinstance(obj, dict) else getattr(obj, "id", "")
+                key = str(raw_id or "")
+                if key:
+                    self._remember("playlist", key, obj)
             # Never pin a failure (or an empty read): one network blip would
             # leave DOWNLOAD ALL and PREVIEW on this tile dead for a whole TTL
             # window. Same no-empty-cache rule the landing and the drilled
@@ -17815,7 +17925,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_status("")
             if not failed:
                 catalog_succeeded(self)
-            first = str(playlists[0].id) if playlists else ""
+            first_member = playlists[0] if playlists else None
+            first = (
+                str(first_member.get("id") or "")
+                if isinstance(first_member, dict)
+                else str(getattr(first_member, "id", "") or "")
+            )
             _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(playlists), first, provider_id)
             devlog.done("browse", load_key, devlog.clock() - t0, n=len(playlists))
 
@@ -17861,11 +17976,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         group_id = f"cat:{api_path}"
         keys: list[str] = []
         weights: dict[str, int] = {}
-        for playlist in playlists:
-            key = str(playlist.id)
-            self._remember("playlist", key, playlist)
+        for member in playlists:
+            key = str(member.get("id") if isinstance(member, dict) else member.id)
+            if not key:
+                continue
+            self._remember("playlist", key, member)
             keys.append(key)
-            weights[key] = max(1, _track_count(playlist))
+            weights[key] = _category_member_weight(member)
         with self._folder_lock:
             self._folder_groups[group_id] = {
                 "keys": set(keys),
@@ -17891,8 +18008,20 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         with self._queue_batch():
             for key in keys:
                 obj = self._objs["playlist"].get(key)
-                if obj is not None:
-                    self._download(obj, "playlist", name_builder_title(obj), self._playlist_template(key), True, key)
+                if obj is None:
+                    continue
+                name = str(obj.get("title") or "") if isinstance(obj, dict) else name_builder_title(obj)
+                # The member's owner rides into the job spec: a native
+                # provider's adapter dispatches its own playlist id.
+                self._download(
+                    obj,
+                    "playlist",
+                    name,
+                    self._playlist_template(key),
+                    True,
+                    key,
+                    provider_id=provider_id,
+                )
         self._set_status(f"Downloading {len(keys)} playlists…")
 
     @Slot(str)
