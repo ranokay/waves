@@ -165,11 +165,11 @@ re-reads on `providerStateChanged` and legacy `loggedInChanged` / `appleStatusCh
 provider card, never in the header. `browseNav()` answers `{available,
 signed_in, provider, message, action, action_label}`: Browse exists while a configured provider declares
 `Capability.BROWSE` and is hidden when none does (never a permanently blank
-tab). The retained `signed_in` key reports operation readiness for the
-provider whose pages fill the pane (the first in registry order), rather
-than requiring every provider's Browse to use an account. When unavailable,
-the bridge supplies its provider-owned message and action; the landing
-dispatches that action through `providerAction`.
+tab). `signed_in` reports whether ANY browse-capable provider is ready (the
+combined landing loads that provider's sections even while another needs an
+account); `provider`/`message`/`action` still name the first capable
+provider for the none-ready call to action, and the landing dispatches that
+action through `providerAction`.
 
 `providerSignInSteps()` answers registered browser-flow provider IDs. All
 use the shared browser/paste component with the selected provider's ID and
@@ -260,10 +260,25 @@ search badges cannot disagree.
 
 ## Browse (editorial pages)
 
+The landing is combined from every READY browse-capable provider's own
+recipe (`Provider.browse_landing()`), in registry order. Each section and
+chip link carries `provider_id` (its owner), the payload carries
+`sources: [{provider, name}]` of the composing providers, and every
+drill-down routes back through that owner: `openBrowsePage(apiPath, title,
+providerId)`, `openBrowsePlaylists(apiPath, title, providerId)` and
+`loadBrowseSectionMore(key, dataPath, offset, modType, title, providerId)`
+each require `Capability.BROWSE` and READY readiness for the id (an unknown,
+disabled or signed-out provider makes no request and emits nothing). A
+provider whose recipe or page reads fail loses only its own rows; the
+payload is an error only when every attempted provider failed. Editorial
+page caches are keyed `browse:<provider>:<path>` / `pl:<provider>:<path>`; a
+legacy bare path — an upgraded nav snapshot or disk cache — still reads as
+TIDAL's.
+
 | Signal                          | Fires when                                                                                                              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `browseLoaded(payload)`         | The Browse landing page (sections + genre/mood/decade chips)                                                            |
-| `browsePageLoaded(payload)`     | One drilled-into page, keyed by its TIDAL api path                                                                      |
+| `browseLoaded(payload)`         | The combined landing page (sections + per-provider genre/mood/decade chips + sources)                                   |
+| `browsePageLoaded(payload)`     | One drilled-into page, keyed by its path and stamped with its owning provider                                           |
 | `browseSectionMore(payload)`    | A section's "load more" page                                                                                            |
 | `browseTileArt(apiPath, urls)`  | Cover mosaic for one genre/mood/decade tile, streamed progressively                                                     |
 | `browsePagePrefetched(payload)` | A hover-armed prefetch finished building a page; carries that page's art summary so the card can paint its hero at once |
