@@ -1,10 +1,12 @@
-"""The search page's provider-keyed surface prefs.
+"""The search page's surface prefs.
 
-The provider group fold and each section's SHOW ALL state are keyed by
-provider id, so a provider the app has never heard of saves and restores its
-own state. waves.json's whitelist validates the key SHAPES (a known provider
-is never enumerated), and TIDAL's legacy section keys (``search_sec_*``)
-migrate to the provider-keyed shape once on load.
+The unified results view keeps one SHOW ALL state per section
+(``search_section_<section>_expanded``, declared defaults), while the retired
+provider-keyed shapes (``search_provider_<id>_collapsed``,
+``<id>_search_sec_<section>_expanded``) stay accepted so an upgraded install
+keeps its stored values. waves.json's whitelist validates key SHAPES; the
+legacy TIDAL section keys (``search_sec_*``) migrate through both hops once on
+load.
 """
 
 from __future__ import annotations
@@ -36,10 +38,25 @@ def _write_prefs(tmp_path, data: dict) -> None:
     (tmp_path / "waves.json").write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_a_provider_keyed_surface_pref_persists_with_no_default(tmp_path):
-    # The shipped defaults declare no key for "fake": the shape rule accepts
-    # and materializes it, so a third provider's fold and SHOW ALL state save
-    # with no wiring edit.
+def test_the_unified_section_pref_round_trips(tmp_path):
+    stub = _PrefsStub(tmp_path)
+    stub.setWavesPref("search_section_albums_expanded", True)
+    assert stub.wavesPref("search_section_albums_expanded") is True
+    assert stub.wavesPref("search_section_tracks_expanded") is False
+
+
+def test_the_source_filter_pref_round_trips(tmp_path):
+    # Remember-last source filter: the provider id is stored as a string and
+    # defaults to "all".
+    stub = _PrefsStub(tmp_path)
+    assert stub.wavesPref("search_source_filter") == "all"
+    stub.setWavesPref("search_source_filter", "apple")
+    assert stub.wavesPref("search_source_filter") == "apple"
+
+
+def test_a_provider_keyed_surface_pref_still_persists_as_a_stored_value(tmp_path):
+    # The provider-keyed shapes are retired from the UI but stay accepted, so
+    # an upgraded waves.json keeps the values it already carries.
     stub = _PrefsStub(tmp_path)
     stub.setWavesPref("search_provider_fake_collapsed", True)
     stub.setWavesPref("fake_search_sec_albums_expanded", True)
@@ -72,7 +89,7 @@ def test_stored_provider_surface_keys_load_and_bad_shapes_do_not(tmp_path):
     assert stub.wavesPref("provider_who_knows") is None
 
 
-def test_tidal_legacy_section_keys_migrate_once(tmp_path):
+def test_tidal_legacy_section_keys_migrate_through_both_shapes(tmp_path):
     _write_prefs(
         tmp_path,
         {
@@ -81,17 +98,24 @@ def test_tidal_legacy_section_keys_migrate_once(tmp_path):
         },
     )
     stub = _PrefsStub(tmp_path)
+    # The provider-keyed hop keeps the stored value...
     assert stub.wavesPref("tidal_search_sec_albums_expanded") is True
     assert stub.wavesPref("tidal_search_sec_tracks_expanded") is False
     assert stub.wavesPref("search_sec_albums_expanded") is None, "the legacy key is not carried"
+    # ...and the unified section flag follows it, so the expanded section
+    # survives the grouped-search retirement.
+    assert stub.wavesPref("search_section_albums_expanded") is True
+    assert stub.wavesPref("search_section_tracks_expanded") is False
 
-    # A value already stored under the new name wins over the legacy key.
+    # A value already stored under the unified name wins over the migration.
     _write_prefs(
         tmp_path,
         {
             "search_sec_albums_expanded": True,
-            "tidal_search_sec_albums_expanded": False,
+            "tidal_search_sec_albums_expanded": True,
+            "search_section_albums_expanded": False,
         },
     )
     stub = _PrefsStub(tmp_path)
-    assert stub.wavesPref("tidal_search_sec_albums_expanded") is False
+    assert stub.wavesPref("tidal_search_sec_albums_expanded") is True
+    assert stub.wavesPref("search_section_albums_expanded") is False

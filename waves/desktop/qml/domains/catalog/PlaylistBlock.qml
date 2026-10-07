@@ -5,6 +5,7 @@ import "../../components"
 import "../../primitives"
 import "../downloads"
 import "../playback"
+import "../search"
 
 // Playlist row + inline expand: the playlist counterpart of AlbumBlock,
 // same interaction grammar (row click expands the track list in place,
@@ -46,6 +47,10 @@ Column {
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
 
   property string plId: ""
+  // The unified search page's folded sources for this row (playlist rows
+  // never fold across providers -- there is no automatic identity for them
+  // -- so this is the row's own single source there, and empty elsewhere).
+  property var sources: []
   property string title: ""
   property string creator: ""
   property string art: ""
@@ -216,6 +221,9 @@ Column {
           font.pixelSize: 12
           elide: Text.ElideRight
           Layout.fillWidth: true
+        }
+        SourceMarks {
+          sources: pb.sources
         }
       }
       DownloadButton {

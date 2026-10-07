@@ -14,7 +14,7 @@ from enum import StrEnum
 from time import time
 
 from waves.ids import namespaced_id
-from waves.metadata.title_identity import canon, edition_key
+from waves.metadata.title_identity import canon_text, edition_key
 
 MAX_CANDIDATES = 10
 MAX_TRACKS = 200
@@ -106,7 +106,7 @@ class CatalogResolution:
 
 
 def _text(value: str) -> str:
-    return " ".join(canon(value).casefold().split())
+    return canon_text(value)
 
 
 def _release_version(title: str) -> tuple[frozenset[str], frozenset[int]]:

@@ -66,27 +66,13 @@ _ALBUMS = 30
 
 
 def _payload() -> dict:
+    from search.fakes import qml_search_payload
+
     albums = [
         dict(_ROW, id=f"a{i}", title=f"Album {i}", tracks=10, duration_sec=2400, quality="HI-RES")
         for i in range(_ALBUMS)
     ]
-    return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "head_when_alone": False,
-                "artists": [],
-                "albums": albums,
-                "tracks": [],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    return qml_search_payload(albums=albums)
 
 
 _FIND_BLOCKS = """

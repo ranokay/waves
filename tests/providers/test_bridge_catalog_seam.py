@@ -70,8 +70,6 @@ class _FakeProvider(BareProvider):
         self.search_sections = answers.pop(
             "search_sections", ("artists", "albums", "tracks", "videos", "playlists", "mixes")
         )
-        self.search_artists_layout = answers.pop("search_artists_layout", "flow")
-        self.search_head_when_alone = answers.pop("search_head_when_alone", True)
         self._answers = answers
 
     @property
@@ -147,10 +145,10 @@ _ALL_SECTIONS = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
 _APPLE_SECTIONS = ("artists", "albums", "tracks", "playlists")
 
 
-def _group(provider, rows=None, *, top=None, error="", layout="flow", sections=_ALL_SECTIONS, alone_head=True) -> dict:
+def _group(provider, rows=None, *, top=None, error="", sections=_ALL_SECTIONS) -> dict:
     """One search group, shaped like the bridge's own builder."""
     source = rows or {}
-    group = {"provider": provider, "artists_layout": layout, "head_when_alone": alone_head}
+    group = {"provider": provider}
     for section in sections:
         group[section] = list(source.get(section) or [])
     group["top"] = top
@@ -167,6 +165,13 @@ def _payload(*groups) -> dict:
 # --------------------------------------------------------------------------- #
 class _SearchStub:
     search = WavesBridge.search
+    dropSearchSource = WavesBridge.dropSearchSource
+    _absorb_search_group = WavesBridge._absorb_search_group
+    _search_display_payload = WavesBridge._search_display_payload
+    _paint_search_display = WavesBridge._paint_search_display
+    _settle_search = WavesBridge._settle_search
+    _show_search_display = WavesBridge._show_search_display
+    _enrich_search_artists = WavesBridge._enrich_search_artists
     _search_total = staticmethod(WavesBridge._search_total)
     _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
     _remember_search = WavesBridge._remember_search
@@ -237,27 +242,27 @@ def test_search_reads_the_provider_and_the_payload_is_the_built_rows():
             "mixes": [object()],
             "top_hit": None,
         },
-        search_head_when_alone=False,
     )
     stub = _SearchStub(provider)
 
     stub.search("aphex twin")
 
     assert provider.calls == [("search", "aphex twin")]
+    # The display folds the provider group into sections; each row exposes
+    # its source, and the provider's own buckets survive untouched.
     assert stub.searchResults.emits == [
-        _payload(
-            _group(
-                "tidal",
-                {
-                    "albums": [{"id": "al1", "title": "A"}],
-                    "tracks": [{"id": "tr1", "title": "T"}],
-                    "videos": [{"id": "vi1", "title": "V"}],
-                    "playlists": [{"id": "pl1", "title": "P"}],
-                    "mixes": [{"id": "mx1", "title": "M"}],
-                },
-                alone_head=False,
-            )
-        )
+        {
+            "sources": [{"provider": "tidal", "state": "ready", "error": ""}],
+            "sections": {
+                "artists": [],
+                "albums": [{"id": "al1", "title": "A", "sources": [{"provider": "tidal", "id": "al1"}]}],
+                "tracks": [{"id": "tr1", "title": "T", "sources": [{"provider": "tidal", "id": "tr1"}]}],
+                "videos": [{"id": "vi1", "title": "V", "sources": [{"provider": "tidal", "id": "vi1"}]}],
+                "playlists": [{"id": "pl1", "title": "P", "sources": [{"provider": "tidal", "id": "pl1"}]}],
+                "mixes": [{"id": "mx1", "title": "M", "sources": [{"provider": "tidal", "id": "mx1"}]}],
+            },
+            "top": None,
+        }
     ]
     assert stub.statuses[-1] == "5 results"
     assert stub.busy == [True, False]
@@ -274,30 +279,35 @@ def test_a_cached_search_never_reaches_the_provider_twice():
     assert stub.busy[-1] is False
 
 
-def test_a_lone_failed_provider_answers_its_own_group():
-    # A LONE enabled provider's failure answers its own group: no second
-    # provider can carry the words, so
-    # a blank page would be the only answer. The status repeats them, nothing
-    # is cached, and busy is never latched. A BUILD failure is the other
+def test_a_lone_failed_provider_names_itself():
+    # A LONE enabled provider's failure names its source with the owner's safe
+    # words: no second provider can carry them, so a blank
+    # page would be the only answer. The status repeats them, nothing is
+    # cached, and busy is never latched. A BUILD failure is the other
     # "Search failed" road (tests/downloads/test_worker_latch_and_logout.py).
-    provider = _provider(search=RuntimeError("network died"), search_head_when_alone=False)
+    provider = _provider(search=RuntimeError("network died"))
     stub = _SearchStub(provider)
 
     stub.search("aphex")
 
     assert stub.busy == [True, False]
     (payload,) = stub.searchResults.emits
-    group = payload["groups"][0]
-    assert group["provider"] == "tidal"
-    assert group["error"] == "The operation could not finish. Try again or open the logs." and group["albums"] == []
+    assert payload["sources"] == [
+        {
+            "provider": "tidal",
+            "state": "failed",
+            "error": "The operation could not finish. Try again or open the logs.",
+        }
+    ]
+    assert payload["sections"] == {}
     assert stub.statuses[-1] == "The operation could not finish. Try again or open the logs."
     assert stub._search_cache == {}
 
 
-def test_a_partial_tidal_failure_answers_the_tidal_group():
+def test_a_partial_tidal_failure_names_the_tidal_source():
     # One provider failed while the other answered: the failure's words ride
-    # ITS group (never the successful one's), and the status names it.
-    tidal = _provider(search=RuntimeError("network died"), search_head_when_alone=False)
+    # ITS source (never the successful one's), and the status names it.
+    tidal = _provider(search=RuntimeError("network died"))
     apple = _provider(
         search={"tracks": [{"id": "apple:song-1", "title": "Xtal"}], "top_hit": None},
         search_sections=_APPLE_SECTIONS,
@@ -309,14 +319,12 @@ def test_a_partial_tidal_failure_answers_the_tidal_group():
 
     stub.search("aphex")
 
-    (payload,) = stub.searchResults.emits
-    tidal_group = next(g for g in payload["groups"] if g["provider"] == "tidal")
-    apple_group = next(g for g in payload["groups"] if g["provider"] == "apple")
-    assert (
-        tidal_group["error"] == "The operation could not finish. Try again or open the logs."
-        and tidal_group["albums"] == []
-    )
-    assert apple_group["error"] == "" and apple_group["tracks"] != []
+    payload = stub.searchResults.emits[-1]
+    sources = {source["provider"]: source for source in payload["sources"]}
+    assert sources["tidal"]["state"] == "failed"
+    assert sources["tidal"]["error"] == "The operation could not finish. Try again or open the logs."
+    assert sources["apple"]["state"] == "ready" and sources["apple"]["error"] == ""
+    assert [row["title"] for row in payload["sections"]["tracks"]] == ["Xtal"]
     assert stub.statuses[-1] == "The operation could not finish. Try again or open the logs."
     assert stub._search_cache == {}
 
@@ -353,8 +361,6 @@ def test_search_group_carries_only_the_sections_its_provider_declares():
     # page does not render contributes no bucket.
     provider = SimpleNamespace(
         search_sections=("artists", "albums", "songs"),
-        search_artists_layout="strip",
-        search_head_when_alone=False,
     )
     group = backend._search_group("fake", provider, {"artists": [1], "albums": [2], "videos": [3], "mixes": [4]})
     assert group["artists"] == [1] and group["albums"] == [2]
@@ -367,7 +373,7 @@ def test_search_group_carries_only_the_sections_its_provider_declares():
 def test_search_enabled_answers_the_bridge_slot_through_the_real_seam():
     # The QML calls waves.searchEnabled(); the real bridge answers it over its
     # own registry and gates.
-    tidal = _provider(search_head_when_alone=False)
+    tidal = _provider()
     stub = _SearchStub(tidal)
     assert WavesBridge.searchEnabled(stub) is True, "a signed-in TIDAL keeps the row live"
     stub._logged_in = False
@@ -388,11 +394,9 @@ class _FanoutProvider(_FakeProvider):
         return self._result
 
 
-def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
+def test_search_fans_out_over_enabled_providers_and_folds_their_sources():
     barrier = Barrier(2)
     tidal = _FanoutProvider(barrier, {"albums": [object()], "top_hit": None})
-    tidal.search_artists_layout = "strip"
-    tidal.search_head_when_alone = False
     apple_payload = {
         "artists": [],
         "albums": [],
@@ -415,22 +419,19 @@ def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
 
     assert tidal.calls == [("search", "aphex twin")]
     assert apple.calls == [("search", "aphex twin")]
-    assert stub.searchResults.emits == [
-        _payload(
-            _group("tidal", {"albums": [{"id": "al1", "title": "A"}]}, layout="strip", alone_head=False),
-            # A successful Apple fetch says so: the group's error word is
-            # empty.
-            _group("apple", apple_payload, sections=_APPLE_SECTIONS, error=""),
-        )
-    ]
+    payload = stub.searchResults.emits[-1]
+    assert [(s["provider"], s["state"]) for s in payload["sources"]] == [("tidal", "ready"), ("apple", "ready")]
+    # TIDAL's built rows and Apple's own row dicts both reach the page, each
+    # labelled with its source; Apple's stray video row never crosses.
+    assert [row["id"] for row in payload["sections"]["albums"]] == ["al1"]
+    assert [row["title"] for row in payload["sections"]["tracks"]] == ["Xtal"]
+    assert payload["sections"]["videos"] == [] and payload["sections"]["mixes"] == []
     assert stub.statuses[-1] == "2 results"
 
 
 def test_search_with_apple_disabled_keeps_the_old_page_unchanged():
     tidal = _provider(
         search={"albums": [object()], "top_hit": None},
-        search_artists_layout="strip",
-        search_head_when_alone=False,
     )
     apple = _provider(search=AssertionError("disabled Apple search ran"))
     stub = _SearchStub(tidal)
@@ -441,17 +442,17 @@ def test_search_with_apple_disabled_keeps_the_old_page_unchanged():
     stub.search("aphex twin")
 
     assert apple.calls == []
-    # Apple contributes no group at all while it is off: the page keeps the
+    # Apple contributes no source at all while it is off: the page keeps the
     # exact TIDAL-only structure.
-    assert stub.searchResults.emits == [
-        _payload(_group("tidal", {"albums": [{"id": "al1", "title": "A"}]}, layout="strip", alone_head=False))
-    ]
+    (payload,) = stub.searchResults.emits
+    assert [s["provider"] for s in payload["sources"]] == ["tidal"]
+    assert [row["id"] for row in payload["sections"]["albums"]] == ["al1"]
 
 
 def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
     # The picker's "Search works with no account" promise. The signed-out
     # TIDAL provider is never touched; the page carries exactly the Apple
-    # group.
+    # source and sections.
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
     apple_payload = {
         "artists": [],
@@ -473,16 +474,19 @@ def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
 
     assert tidal.calls == []
     assert apple.calls == [("search", "aphex twin")]
-    assert stub.searchResults.emits == [_payload(_group("apple", apple_payload, sections=_APPLE_SECTIONS))]
+    (payload,) = stub.searchResults.emits
+    assert [s["provider"] for s in payload["sources"]] == ["apple"]
+    assert set(payload["sections"]) == set(_APPLE_SECTIONS)
+    assert [row["id"] for row in payload["sections"]["albums"]] == ["apple:album-1"]
     assert stub.statuses[-1] == "1 results"
     assert stub.busy == [True, False]
 
 
-def test_an_apple_only_failure_delivers_its_words_to_the_group():
+def test_an_apple_only_failure_names_its_source():
     """When Apple is the only provider and its fetch fails,
-    the honest words still reach the Apple group as a payload -- not a silent
-    "Search failed" with a blank page -- so the group head can show them with
-    a RETRY. Nothing is cached from a failure."""
+    the honest words reach the Apple source so the page can show them with a
+    RETRY -- not a silent "Search failed" with a blank page. Nothing is cached
+    from a failure."""
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
     apple = _provider(search=AppleCatalogUnavailable(), search_sections=_APPLE_SECTIONS)
     stub = _SearchStub(tidal)
@@ -493,21 +497,24 @@ def test_an_apple_only_failure_delivers_its_words_to_the_group():
 
     stub.search("aphex twin")
 
-    assert stub.searchResults.emits, "an Apple-only failure must still answer the group"
     payload = stub.searchResults.emits[-1]
-    group = next(g for g in payload["groups"] if g["provider"] == CTX_APPLE)
-    assert group["error"] == "Apple's catalog format has changed. Check for a Waves update."
-    assert group["albums"] == []
-    assert "videos" not in group and "mixes" not in group, "Apple's group carries no buckets its search does not answer"
-    assert stub.statuses[-1] == group["error"]
+    assert payload["sources"] == [
+        {
+            "provider": "apple",
+            "state": "failed",
+            "error": "Apple's catalog format has changed. Check for a Waves update.",
+        }
+    ]
+    assert payload["sections"] == {}
+    assert stub.statuses[-1] == payload["sources"][0]["error"]
     assert stub._search_cache == {}
 
 
 def test_a_two_provider_failure_stays_a_plain_search_failure():
-    """The in-group error belongs to the one failure no second provider can
+    """The per-source words belong to the one failure no second provider can
     carry: with TIDAL in the fan-out, both fetches failing
-    is a plain failure -- nothing is emitted, so a page that holds rows stays,
-    and no single provider's words are put in the other's mouth."""
+    is a plain failure status -- no single provider's words are put in the
+    other's mouth -- and nothing is cached."""
     tidal = _provider(search=RuntimeError("network died"))
     apple = _provider(search=AppleCatalogUnavailable())
     stub = _SearchStub(tidal)
@@ -518,7 +525,9 @@ def test_a_two_provider_failure_stays_a_plain_search_failure():
     stub.search("aphex twin")
 
     assert stub.statuses[-1] == "Search failed"
-    assert stub.searchResults.emits == []
+    payload = stub.searchResults.emits[-1]
+    assert [(s["provider"], s["state"]) for s in payload["sources"]] == [("tidal", "failed"), ("apple", "failed")]
+    assert payload["sections"] == {}
     assert stub._search_cache == {}
 
 
@@ -555,11 +564,14 @@ def test_an_apple_only_page_never_serves_a_signed_in_search():
     stub.search("aphex twin")
 
     assert tidal.calls == [("search", "aphex twin")]
-    first, second = stub.searchResults.emits
-    assert [g["provider"] for g in first["groups"]] == [CTX_APPLE], "the TIDAL group is not on an Apple-only page"
-    first_apple = first["groups"][0]
-    assert first_apple["tracks"] == [{"id": "apple:song-1", "title": "Xtal"}]
-    assert next(g for g in second["groups"] if g["provider"] == CTX_TIDAL)["albums"] == [{"id": "al1", "title": "A"}]
+    first = stub.searchResults.emits[0]
+    second = stub.searchResults.emits[-1]
+    assert [s["provider"] for s in first["sources"]] == [CTX_APPLE], "TIDAL is not on an Apple-only page"
+    assert first["sections"]["tracks"] == [
+        {"id": "apple:song-1", "title": "Xtal", "sources": [{"provider": CTX_APPLE, "id": "apple:song-1"}]}
+    ]
+    assert [s["provider"] for s in second["sources"]] == [CTX_TIDAL, CTX_APPLE]
+    assert [row["id"] for row in second["sections"]["albums"]] == ["al1"]
 
 
 def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
@@ -574,11 +586,11 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
 
     assert stub.statuses[-1] == "Apple's catalog format has changed. Check for a Waves update."
     assert stub._search_cache == {}
-    group = next(g for g in stub.searchResults.emits[0]["groups"] if g["provider"] == CTX_APPLE)
-    assert group["tracks"] == []
-    # The honest words ride the Apple group itself, so the
-    # group cannot paint "0 results" as if the catalog were empty.
-    assert group["error"] == stub.statuses[-1]
+    payload = stub.searchResults.emits[-1]
+    apple_source = next(s for s in payload["sources"] if s["provider"] == CTX_APPLE)
+    # The honest words ride the Apple source itself, so the page cannot paint
+    # "0 results" as if the catalog were empty.
+    assert apple_source["state"] == "failed" and apple_source["error"] == stub.statuses[-1]
 
 
 # --------------------------------------------------------------------------- #
@@ -586,6 +598,11 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
 # --------------------------------------------------------------------------- #
 class _OpenUrlStub:
     _open_url = WavesBridge._open_url
+    _absorb_search_group = WavesBridge._absorb_search_group
+    _search_display_payload = WavesBridge._search_display_payload
+    _paint_search_display = WavesBridge._paint_search_display
+    _settle_search = WavesBridge._settle_search
+    _show_search_display = WavesBridge._show_search_display
     _fav_artist_dict = WavesBridge._fav_artist_dict
 
     def __init__(self, provider):
@@ -619,7 +636,11 @@ def test_a_pasted_album_link_resolves_through_the_seam():
     stub._open_url("https://tidal.com/browse/album/42?u")
 
     assert provider.calls == [("open_url", "https://tidal.com/browse/album/42?u")]
-    assert stub.searchResults.emits == [_payload(_group("tidal", {"albums": [{"id": "al1", "title": "Pasted"}]}))]
+    (payload,) = stub.searchResults.emits
+    assert payload["sources"] == [{"provider": "tidal", "state": "ready", "error": ""}]
+    assert payload["sections"]["albums"] == [
+        {"id": "al1", "title": "Pasted", "sources": [{"provider": "tidal", "id": "al1"}]}
+    ]
     assert stub.statuses[-1] == "Opened link"
     assert stub._objs["album"]["al1"] is album  # remembered, as ever
 
@@ -679,8 +700,16 @@ def test_a_pasted_artist_link_lands_in_the_artists_bucket():
     stub._open_url("https://tidal.com/browse/artist/99")
 
     (payload,) = stub.searchResults.emits
-    group = payload["groups"][0]
-    assert group["artists"] == [{"id": "99", "name": "Aphex Twin", "art": "", "roles": "Artist", "popularity": -1}]
+    assert payload["sections"]["artists"] == [
+        {
+            "id": "99",
+            "name": "Aphex Twin",
+            "art": "",
+            "roles": "Artist",
+            "popularity": -1,
+            "sources": [{"provider": "tidal", "id": "99"}],
+        }
+    ]
     assert stub._objs["artist"]["99"] is artist
 
 

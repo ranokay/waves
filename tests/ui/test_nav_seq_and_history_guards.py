@@ -40,7 +40,7 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
-_EMPTY_RESULTS = {"groups": []}
+_EMPTY_RESULTS = {"sources": [], "sections": {}, "top": None}
 
 
 @pytest.mark.qml

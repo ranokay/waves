@@ -81,23 +81,19 @@ def test_a_builder_failure_loses_the_pin_not_the_search():
 # --------------------------------------------------------------------------- #
 def test_the_result_count_is_the_lists_only_never_the_pin():
     payload = {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "artists": [1, 2],
-                "albums": [1],
-                "tracks": [1, 2, 3],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": {"kind": "album", "id": "al", "title": "A", "artist": "x"},
-                "error": "",
-            }
-        ]
+        "sources": [{"provider": "tidal", "state": "ready", "error": ""}],
+        "sections": {
+            "artists": [1, 2],
+            "albums": [1],
+            "tracks": [1, 2, 3],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+        },
+        "top": {"kind": "album", "id": "al", "title": "A", "artist": "x"},
     }
     assert backend.WavesBridge._search_total(payload) == 6
-    payload["groups"][0]["top"] = None
+    payload["top"] = None
     assert backend.WavesBridge._search_total(payload) == 6
 
 

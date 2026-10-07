@@ -481,25 +481,9 @@ def _show_search_results(q, settle, bridge) -> None:
     q("openSearch()")
     settle(200)
     q("root._searchSeq = root._navSeq")
-    bridge.searchResults.emit(
-        {
-            "groups": [
-                {
-                    "provider": "tidal",
-                    "artists_layout": "strip",
-                    "head_when_alone": False,
-                    "artists": [],
-                    "albums": [],
-                    "tracks": [TRACK],
-                    "videos": [],
-                    "playlists": [],
-                    "mixes": [],
-                    "top": None,
-                    "error": "",
-                }
-            ]
-        }
-    )
+    from search.fakes import qml_search_payload
+
+    bridge.searchResults.emit(qml_search_payload(tracks=[TRACK]))
     settle(400)
 
 
@@ -1359,25 +1343,9 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         }
         for i in range(1, 7)
     ]
-    bridge.searchResults.emit(
-        {
-            "groups": [
-                {
-                    "provider": "tidal",
-                    "artists_layout": "strip",
-                    "head_when_alone": False,
-                    "artists": [],
-                    "albums": [],
-                    "tracks": many_tracks,
-                    "videos": [],
-                    "playlists": [],
-                    "mixes": [],
-                    "top": None,
-                    "error": "",
-                }
-            ]
-        }
-    )
+    from search.fakes import qml_search_payload
+
+    bridge.searchResults.emit(qml_search_payload(tracks=many_tracks))
     settle(500)
     if not bool(q("root.signedIn")) or not bool(q("root.hasResults")):
         problems.append("the scenario never reached a signed-in search page for the chips")
@@ -1445,8 +1413,32 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         else:
             QTest.keyClick(root, Qt.Key_Return)
             settle(300)
-            if not bool(q("root.searchGroupFor('tidal').isExpanded('tracks')")):
+            if not bool(q("searchResultsView.isExpanded('tracks')")):
                 problems.append("Return on SHOW ALL never expanded the section")
+
+    # A merged search page names every row's sources for a screen reader: a
+    # compact mark per provider, spoken as an "Available on" phrase.
+    tidal_page = qml_search_payload(tracks=many_tracks[:1])
+    apple_page = qml_search_payload(provider="apple", tracks=[dict(many_tracks[1], id="apple:t2")])
+    q("root._searchSeq = root._navSeq")
+    bridge.searchResults.emit(
+        {
+            "sources": [*tidal_page["sources"], *apple_page["sources"]],
+            "sections": {
+                **tidal_page["sections"],
+                **{
+                    name: [*tidal_page["sections"].get(name, []), *rows]
+                    for name, rows in apple_page["sections"].items()
+                },
+            },
+            "top": None,
+        }
+    )
+    settle(400)
+    marks = _buttons(q, "function (o) { return o.objectName === 'searchSourceMark'; }")
+    mark_names = sorted({mark["name"] for mark in marks})
+    if mark_names != ["Available on Apple Music", "Available on TIDAL"]:
+        problems.append(f"the row source marks do not speak their providers: {mark_names}")
 
     # The logs drawer's level and FOLLOW chips.
     q("logsDrawer.open()")

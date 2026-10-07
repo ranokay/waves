@@ -29,6 +29,10 @@ Rectangle {
   property string aName: ""
   property real aPop: 0
   property string aId: ""
+  // The unified search page's folded sources for this card: artist rows
+  // never fold (a name is not automatic identity), so this is the card's own
+  // single source there, and empty elsewhere.
+  property var sources: []
   radius: 12
   color: surface
   border.color: border1
@@ -82,6 +86,10 @@ Rectangle {
       elide: Text.ElideRight
       width: parent.width
       horizontalAlignment: Text.AlignHCenter
+    }
+    SourceMarks {
+      anchors.horizontalCenter: parent.horizontalCenter
+      sources: asc.sources
     }
     PopularityMeter {
       host: asc.host

@@ -15,7 +15,7 @@ from support.paths import QML_DIR, QML_MAIN
 
 MAIN = QML_MAIN.read_text(encoding="utf-8")
 # The sections and the grid live in their own files; the pins follow the code.
-GROUP = (QML_DIR / "domains/search/SearchProviderGroup.qml").read_text(encoding="utf-8")
+RESULTS = (QML_DIR / "domains/search/SearchResults.qml").read_text(encoding="utf-8")
 MORE = (QML_DIR / "domains/search/SearchSectionMore.qml").read_text(encoding="utf-8")
 
 
@@ -24,15 +24,13 @@ def _block(start: str, end: str, source: str = MAIN) -> str:
 
 
 def test_the_video_grid_caps_at_whole_rows():
-    grid = _block("id: videoGrid", 'section: "videos"', GROUP)
+    grid = _block("id: videoGrid", 'section: "videos"', RESULTS)
     assert "readonly property int cap: cols * Math.ceil(5 / cols)" in grid
-    assert (
-        'host.searchRowVisible("videos", videosModel.count, index, group.isExpanded("videos"), videoGrid.cap)' in grid
-    )
+    assert 'resultsView.rowVisibleCapped("videos", index, videoGrid.cap)' in grid
 
 
 def test_show_all_for_videos_waits_for_the_rounded_count():
-    blocks = re.findall(r"SearchSectionMore \{(.*?)\n\s*\}", GROUP, re.DOTALL)
+    blocks = re.findall(r"SearchSectionMore \{(.*?)\n\s*\}", RESULTS, re.DOTALL)
     m = next((b for b in blocks if 'section: "videos"' in b), None)
     assert m, "the videos SHOW ALL instance moved"
     assert "cap: videoGrid.cap" in m, "the videos SHOW ALL must use the grid-computed cap"
@@ -43,7 +41,7 @@ def test_the_other_sections_keep_their_five():
     fn = _block("function searchRowVisible(name, count, index, expanded, cap) {", "\n  }")
     assert "index < (cap || 5)" in fn
     for name in ("albums", "tracks", "playlists", "mixes"):
-        assert f'host.searchRowVisible("{name}", {name}Model.count, index, ' in GROUP
+        assert f'resultsView.rowVisible("{name}", index)' in RESULTS
 
 
 def test_the_cap_is_whole_rows_at_every_column_count():

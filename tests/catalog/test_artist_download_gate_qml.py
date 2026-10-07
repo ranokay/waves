@@ -99,40 +99,12 @@ def _card(ident: str, name: str) -> dict:
 
 def _search_payload(*, apple: bool) -> dict:
     """A search payload whose artist section holds one card, in the Apple
-    group or the TIDAL one."""
+    source or the TIDAL one."""
+    from search.fakes import qml_search_payload
+
     if apple:
-        return {
-            "groups": [
-                {
-                    "provider": "apple",
-                    "artists_layout": "flow",
-                    "head_when_alone": True,
-                    "artists": [_card("apple:artist-1", "Apple Artist")],
-                    "albums": [],
-                    "tracks": [],
-                    "playlists": [],
-                    "top": None,
-                    "error": "",
-                }
-            ]
-        }
-    return {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "head_when_alone": False,
-                "artists": [_card("artist-1", "Tidal Artist")],
-                "albums": [],
-                "tracks": [],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+        return qml_search_payload(provider="apple", artists=[_card("apple:artist-1", "Apple Artist")])
+    return qml_search_payload(artists=[_card("artist-1", "Tidal Artist")])
 
 
 def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
@@ -160,7 +132,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(_search_payload(apple=False))
     settle(500)
-    if q("root.searchGroupFor('tidal').modelFor('artists').count") != 1:
+    if q("searchResultsView.countFor('artists')") != 1:
         problems.append("the TIDAL artist card never rendered")
     elif not bool(q(_FIND_CARD_CONTROL)):
         problems.append("the TIDAL artist card lost its download control")
@@ -168,7 +140,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(_search_payload(apple=True))
     settle(500)
-    if q("root.searchGroupFor('apple').modelFor('artists').count") != 1:
+    if q("searchResultsView.countFor('artists')") != 1:
         problems.append("the Apple artist card never rendered")
     elif bool(q(_FIND_CARD_CONTROL)):
         problems.append("the Apple artist card still offers a download control")

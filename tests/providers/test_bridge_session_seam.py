@@ -302,6 +302,8 @@ class _AuthStub:
     _page_path_ok = staticmethod(WavesBridge._page_path_ok)
     _unbind_merge_plans = WavesBridge._unbind_merge_plans
     _end_provider_context = WavesBridge._end_provider_context
+    _settle_search = WavesBridge._settle_search
+    _show_search_display = WavesBridge._show_search_display
     _start_provider_logout = WavesBridge._start_provider_logout
     _schedule_provider_cache_clear = WavesBridge._schedule_provider_cache_clear
     _warm_provider_login_cache = WavesBridge._warm_provider_login_cache

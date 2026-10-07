@@ -2,10 +2,10 @@
 
 The recent searches outlive the process in the page cache. One restored (or
 one this session past its 90 s window) is emitted straight away, the wire is
-read as always, and the fresh answer swaps in flagged ``refresh`` only when
-something moved. The meters the stale page shows are carried over, and the
-enrichment writes each meter back into the cached payload so the next serve
-paints it with the page.
+read as always, and each provider's fresh answer swaps its rows in place,
+flagged ``refresh``, only when something moved. The meters the stale page
+shows are carried over, and the enrichment writes each meter back into the
+cached groups so the next serve paints it with the page.
 """
 
 from __future__ import annotations
@@ -45,9 +45,9 @@ def test_a_restored_search_paints_first_and_the_wire_corrects_it_in_place(monkey
     stub.search("needle")
 
     first, second = _payloads(stub)
-    assert [a["id"] for a in _group_of(first)["albums"]] == ["al1"] and "refresh" not in first, "the old page, at once"
-    assert second["refresh"] is True and [a["id"] for a in _group_of(second)["albums"]] == ["al1", "al2"]
-    assert _group_of(second)["artists"][0]["popularity"] == 40, "the meter the stale page shows is carried over"
+    assert [a["id"] for a in first["sections"]["albums"]] == ["al1"] and "refresh" not in first, "the old page, at once"
+    assert second["refresh"] is True and [a["id"] for a in second["sections"]["albums"]] == ["al1", "al2"]
+    assert second["sections"]["artists"][0]["popularity"] == 40, "the meter the stale page shows is carried over"
     assert True not in stub.busy, "rows are on screen the whole time: no spinner"
     assert stub.statuses[0].startswith("Searching") and stub.statuses[-1] == "3 results"
     stamp, kept = stub._search_cache["tidal:needle"]
@@ -111,10 +111,19 @@ def test_the_enrichment_writes_the_meter_into_the_cached_page(monkeypatch):
 
 
 def test_same_page_ignores_the_meters_and_the_flag():
-    a = _payload(pop=-1)
-    b = {**_payload(pop=88), "refresh": True}
+    def page(pop):
+        return {
+            "sources": [{"provider": "tidal", "state": "ready", "error": ""}],
+            "sections": {"artists": [{"id": "a1", "popularity": pop}], "albums": [{"id": "al1"}]},
+            "top": None,
+        }
+
+    a = page(-1)
+    b = {**page(88), "refresh": True}
     assert _search_same(a, b)
-    assert not _search_same(a, _payload(("al1", "al2")))
+    moved = page(-1)
+    moved["sections"] = {"artists": [], "albums": [{"id": "al1"}, {"id": "al2"}]}
+    assert not _search_same(a, moved)
 
 
 def _cache_bridge(tmp_path):

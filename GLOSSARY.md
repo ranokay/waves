@@ -46,6 +46,12 @@ evidence, delivery capability, ownership/presence and readiness. Match confidenc
 describes identity; it does not verify a delivered file.
 _Avoid_: universal catalog, provider (for a matched item)
 
+**Search source**:
+One provider's participation in a search: its own result rows and its own
+failure words. A merged search row exposes every source that returned a
+high-confidence equivalent; unmerged rows keep their single source.
+_Avoid_: group, provider section
+
 **Audio type**:
 Which mix of a track is being saved: stereo or Dolby Atmos.
 _Avoid_: mix, format, mode

@@ -440,9 +440,6 @@ def _provider_descriptor_dict(descriptor) -> dict:
         # renders a mark, never a zero-size one.
         "logo_header_width": int(getattr(descriptor, "logo_header_width", 14) or 14),
         "logo_header_height": int(getattr(descriptor, "logo_header_height", 14) or 14),
-        # The search group head's furniture: a descriptor that
-        # names no style renders the neutral one.
-        "head_style": str(getattr(descriptor, "head_style", "") or "plain"),
     }
 
 
@@ -626,16 +623,17 @@ _APPLE_UNAVAILABLE_STATUS = "Not available for Apple Music yet"
 
 
 def _is_provider_surface_pref(key: str) -> bool:
-    """Whether a waves.json key is one of the search page's provider-keyed
-    housekeeping prefs: a provider group's fold
+    """Whether a waves.json key is one of the search page's retired
+    provider-keyed housekeeping prefs: a provider group's fold
     (``search_provider_<id>_collapsed``) or a section's SHOW ALL state
     (``<id>_search_sec_<section>_expanded``).
 
-    Validated by shape rather than enumerated, because a provider the app has
-    never heard of must still save and restore its own state with no wiring;
-    every accepted key holds a bool, so ``setWavesPref`` materializes it as
-    one.
-    """
+    The unified results view uses the declared ``search_section_*`` defaults
+    instead; these shapes stay accepted so an upgraded install keeps the
+    values it already carries (validated by shape rather than enumerated,
+    because a provider the app has never heard of must still save and restore
+    its own state with no wiring; every accepted key holds a bool, so
+    ``setWavesPref`` materializes it as one)."""
     if key.startswith("search_provider_") and key.endswith("_collapsed"):
         return len(key) > len("search_provider__collapsed")
     for section in _SEARCH_SECTIONS:

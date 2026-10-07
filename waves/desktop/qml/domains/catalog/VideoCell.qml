@@ -1,6 +1,7 @@
 import QtQuick
 import "../../primitives" as Primitives
 import "../downloads"
+import "../search"
 
 // One art-first video result cell: the 16:9 thumbnail carrying the quality
 // spec on its corner, then the title, artist and release date baseline-
@@ -33,6 +34,10 @@ Column {
   property bool vcExplicit: false
   property string vcSpec: ""
   property string vcDate: ""
+  // The unified search page's folded sources for this cell: video rows never
+  // fold (audio identity cannot qualify them), so this is the cell's own
+  // single source there, and empty elsewhere.
+  property var sources: []
   spacing: 8
   BigVideoThumb {
     host: vcell.host
@@ -101,12 +106,13 @@ Column {
         // never push the dot + date past the meta column and under
         // the download button.
         readonly property real dateW: vDateTx.visible ? Math.min(width, vDot.implicitWidth + vDateTx.implicitWidth + 16) : 0
+        readonly property real marksW: (vMarks.visible && vMarks.width > 0) ? vMarks.width + 8 : 0
         ArtistLinks {
           id: vArtists
           host: vcell.host
           anchors.left: parent.left
           anchors.top: parent.top
-          width: Math.max(0, Math.min(implicitWidth, parent.width - parent.dateW))
+          width: Math.max(0, Math.min(implicitWidth, parent.width - parent.dateW - parent.marksW))
           artists: host.artistsById[vcell.vid] || []
         }
         Text {
@@ -131,6 +137,12 @@ Column {
           color: textLo
           font.family: mono
           font.pixelSize: 11
+        }
+        SourceMarks {
+          id: vMarks
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          sources: vcell.sources
         }
       }
     }

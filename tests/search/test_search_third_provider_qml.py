@@ -1,19 +1,18 @@
-"""A third provider's search group renders with zero QML edits.
+"""A third provider's search results render with zero QML edits.
 
 WHAT THIS FENCES OFF
 --------------------
-A search payload must be able to carry any provider's group: building TIDAL's
-ungrouped buckets plus one fixed ``apple`` block, with one model set and
-section layout per provider hardcoded in Main.qml, leaves a provider
-registered with ``Capability.SEARCH`` able to render badges but with nowhere
-to put its results.
+A search payload must be able to carry any provider's rows: a page with one
+fixed ``apple`` block and one model set per provider hardcoded in Main.qml
+leaves a provider registered with ``Capability.SEARCH`` able to render badges
+but with nowhere to put its results.
 
 This is the paper test, on the real page: a third provider is registered on
-the live bridge (a descriptor, a session, SEARCH) and the results page grows
-its own group -- head name and mark from its descriptor, its rows in the
-sections its payload declares, its own fold -- driven end to end through the
-bridge's real fan-out and the real QML payload handler. TIDAL and Apple are
-present too, so all three groups render in the payload's own order.
+the live bridge (a descriptor, a session, SEARCH) and the unified results
+surface grows its rows, labelled with that provider's own source mark (name
+and logo from its descriptor) -- driven end to end through the bridge's real
+fan-out and the real QML payload handler. TIDAL and Apple are present too, so
+all three sources render in registry order.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
 installs process-global handlers that must not leak into the suite.
@@ -93,7 +92,7 @@ _APPLE_ALBUM = {
 def _fake_provider():
     """A third provider: descriptor + session + SEARCH, nothing else.
 
-    It names itself; the page must render its group from the payload and the
+    It names itself; the page must render its rows from the payload and the
     descriptor alone, with no wiring registered for it anywhere (no search
     gate, no QML branch).
     """
@@ -104,7 +103,6 @@ def _fake_provider():
         name = "Fake Music"
         capabilities = frozenset({Capability.SEARCH, Capability.CATALOG})
         is_logged_in = True
-        search_artists_layout = "flow"
 
         def descriptor(self):
             return ProviderDescriptor(
@@ -128,10 +126,10 @@ def _fake_provider():
     return _FakeProvider()
 
 
-def _walk_expression(group: str, body: str) -> str:
-    """Run ``body`` with ``g`` bound to the provider group's item."""
+def _walk_expression(container: str, body: str) -> str:
+    """Run ``body`` with ``all`` bound to every object under ``container``."""
     return (
-        "(function(){ var g = " + group + "; if (!g) return JSON.stringify(null);"
+        "(function(){ var g = " + container + ";"
         " function walk(o, out) { if (!o) return; out.push(o);"
         "  if (o.contentItem) walk(o.contentItem, out);"
         "  if (o.item) walk(o.item, out);"
@@ -150,6 +148,15 @@ def _settle_until(q, settle, predicate, *, timeout_ms: int = 8000, step_ms: int 
     return True
 
 
+def _sources(q) -> str:
+    return q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')")
+
+
+def _ids(q, model: str) -> list:
+    ref = f"searchResultsView.modelFor('{model}')"
+    return [q(f"{ref}.get({i}).id") for i in range(int(q(f"{ref}.count")))]
+
+
 def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     booted = boot_main_qml()
     if isinstance(booted, int):
@@ -165,7 +172,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
 
     # TIDAL's reply still carries engine objects; the bridge builds its rows.
     # The row translation is stubbed at the builder (the seam this scenario is
-    # not about), the fan-out and grouping are the real ones.
+    # not about), the fan-out and folding are the real ones.
     class _TidalAlbum:
         id = "tidal:al1"
         name = "Tidal Album"
@@ -203,127 +210,95 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
 
     failures: list[str] = []
     q("root.submitSearch('fabric')")
-    landed = _settle_until(q, settle, lambda: q("root.searchGroupList().length") == 3)
+    landed = _settle_until(q, settle, lambda: _sources(q) == "tidal,apple,fake")
     if not landed:
-        print(
-            f"the third provider's search never landed ({q('root.searchGroupList().length')} groups)", file=sys.stderr
-        )
+        print(f"the third provider's search never landed ({_sources(q)})", file=sys.stderr)
         return EXIT_REGRESSED
 
-    tidal = "root.searchGroupFor('tidal')"
-    apple = "root.searchGroupFor('apple')"
-    fake = "root.searchGroupFor('fake')"
-    order = q("root.searchGroupList().map(function (g) { return g.providerId }).join(',')")
-    if order != "tidal,apple,fake":
-        failures.append(f"the groups did not render in payload order ({order!r})")
+    # The three sources render in registry order; the third one arrives with
+    # no wiring beyond its descriptor and payload.
+    if _sources(q) != "tidal,apple,fake":
+        failures.append(f"sources did not render in registry order ({_sources(q)!r})")
 
-    # The third group's own head: name and mark from its descriptor.
-    if not q(fake + ".headVisible"):
-        failures.append("the third provider's group head is not visible")
-    name_hit = json.loads(
+    # The third provider's rows land in the unified sections, each labelled
+    # with its own source; the other two providers' rows land too.
+    album_ids = _ids(q, "albums")
+    if sorted(album_ids) != ["apple:al1", "fake:al1", "tidal:al1"]:
+        failures.append(f"the unified sections did not carry every source's album rows ({album_ids})")
+    if q("searchResultsView.countFor('artists')") != 1 or q("searchResultsView.countFor('tracks')") != 2:
+        failures.append("the third provider's artist/track rows did not land")
+    row_sources = json.loads(q("JSON.stringify(searchResultsView.rowSources('fake:al1'))"))
+    if row_sources != [{"provider": "fake", "id": "fake:al1"}]:
+        failures.append(f"the third provider's row did not carry its own source ({row_sources})")
+
+    # The source chips row names every source (All + three providers), and
+    # the third provider's own mark renders from its descriptor.
+    chip_count = json.loads(
         q(
-            _walk_expression(
-                fake,
-                "for (var i = 0; i < all.length; i++)"
-                " if (all[i].text !== undefined && all[i].text === 'FAKE MUSIC'"
-                "     && all[i].visible && all[i].width > 0)"
-                "  out.push(['name', all[i].text]);",
-            )
+            "(function(){ var all = [];"
+            " function walk(o) { if (!o) return;"
+            "  if (o.objectName === 'searchSourceChip' && o.visible) all.push(true);"
+            "  if (o.contentItem) walk(o.contentItem); if (o.item) walk(o.item);"
+            "  var k = o.children || []; for (var i = 0; i < k.length; i++) walk(k[i]); }"
+            " walk(root); return JSON.stringify(all.length); })()"
         )
     )
-    if name_hit != [["name", "FAKE MUSIC"]]:
-        failures.append(f"the head did not render the descriptor's name ({name_hit})")
+    if chip_count != 4:
+        failures.append(f"the source chips did not list All plus three sources ({chip_count})")
     marks = json.loads(
         q(
             _walk_expression(
-                fake,
+                "searchResultsView",
                 "for (var i = 0; i < all.length; i++)"
                 " if (all[i].source !== undefined && ('' + all[i].source).indexOf('" + _LOGO + "') !== -1)"
-                "  out.push([all[i].visible, all[i].width, all[i].height]);",
+                "  out.push([all[i].visible, all[i].width > 0, all[i].height > 0]);",
             )
         )
     )
-    if not marks or not any(m[0] and m[1] > 0 and m[2] > 0 for m in marks):
-        failures.append(f"the head did not render the descriptor's mark ({marks})")
+    if not marks or not any(m[0] and m[1] and m[2] for m in marks):
+        failures.append(f"the third provider's rows did not render its descriptor's mark ({marks})")
 
-    # Its rows, on its own models, with its own counts.
-    counts = (
-        q(fake + ".modelFor('artists').count"),
-        q(fake + ".modelFor('albums').count"),
-        q(fake + ".modelFor('tracks').count"),
-    )
-    if counts != (1, 1, 2):
-        failures.append(f"the third provider's rows did not land ({counts})")
-    if q(fake + ".modelFor('albums').get(0).title") != "Fake Album":
-        failures.append("the third provider's album row lost its title")
-    if q(fake + ".rowCount") != 4:
-        failures.append(f"the third provider's count reads {q(fake + '.rowCount')}, expected 4")
-
-    # Sections are driven by its own rows: it declares no search_sections, so
-    # it answers the page's six sections (the undeclared default), and it
-    # returned no videos -- the bucket is hostable, the section is empty.
-    if q(fake + ".hostable('videos')") is not True:
-        failures.append("the third provider's payload did not carry its videos bucket")
-    if q(fake + ".sectionVisible('videos')"):
-        failures.append("an empty videos section rendered for the third provider")
+    # A type filter narrows the sections without touching the sources: only
+    # the third provider answers tracks.
     q("root.filterType = 'tracks'")
     settle(50)
-    # Only the provider with track rows keeps a head under the tracks filter;
-    # the other two have none, and Apple's group carries no videos/mixes
-    # bucket at all (so that filter can never host it).
-    if not q(fake + ".headVisible") or q(tidal + ".headVisible") or q(apple + ".headVisible"):
-        failures.append("the tracks filter did not keep exactly the providers with tracks")
+    if q("searchResultsView.sectionVisible('albums')") or not q("searchResultsView.sectionVisible('tracks')"):
+        failures.append("the tracks filter did not narrow the sections")
+    if q("root.filteredResultCount") != 2:
+        failures.append("the tracks filter did not count the third provider's two tracks")
     q("root.filterType = 'all'")
     settle(50)
 
-    # Its own fold: collapsing the third group hides its rows, leaves the
-    # other two alone, and persists under its own provider-keyed pref.
-    if not q(tidal + ".headVisible") or not q(apple + ".headVisible"):
-        failures.append("the first two providers' groups are not on the page")
-    q(fake + ".toggleCollapsed()")
-    settle(100)
-    if not q(fake + ".collapsed"):
-        failures.append("the third provider's group did not collapse")
-    if q(fake + ".sectionVisible('albums')"):
-        failures.append("a collapsed group still showed its rows")
-    if not q(fake + ".headVisible"):
-        failures.append("the collapsed group lost its own head")
-    if not q(tidal + ".sectionVisible('albums')") or not q(apple + ".sectionVisible('albums')"):
-        failures.append("collapsing the third group moved the shipped two")
-    bridge._config_writer.flush()
-    settle(100)
-    if not bridge._waves_prefs.get("search_provider_fake_collapsed"):
-        failures.append("the third provider's fold did not reach its provider-keyed pref")
+    # The source filter is the unified page's scoping tool: choosing the
+    # third provider shows exactly its rows (artist + album + two tracks).
+    q("root.searchSourceFilter = 'fake'")
+    settle(50)
+    if q("root.filteredResultCount") != 4:
+        failures.append(f"the source filter did not narrow to the third provider ({q('root.filteredResultCount')})")
+    q("root.searchSourceFilter = 'all'")
+    settle(50)
 
-    # The other two are unchanged: heads in order, rows and counts as ever.
-    if q(tidal + ".modelFor('albums').count") != 1 or q(apple + ".modelFor('albums').count") != 1:
-        failures.append("the shipped providers' rows changed beside the third group")
-
-    # Removing the middle group shifts the third provider onto its delegate
-    # (the Repeater reuses items by index). Its own fold must survive the
-    # shift, not inherit the departed provider's state.
+    # Apple switching off retires only its own rows: the bridge refolds the
+    # displayed page, and the other sources (the third provider included)
+    # keep theirs.
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
     bridge.providerStateChanged.emit("apple")
     settle(300)
-    if q("root.searchGroupFor('apple')") is not None:
-        failures.append("the switched-off provider's group stayed on the page")
-    if not bool(q(fake)):
-        failures.append("the third provider's group went with the switched-off one")
-    elif not q(fake + ".collapsed"):
-        failures.append("a group delegate reuse dropped the third provider's fold")
-    if q(fake + ".sectionVisible('albums')"):
-        failures.append("the shifted group rendered rows while collapsed")
-
-    q(fake + ".toggleCollapsed()")
-    settle(100)
-    if not q(fake + ".sectionVisible('albums')") or q(fake + ".modelFor('albums').count") != 1:
-        failures.append("the shifted group did not come back with its own rows")
+    if _sources(q) != "tidal,fake":
+        failures.append(f"the switched-off source stayed on the page ({_sources(q)!r})")
+    album_ids = _ids(q, "albums")
+    if "apple:al1" in album_ids:
+        failures.append("the switched-off provider's rows stayed on the page")
+    if "fake:al1" not in album_ids or "tidal:al1" not in album_ids:
+        failures.append(f"the refold dropped a surviving source's rows ({album_ids})")
 
     # A third provider alone keeps the search row live (the bridge's generic
     # gate) and answers its own unclassified failure with safe copy + RETRY.
     bridge._logged_in = False
     bridge.loggedInChanged.emit()
+    bridge.settings.data.apple_enabled = False
+    bridge.appleStatusChanged.emit()
     settle(200)
     if not q("searchAvailable") or not q("searchField.enabled"):
         failures.append("a lone search-capable provider left the search row dead")
@@ -333,28 +308,27 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
 
     bridge.providers["fake"].search = _fake_is_down
     q("root.submitSearch('boom')")
-    landed = _settle_until(
-        q, settle, lambda: bool(q(fake)) and q(fake + ".errorText") == _SAFE_FAILURE, timeout_ms=4000
-    )
+    landed = _settle_until(q, settle, lambda: q("root.searchSourceError") == _SAFE_FAILURE, timeout_ms=4000)
     if not landed:
-        failures.append(
-            f"the third provider's lone failure did not answer its group ({q(fake + '.errorText') if q(fake) else None!r})"
-        )
+        failures.append(f"the third provider's lone failure did not name itself ({q('root.searchSourceError')!r})")
     else:
-        if q("root.searchGroupError") != _SAFE_FAILURE:
-            failures.append("the page did not carry safe copy for the third provider's failure")
+        states = json.loads(
+            q("JSON.stringify((root.searchSources || []).map(function (s) { return [s.provider, s.state]; }))")
+        )
+        if states != [["fake", "failed"]]:
+            failures.append(f"the failed source did not carry its own state ({states})")
         retry = json.loads(
             q(
-                _walk_expression(
-                    fake,
-                    "for (var i = 0; i < all.length; i++)"
-                    " if (all[i].objectName === 'searchGroupRetry' && all[i].visible)"
-                    "  out.push(true);",
-                )
+                "(function(){ var all = [];"
+                " function walk(o) { if (!o) return;"
+                "  if (o.objectName === 'searchSourceRetry' && o.visible) all.push(true);"
+                "  if (o.contentItem) walk(o.contentItem); if (o.item) walk(o.item);"
+                "  var k = o.children || []; for (var i = 0; i < k.length; i++) walk(k[i]); }"
+                " walk(root); return JSON.stringify(all.length); })()"
             )
         )
         if not retry:
-            failures.append("the third provider's failed group showed no RETRY")
+            failures.append("the third provider's failed source showed no RETRY")
         if q("emptyHint.text") != "Search failed":
             failures.append("the empty line did not name the failure")
 
@@ -364,13 +338,13 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
 
 
 @pytest.mark.qml
-def test_a_third_search_provider_renders_its_own_group_with_no_qml_edits():
+def test_a_third_search_provider_renders_with_no_qml_edits():
     run_scenario(
         Path(__file__),
         "--run-scenario",
         timeout=180,
         sandbox_prefix="waves-search-third-provider-",
-        failure_message="the third search provider did not render its own group",
+        failure_message="the third search provider did not render its rows",
     )
 
 

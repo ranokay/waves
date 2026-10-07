@@ -75,22 +75,9 @@ def _artist(ident: str, name: str) -> dict:
 
 
 def _payload(albums: list, artists: list, *, refresh: bool) -> dict:
-    out = {
-        "groups": [
-            {
-                "provider": "tidal",
-                "artists_layout": "strip",
-                "artists": artists,
-                "albums": albums,
-                "tracks": [],
-                "videos": [],
-                "playlists": [],
-                "mixes": [],
-                "top": None,
-                "error": "",
-            }
-        ]
-    }
+    from search.fakes import qml_search_payload
+
+    out = qml_search_payload(artists=artists, albums=albums)
     if refresh:
         out["refresh"] = True
     return out
@@ -154,7 +141,7 @@ def _run_scenario() -> int:
             failures.append(what)
 
     def ids(model: str) -> list:
-        ref = f"root.searchGroupFor('tidal').modelFor('{model}')"
+        ref = f"searchResultsView.modelFor('{model}')"
         return [q(f"{ref}.get({i}).id") for i in range(int(q(f"{ref}.count")))]
 
     q(PARK_LOGIN_QML)
@@ -185,7 +172,7 @@ def _run_scenario() -> int:
     # index 0 afterwards, so this asks whether its delegate was carried over or
     # thrown away and built again. Comparing a fixed INDEX would prove nothing:
     # index 0 holds a different album after the move, quite correctly.
-    before = q("String(root.searchGroupFor('tidal').albumRepeater.itemAt(2))")
+    before = q("String(searchResultsView.albumRepeater.itemAt(2))")
     check(bool(before), "the album rows were never built, so this scenario proves nothing")
 
     # The correction: al2 is gone, al3 moved up, al4 is new, and al1's title
@@ -201,7 +188,7 @@ def _run_scenario() -> int:
 
     got = ids("albums")
     check(got == ["al3", "al1", "al4"], f"the refresh left the wrong rows, or the wrong order: {got}")
-    albums = "root.searchGroupFor('tidal').modelFor('albums')"
+    albums = "searchResultsView.modelFor('albums')"
     check(
         q(albums + ".get(1).title") == "One (Remastered)",
         f"a changed field was not written: {q(albums + '.get(1).title')!r}",
@@ -211,13 +198,13 @@ def _run_scenario() -> int:
         f"a second changed field on the same row was not written: {q(albums + '.get(1).quality')!r}",
     )
     check(q(albums + ".get(0).title") == "Three", "an unchanged row lost its title")
-    after = q("String(root.searchGroupFor('tidal').albumRepeater.itemAt(0))")  # al3 again, one row up
+    after = q("String(searchResultsView.albumRepeater.itemAt(0))")  # al3 again, one row up
     check(bool(after), "the album rows went away entirely")
     check(
         after == before,
         f"the refresh rebuilt the row delegates instead of reconciling them: {before} -> {after}",
     )
-    check(ids("artists") == ["ar2", "ar9"], f"the artist strip did not reconcile: {ids('artists')}")
+    check(ids("artists") == ["ar2", "ar9"], f"the artist flow did not reconcile: {ids('artists')}")
 
     # The page must not have been veiled: this path is the one that never
     # flashes, and a veil here would mean it fell back to a full rebuild.

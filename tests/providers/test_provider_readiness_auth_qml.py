@@ -10,7 +10,6 @@ from threading import Event
 import pytest
 from providers.fakes import BareProvider
 from providers.qml_auth import CallbackLoginAttempt
-from search.fakes import qml_search_payload
 from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 from support.qml_probe import scene_js
 
@@ -147,8 +146,8 @@ def _run_scenario() -> int:
     assert q("waves.isProviderLink('paper.test/album/1')")
     assert not q("waves.isProviderLink('paper.test.evil/album/1')")
     q("searchDecoder.run('https://paper.test/album/1')")
-    wait_until(lambda: q("root.searchGroupFor('paper') !== null"))
-    assert q("root.searchGroupFor('paper').modelFor('albums').get(0).title") == "paper album"
+    wait_until(lambda: q("(root.searchSources || []).some(function (s) { return s.provider === 'paper' })"))
+    assert q("searchResultsView.modelFor('albums').get(0).title") == "paper album"
 
     # Begin waits at the provider boundary: cancel before its URL returns.
     bridge.providerAction(provider.id, "signin")
@@ -205,11 +204,23 @@ def _run_scenario() -> int:
     bridge.libraryLoaded.emit("paper", "albums", [_album("paper")], False)
     wait_until(lambda: q("root.libGroupFor('tidal').modelFor('albums').count") == 1)
     q("root.libGroupFor('tidal').category = 'albums'")
-    q("root._searchSeq = root._navSeq")
-    bridge.searchResults.emit(
-        {"groups": [qml_search_payload(provider=pid, albums=[_album(pid)])["groups"][0] for pid in ("tidal", "paper")]}
+
+    # The two-source page is a REAL search through the bridge's fan-out (the
+    # providers are faked at their boundary), so disabling Paper refolds the
+    # displayed page and only its own rows leave.
+    class _TidalAlbum:
+        id = "tidal:album-1"
+        name = "tidal album"
+
+    bridge.providers["tidal"].search = lambda needle: {"albums": [_TidalAlbum()], "top_hit": None}
+    bridge._album_dict = lambda album: _album("tidal")
+    provider.search = lambda needle: {"albums": [_album("paper")]}
+    q("root.submitSearch('probe')")
+    wait_until(
+        lambda: q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')") == "tidal,paper",
+        timeout_ms=5000,
+        message="both providers' search rows did not land",
     )
-    wait_until(lambda: q("root.searchGroupList().length") == 2)
 
     # The changed provider's history leaves; unrelated account pages survive.
     q("root.navHistory = [{v:'artist',id:'paper:1'}, {v:'artist',id:'apple:2'}, {v:'artist',id:'123'}, {v:'settings'}]")
@@ -228,7 +239,7 @@ def _run_scenario() -> int:
     assert q("root.previewId") == ""
     assert not q("root.previewLoading")
     assert q("root.searchAvailable")
-    assert q("root.searchGroupList().map(function(g) { return g.providerId }).join(',')") == "tidal"
+    assert q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')") == "tidal"
     assert q("root.libGroupFor('paper') === null")
     assert q("root.libGroupFor('tidal').category") == "albums"
     assert q("root.libGroupFor('tidal').modelFor('albums').count") == 1
