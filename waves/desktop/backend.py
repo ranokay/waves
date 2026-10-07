@@ -8579,16 +8579,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 logger.exception("Skipped a browse category")
         return rows
 
-    def _browse_fetch(self, title: str, api_path: str):
-        """Fetch one TIDAL editorial page through the provider: the read and
-        its parse (the tolerant per-row re-do of tidalapi's ``Page.parse``,
-        the shared-parser serialization, and the raw paging handle each
-        parsed category carries) all live behind the seam. The bridge
-        renders the parsed categories the page comes back with."""
-        if not self._page_path_ok(api_path):
-            raise ValueError("Refused a page path that leaves TIDAL's API")  # noqa: TRY003
-        return self.providers[CTX_TIDAL].browse_page(title, api_path)
-
     def _browse_page_for(self, provider, title: str, api_path: str):
         """Fetch one editorial page through its owning provider, with that
         provider's own path validation (a payload path may never steer a
@@ -8611,21 +8601,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         error, so the loading UI clears and RETRY is offered instead of a
         spinner that never resolves."""
         _catalog_emit(self, signal, payload)
-
-    @staticmethod
-    def _page_path_ok(path: str) -> bool:
-        """Whether an editorial page path from a TIDAL payload is a relative
-        ``pages/...`` path with no scheme or host. The QML-facing slots refuse
-        anything else already; the internal fetches (the Explore quick
-        links, the tile-art crawl, a category's DOWNLOAD ALL) take paths from
-        the same payloads and must refuse the same way, because tidalapi
-        joins the path onto its base URL and an absolute URL would carry the
-        bearer token to whatever host it names."""
-        text = str(path or "")
-        if not text.startswith("pages/") or "//" in text or "\\" in text:
-            return False
-        parts = urlsplit(text)
-        return not parts.scheme and not parts.netloc
 
     def _home_rows(self, provider) -> list[dict]:
         """A provider's personalized home feed as landing rows ("Essentials
@@ -9593,6 +9568,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         kind = str(kind or "")
         media_id = str(media_id or "")
         if not self._can_open_browse_item(kind, media_id):
+            # A refused owner answers the page's own key, so the QML clears
+            # its loading state (see _emit_browse_refusal).
+            self._emit_browse_refusal(
+                self.browsePageLoaded,
+                {
+                    "key": f"item:{kind}:{media_id}",
+                    "provider_id": provider_of_id(media_id),
+                    "title": "",
+                    "sections": [],
+                    "error": True,
+                },
+            )
             return
         key = f"item:{kind}:{media_id}"
         # A hover prefetch of this very page still in flight is adopted as
@@ -17675,6 +17662,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         total = min(int(pl.get("total") or 0), 500)
         data_path = str(pl.get("data") or "")
         mod_type = str(pl.get("modType") or "")
+        if not owner.browse_window_path_ok(data_path):
+            # A handle the provider does not accept as a paging endpoint:
+            # the row contributes its inline window only.
+            return out
         while offset < total and _provider_result_current(self, gen):
             window = owner.browse_window("", data_path, mod_type, offset)
             if not window.n:
@@ -17722,6 +17713,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         title = str(title or "")
         owner = browse_owner(self, provider_id)
         if owner is None or not owner.browse_path_ok(api_path):
+            # Answer the queued action so its pending flags clear and the
+            # status line says why, instead of a click that never lands.
+            self._set_status("Could not load this category")
+            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, 0, "")
             return
         cache_key = f"cat:{provider_id}:{api_path}"
         cached = self._cached_category(cache_key)
@@ -17794,18 +17789,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         self.threadpool.start(_catalog_worker(self, provider_id, work, event_key=f"category:{cache_key}"))
 
-    @Slot(str)
-    def downloadPlaylistCategory(self, api_path: str) -> None:
+    @Slot(str, str)
+    def downloadPlaylistCategory(self, api_path: str, provider_id: str = CTX_TIDAL) -> None:
         """Download every playlist in a resolved Browse category, each as its
         own queue row, aggregated under a cat: rollup exactly like a library
-        folder: track-weighted bar plus the badge countdown."""
+        folder: track-weighted bar plus the badge countdown. The cache and
+        gate keys carry the owning provider (the resolve wrote them that
+        way); the rollup id stays path-based, the UI's own identity."""
         api_path = str(api_path or "")
+        cache_key = f"cat:{provider_id}:{api_path}"
         # Deliberately the TTL-checked read: the confirm the user answered was
         # built from this same entry, so rather than queue a list that has since
         # gone stale, drop it and let the next DOWNLOAD ALL re-resolve. In
         # practice the dialog is answered in seconds and the entry is minutes
         # old, so this only bites a confirm left open.
-        playlists = self._cached_category(api_path) or []
+        playlists = self._cached_category(cache_key) or []
         if not playlists:
             self._set_status("Nothing to download here, open the category again")
             return
@@ -17814,9 +17812,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if gate == "block":
             return
         if gate == "nudge":
-            self._stash_pending_download(f"cat:{api_path}", lambda: self.downloadPlaylistCategory(api_path))
+            self._stash_pending_download(cache_key, lambda: self.downloadPlaylistCategory(api_path, provider_id))
             return
-        if self._ffmpeg_gate_holds(f"cat:{api_path}", lambda: self.downloadPlaylistCategory(api_path)):
+        if self._ffmpeg_gate_holds(cache_key, lambda: self.downloadPlaylistCategory(api_path, provider_id)):
             return
         # Cold session: {folder_path} would resolve to "" for every foldered
         # playlist in the category, writing a second complete copy outside its
@@ -17824,7 +17822,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # downloadPlaylist; the button feedback targets the cat: rollup id so
         # a failed sweep clears the right button.
         if self._needs_folder_tree() and self._warm_folder_tree(
-            lambda: self.downloadPlaylistCategory(api_path), f"cat:{api_path}"
+            lambda: self.downloadPlaylistCategory(api_path, provider_id), f"cat:{api_path}"
         ):
             self.downloadState.emit(f"cat:{api_path}", "preparing")
             return

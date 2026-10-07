@@ -1,6 +1,6 @@
 """Browse landing: the V2 home feed's personalized shelves.
 
-Pins the rules ``_home_v2_rows`` adds on top of the shared row builder:
+Pins the rules ``_home_rows`` adds on top of the shared row builder:
 - rows parse through the REAL tidalapi V2 category parser, tolerantly: an
   unknown module type drops that row, never the whole feed,
 - MIX rows fall away whole (they parse to MixV2, which the engine's download

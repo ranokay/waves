@@ -5175,6 +5175,9 @@ ApplicationWindow {
   // download or a preview, and the confirm prompt ({path, title, count}).
   property string catPendingDl: ""
   property string catPendingPv: ""
+  // The owning provider of the pending category action: the resolve and the
+  // download must name the same one (issue #600).
+  property string catPendingProvider: ""
   property var catDlPrompt: null
   // Every way out of the bulk-download confirm that is not "Download all".
   // The tick has to go with the dialog: left armed it re-opens pre-ticked for
@@ -5970,6 +5973,7 @@ ApplicationWindow {
     root.browseHighlightId = ""
     root.catPendingDl = ""
     root.catPendingPv = ""
+    root.catPendingProvider = ""
     root.catDlPrompt = null
   }
 
@@ -6096,14 +6100,16 @@ ApplicationWindow {
       if (count <= 0)
         // backend already set the status line
         return
+      var provider = root.catPendingProvider || root.legacyBrowseProvider
       if (waves.confirmCategoryDl)
         root.catDlPrompt = {
           path: path,
+          provider: provider,
           title: title || "this category",
           count: count
         }
       else
-        waves.downloadPlaylistCategory(path)
+        waves.downloadPlaylistCategory(path, provider)
     }
     function onHomeLoaded(source, sections) {
       var g = root.libGroupFor(source)
@@ -10287,7 +10293,7 @@ ApplicationWindow {
               else if (p.kind === "favVideos")
                 waves.downloadFavoriteVideos(p.source)
               else
-                waves.downloadPlaylistCategory(p.path)
+                waves.downloadPlaylistCategory(p.path, p.provider || root.legacyBrowseProvider)
             }
           }
           GateAction {

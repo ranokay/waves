@@ -134,7 +134,9 @@ def test_the_resolve_routes_through_the_named_provider():
     assert stub.providers["stub"].calls == [("Chill", "pages/mood/chill")]
     assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "")
 
-    # An unknown/disabled owner makes no request and emits nothing.
+    # An unknown/disabled owner makes no request; it answers a zero count and
+    # a status so the queued action's pending flags clear.
     stub.resolvePlaylistCategory("pages/mood/chill", "Chill", "ghost")
     assert stub.providers["stub"].calls == [("Chill", "pages/mood/chill")]
-    assert len(stub.playlistCategoryResolved.emits) == 1
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "")
+    assert stub.statuses[-1] == "Could not load this category"

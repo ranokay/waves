@@ -350,7 +350,13 @@ def test_disabled_provider_catalog_and_preview_do_not_call_the_service(bridge, m
     bridge.threadpool.run_all()
     _drain_gui(bridge)
     assert bridge.providers["paper"].calls == []
-    assert getattr(bridge, signal).emits == []
+    emits = getattr(bridge, signal).emits
+    if method == "openBrowseItem":
+        # A refused owner answers the page's own key with an error so the
+        # QML clears its loading state; prefetch stays silent.
+        assert emits and all(payload.get("error") for payload in emits)
+    else:
+        assert emits == []
     assert bridge.providers["tidal"].calls == []
 
 

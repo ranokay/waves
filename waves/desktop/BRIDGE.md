@@ -267,8 +267,11 @@ chip link carries `provider_id` (its owner), the payload carries
 drill-down routes back through that owner: `openBrowsePage(apiPath, title,
 providerId)`, `openBrowsePlaylists(apiPath, title, providerId)` and
 `loadBrowseSectionMore(key, dataPath, offset, modType, title, providerId)`
-each require `Capability.BROWSE` and READY readiness for the id (an unknown,
-disabled or signed-out provider makes no request and emits nothing). A
+each require `Capability.BROWSE` and READY readiness for the id. A refused
+id (unknown, disabled or signed-out) makes no request: `browsePageLoaded` /
+`browseSectionMore` answer that page's own key with an `error` payload so
+the loading UI clears and RETRY is offered; `resolvePlaylistCategory` sets
+its status line and answers a zero count so the queued action clears. A
 provider whose recipe or page reads fail loses only its own rows; the
 payload is an error only when every attempted provider failed. Editorial
 page caches are keyed `browse:<provider>:<path>` / `pl:<provider>:<path>`; a

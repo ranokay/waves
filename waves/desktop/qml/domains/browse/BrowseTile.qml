@@ -407,7 +407,8 @@ Rectangle {
               accessibleLabel: "Preview " + (bt.title || "category")
               onTriggered: {
                 host.catPendingPv = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider)
+                host.catPendingProvider = bt.provider || host.legacyBrowseProvider
+                waves.resolvePlaylistCategory(bt.path, bt.title, host.catPendingProvider)
               }
             }
           }
@@ -448,7 +449,8 @@ Rectangle {
               accessibleLabel: "Download all in " + (bt.title || "category")
               onTriggered: {
                 host.catPendingDl = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider)
+                host.catPendingProvider = bt.provider || host.legacyBrowseProvider
+                waves.resolvePlaylistCategory(bt.path, bt.title, host.catPendingProvider)
               }
             }
           }
@@ -463,7 +465,7 @@ Rectangle {
         label: "Download all"
         // Retry after a failed rollup re-queues from the cached list.
         onTap: function () {
-          waves.downloadPlaylistCategory(bt.path)
+          waves.downloadPlaylistCategory(bt.path, bt.provider || host.legacyBrowseProvider)
         }
       }
     }

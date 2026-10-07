@@ -198,7 +198,13 @@ def test_signed_out_item_open_requires_its_provider_enabled():
     bridge.openBrowseItem("album", "apple:album-1")
     bridge.openBrowseItem("album", "tidal-album")
     bridge.prefetchBrowseItem("album", "apple:album-1")
-    assert bridge.browsePageLoaded.emits == []
+    # Both opens are refused without touching a service; each answers its
+    # page's own key with an error so the QML clears its loading state.
+    assert [payload["key"] for payload in bridge.browsePageLoaded.emits] == [
+        "item:album:apple:album-1",
+        "item:album:tidal-album",
+    ]
+    assert all(payload["error"] for payload in bridge.browsePageLoaded.emits)
     assert bridge._browse_loading == set()
 
 

@@ -311,7 +311,9 @@ class _BrowsePageStub:
         self.sampled: list = []
         self._fresh_sections = fresh_sections
 
-    browse_path_ok = staticmethod(WavesBridge._page_path_ok)
+    @staticmethod
+    def browse_path_ok(path):
+        return str(path or "").startswith("pages/") and "//" not in str(path or "")
 
     def browse_page(self, title, api_path):
         return SimpleNamespace(title="Labels")
@@ -412,6 +414,19 @@ def test_category_download_warms_the_tree_under_the_rollup_id():
     assert stub.warm_calls == ["cat:pages/mood/chill"], "the failed-sweep clear must target the cat: button"
     assert stub.downloadState.emits == [("cat:pages/mood/chill", "preparing")]
     assert stub._folder_groups == {}, "no rollup state is published before the tree is warm"
+
+
+def test_category_download_reads_the_owner_qualified_cache():
+    # The resolve writes cat:<provider>:<path>; the download confirms against
+    # the same entry (issue #600's second-provider path).
+    stub = _CategoryStub()
+    seen: list = []
+    stub._cached_category = lambda key: (seen.append(key), None)[1]
+
+    stub.downloadPlaylistCategory("pages/mood/chill", "stub")
+
+    assert seen == ["cat:stub:pages/mood/chill"]
+    assert stub.statuses[-1] == "Nothing to download here, open the category again"
 
 
 # Best-of-both publishes button state before its edition scan.

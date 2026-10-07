@@ -299,7 +299,6 @@ class _AuthStub:
     """Base stand-in for the auth slots: the guard tidal, the fake provider,
     the inline pool and the signals they touch."""
 
-    _page_path_ok = staticmethod(WavesBridge._page_path_ok)
     _unbind_merge_plans = WavesBridge._unbind_merge_plans
     _end_provider_context = WavesBridge._end_provider_context
     _settle_search = WavesBridge._settle_search
@@ -660,13 +659,22 @@ class TestTheCatalogRoads:
         assert tree.playlist_paths == {"p1": "F"}
         assert stub._folder_tree["tidal"] is tree
 
-    def test_browse_fetch_reads_the_provider(self):
+    def test_browse_page_for_reads_the_provider_after_validating(self):
         page = object()
         stub = self._stub(browse_page=page)
+        stub._provider.browse_path_ok = lambda path: path.startswith("pages/")
 
-        result = WavesBridge._browse_fetch.__get__(stub, type(stub))("Explore", "pages/explore")
+        result = WavesBridge._browse_page_for.__get__(stub, type(stub))(stub._provider, "Explore", "pages/explore")
 
         assert result is page
+        assert stub._provider.calls == [("browse_page", "Explore", "pages/explore")]
+
+        try:
+            WavesBridge._browse_page_for.__get__(stub, type(stub))(stub._provider, "Evil", "https://evil.test/x")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an off-service path must be refused before the provider sees it")
         assert stub._provider.calls == [("browse_page", "Explore", "pages/explore")]
 
     def test_the_home_rows_read_the_provider_and_drop_the_handles(self):

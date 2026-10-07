@@ -72,9 +72,11 @@ def test_download_uses_the_ttl_checked_read():
     """downloadPlaylistCategory must not reach past _cached_category into the
     raw dict, or the whole TTL is decorative for the one path that matters."""
     stub = _CacheStub()
-    stub._cache_category("pages/mood/chill", ["a"])
-    ts, playlists = stub._category_pl["pages/mood/chill"]
-    stub._category_pl["pages/mood/chill"] = (ts - WavesBridge._CATEGORY_PL_TTL - 1, playlists)
+    # The resolve now writes the owner-qualified key; the download reads the
+    # same one (the TIDAL default here).
+    stub._cache_category("cat:tidal:pages/mood/chill", ["a"])
+    ts, playlists = stub._category_pl["cat:tidal:pages/mood/chill"]
+    stub._category_pl["cat:tidal:pages/mood/chill"] = (ts - WavesBridge._CATEGORY_PL_TTL - 1, playlists)
 
     seen: list = []
     stub._logged_in = True
