@@ -1196,6 +1196,183 @@ ApplicationWindow {
   // browsePage, keyed by its TIDAL api path so a slow load for a chip the
   // user has already left is ignored (see onBrowsePageLoaded).
   property var browseSections: []
+  // The providers that composed this landing (bridge payload, registry
+  // order), one entry per source for the filter chips.
+  property var browseSources: []
+  // The Browse source filter: "all" or one provider id, remembered across
+  // launches (the Search page's remember-last pattern). The remembered value
+  // survives a provider's absence, so the filter applies again when that
+  // provider returns.
+  property string browseSourceFilter: {
+    var saved = waves.wavesPref("browse_source_filter")
+    return typeof saved === "string" && saved !== "" ? saved : "all"
+  }
+  onBrowseSourceFilterChanged: waves.setWavesPref("browse_source_filter", root.browseSourceFilter)
+  function browsePrefObject(name) {
+    var raw = waves.wavesPref(name)
+    if (typeof raw !== "string" || raw === "")
+      return ({})
+    try {
+      var parsed = JSON.parse(raw)
+      return parsed && typeof parsed === "object" ? parsed : ({})
+    } catch (e) {
+      return ({})
+    }
+  }
+  function browseWritePref(name, value) {
+    waves.setWavesPref(name, JSON.stringify(value))
+  }
+  // Landing section arrangement (issue #600): hidden / collapsed / per-
+  // provider order, as JSON maps keyed "<provider>|<title>", so a
+  // rearrangement follows the section across launches and provider outages.
+  property var browseHidden: root.browsePrefObject("browse_sections_hidden")
+  property var browseCollapsed: root.browsePrefObject("browse_sections_collapsed")
+  property var browseOrder: root.browsePrefObject("browse_section_order")
+  function browseSectionKey(sec) {
+    return String(sec.provider_id || "tidal") + "|" + String(sec.title || "")
+  }
+  // The filter actually applied: the remembered choice while one of the
+  // landing's sources carries it, All otherwise.
+  readonly property string effectiveBrowseSourceFilter: {
+    if (root.browseSourceFilter === "all")
+      return "all"
+    var sources = root.browseSources || []
+    for (var i = 0; i < sources.length; ++i)
+      if (String(sources[i].provider || "") === root.browseSourceFilter)
+        return root.browseSourceFilter
+    return "all"
+  }
+  // The source chip row's model: All first, then one entry per composing
+  // provider with its descriptor's name and mark (the bridge answers both).
+  readonly property var browseSourceChips: {
+    var out = [
+      {
+        provider: "all",
+        name: "All",
+        logo: ""
+      }
+    ]
+    var sources = root.browseSources || []
+    for (var i = 0; i < sources.length; ++i) {
+      var descriptor = waves.providerDescriptor(String(sources[i].provider || ""))
+      out.push({
+        provider: String(sources[i].provider || ""),
+        name: descriptor ? String(descriptor.name || "") : "",
+        logo: descriptor ? String(descriptor.logo || "") : ""
+      })
+    }
+    return out
+  }
+  // The visible, ordered landing sections: the source filter first, hidden
+  // sections dropped, then each provider's own order map applied within its
+  // group (titles absent from the map keep their payload order after the
+  // ranked ones; a provider's group order never crosses into another's).
+  readonly property var browseVisibleSections: root.computeBrowseSections()
+  function computeBrowseSections() {
+    var secs = root.browseSections || []
+    var filter = root.effectiveBrowseSourceFilter
+    var groups = []
+    var byProvider = ({})
+    for (var i = 0; i < secs.length; ++i) {
+      var sec = secs[i]
+      if (filter !== "all" && String(sec.provider_id || "tidal") !== filter)
+        continue
+      if (root.browseHidden[root.browseSectionKey(sec)])
+        continue
+      var pid = String(sec.provider_id || "tidal")
+      if (byProvider[pid] === undefined) {
+        byProvider[pid] = []
+        groups.push(pid)
+      }
+      byProvider[pid].push(sec)
+    }
+    var out = []
+    for (var g = 0; g < groups.length; ++g) {
+      var list = byProvider[groups[g]]
+      var order = root.browseOrder[groups[g]] || []
+      var rank = ({})
+      for (var k = 0; k < order.length; ++k)
+        rank[String(order[k])] = k
+      var ranked = []
+      var rest = []
+      for (var m = 0; m < list.length; ++m)
+        (rank[String(list[m].title || "")] !== undefined ? ranked : rest).push(list[m])
+      ranked.sort(function (a, b) {
+        return rank[String(a.title || "")] - rank[String(b.title || "")]
+      })
+      out = out.concat(ranked, rest)
+    }
+    return out
+  }
+  // Hidden sections still present in the current payload (the restore row).
+  readonly property var browseHiddenSections: {
+    var out = []
+    var secs = root.browseSections || []
+    for (var i = 0; i < secs.length; ++i) {
+      var key = root.browseSectionKey(secs[i])
+      if (root.browseHidden[key])
+        out.push({
+          key: key,
+          provider: String(secs[i].provider_id || "tidal"),
+          title: String(secs[i].title || "")
+        })
+    }
+    return out
+  }
+  function browseHideSection(sec) {
+    var m = Object.assign({}, root.browseHidden)
+    m[root.browseSectionKey(sec)] = true
+    root.browseHidden = m
+    root.browseWritePref("browse_sections_hidden", m)
+  }
+  function browseRestoreSection(key) {
+    var m = Object.assign({}, root.browseHidden)
+    delete m[key]
+    root.browseHidden = m
+    root.browseWritePref("browse_sections_hidden", m)
+  }
+  function browseToggleCollapsed(sec) {
+    var key = root.browseSectionKey(sec)
+    var m = Object.assign({}, root.browseCollapsed)
+    if (m[key])
+      delete m[key]
+    else
+      m[key] = true
+    root.browseCollapsed = m
+    root.browseWritePref("browse_sections_collapsed", m)
+  }
+  // Whether a move in this direction is possible within the section's own
+  // provider group (the landing's controls gray out at the ends).
+  function browseCanMove(sec, delta) {
+    var pid = String(sec.provider_id || "tidal")
+    var list = []
+    var visible = root.browseVisibleSections
+    for (var i = 0; i < visible.length; ++i)
+      if (String(visible[i].provider_id || "tidal") === pid)
+        list.push(String(visible[i].title || ""))
+    var at = list.indexOf(String(sec.title || ""))
+    return at >= 0 && at + delta >= 0 && at + delta < list.length
+  }
+  // Move one section up (-1) or down (+1) within its own provider's visible
+  // order and persist the resulting title list for that provider.
+  function browseMoveSection(sec, delta) {
+    var pid = String(sec.provider_id || "tidal")
+    var list = []
+    var visible = root.browseVisibleSections
+    for (var i = 0; i < visible.length; ++i)
+      if (String(visible[i].provider_id || "tidal") === pid)
+        list.push(String(visible[i].title || ""))
+    var at = list.indexOf(String(sec.title || ""))
+    var to = at + delta
+    if (at < 0 || to < 0 || to >= list.length)
+      return
+    var moved = list.splice(at, 1)[0]
+    list.splice(to, 0, moved)
+    var m = Object.assign({}, root.browseOrder)
+    m[pid] = list
+    root.browseOrder = m
+    root.browseWritePref("browse_section_order", m)
+  }
   // The clicked card's own title, kept while its page payload is in flight,
   // so the breadcrumb (and a snapshot of a page left mid-load) can name the
   // page immediately instead of flashing the "Browse" fallback until
@@ -1256,6 +1433,7 @@ ApplicationWindow {
     if (root.browseSections.length > 0)
       browseLanding.holdScroll()
     root.browseSections = secs
+    root.browseSources = p.sources || []
     root.browseChips = {
       genres: p.genres || [],
       moods: p.moods || [],
@@ -1559,6 +1737,10 @@ ApplicationWindow {
   property bool browseError: false
   property var browsePage: null          // {key, title, sections} when drilled in
   property string browsePageKey: ""      // "" = the Browse landing page
+  // The drilled page's owning provider, so a retry (openBrowsePage /
+  // openBrowsePlaylists) and the nav snapshot route back through it even
+  // when the page payload has not landed yet.
+  property string browsePageProvider: ""
   property bool browsePageLoading: false
   property bool browsePageError: false
   // "Is this album already in my local library?" for the album page on
@@ -3328,7 +3510,7 @@ ApplicationWindow {
       // silent, throttled; repaints only on change
     }
   }
-  function openBrowseLink(path, title) {
+  function openBrowseLink(path, title, provider) {
     navPush()
     // browsePage stays set while the landing shows (the drill pane
     // is kept alive for an instant return), so "there is a page" is
@@ -3345,7 +3527,8 @@ ApplicationWindow {
     // editorial pages have no hero
     browsePageError = false
     browsePageLoading = true
-    waves.openBrowsePage(path, title)
+    root.browsePageProvider = String(provider || "tidal")
+    waves.openBrowsePage(path, title, root.browsePageProvider)
   }
   // Re-issue the current drilled page's fetch after an error. The key alone
   // says which backend entry built the page: openBrowsePage only answers
@@ -3356,14 +3539,15 @@ ApplicationWindow {
     var key = "" + browsePageKey
     browsePageError = false
     browsePageLoading = true
+    var provider = String(root.browsePageProvider || "tidal")
     if (key.indexOf("pl:") === 0) {
-      waves.openBrowsePlaylists(key.substring(3), browseTitleHint)
+      waves.openBrowsePlaylists(key.substring(3), browseTitleHint, provider)
     } else if (key.indexOf("item:") === 0) {
       var rest = key.substring(5)
       var cut = rest.indexOf(":")
       waves.openBrowseItem(rest.substring(0, cut), rest.substring(cut + 1))
     } else {
-      waves.openBrowsePage(key, browseTitleHint)
+      waves.openBrowsePage(key, browseTitleHint, provider)
     }
   }
   // Some rows (Custom mixes, Radio stations, New releases…) have no TIDAL
@@ -3390,6 +3574,7 @@ ApplicationWindow {
     browsePage = {
       key: key,
       title: sec.title || "More",
+      provider_id: String(sec.provider_id || "tidal"),
       sections: [
         {
           rowKind: sec.rowKind,
@@ -3401,10 +3586,12 @@ ApplicationWindow {
           data: sec.data || "",
           total: sec.total || 0,
           offset: sec.offset || 0,
-          modType: sec.modType || ""
+          modType: sec.modType || "",
+          provider_id: String(sec.provider_id || "tidal")
         }
       ]
     }
+    root.browsePageProvider = String(sec.provider_id || "tidal")
   }
   // A local: page is a snapshot of its landing row taken at click time; a
   // background revalidation can deliver a fresher ordering afterwards (e.g.
@@ -3434,6 +3621,7 @@ ApplicationWindow {
       // unchanged
       return {
         key: pg.key,
+        provider_id: pg.provider_id,
         title: pg.title,
         sections: [
           {
@@ -3444,7 +3632,8 @@ ApplicationWindow {
             data: r.data || "",
             total: r.total || 0,
             offset: r.offset || 0,
-            modType: r.modType || ""
+            modType: r.modType || "",
+            provider_id: r.provider_id || pg.provider_id
           }
         ]
       }
@@ -3481,11 +3670,12 @@ ApplicationWindow {
       return {
         title: c.title,
         path: c.path,
+        provider_id: c.provider_id,
         pl: true
       }
     })
   }
-  function openPlaylistsFolder(path, title) {
+  function openPlaylistsFolder(path, title, provider) {
     var key = "pl:" + path
     if (browsePageKey === key)
       return
@@ -3505,7 +3695,8 @@ ApplicationWindow {
     // a playlist grid has no hero
     browsePageError = false
     browsePageLoading = true
-    waves.openBrowsePlaylists(path, title)
+    root.browsePageProvider = String(provider || "tidal")
+    waves.openBrowsePlaylists(path, title, root.browsePageProvider)
   }
   function openPlaylistsRoot() {
     var key = "cloud:All Playlists"
@@ -3559,8 +3750,12 @@ ApplicationWindow {
     browsePageKey = key
     browsePageError = false
     browsePageLoading = false
+    // A cloud aggregates links that keep their own owners; the page's
+    // provider is the first link's, for the crumb's badge and snapshots.
+    root.browsePageProvider = (chips && chips.length > 0) ? String(chips[0].provider_id || "tidal") : ""
     browsePage = {
       key: key,
+      provider_id: root.browsePageProvider,
       title: title,
       sections: [
         {
@@ -3585,20 +3780,24 @@ ApplicationWindow {
   // One in-flight fetch per data path; results splice into whichever views
   // hold the row at that offset (backend keeps its caches in step).
   property var browseGrowing: ({})
+  function browseGrowKey(sec) {
+    return String((sec && sec.provider_id) || root.browsePageProvider || "tidal") + "|" + String((sec && sec.data) || "")
+  }
   function browseCanGrow(sec) {
     return !!(sec && sec.data) && (sec.offset || 0) < (sec.total || 0)
   }
   function browseGrow(sec) {
-    if (!browseCanGrow(sec) || browseGrowing[sec.data])
+    var key = root.browseGrowKey(sec)
+    if (!browseCanGrow(sec) || browseGrowing[key])
       return
     var g = Object.assign({}, browseGrowing)
-    g[sec.data] = true
+    g[key] = true
     browseGrowing = g
-    waves.loadBrowseSectionMore(browsePageKey, sec.data, sec.offset || 0, sec.modType || "", sec.title || "")
+    waves.loadBrowseSectionMore(browsePageKey, sec.data, sec.offset || 0, sec.modType || "", sec.title || "", String(sec.provider_id || root.browsePageProvider || "tidal"))
   }
   function browseGrew(p) {
     var g = Object.assign({}, browseGrowing)
-    delete g[p.data]
+    delete g[String(p.provider_id || "tidal") + "|" + String(p.data || "")]
     browseGrowing = g
     if (p.error || (p.items || []).length === 0)
       return
@@ -3607,6 +3806,8 @@ ApplicationWindow {
       var hit = false
       var out = (rows || []).map(function (r) {
         if (r.data !== p.data || (r.offset || 0) !== p.reqOffset)
+          return r
+        if (p.provider_id && r.provider_id && String(r.provider_id) !== String(p.provider_id))
           return r
         hit = true
         return Object.assign({}, r, {
@@ -5689,7 +5890,9 @@ ApplicationWindow {
       return root.mediaProvider(page.header.id)
     if (String(key || "").indexOf("item:") === 0)
       return root.mediaProvider(String(key).split(":").slice(2).join(":"))
-    return String(root.browseNav.provider || "")
+    if (page && page.provider_id)
+      return String(page.provider_id)
+    return String(root.browsePageProvider || root.browseNav.provider || "")
   }
   function snapshotProvider(snapshot) {
     if (snapshot.v === "artist")
@@ -7505,6 +7708,60 @@ ApplicationWindow {
             }
           }
 
+          // Source chips: All plus one per provider that composed this
+          // landing. Shown once two sources are in play; a single-provider
+          // install has nothing to filter (the Search page's pattern).
+          Row {
+            objectName: "browseSourceChips"
+            visible: root.signedIn && root.browseSources.length > 1 && !root.browseLoading
+            spacing: 8
+            Repeater {
+              model: root.browseSourceChips
+              delegate: Rectangle {
+                id: bsourceChip
+                objectName: "browseSourceChip"
+                required property var modelData
+                readonly property bool on: root.effectiveBrowseSourceFilter === String(modelData.provider)
+                radius: 8
+                implicitHeight: 30
+                implicitWidth: bsourceRow.implicitWidth + 26
+                color: on ? root.accentCont : "transparent"
+                border.color: on ? root.accentDim : root.border1
+                Row {
+                  id: bsourceRow
+                  anchors.centerIn: parent
+                  spacing: 7
+                  ProviderLogo {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: String(bsourceChip.modelData.provider || "") !== "all"
+                    logo: String(bsourceChip.modelData.logo || "")
+                    width: 16
+                    height: 12
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: true
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: String(bsourceChip.modelData.name || "")
+                    color: bsourceChip.on ? root.accent : root.textLo
+                    font.pixelSize: 13
+                  }
+                }
+                TapAction {
+                  objectName: "browseSourceChipAction"
+                  anchors.fill: parent
+                  accessibleLabel: "Show " + String(bsourceChip.modelData.name || "") + " sections"
+                  role: Accessible.RadioButton
+                  checkable: true
+                  checked: bsourceChip.on
+                  focusRadius: 8
+                  onTriggered: root.browseSourceFilter = String(bsourceChip.modelData.provider)
+                }
+              }
+            }
+          }
           // Landing, console style: the Genres / Moods / Decades
           // chip sets lead the page (the art-first layout renders
           // the same data as colour tiles BELOW the content
@@ -7581,7 +7838,7 @@ ApplicationWindow {
                           accessibleLabel: "Open " + bchip.modelData.title
                           anchors.fill: parent
                           cursorShape: Qt.PointingHandCursor
-                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title)
+                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || "tidal")) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || "tidal"))
                         }
                       }
                     }
@@ -7599,7 +7856,7 @@ ApplicationWindow {
           // frames instead of freezing for the ~250 ms a
           // synchronous build of every shelf would take.
           Repeater {
-            model: root.browseSections
+            model: root.browseVisibleSections
             delegate: Loader {
               id: bsecLd
               required property var modelData
@@ -7616,6 +7873,74 @@ ApplicationWindow {
                 landing: true
                 pane: browseLanding
                 col: browseLandingCol
+                arrangeable: true
+                collapsed: root.browseCollapsed[root.browseSectionKey(bsecLd.modelData)] === true
+                canMoveUp: root.browseCanMove(bsecLd.modelData, -1)
+                canMoveDown: root.browseCanMove(bsecLd.modelData, 1)
+                onToggled: root.browseToggleCollapsed(bsecLd.modelData)
+                onHideRequested: root.browseHideSection(bsecLd.modelData)
+                onMoveRequested: function (delta) {
+                  root.browseMoveSection(bsecLd.modelData, delta)
+                }
+              }
+            }
+          }
+
+          // Hidden landing sections: every hidden section still present in
+          // the payload gets a restore chip, so a hide is one click to undo
+          // without touching Settings.
+          Row {
+            objectName: "browseHiddenSections"
+            visible: root.browseHiddenSections.length > 0
+            width: parent.width
+            spacing: 8
+            Text {
+              textFormat: Text.PlainText
+              anchors.verticalCenter: parent.verticalCenter
+              text: "HIDDEN"
+              color: root.textDim
+              font.family: root.mono
+              font.pixelSize: 11
+              font.bold: true
+              font.letterSpacing: 1.9
+            }
+            Repeater {
+              model: root.browseHiddenSections
+              delegate: Rectangle {
+                id: hiddenChip
+                required property var modelData
+                radius: 8
+                implicitHeight: 26
+                implicitWidth: hiddenRow.implicitWidth + 22
+                color: "transparent"
+                border.color: root.border1
+                Row {
+                  id: hiddenRow
+                  anchors.centerIn: parent
+                  spacing: 6
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: String(hiddenChip.modelData.title || "")
+                    color: root.textLo
+                    font.pixelSize: 12
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "RESTORE"
+                    color: root.accent
+                    font.family: root.mono
+                    font.pixelSize: 10
+                    font.bold: true
+                  }
+                }
+                TapAction {
+                  objectName: "browseRestoreSection"
+                  anchors.fill: parent
+                  accessibleLabel: "Restore " + String(hiddenChip.modelData.title || "")
+                  onTriggered: root.browseRestoreSection(String(hiddenChip.modelData.key))
+                }
               }
             }
           }
@@ -7682,6 +8007,7 @@ ApplicationWindow {
                       required property int index
                       title: modelData.title
                       path: modelData.path
+                      provider: String(modelData.provider_id || "tidal")
                       idx: index
                       plOnly: !!modelData.pl
                     }

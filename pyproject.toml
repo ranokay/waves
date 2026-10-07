@@ -318,6 +318,7 @@ ignore = [
 "tests/ui/test_boot_quiet_window.py" = ["C901"]
 "tests/catalog/test_new_release_mark.py" = ["C901"]
 "tests/catalog/test_explicit_mark.py" = ["C901"]
+"tests/browse/test_browse_combined_qml.py" = ["C901"]
 "tests/queue/test_queue_section_pulse.py" = ["C901"]
 "tests/queue/test_queue_single_row_has_nothing_to_expand.py" = ["C901"]
 "tests/search/test_search_query_collapse_qml.py" = ["C901"]

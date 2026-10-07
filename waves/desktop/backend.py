@@ -12231,6 +12231,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Browse landing presentation: "art" (artwork-first, hover
             # controls) or "console" (chip sets + framed cards).
             "browse_style": "art",
+            # Combined Browse landing (issue #600): the source filter and the
+            # section arrangement — hidden sections, collapsed sections and
+            # each provider's section order — remembered across launches.
+            # Housekeeping state, not user-facing settings (the landing's own
+            # controls are the editor), so not in settingsSchema; the three
+            # arrangement maps are JSON objects in a string.
+            "browse_source_filter": "all",
+            "browse_sections_hidden": "",
+            "browse_sections_collapsed": "",
+            "browse_section_order": "",
             # Ambient wave-loop video behind the UI; on by default, the toggle
             # fully stops the decode pipeline (not just hides it).
             "motion_background": True,

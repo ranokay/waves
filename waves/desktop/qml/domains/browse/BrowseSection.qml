@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import "../../primitives" as Primitives
 import "../../components"
 import "../../primitives"
@@ -36,6 +37,16 @@ Column {
   property var sec: null
   property int secIndex: 0
   property bool landing: false
+  // Landing arrangement (issue #600): the caller owns the persisted state.
+  // An arranged section keeps its header (and these controls) and hides its
+  // body while collapsed; hide and move are signals the landing handles.
+  property bool arrangeable: false
+  property bool collapsed: false
+  property bool canMoveUp: false
+  property bool canMoveDown: false
+  signal toggled
+  signal hideRequested
+  signal moveRequested(int delta)
   // The scroll pane and content column this section lives in, for
   // wheel redirection, row windowing and highlight centering.
   property Flickable pane: null
@@ -68,39 +79,122 @@ Column {
   readonly property bool headlinable: !grid && (!!sec.more || (sec.rowKind === "cards" && (sec.items || []).length > 0))
   function openListing() {
     if (sec.more)
-      host.openBrowseLink(sec.more, sec.title || "More")
+      host.openBrowseLink(sec.more, sec.title || "More", String(sec.provider_id || "tidal"))
     else
       host.openBrowseSection(sec)
   }
   spacing: 8
+  // The landing's arrangement controls: move up / move down / hide, in the
+  // app's mono data voice, shown only for an arranged landing. The chevron
+  // covers collapse, so it is not repeated here.
+  component ArrangeButton: Item {
+    id: abtn
+    property string label: ""
+    property bool active: true
+    signal tapped
+    implicitWidth: abtnText.implicitWidth
+    implicitHeight: 16
+    Text {
+      id: abtnText
+      textFormat: Text.PlainText
+      anchors.centerIn: parent
+      text: abtn.label
+      color: !abtn.active ? textDim : abtnMa.containsMouse ? accent : textLo
+      font.family: mono
+      font.pixelSize: 10
+      font.bold: true
+      font.letterSpacing: 1
+    }
+    TapAction {
+      id: abtnMa
+      anchors.fill: parent
+      enabled: abtn.active
+      accessibleLabel: abtn.label
+      onTriggered: abtn.tapped()
+    }
+  }
+  Component {
+    id: arrangeControls
+    Row {
+      spacing: 12
+      ArrangeButton {
+        objectName: "browseArrangeUp"
+        label: "UP"
+        active: bsec.canMoveUp
+        onTapped: bsec.moveRequested(-1)
+      }
+      ArrangeButton {
+        objectName: "browseArrangeDown"
+        label: "DOWN"
+        active: bsec.canMoveDown
+        onTapped: bsec.moveRequested(1)
+      }
+      ArrangeButton {
+        objectName: "browseArrangeHide"
+        label: "HIDE"
+        onTapped: bsec.hideRequested()
+      }
+    }
+  }
   SectionHeader {
+    objectName: "browseSectionHeader"
     visible: !bsec.artStyle && bsec.showHeadline
     label: (bsec.sec.title || "More").toUpperCase()
     count: (bsec.sec.items || []).length
     openable: bsec.headlinable
+    collapsible: bsec.arrangeable
+    collapsed: bsec.collapsed
+    onToggled: bsec.toggled()
+    trailing: bsec.arrangeable ? arrangeControls : null
     onOpened: bsec.openListing()
   }
-  Text {
-    id: bsecTitle
+  RowLayout {
     visible: bsec.artStyle && bsec.showHeadline
-    textFormat: Text.PlainText
-    // "\u203a" marks headlines that open the full listing
-    text: (bsec.sec.title || "More") + (bsec.headlinable ? "  \u203a" : "")
-    color: bsecTitleMa.containsMouse ? "#ffffff" : textHi
-    font.pixelSize: 17
-    font.bold: true
     width: parent.width
-    elide: Text.ElideRight
-    topPadding: 6
-    TapAction {
-      id: bsecTitleMa
-      anchors.left: parent.left
-      anchors.top: parent.top
-      anchors.bottom: parent.bottom
-      width: Math.min(parent.width, parent.implicitWidth)
-      enabled: bsec.headlinable
-      accessibleLabel: "Open " + (bsec.sec.title || "More")
-      onTriggered: bsec.openListing()
+    spacing: 10
+    ExpandChevron {
+      visible: bsec.arrangeable
+      open: !bsec.collapsed
+      hovered: bsecTitleMa.containsMouse
+      tile: 20
+      glyph: 14
+      showTile: false
+      stroke: bsecTitleMa.containsMouse ? accent : textLo
+      Layout.alignment: Qt.AlignVCenter
+      TapAction {
+        objectName: "browseCollapseToggle"
+        anchors.fill: parent
+        accessibleLabel: (bsec.collapsed ? "Expand " : "Collapse ") + (bsec.sec.title || "More")
+        onTriggered: bsec.toggled()
+      }
+    }
+    Text {
+      id: bsecTitle
+      textFormat: Text.PlainText
+      // "\u203a" marks headlines that open the full listing
+      text: (bsec.sec.title || "More") + (bsec.headlinable ? "  \u203a" : "")
+      color: bsecTitleMa.containsMouse ? "#ffffff" : textHi
+      font.pixelSize: 17
+      font.bold: true
+      Layout.fillWidth: true
+      elide: Text.ElideRight
+      topPadding: 6
+      TapAction {
+        id: bsecTitleMa
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: Math.min(parent.width, parent.implicitWidth)
+        enabled: bsec.headlinable
+        accessibleLabel: "Open " + (bsec.sec.title || "More")
+        onTriggered: bsec.openListing()
+      }
+    }
+    Loader {
+      active: bsec.arrangeable
+      visible: active
+      sourceComponent: arrangeControls
+      Layout.alignment: Qt.AlignVCenter
     }
   }
   // full-listing wrap grid (drilled "show more" pages).
@@ -109,7 +203,7 @@ Column {
   // of dumped on the right until the window grows enough to add
   // another column.
   Flow {
-    visible: bsec.grid
+    visible: bsec.grid && !bsec.collapsed
     readonly property real cardW: bsec.artStyle ? 200 : 156
     spacing: bsec.artStyle ? 14 : 12
     readonly property int cols: host.gridCols(cardW, spacing, (bsec.sec.items || []).length, parent.width)
@@ -143,10 +237,10 @@ Column {
   // doesn't read as "stuck" the way an endless genre listing keeps
   // flowing.
   Item {
-    visible: bsec.grid
+    visible: bsec.grid && !bsec.collapsed
     width: parent.width
     height: 46
-    readonly property bool loadingMore: !!(bsec.sec.data && host.browseGrowing[bsec.sec.data])
+    readonly property bool loadingMore: !!(bsec.sec.data && host.browseGrowing[host.browseGrowKey(bsec.sec)])
     Row {
       anchors.centerIn: parent
       spacing: 10
@@ -177,7 +271,7 @@ Column {
   }
   // horizontal card shelf, console (framed cards)
   ListView {
-    visible: !bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards"
+    visible: !bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" && !bsec.collapsed
     width: parent.width
     height: 238
     orientation: ListView.Horizontal
@@ -217,7 +311,7 @@ Column {
   }
   // horizontal card shelf, art-first (unframed covers)
   ListView {
-    visible: bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards"
+    visible: bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" && !bsec.collapsed
     width: parent.width
     height: bsec.hero ? 284 : 250
     orientation: ListView.Horizontal
@@ -264,7 +358,7 @@ Column {
   // vertical track list (e.g. "New Tracks" on a genre page)
   Column {
     id: bsecRows
-    visible: bsec.sec.rowKind === "tracks"
+    visible: bsec.sec.rowKind === "tracks" && !bsec.collapsed
     width: parent.width
     Repeater {
       model: bsec.sec.rowKind === "tracks" ? bsec.sec.items : []
@@ -382,7 +476,7 @@ Column {
   // one presentation across every drilled box view. Console mode
   // keeps the variable-width chip flow.
   Flow {
-    visible: bsec.sec.rowKind === "links"
+    visible: bsec.sec.rowKind === "links" && !bsec.collapsed
     readonly property bool tiled: bsec.artStyle
     readonly property real cardW: 200
     spacing: tiled ? 14 : 8
@@ -402,6 +496,7 @@ Column {
             host: bsec.host
             title: blinkLd.modelData.title
             path: blinkLd.modelData.path
+            provider: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || "tidal")
             idx: blinkLd.index
             plOnly: !!blinkLd.modelData.pl
           }
@@ -438,7 +533,10 @@ Column {
               anchors.fill: parent
               accessibleLabel: "Open " + (blinkLd.modelData.title || "category")
               focusRadius: 8
-              onTriggered: blinkLd.modelData.pl ? host.openPlaylistsFolder(blinkLd.modelData.path, blinkLd.modelData.title) : host.openBrowseLink(blinkLd.modelData.path, blinkLd.modelData.title)
+              // The link's own owner rides along; a drilled page's links have
+              // none individually and inherit the page's provider.
+              readonly property string owner: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || "tidal")
+              onTriggered: blinkLd.modelData.pl ? host.openPlaylistsFolder(blinkLd.modelData.path, blinkLd.modelData.title, owner) : host.openBrowseLink(blinkLd.modelData.path, blinkLd.modelData.title, owner)
             }
           }
         }

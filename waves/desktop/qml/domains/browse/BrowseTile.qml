@@ -49,6 +49,10 @@ Rectangle {
 
   property string title: ""
   property string path: ""
+  // The tile's owning provider: its click drills back through the provider
+  // that served the link (a chip/cloud crossing providers keeps each link
+  // with its own owner).
+  property string provider: "tidal"
   property int idx: 0
   // Tile lives inside the Playlists folder view: drill into the
   // playlists-only grid instead of the full editorial page.
@@ -305,7 +309,7 @@ Rectangle {
     anchors.fill: parent
     accessibleLabel: "Open " + (bt.title || "category")
     focusRadius: bt.radius
-    onTriggered: bt.plOnly ? host.openPlaylistsFolder(bt.path, bt.title) : host.openBrowseLink(bt.path, bt.title)
+    onTriggered: bt.plOnly ? host.openPlaylistsFolder(bt.path, bt.title, bt.provider) : host.openBrowseLink(bt.path, bt.title, bt.provider)
   }
   // All Playlists folder chrome: the card-style hover strip (PREVIEW |
   // DOWNLOAD ALL), swapped for the live rollup button + badge once the
