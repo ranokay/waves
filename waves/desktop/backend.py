@@ -6717,9 +6717,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         promises.
 
         The cached order is the display's own fold order, so a cache replay
-        shows the same primaries and pin the live page did, and a group kept
-        because its fresh answer was empty caches as displayed rather than
-        vanishing on the next replay."""
+        shows the same primaries and pin the live page did. A group kept
+        because its fresh answer was empty caches as displayed whenever at
+        least one source answered with rows, rather than vanishing on the
+        next replay."""
         if not getattr(self, "_search_live", False):
             return
         self._search_live = False

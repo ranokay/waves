@@ -663,8 +663,8 @@ ApplicationWindow {
       return "all"
     return root.sourceIn(root.searchSources, root.searchSourceFilter) ? root.searchSourceFilter : "all"
   }
-  // Whether a source list carries one provider: the one scan the row, chip
-  // and error rules all read.
+  // Whether a source list carries one provider: the one scan behind the row
+  // rules (the chips and the error line compare effectiveSourceFilter).
   function sourceIn(sources, provider) {
     var list = sources || []
     for (var i = 0; i < list.length; ++i)
@@ -6154,8 +6154,9 @@ ApplicationWindow {
       // sticky, an earlier Albums click hid the ARTISTS section of every
       // later search (an artist could not be found at all). Reset here,
       // where new results land, so it also covers cache-served searches.
-      // The source filter is remember-last instead: applySearchResults keeps
-      // it when the new payload still carries that provider.
+      // The source filter is remember-last instead: effectiveSourceFilter
+      // applies it while the payload carries that provider and keeps the
+      // remembered value across an absence.
       root.filterType = "all"
       // A section a user expanded stays expanded on the next search (the
       // pref-backed flags), so nothing is reset here.

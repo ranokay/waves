@@ -234,11 +234,11 @@ def test_rows_kept_over_an_empty_fresh_answer_survive_a_replay() -> None:
 
     live = search_payloads(stub)[-1]
     assert [a["id"] for a in live["sections"]["albums"]] == ["al1"], "the stale rows stay on screen"
-    assert calls == ["tidal", "apple"]
+    assert sorted(calls) == ["apple", "tidal"]
 
     stub.search("one")  # served from the short cache: the kept rows replay
     replay = search_payloads(stub)[-1]
-    assert calls == ["tidal", "apple"], "the replay never reached the wire"
+    assert sorted(calls) == ["apple", "tidal"], "the replay never reached the wire"
     assert [a["id"] for a in replay["sections"]["albums"]] == ["al1"]
 
 
