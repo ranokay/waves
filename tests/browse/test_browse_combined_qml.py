@@ -364,6 +364,20 @@ def _run_scenario() -> int:
     if json.loads(q("waves.wavesPref('browse_sections_hidden')")) != {}:
         return fail("the restored section stayed in the hidden set")
 
+    # A category resolve answers the action that asked for it, with its own
+    # owner on the signal: arm the pending DOWNLOAD ALL, emit the resolve for
+    # the stub, and the download must read the stub's cache entry.
+    seen_keys: list = []
+    bridge._cached_category = lambda key: (seen_keys.append(key), [])[1]
+    q("root.catPendingDl = 'pages/stub-cat'")
+    bridge.playlistCategoryResolved.emit("pages/stub-cat", "Stub cat", 1, "stub:pl1", "stub")
+    settle(200)
+    if q("root.catPendingDl") != "":
+        return fail("the resolve did not clear the pending download")
+    prompt_provider = q("root.catDlPrompt ? root.catDlPrompt.provider : ''")
+    if prompt_provider != "stub" and seen_keys != ["cat:stub:pages/stub-cat"]:
+        return fail(f"the resolve did not join the stub's owner (prompt={prompt_provider!r}, keys={seen_keys})")
+
     # A section's headline route carries its owner: opening the stub shelf
     # keys the page to stub, not to the first provider.
     if q(_OPEN_SECTION % {"title": "Stub Shelf"}) != "ok":

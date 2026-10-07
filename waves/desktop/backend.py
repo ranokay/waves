@@ -3949,7 +3949,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     # Folder "download all" badge: playlists remaining in the rollup. Emitted
     # on every member completion (and once at start), under the folder id.
     folderRemaining = Signal(str, int, int)  # folder_id, remaining, total
-    playlistCategoryResolved = Signal(str, str, int, str)  # api_path, title, count, first playlist id
+    playlistCategoryResolved = Signal(str, str, int, str, str)  # api_path, title, count, first playlist id, owner
     # A shelf's DOWNLOAD ALL count is known (source, count; -1 when the count
     # failed): the shelf's pending flag turns it into the shared bulk confirm.
     favoriteTracksResolved = Signal(str, int)
@@ -17716,14 +17716,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Answer the queued action so its pending flags clear and the
             # status line says why, instead of a click that never lands.
             self._set_status("Could not load this category")
-            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, 0, "")
+            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, 0, "", str(provider_id or CTX_TIDAL))
             return
         cache_key = f"cat:{provider_id}:{api_path}"
         cached = self._cached_category(cache_key)
         if cached is not None:
             first = str(cached[0].id) if cached else ""
             catalog_succeeded(self, key=f"category:{cache_key}")
-            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(cached), first)
+            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(cached), first, provider_id)
             return
         load_key = cache_key
         if load_key in self._browse_loading:
@@ -17784,7 +17784,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not failed:
                 catalog_succeeded(self)
             first = str(playlists[0].id) if playlists else ""
-            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(playlists), first)
+            _catalog_emit(self, self.playlistCategoryResolved, api_path, title, len(playlists), first, provider_id)
             devlog.done("browse", load_key, devlog.clock() - t0, n=len(playlists))
 
         self.threadpool.start(_catalog_worker(self, provider_id, work, event_key=f"category:{cache_key}"))

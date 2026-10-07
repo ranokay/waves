@@ -117,7 +117,7 @@ def test_no_slot_resolves_media_objects_on_the_gui_thread():
     assert not offenders, "slots resolving media objects on the GUI thread:\n" + "\n".join(offenders)
 
 
-def test_browse_fetch_does_not_hold_the_lock_across_the_request():
+def test_browse_page_does_not_hold_the_lock_across_the_request():
     """The HTTP request must be issued before the lock is taken.
 
     The read-and-parse live behind the Provider seam, so the

@@ -755,6 +755,15 @@ class TestTheCatalogRoads:
             ("browse_window", "", "pages/data/x", "pagedList", 3),
         ]
 
+        # A handle the provider does not accept as a paging endpoint (TIDAL:
+        # anything outside pages/data/) contributes its inline window only.
+        stub._provider.calls.clear()
+        stub._provider.browse_window_path_ok = lambda path: False
+        rest = WavesBridge._category_page_rest.__get__(stub, type(stub))(
+            {"n": 0, "total": 9, "data": "pages/explore", "modType": "pagedList"}, 1, stub._provider
+        )
+        assert rest == [] and stub._provider.calls == []
+
     def test_a_refetch_resolves_through_get_object(self):
         obj = object()
         stub = self._stub(get_object=obj)

@@ -5175,9 +5175,6 @@ ApplicationWindow {
   // download or a preview, and the confirm prompt ({path, title, count}).
   property string catPendingDl: ""
   property string catPendingPv: ""
-  // The owning provider of the pending category action: the resolve and the
-  // download must name the same one (issue #600).
-  property string catPendingProvider: ""
   property var catDlPrompt: null
   // Every way out of the bulk-download confirm that is not "Download all".
   // The tick has to go with the dialog: left armed it re-opens pre-ticked for
@@ -5973,7 +5970,6 @@ ApplicationWindow {
     root.browseHighlightId = ""
     root.catPendingDl = ""
     root.catPendingPv = ""
-    root.catPendingProvider = ""
     root.catDlPrompt = null
   }
 
@@ -6088,7 +6084,10 @@ ApplicationWindow {
     }
     // A Browse category finished resolving (count known, list cached):
     // run whichever action the user queued on the tile.
-    function onPlaylistCategoryResolved(path, title, count, firstId) {
+    // The emit carries the category's owner, so a resolve that lands after
+    // another tile was clicked still answers for ITS provider (no shared
+    // pending-provider state to race).
+    function onPlaylistCategoryResolved(path, title, count, firstId, providerId) {
       if (root.catPendingPv === path) {
         root.catPendingPv = ""
         if (firstId !== "")
@@ -6100,7 +6099,7 @@ ApplicationWindow {
       if (count <= 0)
         // backend already set the status line
         return
-      var provider = root.catPendingProvider || root.legacyBrowseProvider
+      var provider = String(providerId || root.legacyBrowseProvider)
       if (waves.confirmCategoryDl)
         root.catDlPrompt = {
           path: path,

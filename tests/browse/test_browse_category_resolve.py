@@ -93,7 +93,7 @@ def test_a_failed_resolve_is_not_cached_and_says_so():
 
     assert stub._category_pl == {}, "a transient failure must not be pinned for the session"
     assert stub.statuses[-1] == "Could not load this category"
-    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "")
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "", "tidal")
     # The retry is a real retry, not a cache hit: it fetches again.
     stub._page = _empty_page()
     stub.resolvePlaylistCategory("pages/mood/chill", "Chill")
@@ -120,23 +120,23 @@ def test_a_resolved_category_is_cached_and_served_from_cache():
     stub.resolvePlaylistCategory("pages/mood/focus", "Focus")
     assert [str(p.id) for p in stub._category_pl["cat:tidal:pages/mood/focus"][1]] == ["pl-1"]
     assert stub.statuses[-1] == ""
-    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1")
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1", "tidal")
 
     # Second click: served from the cache, no refetch.
     stub._page = RuntimeError("must not be called")
     stub.resolvePlaylistCategory("pages/mood/focus", "Focus")
-    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1")
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/focus", "Focus", 1, "pl-1", "tidal")
 
 
 def test_the_resolve_routes_through_the_named_provider():
     stub = _ResolveStub(_empty_page(), provider_id="stub")
     stub.resolvePlaylistCategory("pages/mood/chill", "Chill", "stub")
     assert stub.providers["stub"].calls == [("Chill", "pages/mood/chill")]
-    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "")
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "", "stub")
 
     # An unknown/disabled owner makes no request; it answers a zero count and
     # a status so the queued action's pending flags clear.
     stub.resolvePlaylistCategory("pages/mood/chill", "Chill", "ghost")
     assert stub.providers["stub"].calls == [("Chill", "pages/mood/chill")]
-    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "")
+    assert stub.playlistCategoryResolved.emits[-1] == ("pages/mood/chill", "Chill", 0, "", "ghost")
     assert stub.statuses[-1] == "Could not load this category"

@@ -407,8 +407,7 @@ Rectangle {
               accessibleLabel: "Preview " + (bt.title || "category")
               onTriggered: {
                 host.catPendingPv = bt.path
-                host.catPendingProvider = bt.provider || host.legacyBrowseProvider
-                waves.resolvePlaylistCategory(bt.path, bt.title, host.catPendingProvider)
+                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider || host.legacyBrowseProvider)
               }
             }
           }
@@ -449,8 +448,7 @@ Rectangle {
               accessibleLabel: "Download all in " + (bt.title || "category")
               onTriggered: {
                 host.catPendingDl = bt.path
-                host.catPendingProvider = bt.provider || host.legacyBrowseProvider
-                waves.resolvePlaylistCategory(bt.path, bt.title, host.catPendingProvider)
+                waves.resolvePlaylistCategory(bt.path, bt.title, bt.provider || host.legacyBrowseProvider)
               }
             }
           }
