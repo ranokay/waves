@@ -9887,6 +9887,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         disk["_paths"] = {"links": links, "ts": time.time(), "v": self._TILE_ART_V}
         self._sample_links_art(links, disk)
 
+    @staticmethod
+    def _tile_art_key(provider_id: str, path: str) -> str:
+        """The tile-art cache/emit key: a TIDAL path stands alone (legacy
+        cache keys keep resolving), another provider's is namespaced so two
+        services sharing a path spelling cannot share mosaics."""
+        text = str(path or "")
+        return text if str(provider_id or CTX_TIDAL) == CTX_TIDAL else f"{provider_id}|{text}"
+
     def _sample_links_art(self, links: list[tuple[str, str, str]], disk: dict | None = None) -> None:
         """Fill a set of link tiles with cover mosaics: serve everything cached
         (memory, then disk within TTL) immediately, then sample the rest on the
@@ -9900,21 +9908,22 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         now = time.time()
         missing: list[tuple[str, str, str]] = []
         for title, path, provider_id in links:
+            key = self._tile_art_key(provider_id, path)
             # Memory entries carry the sample's own timestamp and honour the
             # TTL: without that, an always-on app serves day-0 mosaics forever,
             # because the mem hit short-circuits the disk TTL check.
             arts = None
-            held = self._tile_art_mem.get(path)
+            held = self._tile_art_mem.get(key)
             if held is not None and now - held[0] < self._TILE_ART_TTL:
                 arts = held[1]
             if arts is None:
-                entry = disk.get(path)
+                entry = disk.get(key)
                 if entry and now - float(entry.get("ts", 0)) < self._TILE_ART_TTL:
                     arts = [str(u) for u in entry.get("arts", [])]
                     # Keep the DISK stamp, so the memory copy can't outlive it.
-                    _cache_put(self, self._tile_art_mem, path, (float(entry.get("ts", 0)), arts))
+                    _cache_put(self, self._tile_art_mem, key, (float(entry.get("ts", 0)), arts))
             if arts:
-                _catalog_emit(self, self.browseTileArt, path, arts)
+                _catalog_emit(self, self.browseTileArt, key, arts)
             if arts is None:
                 missing.append((title, path, provider_id))
         if not missing:
@@ -9943,11 +9952,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         continue
                     # Remember misses too (as []) so a page with no usable
                     # covers isn't re-crawled every session within the TTL.
-                    _cache_put(self, self._tile_art_mem, path, (time.time(), arts))
-                    disk[path] = {"arts": arts, "ts": time.time(), "v": self._TILE_ART_V}
+                    key = self._tile_art_key(provider_id, path)
+                    _cache_put(self, self._tile_art_mem, key, (time.time(), arts))
+                    disk[key] = {"arts": arts, "ts": time.time(), "v": self._TILE_ART_V}
                     fetched += 1
                     if arts:
-                        _catalog_emit(self, self.browseTileArt, path, arts)
+                        _catalog_emit(self, self.browseTileArt, key, arts)
                     time.sleep(0.1)  # polite pacing between page fetches
             finally:
                 with self._tile_art_lock:
@@ -9981,8 +9991,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         ]
         if links and now - float(stored.get("ts", 0)) < self._TILE_ART_TTL:
             fresh = all(
-                (e := disk.get(path)) is not None and now - float(e.get("ts", 0)) < self._TILE_ART_TTL
-                for _, path, _ in links
+                (e := disk.get(self._tile_art_key(pid, path))) is not None
+                and now - float(e.get("ts", 0)) < self._TILE_ART_TTL
+                for _, path, pid in links
             )
             if fresh:
                 return  # everything cached, zero network spent

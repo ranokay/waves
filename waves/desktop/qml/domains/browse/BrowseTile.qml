@@ -60,7 +60,10 @@ Rectangle {
   readonly property var tones: [[accentCont, accentDim, accentContTx], [goldCont, goldDim, goldContTx], ["#0a2126", cyanDim, "#9fdbe6"], [redCont, "#8a3a34", "#ffb3ad"], [greenCont, greenDim, greenContTx], [surface3, outline, textHi],]
   readonly property var tone: tones[idx % 6]
   readonly property string era: /^\d{4}s$/.test(title) ? "'" + title.substring(2) : ""
-  readonly property var arts: host.browseTileArt[path] || []
+  // The backend's tile-art key: a TIDAL path stands alone, another
+  // provider's is namespaced (see _tile_art_key).
+  readonly property string artKey: provider === "" || provider === "tidal" ? path : provider + "|" + path
+  readonly property var arts: host.browseTileArt[artKey] || []
   // 4+ covers -> 2x2 mosaic; 2-3 -> two half tiles; 1 -> full bleed.
   readonly property int artN: arts.length >= 4 ? 4 : arts.length >= 2 ? 2 : arts.length
   // Which pool index each visible cell shows; advanced one cell at a

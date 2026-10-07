@@ -321,6 +321,7 @@ def test_expanding_a_hovered_album_defers_the_ownership_commit():
 # --------------------------------------------------------------------------- #
 class _TileArtStub:
     _sample_links_art = WavesBridge._sample_links_art
+    _tile_art_key = staticmethod(WavesBridge._tile_art_key)
     _TILE_ART_TTL = WavesBridge._TILE_ART_TTL
     _TILE_ART_V = WavesBridge._TILE_ART_V
 

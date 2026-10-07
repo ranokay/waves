@@ -129,7 +129,14 @@ def _drop_members[K](cache: set[K], owns: Callable[[K], bool]) -> None:
 
 
 def page_provider(key: str) -> str:
-    """Item/playlist page keys wrap media IDs; editorial paths are TIDAL."""
+    """The provider a page-cache key belongs to.
+
+    Item page keys wrap media ids (``item:<kind>:<id>``); playlists-grid
+    keys are ``pl:<provider>:<path>`` and editorial page keys
+    ``browse:<provider>:<path>``. A legacy bare editorial path (an upgraded
+    nav snapshot or disk cache) reads as TIDAL, and ``cat:``/``root`` keys
+    are TIDAL's own rollup/landing slots.
+    """
     if key.startswith("item:"):
         return provider_of_id(key.partition(":")[2].partition(":")[2])
     if key.startswith(("pl:", "browse:")):
