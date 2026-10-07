@@ -919,6 +919,27 @@ class Provider(ABC):
         inherits another's editorial composition."""
         return {}
 
+    def browse_path_ok(self, path: str) -> bool:
+        """Whether an editorial path this provider handed out may be
+        requested back, validated by the provider whose API receives it.
+
+        The neutral default accepts a relative path only: no scheme, no
+        authority, no backslash, so a payload can never steer a request to
+        another host. A provider whose API nests under a known prefix
+        tightens this (TIDAL requires ``pages/``)."""
+        text = str(path or "")
+        if not text or "//" in text or "\\" in text:
+            return False
+        parts = urlsplit(text)
+        return not parts.scheme and not parts.netloc
+
+    def link_art_sample(self, page, want: int = 12) -> list[str]:
+        """Cover URLs sampled from one of this provider's editorial pages,
+        for the landing's link-tile mosaics. The neutral default samples
+        nothing: a provider without an implementation gets no mosaics, never
+        another provider's covers."""
+        return []
+
     @abstractmethod
     def favorites_page(
         self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None

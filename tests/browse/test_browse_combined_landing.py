@@ -11,47 +11,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from providers.fakes import StubProvider
+from browse.fakes import LandingProvider
 
 from waves.desktop.backend import WavesBridge
 from waves.providers.base import Capability
-
-
-class LandingProvider(StubProvider):
-    """A provider whose Browse seam is scripted: a landing recipe, its pages
-    and its home feed, each settable to an exception to simulate failure."""
-
-    def __init__(
-        self,
-        provider_id: str,
-        name: str,
-        *,
-        landing=None,
-        pages=None,
-        home=None,
-        logged_in=True,
-        capabilities=frozenset({Capability.BROWSE, Capability.CATALOG}),
-    ):
-        super().__init__(provider_id, name, capabilities=capabilities, logged_in=logged_in)
-        self._landing = landing
-        self._pages = pages or {}
-        self._home = home
-
-    def browse_landing(self):
-        if isinstance(self._landing, Exception):
-            raise self._landing
-        return self._landing
-
-    def browse_page(self, title, api_path):
-        page = self._pages.get(api_path)
-        if isinstance(page, Exception):
-            raise page
-        return page
-
-    def browse_home(self):
-        if isinstance(self._home, Exception):
-            raise self._home
-        return self._home
 
 
 def _page(rows):

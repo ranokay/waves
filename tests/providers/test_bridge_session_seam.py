@@ -683,12 +683,13 @@ class TestTheCatalogRoads:
             }
         ]
 
-        rows = WavesBridge._home_v2_rows.__get__(stub, type(stub))()
+        rows = WavesBridge._home_rows.__get__(stub, type(stub))(stub.providers["tidal"])
 
         assert stub._provider.calls == [("browse_home",)]
         assert rows == [{"title": "Shelf", "more": "", "items": []}]
 
-    def test_a_browse_more_window_reads_the_provider(self):
+    def test_a_browse_more_window_reads_the_provider(self, monkeypatch):
+        from waves.desktop import backend as backend_pkg
         from waves.providers import BrowseWindow
 
         cat = SimpleNamespace(items=[object(), None])
@@ -700,6 +701,10 @@ class TestTheCatalogRoads:
         grown: list = []
         stub._browse_grow_cached = lambda *args: grown.append(args)
         stub.browseSectionMore = _Signal()
+        # The owner guard itself is covered by the routing suite; here the
+        # slot's read path is what runs.
+        stub._provider.browse_path_ok = lambda path: True
+        monkeypatch.setattr(backend_pkg, "browse_owner", lambda bridge, provider_id: stub._provider)
 
         WavesBridge.loadBrowseSectionMore.__get__(stub, type(stub))("key", "pages/data/x", 50, "pagedList", "Genre")
 

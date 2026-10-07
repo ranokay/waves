@@ -81,6 +81,50 @@ def test_tidal_landing_ships_for_you_when_the_quick_links_are_missing() -> None:
     assert landing["chips"]["genres"] == [{"title": "Pop", "path": "pages/genres/pop"}]
 
 
+def _artist(aid: str, name: str = "") -> object:
+    import tidalapi
+
+    obj = tidalapi.Artist.__new__(tidalapi.Artist)
+    obj.id = aid
+    obj.name = name or aid
+    obj.image = lambda dimension=320: f"https://img/{aid}/{dimension}"
+    return obj
+
+
+def _track(tid: str, album) -> object:
+    import tidalapi
+
+    obj = tidalapi.Track.__new__(tidalapi.Track)
+    obj.id = tid
+    obj.album = album
+    obj.image = lambda dimension=320: f"https://img/{tid}/{dimension}"
+    return obj
+
+
+def test_tidal_link_art_sample_round_robins_distinct_covers() -> None:
+    # One cover per identity, one per row per pass: an artist portrait leads
+    # its row over a track's copy of the same art, and the second row's
+    # portrait joins before the repeat pass.
+    a1 = _artist("ar1")
+    page = SimpleNamespace(
+        categories=[
+            SimpleNamespace(items=[a1, _track("t1", a1)]),
+            SimpleNamespace(items=[_artist("ar2")]),
+        ]
+    )
+    provider = TidalProvider.__new__(TidalProvider)
+    assert provider.link_art_sample(page, want=3) == [
+        "https://img/ar1/320",
+        "https://img/ar2/320",
+        "https://img/t1/320",
+    ]
+
+
+def test_tidal_link_art_sample_has_nothing_for_a_page_without_covers() -> None:
+    provider = TidalProvider.__new__(TidalProvider)
+    assert provider.link_art_sample(SimpleNamespace(categories=[])) == []
+
+
 def test_a_failed_explore_read_fails_the_whole_recipe() -> None:
     provider = TidalProvider.__new__(TidalProvider)
     provider._tidal = SimpleNamespace()

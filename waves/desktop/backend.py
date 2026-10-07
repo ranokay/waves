@@ -205,6 +205,7 @@ from .bridge_surfaces import (
     _session_logged_in,
     _source_provider,
     _source_rows,
+    browse_owner,
     ready_browse_providers,
 )
 from .diagnostics import devlog
@@ -2334,12 +2335,13 @@ def _graft_scroll_growth(fresh: dict, cached: dict) -> None:
                     row[k] = old[k]
 
 
-def _link_tiles_of(payload: dict) -> list[tuple[str, str]]:
-    """(title, path) for every link tile in a browse page payload; the tiles
-    (e.g. Record Labels) carry no image of their own, so callers hand these to
-    the mosaic sampler."""
+def _link_tiles_of(payload: dict) -> list[tuple[str, str, str]]:
+    """(title, path, provider) for every link tile in a browse page payload;
+    the tiles (e.g. Record Labels) carry no image of their own, so callers
+    hand these to the owning provider's mosaic sampler."""
+    provider = str((payload or {}).get("provider_id") or CTX_TIDAL)
     return [
-        (str(it.get("title", "")), str(it.get("path", "")))
+        (str(it.get("title", "")), str(it.get("path", "")), provider)
         for section in (payload or {}).get("sections") or []
         if section.get("rowKind") == "links"
         for it in section.get("items", [])
@@ -6093,6 +6095,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 accounts[pid] = "public"
         return accounts
 
+    @staticmethod
+    def _browse_root_sources(payload) -> set[str]:
+        """The providers a landing payload was composed from: the explicit
+        sources list, else its rows' owners, else TIDAL (a payload cached
+        before rows carried their owner)."""
+        if not isinstance(payload, dict):
+            return set()
+        sources = {str(s.get("provider") or "") for s in payload.get("sources") or [] if isinstance(s, dict)}
+        sources.discard("")
+        if sources:
+            return sources
+        owners = {str(sec.get("provider_id") or "") for sec in payload.get("sections") or [] if isinstance(sec, dict)}
+        owners.discard("")
+        return owners or {CTX_TIDAL}
+
     def _save_page_cache(self) -> None:
         """Stage snapshots outside locks; reject saves from revoked workers."""
         if getattr(self, "_factory_reset", False):
@@ -6105,6 +6122,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             tokens.append(worker_token)
         try:
             accounts = WavesBridge._cache_accounts(self)
+            root_sources = WavesBridge._browse_root_sources(self._browse_root_cache)
             lib = {
                 _lib_disk_key(source, category): {
                     "items": entry["items"][:_LIBRARY_PAGE],
@@ -6116,7 +6134,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             }
             data = {
                 "accounts": accounts,
-                "browse_root": self._browse_root_cache if CTX_TIDAL in accounts else None,
+                # The landing is saved only while every account that composed
+                # it still matches: a restored mixed landing must never mix a
+                # previous account's personalized rows into a new sign-in.
+                "browse_root": self._browse_root_cache if root_sources and root_sources <= set(accounts) else None,
                 "browse_pages": {
                     key: value for key, value in list(self._browse_pages.items()) if page_provider(key) in accounts
                 },
@@ -6157,19 +6178,35 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         stored = data.get("accounts")
         if not isinstance(stored, dict):
             return
+        revoked = getattr(self, "_cache_disk_revoked", {})
+        # The combined landing restores only while every account that composed
+        # it still matches; commit it under the first contributor's token so a
+        # change before the commit drops it like any other stale cache.
+        stored_root = data.get("browse_root")
+        root_sources = WavesBridge._browse_root_sources(stored_root) if isinstance(stored_root, dict) else set()
+        root_ok = (
+            bool(root_sources)
+            and not (root_sources & set(revoked))
+            and all(accounts.get(pid) and accounts.get(pid) == stored.get(pid) for pid in root_sources)
+        )
+        if root_ok and self._browse_root_cache is None:
+            anchor = next((pid for pid in root_sources if pid in tokens), None)
+            if anchor is not None:
+
+                def restore_root(root=stored_root) -> None:
+                    if anchor in getattr(self, "_cache_disk_revoked", {}):
+                        return
+                    if self._browse_root_cache is None:
+                        self._browse_root_cache = _scrub_browse_payload(root)
+
+                contexts.commit(tokens[anchor], restore_root)
         for pid, token in tokens.items():
-            if (
-                pid in getattr(self, "_cache_disk_revoked", {})
-                or not accounts.get(pid)
-                or accounts[pid] != stored.get(pid)
-            ):
+            if pid in revoked or not accounts.get(pid) or accounts[pid] != stored.get(pid):
                 continue
 
             def restore(pid=pid) -> None:
                 if pid in getattr(self, "_cache_disk_revoked", {}):
                     return
-                if pid == CTX_TIDAL and self._browse_root_cache is None and isinstance(data.get("browse_root"), dict):
-                    self._browse_root_cache = _scrub_browse_payload(data["browse_root"])
                 for key, page in (data.get("browse_pages") or {}).items():
                     if page_provider(key) == pid and isinstance(page, dict):
                         self._browse_pages.setdefault(key, page)
@@ -8551,6 +8588,22 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             raise ValueError("Refused a page path that leaves TIDAL's API")  # noqa: TRY003
         return self.providers[CTX_TIDAL].browse_page(title, api_path)
 
+    def _browse_page_for(self, provider, title: str, api_path: str):
+        """Fetch one editorial page through its owning provider, with that
+        provider's own path validation (a payload path may never steer a
+        request off-service). Parsing stays behind the provider seam."""
+        text = str(api_path or "")
+        if not provider.browse_path_ok(text):
+            raise ValueError(f"Refused a page path {provider.id} does not accept")  # noqa: TRY003
+        return provider.browse_page(title, text)
+
+    @staticmethod
+    def _stamp_sections(sections: list[dict], provider_id: str) -> list[dict]:
+        """A copy of one page's rows carrying their owner, so the surface can
+        filter by source and every later fetch stays with the provider that
+        served the row."""
+        return [{**row, "provider_id": provider_id} for row in sections]
+
     @staticmethod
     def _page_path_ok(path: str) -> bool:
         """Whether an editorial page path from a TIDAL payload is a relative
@@ -8879,7 +8932,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         ]
 
     def _load_browse_root(self, emit_cached: bool) -> None:
-        if not self._logged_in:
+        contributors = ready_browse_providers(self)
+        if not contributors:
+            # No browse-capable provider is ready: the pane's sign-in call to
+            # action (browseNav) names the first capable provider, and the
+            # failure event keeps that reference so the copy matches.
+            capable = next(
+                (
+                    provider.id
+                    for provider in _provider_registry(self)
+                    if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
+                ),
+                CTX_TIDAL,
+            )
             status_failure(
                 self,
                 EventDomain.ACCOUNT,
@@ -8888,9 +8953,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 code=EventCode.ACCOUNT_REQUIRED,
                 actions=(EventAction.OPEN_SETTINGS,),
                 key="browse-account",
-                references=EventReferences(provider_id=CTX_TIDAL),
+                references=EventReferences(provider_id=capable),
             )
             return
+        # One token per contributing provider: the landing belongs to every
+        # account that composed it, and any epoch change (sign-out, relogin)
+        # drops this load entirely.
+        contexts = provider_contexts(self)
+        tokens = {provider.id: contexts.capture(provider.id) for provider in contributors}
+
+        def current() -> bool:
+            return all(_provider_result_current(self, token) for token in tokens.values())
+
         cached = self._browse_root_cache
         if cached is not None and emit_cached:
             # Off the GUI thread, BOTH halves: the tile-art warmup reads its
@@ -8900,23 +8974,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # inline (~60ms) when this was reached from the sign-in flip.
             # From the worker the emit is queued to QML, so the flip's slot
             # returns immediately and the landing applies as its own event.
-            gen = provider_contexts(self).capture(CTX_TIDAL)
 
             def _emit_cached() -> None:
                 # The revalidate below can finish first on a saturated pool
                 # and repaint fresher content; never paint this snapshot over
                 # it (and never paint another account's page after a relogin).
-                if not _provider_result_current(self, gen) or self._browse_root_cache is not cached:
+                if not current() or self._browse_root_cache is not cached:
                     return
-                self._emit_dressed(self.browseLoaded, cached, gen)
-                self._start_tile_art(cached, gen)
+                _catalog_emit(self, self.browseLoaded, self._dress_cards(cached))
+                self._start_tile_art(cached)
 
             self.threadpool.start(_catalog_worker(self, CTX_TIDAL, _emit_cached))
         if "root" in self._browse_loading:
             return
         _cache_commit(self, lambda: self._browse_loading.add("root"))
         revalidate = cached is not None
-        gen = provider_contexts(self).capture(CTX_TIDAL)
         if not revalidate:
             self._set_busy(True)
             self._set_status("Loading browse…")
@@ -8927,13 +8999,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 payload = self._browse_root()
             except Exception:
                 logger.exception("Could not load the browse page")
-                payload = {"sections": [], "genres": [], "moods": [], "decades": [], "error": True}
-            if not _provider_result_current(self, gen):
-                # Logged out (maybe back in as someone else) while this load
-                # was in flight: the payload belongs to the previous account.
-                # Drop it entirely, emitting would repaint the old account's
-                # personalized rows, and touching busy/status/_browse_loading
-                # would stomp the replacement load started after re-login.
+                payload = {"sections": [], "genres": [], "moods": [], "decades": [], "sources": [], "error": True}
+            if not current():
+                # A contributing account changed (signed out, maybe back in as
+                # someone else) while this load was in flight: the payload
+                # belongs to the previous account. Drop it entirely, emitting
+                # would repaint the old account's personalized rows, and
+                # touching busy/status/_browse_loading would stomp the
+                # replacement load started after the change.
                 return
             _cache_commit(self, lambda: self._browse_loading.discard("root"))
             if not payload["error"]:
@@ -8948,47 +9021,58 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if not payload["error"] and payload["sections"] and payload != cached:
                     _cache_commit(self, lambda: setattr(self, "_browse_root_cache", payload))
                     self._save_page_cache()
-                    self._emit_dressed(self.browseLoaded, payload, gen)
-                    self._start_tile_art(payload, gen)
+                    _catalog_emit(self, self.browseLoaded, self._dress_cards(payload))
+                    self._start_tile_art(payload)
                 devlog.done("browse", "root revalidate", devlog.clock() - t0, n=len(payload["sections"]))
                 return
             if not payload["error"] and payload["sections"]:
-                # An all-empty landing (Explore ok, every content page failed)
-                # is shown but NOT cached, so the next visit retries instead of
-                # pinning a chips-only page for the rest of the session.
+                # An all-empty landing (every content page failed) is shown but
+                # NOT cached, so the next visit retries instead of pinning a
+                # chips-only page for the rest of the session.
                 _cache_commit(self, lambda: setattr(self, "_browse_root_cache", payload))
                 self._save_page_cache()
-            self._emit_dressed(self.browseLoaded, payload, gen)
+            _catalog_emit(self, self.browseLoaded, self._dress_cards(payload))
             self._set_status(
                 f"Browse · {len(payload['sections'])} sections" if not payload["error"] else "Browse failed to load"
             )
             self._set_busy(False)
             devlog.done("browse", "root", devlog.clock() - t0, n=len(payload["sections"]))
             if not payload["error"]:
-                self._start_tile_art(payload, gen)
+                self._start_tile_art(payload)
 
         self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work))
 
-    @Slot(str, str, int, str, str)
-    def loadBrowseSectionMore(self, page_key: str, data_path: str, offset: int, mod_type: str, title: str) -> None:
-        """Endless scroll: fetch the next window of one browse row's paged list
-        (``pages/data/<id>``, needs the ``locale`` param or TIDAL 400s) and
-        emit the new cards. Every cached copy of the row (landing + drilled
-        pages share data paths) is extended too, so revisits keep the growth."""
+    @Slot(str, str, int, str, str, str)
+    def loadBrowseSectionMore(
+        self, page_key: str, data_path: str, offset: int, mod_type: str, title: str, provider_id: str = CTX_TIDAL
+    ) -> None:
+        """Endless scroll: fetch the next window of one browse row's paged
+        list through the row's OWN provider and emit the new cards. Every
+        cached copy of the row (landing + drilled pages share data paths) is
+        extended too, so revisits keep the growth."""
         data_path = str(data_path or "")
-        if not self._logged_in or not data_path.startswith("pages/data/") or not self._page_path_ok(data_path):
+        owner = browse_owner(self, provider_id)
+        if owner is None or not owner.browse_path_ok(data_path):
             return
-        load_key = "more:" + data_path
+        load_key = f"more:{provider_id}:{data_path}"
         if load_key in self._browse_loading:
             return
         _cache_commit(self, lambda: self._browse_loading.add(load_key))
-        gen = provider_contexts(self).capture(CTX_TIDAL)
+        gen = provider_contexts(self).capture(provider_id)
 
         def work() -> None:
             t0 = devlog.clock()
-            payload = {"key": page_key, "data": data_path, "items": [], "offset": offset, "more": False, "error": True}
+            payload = {
+                "key": page_key,
+                "provider_id": provider_id,
+                "data": data_path,
+                "items": [],
+                "offset": offset,
+                "more": False,
+                "error": True,
+            }
             try:
-                window = self.providers[CTX_TIDAL].browse_window(title, data_path, mod_type, offset)
+                window = owner.browse_window(title, data_path, mod_type, offset)
                 cards = [
                     c
                     for c in (self._browse_card(o) for o in window.category.items or [] if o is not None)
@@ -8997,6 +9081,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 new_off = offset + window.n
                 payload = {
                     "key": page_key,
+                    "provider_id": provider_id,
                     "data": data_path,
                     "items": cards,
                     "reqOffset": offset,
@@ -9009,44 +9094,57 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not _provider_result_current(self, gen):
                 return  # cross-account stale load, drop silently (see loadBrowse)
             if not payload["error"]:
-                self._browse_grow_cached(data_path, offset, payload["items"], payload["offset"], payload["more"])
+                self._browse_grow_cached(
+                    data_path, offset, payload["items"], payload["offset"], payload["more"], provider_id
+                )
             _cache_commit(self, lambda: self._browse_loading.discard(load_key))
             self._emit_dressed(self.browseSectionMore, payload, gen)
             devlog.done("browse", load_key, devlog.clock() - t0, n=len(payload["items"]))
 
-        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work))
+        self.threadpool.start(_catalog_worker(self, provider_id, work))
 
-    def _browse_grow_cached(self, data_path: str, req_offset: int, cards: list, new_offset: int, more: bool) -> None:
-        """Extend every cached row that pages through ``data_path`` AND sits at
-        the offset this fetch resumed from. The landing shelf and its drilled
-        'show more' page share a data path but hold different windows (e.g. 12
-        vs 50 items), extending a row at a different offset would leave a gap
-        in its listing, so those are left alone."""
+    def _browse_grow_cached(
+        self, data_path: str, req_offset: int, cards: list, new_offset: int, more: bool, provider_id: str = CTX_TIDAL
+    ) -> None:
+        """Extend every cached row that pages through ``data_path`` with the
+        same owner AND sits at the offset this fetch resumed from. The
+        landing shelf and its drilled 'show more' page share a data path but
+        hold different windows (e.g. 12 vs 50 items), extending a row at a
+        different offset would leave a gap in its listing, so those are left
+        alone. A row cached before rows carried their owner reads as TIDAL's
+        (the only provider that could have written it)."""
         caches = [self._browse_root_cache, *self._browse_pages.values()]
         for payload in caches:
             for row in (payload or {}).get("sections") or []:
-                if row.get("data") == data_path and row.get("offset") == req_offset:
+                if (
+                    row.get("data") == data_path
+                    and row.get("provider_id", CTX_TIDAL) == provider_id
+                    and row.get("offset") == req_offset
+                ):
                     row["items"] = list(row["items"]) + cards
                     row["offset"] = new_offset
                     if not more:
                         row["total"] = new_offset  # exhausted: QML stops asking
 
-    @Slot(str, str)
-    def openBrowsePage(self, api_path: str, title: str) -> None:
-        """Drill into one editorial page (a genre / mood / decade chip)."""
+    @Slot(str, str, str)
+    def openBrowsePage(self, api_path: str, title: str, provider_id: str = CTX_TIDAL) -> None:
+        """Drill into one provider's editorial page (a genre / mood / decade
+        chip), routed through the provider that served the link."""
         api_path = str(api_path or "")
         title = str(title or "")
-        if not self._logged_in or not self._page_path_ok(api_path):
+        owner = browse_owner(self, provider_id)
+        if owner is None:
             return
-        cached = self._browse_pages.get(api_path)
+        cache_key = f"browse:{provider_id}:{api_path}"
+        cached = self._browse_pages.get(cache_key)
         if cached is not None:
-            catalog_succeeded(self, key=f"browse-page:{api_path}")
+            catalog_succeeded(self, key=f"browse-page:{cache_key}")
             _catalog_emit(self, self.browsePageLoaded, cached)
-        if api_path in self._browse_loading:
+        if cache_key in self._browse_loading:
             return
-        _cache_commit(self, lambda: self._browse_loading.add(api_path))
+        _cache_commit(self, lambda: self._browse_loading.add(cache_key))
         revalidate = cached is not None
-        gen = provider_contexts(self).capture(CTX_TIDAL)
+        gen = provider_contexts(self).capture(provider_id)
         if not revalidate:
             self._set_busy(True)
             self._set_status(f"Loading {title}…" if title else "Loading…")
@@ -9054,21 +9152,22 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             t0 = devlog.clock()
             try:
-                page = self._browse_fetch(title, api_path)
+                page = self._browse_page_for(owner, title, api_path)
                 payload = {
                     "key": api_path,
+                    "provider_id": provider_id,
                     "title": str(getattr(page, "title", "") or "") or title,
-                    "sections": self._page_rows(page),
+                    "sections": self._stamp_sections(self._page_rows(page), provider_id),
                     "error": False,
                 }
             except Exception:
                 logger.exception("Could not load browse page %s", api_path)
-                payload = {"key": api_path, "title": title, "sections": [], "error": True}
+                payload = {"key": api_path, "provider_id": provider_id, "title": title, "sections": [], "error": True}
             if not _provider_result_current(self, gen):
                 # Stale cross-account load, see loadBrowse's work() for why
                 # this returns without emitting or touching shared state.
                 return
-            _cache_commit(self, lambda: self._browse_loading.discard(api_path))
+            _cache_commit(self, lambda: self._browse_loading.discard(cache_key))
             if not payload["error"]:
                 catalog_succeeded(self)
             if revalidate:
@@ -9077,7 +9176,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 _graft_scroll_growth(payload, cached)
                 served = cached
                 if not payload["error"] and payload["sections"] and payload != cached:
-                    self._remember_capped(self._browse_pages, api_path, payload, self._BROWSE_PAGES_MAX)
+                    self._remember_capped(self._browse_pages, cache_key, payload, self._BROWSE_PAGES_MAX)
                     self._save_page_cache()
                     self._emit_dressed(self.browsePageLoaded, payload, gen)
                     served = payload
@@ -9085,13 +9184,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # per-tile art cache, so even a revisit served straight from
                 # cache must re-emit the mosaics (the sampler serves cached art
                 # immediately) or the page renders art-less from launch 2 on.
-                self._sample_links_art(_link_tiles_of(served), gen)
+                self._sample_links_art(_link_tiles_of(served))
                 devlog.done("browse", f"{api_path} revalidate", devlog.clock() - t0, n=len(payload["sections"]))
                 return
             if not payload["error"] and payload["sections"]:
                 # Same no-empty-cache rule as the landing: a page whose rows
                 # all failed to normalize shouldn't be pinned for the session.
-                self._remember_capped(self._browse_pages, api_path, payload, self._BROWSE_PAGES_MAX)
+                self._remember_capped(self._browse_pages, cache_key, payload, self._BROWSE_PAGES_MAX)
                 self._save_page_cache()
             self._emit_dressed(self.browsePageLoaded, payload, gen)
             if payload["error"]:
@@ -9103,32 +9202,34 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Link tiles (e.g. Record Labels) carry no image of their own, so
             # sample cover mosaics for them the same way the landing chips fill.
             if not payload["error"]:
-                self._sample_links_art(_link_tiles_of(payload), gen)
+                self._sample_links_art(_link_tiles_of(payload))
 
-        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work, event_key=f"browse-page:{api_path}"))
+        self.threadpool.start(_catalog_worker(self, provider_id, work, event_key=f"browse-page:{cache_key}"))
 
-    @Slot(str, str)
-    def openBrowsePlaylists(self, api_path: str, title: str) -> None:
-        """Drill into one editorial page keeping only its playlists: the leaf
-        grid of Browse's folder-style Playlists view. A mood / genre / decade
-        page mixes albums, tracks and mixes into its rows; opened from the
-        Playlists folders it should read as "the playlists in here", so the
-        other kinds are filtered out and the survivors flatten into one grid
-        (cached under its own pl: key so the unfiltered page stays intact)."""
+    @Slot(str, str, str)
+    def openBrowsePlaylists(self, api_path: str, title: str, provider_id: str = CTX_TIDAL) -> None:
+        """Drill into one provider's editorial page keeping only its
+        playlists: the leaf grid of Browse's folder-style Playlists view. A
+        mood / genre / decade page mixes albums, tracks and mixes into its
+        rows; opened from the Playlists folders it should read as "the
+        playlists in here", so the other kinds are filtered out and the
+        survivors flatten into one grid (cached under its own pl: key so the
+        unfiltered page stays intact)."""
         api_path = str(api_path or "")
         title = str(title or "")
-        if not self._logged_in or not api_path.startswith("pages/"):
+        owner = browse_owner(self, provider_id)
+        if owner is None:
             return
-        key = f"pl:{api_path}"
+        key = f"pl:{provider_id}:{api_path}"
         cached = self._browse_pages.get(key)
         if cached is not None:
-            catalog_succeeded(self, key=f"browse-playlists:{api_path}")
+            catalog_succeeded(self, key=f"browse-playlists:{key}")
             _catalog_emit(self, self.browsePageLoaded, cached)
         if key in self._browse_loading:
             return
         _cache_commit(self, lambda: self._browse_loading.add(key))
         revalidate = cached is not None
-        gen = provider_contexts(self).capture(CTX_TIDAL)
+        gen = provider_contexts(self).capture(provider_id)
         if not revalidate:
             self._set_busy(True)
             self._set_status(f"Loading {title}…" if title else "Loading…")
@@ -9136,7 +9237,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             t0 = devlog.clock()
             try:
-                page = self._browse_fetch(title, api_path)
+                page = self._browse_page_for(owner, title, api_path)
                 sections: list[dict] = []
                 for row in self._page_rows(page):
                     if row.get("rowKind") != "cards":
@@ -9165,10 +9266,22 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # back bar (which already names the page) is the label.
                     sections[0] = {**sections[0], "title": ""}
                 page_title = str(getattr(page, "title", "") or "") or title
-                payload = {"key": key, "title": page_title, "sections": sections, "error": False}
+                payload = {
+                    "key": f"pl:{api_path}",
+                    "provider_id": provider_id,
+                    "title": page_title,
+                    "sections": self._stamp_sections(sections, provider_id),
+                    "error": False,
+                }
             except Exception:
                 logger.exception("Could not load browse playlists for %s", api_path)
-                payload = {"key": key, "title": title, "sections": [], "error": True}
+                payload = {
+                    "key": f"pl:{api_path}",
+                    "provider_id": provider_id,
+                    "title": title,
+                    "sections": [],
+                    "error": True,
+                }
             if not _provider_result_current(self, gen):
                 # Stale cross-account load, see loadBrowse's work() for why
                 # this returns without emitting or touching shared state.
@@ -9198,7 +9311,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self._set_busy(False)
             devlog.done("browse", key, devlog.clock() - t0, n=len(payload["sections"]))
 
-        self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work, event_key=f"browse-playlists:{api_path}"))
+        self.threadpool.start(_catalog_worker(self, provider_id, work, event_key=f"browse-playlists:{key}"))
 
     def _record_page_members(self, payload: dict) -> None:
         """Remember the track ids an item page lists as its collection's
@@ -9743,87 +9856,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     _TILE_ART_TTL = 7 * 24 * 3600  # editorial pages shuffle slowly; a week is fine
     _TILE_ART_V = 3  # bump to invalidate cached samples when the sampler changes
 
-    @staticmethod
-    def _art_identity(obj) -> tuple | None:
-        """Who a cover 'belongs to', for per-tile dedup: one cover per artist
-        (an artist portrait and two of their albums must not share a tile),
-        falling back to the item's own id when no artist is attached."""
-        if isinstance(obj, Artist):
-            return ("ar", str(getattr(obj, "id", "") or id(obj)))
-        if isinstance(obj, Album | Track):
-            artist = getattr(obj, "artist", None)
-            aid = getattr(artist, "id", None) if artist is not None else None
-            if aid is not None:
-                return ("ar", str(aid))
-            return ("it", str(getattr(obj, "id", "") or id(obj)))
-        if isinstance(obj, Mix | Playlist):
-            return ("md", str(getattr(obj, "id", "") or id(obj)))
-        return None
-
-    def _page_art_sample(self, page, want: int = 12) -> list[str]:
-        """Sample up to ``want`` cover URLs from a page for its tile mosaic,
-        four show at once, the rest feed the tile's slow rotation.
-
-        Diversity beats adjacency: covers are drawn round-robin ACROSS the
-        page's rows (one per row per pass), so the mosaic mixes Top Artists,
-        New/Classic Albums, Essentials… instead of four neighbours from one
-        list. Within a row, artist portraits and album covers outrank track
-        art and text-heavy editorial playlist covers; rows whose best item is
-        an artist/album get first pick. The pool is identity-unique (see
-        _art_identity): no two covers from the same artist/album/track can
-        ever share a tile, no matter how the rotation lands. Deliberately
-        does NOT go through the ``_*_dict`` builders: sampling ~45 pages
-        through them would flood the ``_objs`` registry and evict live
-        search results."""
-        rows: list[list[tuple[int, str, tuple]]] = []
-        for cat in list(getattr(page, "categories", None) or []):
-            items = getattr(cat, "items", None)
-            if not isinstance(items, list):
-                continue
-            row: list[tuple[int, str, tuple]] = []
-            for obj in items:
-                if isinstance(obj, Artist):
-                    rank = 0
-                elif isinstance(obj, Album):
-                    rank = 1
-                elif isinstance(obj, Track):
-                    rank = 2  # a track's art IS its album cover
-                elif isinstance(obj, Mix):
-                    rank = 3
-                elif isinstance(obj, Playlist):
-                    rank = 4
-                else:
-                    continue
-                ident = self._art_identity(obj)
-                url = _image(obj, 320)
-                if url and ident is not None:
-                    row.append((rank, url, ident))
-            if row:
-                row.sort(key=lambda t: t[0])
-                rows.append(row)
-        rows.sort(key=lambda r: r[0][0])  # artist/album-led rows pick first
-        out: list[str] = []
-        seen_urls: set[str] = set()
-        seen_ids: set[tuple] = set()
-        i = 0
-        while len(out) < want:
-            progressed = False
-            for row in rows:
-                if i >= len(row):
-                    continue
-                progressed = True
-                _, url, ident = row[i]
-                if url not in seen_urls and ident not in seen_ids:
-                    seen_urls.add(url)
-                    seen_ids.add(ident)
-                    out.append(url)
-                    if len(out) >= want:
-                        break
-            if not progressed:
-                break
-            i += 1
-        return out
-
     def _tile_art_disk(self) -> dict:
         try:
             with open(self._tile_art_path, encoding="utf-8") as handle:
@@ -9834,15 +9866,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             logger.debug("No tile-art cache to load", exc_info=True)
             return {}
 
-    def _start_tile_art(self, payload: dict, gen: int) -> None:
+    def _start_tile_art(self, payload: dict) -> None:
         """Fill the landing's genre/mood/decade tiles with cover mosaics.
 
         Serves everything already known (memory, then the disk cache within
         TTL) immediately, then walks the remaining pages on ONE background
         worker, serialized and politely paced, so the mosaic crawl can never
-        stampede TIDAL or starve the metadata pool."""
+        stampede the providers or starve the metadata pool."""
         links = [
-            (str(link.get("title", "")), str(link.get("path", "")))
+            (str(link.get("title", "")), str(link.get("path", "")), str(link.get("provider_id") or CTX_TIDAL))
             for group in ("genres", "moods", "decades")
             for link in payload.get(group, [])
             if link.get("path")
@@ -9853,9 +9885,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Persist the chip list itself so the login-time prefetch can judge
         # cache freshness (and know what to crawl) without any network.
         disk["_paths"] = {"links": links, "ts": time.time(), "v": self._TILE_ART_V}
-        self._sample_links_art(links, gen, disk)
+        self._sample_links_art(links, disk)
 
-    def _sample_links_art(self, links: list[tuple[str, str]], gen: int, disk: dict | None = None) -> None:
+    def _sample_links_art(self, links: list[tuple[str, str, str]], disk: dict | None = None) -> None:
         """Fill a set of link tiles with cover mosaics: serve everything cached
         (memory, then disk within TTL) immediately, then sample the rest on the
         single serialized tile-art worker. Shared by the landing's genre/mood/
@@ -9866,8 +9898,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if disk is None:
             disk = self._tile_art_disk()
         now = time.time()
-        missing: list[tuple[str, str]] = []
-        for title, path in links:
+        missing: list[tuple[str, str, str]] = []
+        for title, path, provider_id in links:
             # Memory entries carry the sample's own timestamp and honour the
             # TTL: without that, an always-on app serves day-0 mosaics forever,
             # because the mem hit short-circuits the disk TTL check.
@@ -9884,22 +9916,28 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if arts:
                 _catalog_emit(self, self.browseTileArt, path, arts)
             if arts is None:
-                missing.append((title, path))
+                missing.append((title, path, provider_id))
         if not missing:
             return
         with self._tile_art_lock:
             if self._tile_art_running:
                 return
             self._tile_art_running = True
+        # One token per contributing provider, captured before the worker so a
+        # sign-out mid-crawl stops that provider's fetches (and no other's).
+        tokens = {pid: provider_contexts(self).capture(pid) for pid in sorted({pid for _, _, pid in missing})}
 
         def work() -> None:
             fetched = 0
             try:
-                for title, path in missing:
-                    if not _provider_result_current(self, gen) or not self._logged_in:
-                        return
+                for title, path, provider_id in missing:
+                    if not _provider_result_current(self, tokens[provider_id]):
+                        continue
+                    owner = browse_owner(self, provider_id)
+                    if owner is None:
+                        continue
                     try:
-                        arts = self._page_art_sample(self._browse_fetch(title, path))
+                        arts = owner.link_art_sample(self._browse_page_for(owner, title, path))
                     except Exception:
                         logger.debug("Tile art fetch failed for %s", path, exc_info=True)
                         continue
@@ -9934,11 +9972,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         disk = self._tile_art_disk()
         now = time.time()
         stored = disk.get("_paths") or {}
-        links = [(str(t), str(p)) for t, p in stored.get("links", [])]
+        # Stored links may predate the owner stamp (two-element entries from
+        # before the combined landing): a legacy entry is TIDAL's chip.
+        links = [
+            (str(parts[0]), str(parts[1]), str(parts[2] if len(parts) > 2 and parts[2] else CTX_TIDAL))
+            for entry in stored.get("links", [])
+            if len(parts := list(entry)) >= 2
+        ]
         if links and now - float(stored.get("ts", 0)) < self._TILE_ART_TTL:
             fresh = all(
                 (e := disk.get(path)) is not None and now - float(e.get("ts", 0)) < self._TILE_ART_TTL
-                for _, path in links
+                for _, path, _ in links
             )
             if fresh:
                 return  # everything cached, zero network spent
@@ -9952,7 +9996,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return
             if not _provider_result_current(self, gen) or not self._logged_in:
                 return
-            self._start_tile_art(chips, gen)
+            self._start_tile_art(chips)
 
         self.threadpool.start(_catalog_worker(self, CTX_TIDAL, work))
 

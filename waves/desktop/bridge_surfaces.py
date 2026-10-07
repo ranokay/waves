@@ -596,6 +596,23 @@ def ready_browse_providers(bridge) -> list:
     ]
 
 
+def browse_owner(bridge, provider_id) -> object | None:
+    """The registered provider that may serve Browse for this id, or None.
+
+    A Browse fetch runs only when the id names a registered provider that
+    declares ``Capability.BROWSE`` and is READY for it: capability and
+    session, never provider identity or a global session flag. An unknown
+    id, a catalog-only provider (Apple), a disabled or signed-out provider
+    all answer None, and the caller makes no request and emits nothing.
+    """
+    provider = (getattr(bridge, "providers", None) or {}).get(str(provider_id or ""))
+    if provider is None or Capability.BROWSE not in getattr(provider, "capabilities", frozenset()):
+        return None
+    if _provider_readiness(bridge, provider).for_operation(Capability.BROWSE).state != ReadinessState.READY:
+        return None
+    return provider
+
+
 def _browse_nav(bridge) -> dict:
     """Browse's availability for the header and its landing pane.
 

@@ -356,6 +356,9 @@ def test_disabled_provider_catalog_and_preview_do_not_call_the_service(bridge, m
 
 def test_cached_browse_root_is_checked_again_when_the_gui_receives_it(bridge):
     bridge._logged_in = True
+    # The landing composes from ready BROWSE providers; the fixture's guard
+    # otherwise declares a closed TIDAL seam (no Browse at all).
+    bridge.providers["tidal"].capabilities = bridge.providers["tidal"].capabilities | {Capability.BROWSE}
     cached = {"title": "Previous account", "sections": []}
     bridge._browse_root_cache = cached
     bridge._start_tile_art = lambda *args: None

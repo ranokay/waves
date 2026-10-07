@@ -351,13 +351,13 @@ class _TileArtStub:
 
 def test_a_second_tile_art_crawl_never_starts_beside_the_first():
     stub = _TileArtStub()
-    links = [("Rock", "/pages/rock"), ("Jazz", "/pages/jazz")]
+    links = [("Rock", "/pages/rock", "tidal"), ("Jazz", "/pages/jazz", "tidal")]
 
-    stub._sample_links_art(links, 0)
+    stub._sample_links_art(links)
     assert len(stub.threadpool.started) == 1  # the first crawl claimed the run
 
     # A browse page opening (or the post-login prefetch) lands while it runs.
-    stub._sample_links_art(links, 0)
+    stub._sample_links_art(links)
     assert len(stub.threadpool.started) == 1, "two crawls would race their disk snapshots"
 
     # Claim and release both happen under the lock, so the check-then-set cannot
@@ -367,7 +367,7 @@ def test_a_second_tile_art_crawl_never_starts_beside_the_first():
     assert stub._tile_art_running is False
     assert stub.set_while_unlocked == 0
 
-    stub._sample_links_art(links, 0)  # the flag really was released
+    stub._sample_links_art(links)  # the flag really was released
     assert len(stub.threadpool.started) == 2
 
 

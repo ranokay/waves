@@ -302,25 +302,24 @@ def test_settings_page_listens_for_external_persists():
 
 class _BrowsePageStub:
     openBrowsePage = WavesBridge.openBrowsePage
-    _page_path_ok = staticmethod(WavesBridge._page_path_ok)
 
     def __init__(self, cached, fresh_sections):
-        self._logged_in = True
-        self._browse_pages = {"pages/labels": cached}
+        self._browse_pages = {"browse:tidal:pages/labels": cached}
         self._browse_loading = set()
-        self._browse_gen = 1
         self.threadpool = _InlinePool()
         self.browsePageLoaded = _Signal()
         self.sampled: list = []
         self._fresh_sections = fresh_sections
 
-    def _browse_fetch(self, title, api_path):
+    browse_path_ok = staticmethod(WavesBridge._page_path_ok)
+
+    def browse_page(self, title, api_path):
         return SimpleNamespace(title="Labels")
 
     def _page_rows(self, page):
         return self._fresh_sections
 
-    def _sample_links_art(self, links, gen, disk=None):
+    def _sample_links_art(self, links, disk=None):
         self.sampled.append(links)
 
     def _save_page_cache(self):
@@ -336,23 +335,36 @@ class _BrowsePageStub:
 _LINKS_SECTION = {"rowKind": "links", "items": [{"title": "Label A", "path": "pages/label_a"}]}
 
 
-def test_a_revalidated_page_still_fills_its_link_mosaics():
-    cached = {"key": "pages/labels", "title": "Labels", "sections": [_LINKS_SECTION], "error": False}
+def test_a_revalidated_page_still_fills_its_link_mosaics(monkeypatch):
+    from waves.desktop import backend as backend_pkg
+
+    cached = {
+        "key": "pages/labels",
+        "provider_id": "tidal",
+        "title": "Labels",
+        "sections": [_LINKS_SECTION],
+        "error": False,
+    }
     stub = _BrowsePageStub(cached, [_LINKS_SECTION])  # unchanged page: no re-emit, but art must flow
+    monkeypatch.setattr(backend_pkg, "browse_owner", lambda bridge, provider_id: stub)
     stub.openBrowsePage("pages/labels", "Labels")
 
-    assert stub.sampled == [[("Label A", "pages/label_a")]], "cache-served revisits must not render art-less"
+    assert stub.sampled == [[("Label A", "pages/label_a", "tidal")]], "cache-served revisits must not render art-less"
 
 
 def test_link_tiles_of_extracts_only_link_rows():
     payload = {
+        "provider_id": "stub",
         "sections": [
             _LINKS_SECTION,
             {"rowKind": "cards", "items": [{"title": "X", "path": "pages/x"}]},
             {"rowKind": "links", "items": [{"title": "No path"}]},
-        ]
+        ],
     }
-    assert _link_tiles_of(payload) == [("Label A", "pages/label_a")]
+    # The tile's owner rides along so the mosaic sampler routes to the
+    # provider that served the page; a payload without one is TIDAL's.
+    assert _link_tiles_of(payload) == [("Label A", "pages/label_a", "stub")]
+    assert _link_tiles_of({"sections": [_LINKS_SECTION]}) == [("Label A", "pages/label_a", "tidal")]
     assert _link_tiles_of({}) == []
 
 

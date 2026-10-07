@@ -16,6 +16,7 @@ from waves.desktop.providers.lifecycle import (
     scan_current,
     scan_generation,
 )
+from waves.providers.base import Capability
 
 
 def test_revocation_and_login_cancel_have_distinct_scopes():
@@ -180,6 +181,13 @@ def _cache_bridge(tmp_path):
     pages = {f"item:album:{mid}" for mid in ids}
     pages.update({"root", "pages/browse", "pl:p1", "pl:third:p1"})
     bridge = SimpleNamespace(
+        # The registry drives which provider owns what; only TIDAL declares
+        # Browse here, so clearing it also retires the combined landing.
+        providers={
+            "tidal": SimpleNamespace(capabilities=frozenset({Capability.BROWSE})),
+            "apple": SimpleNamespace(capabilities=frozenset()),
+            "third": SimpleNamespace(capabilities=frozenset()),
+        },
         _objs={"album": dict.fromkeys(ids, "catalog object"), "track": dict.fromkeys(ids, "track object")},
         _objs_lock=Lock(),
         _evict_lock=Lock(),
@@ -304,6 +312,17 @@ def test_cache_cleanup_preserves_other_providers_and_local_evidence(tmp_path, pr
         assert not ({f"item:album:{mid}" for mid in own} & pages)
         assert ("root" in pages) == (provider_id != "tidal")
         assert ("pl:third:p1" in pages) == (provider_id != "third")
+
+
+def test_a_browse_capable_provider_invalidates_the_combined_landing(tmp_path):
+    """The landing is composed from every browse-capable provider's account:
+    clearing any one of them retires it, not just TIDAL's."""
+    bridge = _cache_bridge(tmp_path)
+    bridge.providers["third"].capabilities = frozenset({Capability.BROWSE})
+
+    clear_provider_caches(bridge, "third")
+
+    assert bridge._browse_root_cache is None and bridge._browse_reval_ts == 0.0
 
 
 def test_mixed_search_is_evicted_instead_of_served_as_complete(tmp_path):
