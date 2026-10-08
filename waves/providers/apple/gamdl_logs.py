@@ -6,9 +6,8 @@ developer token and the account identifier. structlog left unconfigured prints
 every record to stdout. gamdl is the only structlog user in the process, so
 configuring structlog configures gamdl and nothing else.
 
-Waves first calls into gamdl from one of three factories (the catalog API, the
-cookies stack and the wrapper session), and each calls :func:`quiet_gamdl_logs`
-before anything else.
+Every factory that builds a gamdl client calls :func:`quiet_gamdl_logs` before
+anything else, so whichever runs first quiets gamdl for the process.
 """
 
 from __future__ import annotations
@@ -36,20 +35,22 @@ def quiet_gamdl_logs() -> None:
     import structlog
 
     structlog.configure(
-        processors=[_one_line],
+        processors=[_event_and_action],
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING),
         logger_factory=lambda *_args: logger,
     )
 
 
-def _one_line(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> tuple[tuple[str], dict[str, object]]:
-    """gamdl's event and its bound context as one stdlib message.
+def _event_and_action(_logger: WrappedLogger, _method: str, event_dict: EventDict):
+    """gamdl's event and the operation it names, as one stdlib message.
 
-    The reply bodies gamdl binds whole (the dicts and lists it parsed) stay out
-    of the line. ``exc_info`` passes through as a keyword, so the diagnostics
-    filter formats and scrubs the traceback.
+    The rest of gamdl's bound context is Apple data (whole replies, decryption
+    keys, media ids, paths) and stays out of the line. ``exc_info`` passes
+    through as a keyword, so the diagnostics filter formats and scrubs the
+    traceback.
     """
-    exc_info = event_dict.pop("exc_info", None)
-    words = [str(event_dict.pop("event", ""))]
-    words += [f"{key}={value!r}" for key, value in event_dict.items() if not isinstance(value, dict | list)]
-    return (" ".join(words),), {"exc_info": exc_info}
+    message = str(event_dict.get("event", ""))
+    action = event_dict.get("action")
+    if action:
+        message = f"{message} action={action}"
+    return (message,), {"exc_info": event_dict.get("exc_info")}

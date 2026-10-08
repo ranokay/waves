@@ -121,24 +121,27 @@ def _hang_up() -> None:
     raise RuntimeError("wrapper hung up")
 
 
-def test_gamdl_warning_reaches_the_waves_logger_without_its_reply(caplog, capfd):
+def test_gamdl_warning_reaches_the_waves_logger_without_its_data(caplog, capfd):
     quiet_gamdl_logs()
-    gamdl_log = structlog.get_logger("gamdl.api.wrapper").bind(action="wrapper_get_playback", media_id="1440833098")
+    gamdl_log = structlog.get_logger("gamdl.interface.base").bind(
+        action="get_decryption_key", decryption_key=_DEV_TOKEN, account_info={"dsid": _ACCOUNT_ID}
+    )
 
     with caplog.at_level(logging.DEBUG, logger="waves"):
-        gamdl_log.debug("success", playback={"dsid": _ACCOUNT_ID})
-        gamdl_log.warning("playback slow", playback={"dsid": _ACCOUNT_ID})
+        gamdl_log.debug("success")
+        gamdl_log.warning("key slow")
         try:
             _hang_up()
         except RuntimeError:
-            gamdl_log.exception("playback failed")
+            gamdl_log.exception("key failed")
 
     records = [record for record in caplog.records if record.name.startswith("waves.")]
-    assert [(record.levelno, record.getMessage()) for record in records] == [
-        (logging.WARNING, "playback slow action='wrapper_get_playback' media_id='1440833098'"),
-        (logging.ERROR, "playback failed action='wrapper_get_playback' media_id='1440833098'"),
-    ]
+    assert [record.levelno for record in records] == [logging.WARNING, logging.ERROR]
+    for record, event in zip(records, ("key slow", "key failed"), strict=True):
+        message = record.getMessage()
+        assert event in message
+        assert "get_decryption_key" in message
+        assert not any(sentinel in message for sentinel in _SENTINELS)
     assert records[1].exc_info is not None
     assert records[1].exc_info[0] is RuntimeError
-    assert all(_ACCOUNT_ID not in record.getMessage() for record in caplog.records)
     _assert_no_sentinel(capfd)
