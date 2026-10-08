@@ -17,7 +17,7 @@ run = "uv sync --locked --all-extras && uv run --locked --all-extras pre-commit 
 alias = "lint"
 description = "Lock drift, static analysis, pre-commit hooks and unused dependencies (the format hooks rewrite files; run fmt first)"
 depends = ["typecheck"]
-run = "uv lock --check && uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry ."
+run = 'uv lock --check && SKIP="${SKIP:+$SKIP,}no-commit-to-branch" uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry .'
 
 [tasks.clean]
 description = "Remove regenerable build and test caches (never .venv, never git clean; idempotent)"
@@ -37,8 +37,8 @@ description = "Format the tree: ruff format (Python), qmlformat (QML), prettier 
 run = "uv run --locked --all-extras ruff format --force-exclude && bash tools/format_qml.sh && uv run --locked --all-extras pre-commit run prettier --all-files"
 
 [tasks.typecheck]
-description = "ty over the shipped package (waves/)"
-run = "uv run --locked --all-extras ty check"
+description = "ty over the shipped package (waves/); errors fail and print, the baseline warnings are counted"
+run = "bash tools/typecheck.sh"
 
 [tasks.test-fast]
 description = "Fast tests (excludes qml, ffmpeg, slow, integration and account markers)"
@@ -76,6 +76,10 @@ run = "bash tools/build_waves.sh"
 [tasks.doctor]
 description = "Fail fast on stale installs and missing hooks (versions, waves/tidaler, lock, hooks, QML smoke)"
 run = "bash tools/doctor.sh"
+
+[tasks.frontier]
+description = "Report each open wayfinder map's next agent-ready issue, live blockers and checklist drift (pass map numbers to narrow)"
+run = "uv run --locked --all-extras python tools/wayfinder_frontier.py"
 
 [tasks.graph]
 description = "Refresh the code-review-graph index (run when list_graph_stats reports head_matches_build false; semantic search stays keyword until embeddings are generated)"

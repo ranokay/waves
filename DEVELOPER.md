@@ -173,7 +173,8 @@ lockfile is the environment and drift fails the run.
 `mise run check` (also `mise run lint`) carries the static gates. It runs the format hooks
 (ruff format, prettier, qmlformat), so it rewrites unformatted files instead
 of only failing: run `mise run format` first on a dirty tree, or re-run check
-until it is clean.
+until it is clean. The commit hook `no-commit-to-branch` refuses commits on
+`develop` and `main`: work lands there through PRs.
 
 - `mise run format` (also `fmt`) — format Python, QML and the remaining
   text with ruff, qmlformat and prettier. `lint` is an alias for the comprehensive
@@ -195,8 +196,10 @@ until it is clean.
   only inside the files the `pyproject.toml` overrides name; every other
   module is held at the error level, so a new diagnostic in hand-written code
   fails the gate. Warnings do not fail (ty's own default-warn rules included);
-  the seam warnings that remain are that accepted baseline. Re-check each
-  override reason when a seam, a stub, or the inherited engine moves.
+  the seam warnings that remain are that accepted baseline, which
+  `tools/typecheck.sh` counts rather than prints (`uv run ty check` lists
+  them). Re-check each override reason when a seam, a stub, or the inherited
+  engine moves.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `mise run doctor` first — it detects the stale state — then

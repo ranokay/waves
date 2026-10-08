@@ -30,6 +30,29 @@ global standards and take precedence where they differ.
 - Preserve serialized settings and payload keys during internal cleanup.
 - Moves must update source imports, QML imports and assets, test harnesses,
   resource recipes, dynamic module names, CI and tool imports, and documentation.
+- The per-path house rules in [`.opencodereview/rule.json`](.opencodereview/rule.json)
+  (QML, bridge Python, tests, Markdown, BRIDGE.md, the architecture map) bind
+  every review, whichever tool runs it.
+
+## Correctness
+
+The correctness review hunts these defect classes. Each finding names a
+concrete failure: the state or input, and the wrong result it produces.
+
+- **Provider identity travels with the data.** When a change lets a path
+  serve more than one provider, every key, cache, pending map, preference key,
+  rollup and paging guard built from a path, title or bare ID carries the
+  owning provider. TIDAL-specific type checks, defaults and fallbacks inside
+  that path move behind the provider seam.
+- **Stale work never publishes.** A worker re-checks every provider token it
+  read from at emit time, not only at start. Revoking or signing out a
+  provider clears its state from every combined surface it contributed to.
+- **Derived UI state follows its inputs.** Every input that changes a plan or
+  layout (resize, source filter, sort, refresh, expand or collapse, Back
+  restore) re-runs it, after the state it reads is restored. Counters and
+  caches keyed to delegates reset when those delegates are destroyed or replaced.
+- **Failure reads as failure.** A run whose every read failed reports an
+  error, not an empty success, and a partial index or result stays marked partial.
 
 ## Tests
 
