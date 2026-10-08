@@ -40,6 +40,15 @@ def test_every_public_signal_qt_registers_on_the_bridge_resolves():
     assert all(isinstance(getattr(stub, name), RecordingSignal) for name in BRIDGE_SIGNALS)
 
 
+def test_a_bound_bridge_method_emits_onto_a_signal_the_stand_in_never_declared():
+    stub = BridgeStub()
+
+    WavesBridge._set_status(stub, "Downloading")
+
+    assert stub._status == "Downloading"
+    assert stub.statusChanged.emits == [()], "the real slot's emit lands on the stand-in's recording double"
+
+
 def test_a_resolved_signal_keeps_its_emits_on_the_instance():
     stub = BridgeStub()
 
