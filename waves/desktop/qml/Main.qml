@@ -1650,6 +1650,95 @@ ApplicationWindow {
   // group (titles absent from the map keep their payload order after the
   // ranked ones; a provider's group order never crosses into another's).
   readonly property var browseVisibleSections: root.computeBrowseSections()
+  // --- Landing section slots ---------------------------------------------
+  // The landing renders from a slot model, never from the array: a refresh
+  // that reassigns the array is a Repeater reset (every shelf torn down and
+  // every card rebuilt), so the slots stay put and each rebinds the section
+  // it holds. A longer landing appends slots, a shorter one drops its
+  // trailing slots only. `late` marks a slot a refresh appended to a
+  // landing already built: its shelf incubates on its own and no veil
+  // counts it.
+  ListModel {
+    id: browseSecSlots
+  }
+  property int _browseSecSlotN: 0
+  // The array before the latest assignment (prev): a released slot's
+  // binding still evaluates until its delegate is deleted, so it reads the
+  // section it had from prev for that instant instead of undefined.
+  property var _browseSecHeld: ({
+      prev: [],
+      cur: []
+    })
+  // A released slot's binding still evaluates until its delegate is deleted,
+  // so it falls back to the section it had from prev for that instant.
+  function _browseSecSlotAt(held, slot) {
+    var cur = held.cur
+    if (cur[slot] !== undefined)
+      return cur[slot]
+    var prev = held.prev
+    return prev[slot] !== undefined ? prev[slot] : null
+  }
+  function browseSecAt(slot) {
+    return root._browseSecSlotAt(root._browseSecHeld, slot)
+  }
+  // The grow/trim machine behind both section slot lists: keeps the count,
+  // the held arrays (a released slot's binding still evaluates until its
+  // delegate dies, so it reads the section it had from prev) and the
+  // appended slots' `late` mark.
+  function _browseSyncSlots(model, held, slotN, secs, late) {
+    var n = secs.length
+    var prev = held.prev
+    if (held.cur.length > n)
+      prev = held.cur
+    if (slotN > n) {
+      model.remove(n, slotN - n)
+      slotN = n
+    }
+    while (slotN < n) {
+      model.append(late === undefined ? {
+        slot: slotN
+      } : {
+        slot: slotN,
+        late: late
+      })
+      slotN++
+    }
+    return {
+      held: {
+        prev: prev,
+        cur: secs
+      },
+      slotN: slotN
+    }
+  }
+  function _browseSyncSecSlots() {
+    // A source-filter change (or an arrange action) re-lays the landing
+    // too: hold the user's spot across it.
+    browseLanding.holdScroll()
+    var r = root._browseSyncSlots(browseSecSlots, root._browseSecHeld, root._browseSecSlotN, root.browseVisibleSections, root._browseSecSlotN > 0)
+    root._browseSecHeld = r.held
+    root._browseSecSlotN = r.slotN
+  }
+  onBrowseVisibleSectionsChanged: root._browseSyncSecSlots()
+  // The same slots for a drilled page's sections, so a growth reassign (a
+  // new sections array on the same page) rebinds instead of resetting.
+  ListModel {
+    id: browsePageSecSlots
+  }
+  property int _browsePageSecSlotN: 0
+  property var _browsePageSecHeld: ({
+      prev: [],
+      cur: []
+    })
+  function browsePageSecAt(slot) {
+    return root._browseSecSlotAt(root._browsePageSecHeld, slot)
+  }
+  function _browseSyncPageSecSlots() {
+    var secs = root.browsePage && root.browsePage.sections ? root.browsePage.sections : []
+    var r = root._browseSyncSlots(browsePageSecSlots, root._browsePageSecHeld, root._browsePageSecSlotN, secs, undefined)
+    root._browsePageSecHeld = r.held
+    root._browsePageSecSlotN = r.slotN
+  }
   // `override` lets a landing being applied measure the incoming sections
   // before the assignment (the build veil's total must count exactly the
   // delegates the model will create).
@@ -1798,35 +1887,41 @@ ApplicationWindow {
   property var _browseParked: null
   function applyBrowseLanding(p) {
     root.browseError = !!p.error
-    var secs = p.sections || [];
-    // Fresh build (nothing on screen): async + veil. Refresh of a landing
-    // already showing: synchronous, swaps in place. While the launch
-    // overlay is still up nothing is "showing" yet, and the boot-time
-    // revalidate re-emit fires almost every launch because the landing
-    // embeds For You rows (their ordering shifts between sessions), so
-    // build that one asynchronously too: a synchronous shelf rebuild
-    // freezes the GUI thread mid boot sequence and hitches the water/nav
-    // animations.
-    root._browseAsyncBuild = root.browseSections.length === 0 || !bootOverlay.done
-    // +4 = the wayfinding groups (Playlists / Genres / Moods / Decades)
-    // rendered as async shelves alongside the content sections. Count the
-    // VISIBLE sections: hidden/filtered ones create no delegates, so
-    // counting them would hold the veil until its stall guard.
-    root._browseBuildStart(root._browseAsyncBuild && !p.error ? root.computeBrowseSections(secs).length + 4 : 0)
-    root.browseArtistsSideMap(secs)
-    // Refresh of a landing already built: hold the spot across the
-    // shelf rebuild (see holdScroll). The landing pane is alive even
-    // behind a drilled page, and the clamp does not care that it is
-    // hidden, so the hold arms regardless of which pane is showing.
-    if (root.browseSections.length > 0)
-      browseLanding.holdScroll()
-    root.browseSections = secs
-    root.browseSources = p.sources || []
-    root.browseChips = {
+    var secs = p.sections || []
+    var chips = {
       genres: p.genres || [],
       moods: p.moods || [],
       decades: p.decades || []
     }
+    var chipsChanged = JSON.stringify(chips) !== JSON.stringify(root.browseChips);
+    // Fresh build (nothing built yet): async + veil. A landing already
+    // built refreshes IN PLACE: the section slots rebind (see
+    // browseSecSlots), so nothing is torn down, nothing is watched
+    // assembling, and there is nothing to veil — at boot behind the overlay
+    // (the revalidate re-emit fires almost every launch now that the
+    // landing embeds For You rows) as well as later with the page on
+    // screen.
+    var fresh = browseSecSlots.count === 0
+    if (fresh) {
+      root._browseAsyncBuild = true
+      // +4 = the wayfinding groups (Playlists / Genres / Moods / Decades)
+      // rendered as async shelves alongside the content sections when the
+      // chips change (an unchanged set keeps the shelves it has, so they
+      // would never report in). Count the VISIBLE sections: hidden/filtered
+      // ones create no delegates, so counting them would hold the veil
+      // until its stall guard.
+      root._browseBuildStart(p.error ? 0 : root.computeBrowseSections(secs).length + (chipsChanged ? 4 : 0))
+    }
+    root.browseArtistsSideMap(secs)
+    // The refresh's scroll hold comes with the section-slot sync below
+    // (see _browseSyncSecSlots), which runs for every landing re-lay.
+    root.browseSections = secs
+    root.browseSources = p.sources || []
+    // The wayfinding tile shelves hang off the chips: a refresh carrying
+    // the same set leaves them alone instead of rebuilding four shelves of
+    // tiles to show what they already show.
+    if (chipsChanged)
+      root.browseChips = chips
     // An open (or stacked) local: row page snapshotted a row this payload
     // may have just refreshed; bring it in line.
     root.refreshLocalBrowsePages(p.sections || [])
@@ -1863,6 +1958,67 @@ ApplicationWindow {
     id: browseBuildGuard
     interval: 800
     onTriggered: root.browseBuilding = false
+  }
+  // --- Drilled page build veil ---------------------------------------------
+  // A fresh drilled page (a wire payload) builds behind its own veil: its
+  // cards and in-view track rows incubate, the pane stays covered, and it
+  // fades in complete when the last one reports. A revalidate re-emit, a
+  // Back, a history restore and a local listing land synchronously in
+  // place and drop any veil the replaced page had up (see
+  // onBrowsePageChanged), so a returning page never inherits one.
+  property int _browsePageBuildTotal: 0
+  property int _browsePageBuildReady: 0
+  property bool browsePageBuilding: false
+  property bool _browsePageWire: false
+  function _browsePageBuildStart(n) {
+    _browsePageBuildTotal = n
+    _browsePageBuildReady = 0
+    browsePageBuilding = n > 0
+    if (browsePageBuilding)
+      browsePageBuildGuard.restart()
+    else
+      browsePageBuildGuard.stop()
+  }
+  function _browsePageBuildTick() {
+    if (!browsePageBuilding)
+      return
+    browsePageBuildGuard.restart()
+    if (++_browsePageBuildReady >= _browsePageBuildTotal) {
+      browsePageBuilding = false
+      browsePageBuildGuard.stop()
+    }
+  }
+  function _browsePageCardStart(async) {
+    if (async && browsePageBuilding) {
+      ++_browsePageBuildTotal
+      return true
+    }
+    return false
+  }
+  function _browsePageCardTick(counted) {
+    if (counted)
+      _browsePageBuildTick()
+  }
+  Timer {
+    id: browsePageBuildGuard
+    interval: 800
+    onTriggered: root.browsePageBuilding = false
+  }
+  property real browsePageReveal: 1
+  onBrowsePageBuildingChanged: {
+    if (browsePageBuilding) {
+      browsePageRevealRise.stop()
+      browsePageReveal = 0
+    } else
+      browsePageRevealRise.restart()
+  }
+  NumberAnimation {
+    id: browsePageRevealRise
+    target: root
+    property: "browsePageReveal"
+    to: 1
+    duration: 180
+    easing.type: Easing.OutQuad
   }
   // Always-on freshness: revalidate-on-tab-return alone lets the landing
   // freeze for a user who parks on Browse. The backend's 60s throttle is a
@@ -2127,7 +2283,18 @@ ApplicationWindow {
   // LOADED left Back and tab-restore showing the previous album's badge on
   // this album, pointing at the wrong folder, so hang it off the property
   // itself: every assignment re-resolves, and nothing has to remember to.
-  onBrowsePageChanged: root._resolveLibraryPresence()
+  onBrowsePageChanged: {
+    root._resolveLibraryPresence()
+    // Only a wire payload builds behind the veil (onBrowsePageLoaded arms
+    // it before assigning). Every other assignment (Back, a history
+    // restore, a local listing) lands in place, and drops a veil the
+    // replaced page may still have up: a Back off a page mid-build must
+    // not hide the page it returns to until the guard.
+    if (!root._browsePageWire)
+      root._browsePageBuildStart(0)
+    root._browsePageWire = false
+    root._browseSyncPageSecSlots()
+  }
   function _resolveLibraryPresence() {
     var ph = (root.browsePage && root.browsePage.header) ? root.browsePage.header : null
     root.libraryPresence = (ph && ph.kind === "album") ? waves.libraryAlbumPresence(ph.artist || "", ph.title || "", "" + (ph.year || ""), ph.num_tracks || 0, ph.duration_sec || 0, ph.explicit === true ? 1 : -1) : null
@@ -4200,6 +4367,10 @@ ApplicationWindow {
           return r
         hit = true
         return Object.assign({}, r, {
+          // The boundary the section treats as its base rows: everything
+          // past it is growth and incubates (a grown shelf is not re-laid
+          // inline).
+          base: r.base !== undefined ? r.base : (r.items || []).length,
           items: (r.items || []).concat(p.items),
           offset: p.offset,
           total: p.more ? r.total : p.offset
@@ -4213,10 +4384,14 @@ ApplicationWindow {
     var ps = (browsePage && browsePage.sections) ? grown(browsePage.sections) : null
     // Growth rebuilds a column in place; hold the user's spot across it,
     // on whichever pane actually re-lays.
-    if (s)
-      browseLanding.holdScroll()
-    if (ps)
+    // The landing's hold comes with the section-slot sync (the assignment
+    // below re-lays it); the drilled page has no such sync, so it holds
+    // here. A growth rebind is not a page swap: an in-flight page build
+    // keeps its veil while the grown rows append through their slots.
+    if (ps) {
       browseDrill.holdScroll()
+      root._browsePageWire = true
+    }
     if (s)
       browseSections = s
     if (ps)
@@ -6628,6 +6803,16 @@ ApplicationWindow {
       // for an uncached album, e.g. one opened from a My Music Home shelf.
       if (!p.error && root.browseHighlightId !== "")
         root.browseHighlightPending = true
+      // A fresh wire payload builds behind the page's veil: the sections
+      // report in as they complete, and every card and in-view row they
+      // incubate adds itself to the count. A revalidate of the page
+      // already showing swaps it in place with no veil, as do the
+      // assignment paths that are not the wire at all (Back, a local
+      // listing; see onBrowsePageChanged).
+      var revalidate = root.browsePage !== null && String(p.key || "") === root.browsePageKey
+      root._browsePageWire = !p.error && !revalidate
+      if (root._browsePageWire)
+        root._browsePageBuildStart((p.sections || []).length)
       // A revalidate re-emit of the page already showing swaps it in
       // place; hold the user's spot across the rebuild (see holdScroll).
       if (root.browsePage && !p.error)
@@ -8300,31 +8485,38 @@ ApplicationWindow {
           // frames instead of freezing for the ~250 ms a
           // synchronous build of every shelf would take.
           Repeater {
-            model: root.browseVisibleSections
+            id: browseSecRep
+            model: browseSecSlots
             delegate: Loader {
               id: bsecLd
-              required property var modelData
-              required property int index
+              required property int slot
+              required property bool late
+              readonly property var sec: root.browseSecAt(slot)
               width: browseLandingCol.width
-              asynchronous: root._browseAsyncBuild
+              // A shelf a refresh appended incubates on its own and joins
+              // no build: it reports in to nobody, and its cards (which
+              // know its `late` mark) stay out of the count too.
+              asynchronous: root._browseAsyncBuild || late
               // Invisible while the veil is up, but still laid out.
               opacity: root.browseBuilding ? 0 : 1
-              onLoaded: root._browseBuildTick()
+              onLoaded: if (!late)
+                root._browseBuildTick()
               sourceComponent: BrowseSection {
                 host: root
-                sec: bsecLd.modelData
-                secIndex: bsecLd.index
+                sec: bsecLd.sec
+                late: bsecLd.late
+                secIndex: bsecLd.slot
                 landing: true
                 pane: browseLanding
                 col: browseLandingCol
                 arrangeable: true
-                collapsed: root.browseCollapsed[root.browseSectionKey(bsecLd.modelData)] === true
-                canMoveUp: root.browseCanMove(bsecLd.modelData, -1)
-                canMoveDown: root.browseCanMove(bsecLd.modelData, 1)
-                onToggled: root.browseToggleCollapsed(bsecLd.modelData)
-                onHideRequested: root.browseHideSection(bsecLd.modelData)
+                collapsed: root.browseCollapsed[root.browseSectionKey(bsecLd.sec)] === true
+                canMoveUp: root.browseCanMove(bsecLd.sec, -1)
+                canMoveDown: root.browseCanMove(bsecLd.sec, 1)
+                onToggled: root.browseToggleCollapsed(bsecLd.sec)
+                onHideRequested: root.browseHideSection(bsecLd.sec)
                 onMoveRequested: function (delta) {
-                  root.browseMoveSection(bsecLd.modelData, delta)
+                  root.browseMoveSection(bsecLd.sec, delta)
                 }
               }
             }
@@ -8488,16 +8680,15 @@ ApplicationWindow {
           width: browseDrill.width - 44
           spacing: 8
           // Hidden (but still laid out, so heights resolve) until
-          // the highlighted-track scroll has been applied: opening
-          // an album from a track then reveals it already on the
-          // row, never mid-jump. Entering the state has no
-          // transition, so the un-scrolled top never shows; the
-          // reveal then FADES in so the album eases into place
-          // already scrolled instead of dropping in blank. Only
-          // the reveal direction is animated (the Transition's
-          // `to: ""`); a Behavior can't do direction here without
-          // racing the pending change.
-          opacity: 1
+          // the highlighted-track scroll has been applied, or while a
+          // fresh page builds: opening an album from a track then reveals
+          // it already on the row, never mid-jump, and a wire page fades
+          // in complete instead of arriving shelf by shelf. Entering a
+          // state has no transition, so the un-scrolled top never shows;
+          // the reveal then FADES in. Only the reveal direction is
+          // animated (the Transition's `to: ""`); a Behavior can't do
+          // direction here without racing the pending change.
+          opacity: root.browsePageReveal
           states: State {
             name: "positioning"
             when: root.browseHighlightPending
@@ -8861,14 +9052,14 @@ ApplicationWindow {
           // BrowseSection, so "the full page" is shells plus the
           // viewport, never five hundred built rows.
           Repeater {
-            model: root.browsePage ? root.browsePage.sections : []
+            id: browsePageSecRep
+            model: browsePageSecSlots
             delegate: BrowseSection {
               host: root
-              required property var modelData
-              required property int index
+              required property int slot
               width: browseDrillCol.width
-              sec: modelData
-              secIndex: index
+              sec: root.browsePageSecAt(slot)
+              secIndex: slot
               landing: false
               pane: browseDrill
               col: browseDrillCol
