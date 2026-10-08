@@ -19,6 +19,7 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_queue
 
 from waves.desktop.backend import WavesBridge
@@ -160,7 +161,7 @@ class _Engine:
         pass
 
 
-class _JobStub:
+class _JobStub(BridgeStub):
     """Enough bridge for one job body whose folder does not answer, with the
     press landing while the probe runs (the window the gate stashes in)."""
 

@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import pytest
 from providers.fakes import BareProvider
 from providers.qml_auth import CallbackLoginAttempt
+from support.bridge_stub import BridgeStub
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge
@@ -295,7 +296,7 @@ class _InlinePool:
         worker.run()
 
 
-class _AuthStub:
+class _AuthStub(BridgeStub):
     """Base stand-in for the auth slots: the guard tidal, the fake provider,
     the inline pool and the signals they touch."""
 

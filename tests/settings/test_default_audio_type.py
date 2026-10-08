@@ -11,6 +11,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.config import _migrate_settings
 from waves.constants import DefaultAudio, default_audio_is_both
@@ -75,7 +76,7 @@ def test_both_means_both_and_everything_else_means_stereo():
 def _stub(**over):
     base = {"default_audio_type": "stereo"}
     base.update(over)
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(**base)))
+    stub = BridgeStub(settings=SimpleNamespace(data=SimpleNamespace(**base)))
     stub._chooser_default_audio = WavesBridge._chooser_default_audio.__get__(stub)
     stub._default_wants_both = WavesBridge._default_wants_both.__get__(stub)
     return stub
@@ -90,14 +91,14 @@ def test_chooser_default_follows_the_setting():
 def test_plain_clicks_consult_the_single_source():
     assert _stub(default_audio_type="both")._default_wants_both() is True
     assert _stub(default_audio_type="stereo")._default_wants_both() is False
-    bare = SimpleNamespace()
+    bare = BridgeStub()
     bare._default_wants_both = WavesBridge._default_wants_both.__get__(bare)
     assert bare._default_wants_both() is False
 
 
 def test_save_defaults_writes_the_dropdown_word():
     staged: dict = {}
-    stub = SimpleNamespace(applySettings=staged.update)
+    stub = BridgeStub(applySettings=staged.update)
     stub._provider_meta = WavesBridge._provider_meta.__get__(stub, type(stub))
     stub.saveChooserDefaults = WavesBridge.saveChooserDefaults.__get__(stub)
     stub.saveChooserDefaults({"provider": "tidal", "tier": "", "audioType": "both"})

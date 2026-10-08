@@ -15,13 +15,14 @@ from threading import Lock
 from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
 
 
-class SearchStub:
+class SearchStub(BridgeStub):
     search = WavesBridge.search
     dropSearchSource = WavesBridge.dropSearchSource
     _absorb_search_group = WavesBridge._absorb_search_group

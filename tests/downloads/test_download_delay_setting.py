@@ -24,6 +24,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
@@ -75,7 +76,7 @@ class _RecordingDownload:
     list_unavailable = False
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Just what _download and its worker touch on the happy path; every gate
     answers "go". Mirrors tests/downloads/test_download_start_readout.py's stand-in."""
 

@@ -27,6 +27,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
@@ -58,7 +59,7 @@ class _FakeDownload:
         return True, "/tmp/song.flac"
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Just the attributes ``_download`` and its worker touch on the happy
     path of a single track; every gate answers "go"."""
 

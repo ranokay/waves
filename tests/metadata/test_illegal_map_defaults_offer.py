@@ -25,6 +25,7 @@ from datetime import datetime
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
 from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
@@ -44,7 +45,7 @@ _UI = REPO_ROOT / "waves" / "desktop"
 _SETTINGS_QML = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text(encoding="utf-8")
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real bridge methods get bound onto."""
 
 

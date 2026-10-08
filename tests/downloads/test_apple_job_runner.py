@@ -11,6 +11,7 @@ from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.desktop import backend
@@ -266,7 +267,7 @@ def _settings(base: Path, **overrides):
 
 
 def _stub(base: Path, provider, **overrides):
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=_settings(base),
         providers={CTX_APPLE: provider},
         _ownership=SimpleNamespace(ownership_of=lambda tid: None),
@@ -1101,7 +1102,7 @@ def test_configure_apple_provider_reads_settings(tmp_path):
     provider = _FakeProvider()
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape\n")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={CTX_APPLE: provider},
         settings=_settings(tmp_path, apple_cookies_path=str(cookies)),
     )
@@ -1204,7 +1205,7 @@ def test_retry_reroutes_an_apple_row_through_the_apple_entry(tmp_path):
 def test_row_object_falls_back_to_the_provider_cache(tmp_path):
     provider = _FakeProvider()
     provider.cached = lambda kind, raw_id: _album_resource()
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _jobs=JobRuntime(),
         _objs={"album": {}},
         providers={CTX_APPLE: provider},

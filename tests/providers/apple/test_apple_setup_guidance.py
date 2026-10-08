@@ -17,6 +17,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
@@ -91,7 +92,7 @@ def test_refresh_setup_reprobes_and_rebuilds_the_wizard():
     from waves.desktop.backend import WavesBridge
 
     seen = []
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub._refresh_apple_container_cache = lambda timeout=10: seen.append(("probe", timeout)) or {"running": False}
     stub.appleRuntimeStateChanged = SimpleNamespace(emit=lambda *a: seen.append(("state", *a)))
     stub.appleRuntimeStatusChanged = SimpleNamespace(emit=lambda *a: seen.append(("status",)))

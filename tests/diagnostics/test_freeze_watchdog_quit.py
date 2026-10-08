@@ -28,9 +28,9 @@ import os
 import subprocess
 import sys
 import time
-from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.diagnostics import export as diagnostics
 from waves.desktop.queue.runtime import JobRuntime
@@ -140,7 +140,7 @@ def test_shutdown_stops_the_watchdog_before_it_drains_the_pools():
         def close(self):
             pass
 
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _teardown_library_watch=lambda: None,
         _library_gen=0,
         _event_abort=None,

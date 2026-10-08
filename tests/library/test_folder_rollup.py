@@ -11,6 +11,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.providers.tidal_folders import FolderNode, FolderTree
 
@@ -37,7 +39,7 @@ class _OrderedSignal(_Signal):
         self._log.append(self._tag)
 
 
-class _BumpStub:
+class _BumpStub(BridgeStub):
     _bump_folder_group = WavesBridge._bump_folder_group
 
     def __init__(self, group: dict, extra: dict | None = None):
@@ -109,7 +111,7 @@ def _tree_with(paths: dict[str, str]) -> FolderTree:
     return tree
 
 
-class _TemplateStub:
+class _TemplateStub(BridgeStub):
     _playlist_template = WavesBridge._playlist_template
 
     def __init__(self, tree):
@@ -137,7 +139,7 @@ def test_playlist_template_root_and_cold_session_fall_back_clean():
         assert out == "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}"
 
 
-class _DownloadFolderStub:
+class _DownloadFolderStub(BridgeStub):
     downloadFolder = WavesBridge.downloadFolder
     # The folder's playlists are queued as one batch, delivered once.
     _queue_batch = WavesBridge._queue_batch

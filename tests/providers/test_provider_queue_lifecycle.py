@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import _Signal
+from support.bridge_stub import BridgeStub
 
 from waves.constants import ITEM_FETCH_FAILED
 from waves.desktop.backend import WavesBridge
@@ -61,7 +62,7 @@ def test_revocation_resets_only_owned_rollups_without_queue_rows():
     }
 
 
-class _Queue(QueueMixin):
+class _Queue(BridgeStub, QueueMixin):
     _release_abandoned_hold = WavesBridge._release_abandoned_hold
     _media_work_outstanding = WavesBridge._media_work_outstanding
     _bump_download_groups = WavesBridge._bump_download_groups

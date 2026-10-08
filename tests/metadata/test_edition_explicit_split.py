@@ -36,6 +36,8 @@ from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import (
     WavesBridge,
     _align_edition,
@@ -387,7 +389,7 @@ def _twin_group():
     return std, deluxe, clean, recs
 
 
-class _DiscoStub:
+class _DiscoStub(BridgeStub):
     """_merge_editions with the group already decided, so the split is what is
     under test rather than the edition keying."""
 
@@ -433,7 +435,7 @@ def test_a_clean_preference_takes_the_clean_side_and_never_merges_into_it():
     assert std not in plain and deluxe not in plain
 
 
-class _ClickStub:
+class _ClickStub(BridgeStub):
     downloadAlbumBestOfBoth = WavesBridge.downloadAlbumBestOfBoth
 
     def __init__(self, clicked, group, recs, mode="explicit"):

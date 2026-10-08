@@ -22,6 +22,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider, stub_bridge
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend, bridge_surfaces
 from waves.desktop.backend import WavesBridge
@@ -166,7 +167,7 @@ def test_patched_row_helpers_reach_the_album_row(monkeypatch):
     monkeypatch.setattr(backend, "_image", lambda obj, dimension=320: "PATCHED ART")
     monkeypatch.setattr(backend, "name_builder_title", lambda obj: "PATCHED TITLE")
 
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _remember=lambda bucket, key, obj: None,
         providers={"tidal": SimpleNamespace()},
     )

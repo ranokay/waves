@@ -19,6 +19,8 @@ from threading import Event, Lock, local
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from support.bridge_stub import BridgeStub
+
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge, _stream_quality
 from waves.desktop.queue.runtime import JobRuntime
@@ -50,7 +52,7 @@ class _SyncPool:
         worker.run()
 
 
-class _BridgeStub:
+class _BridgeStub(BridgeStub):
     """Bare stand-in for WavesBridge carrying only what the ownership sink and
     query touch, with the real bridge methods bound on and a real store."""
 

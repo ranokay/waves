@@ -19,6 +19,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
@@ -40,7 +41,7 @@ class _InlinePool:
         worker.fn()
 
 
-class _StubBase:
+class _StubBase(BridgeStub):
     """The attributes every slot under test shares."""
 
     def __init__(self):

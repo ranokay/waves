@@ -16,6 +16,7 @@ import re
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
 from support.paths import QML_DIR, QML_MAIN
 
 from waves.desktop.backend import _ARTIST_VIDEO_PAGE, _VIDEOS_GROUP_PREFIX, WavesBridge
@@ -56,7 +57,7 @@ class _Artist:
         return list(self._videos[offset : offset + window])
 
 
-class _Stub:
+class _Stub(BridgeStub):
     downloadArtistVideos = WavesBridge.downloadArtistVideos
 
     def __init__(self, artist, video_download: bool = False):

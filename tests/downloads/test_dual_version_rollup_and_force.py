@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from threading import Lock
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
@@ -33,7 +35,7 @@ class _Signal:
         self.emits.append(args)
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Enough bridge for the rollup bumps and the force release: the queue,
     the group maps with their locks, the override sets, and signal recorders."""
 

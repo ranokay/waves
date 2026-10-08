@@ -33,6 +33,7 @@ from settings.fakes import (
     APPLE_SIGN_OUT_PILL,
 )
 from settings.fakes import schema_stub as _schema_stub
+from support.bridge_stub import BridgeStub
 from support.paths import QML_DIR
 
 from waves.desktop.backend import WavesBridge
@@ -250,7 +251,7 @@ def test_the_apple_status_slot_reports_off_and_not_set_up():
 # ---- applySettings: the switch persists and flips the light ----------------------
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real applySettings gets bound onto."""
 
 

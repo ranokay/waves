@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import WavesBridge
@@ -68,7 +69,7 @@ def _playlist(count: int, *, dur: float = 4.0, base: str = "https://cdn/seg", ex
     return "\n".join(lines) + "\n"
 
 
-class _HlsStub:
+class _HlsStub(BridgeStub):
     _localise_hls = WavesBridge._localise_hls
 
 
@@ -265,7 +266,7 @@ class _ImmediatePool:
         worker.run()
 
 
-class _PreviewStub:
+class _PreviewStub(BridgeStub):
     previewTrack = WavesBridge.previewTrack
     _emit_preview_meta = WavesBridge._emit_preview_meta
 

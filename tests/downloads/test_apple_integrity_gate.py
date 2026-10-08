@@ -11,6 +11,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.desktop.backend import WavesBridge
@@ -417,7 +418,7 @@ def _settings(base: Path, **overrides):
 
 def _stub(base: Path, provider, **overrides):
     store = overrides.pop("_ownership_store", _SkipStore())
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=_settings(base),
         providers={CTX_APPLE: provider},
         _ownership=store,

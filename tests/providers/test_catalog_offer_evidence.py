@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import BareProvider
+from support.bridge_stub import BridgeStub
 
 from waves.constants import QualityTier
 from waves.desktop.providers.catalog_identity import CatalogSelection
@@ -559,7 +560,7 @@ def test_engine_readiness_is_scoped_without_requiring_a_provider_pin():
 def test_ownership_sdk_numeric_defaults_are_not_published_as_delivered_evidence():
     from waves.desktop.backend import WavesBridge
 
-    host = SimpleNamespace(
+    host = BridgeStub(
         _ownership=SimpleNamespace(
             ownership_of=lambda *args, **kwargs: {
                 "quality_tier": "LOSSLESS",
@@ -605,9 +606,7 @@ def test_catalog_presence_distinguishes_download_ownership_from_scanned_library(
                 {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180, "codec": "flac"}
             ]
         }
-    host = SimpleNamespace(
-        _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: rec), _library_track_index=index
-    )
+    host = BridgeStub(_ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: rec), _library_track_index=index)
     identity = CatalogIdentity(
         "apple:2", "track", title="Recording", artist="Artist", release_title="Release", release_date="2020-01-01"
     )
@@ -623,7 +622,7 @@ def test_catalog_library_presence_does_not_promote_an_unproven_recording(differe
     from waves.desktop.backend import WavesBridge
     from waves.metadata.matching import track_key
 
-    host = SimpleNamespace(
+    host = BridgeStub(
         _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
         _library_track_index={
             track_key("Recording", "Artist"): [
@@ -653,7 +652,7 @@ def test_catalog_library_presence_preserves_separate_release_version(release_ver
     from waves.metadata.matching import track_key
 
     album = f"Release ({release_version})" if same_edition else "Release"
-    host = SimpleNamespace(
+    host = BridgeStub(
         _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
         _library_track_index={
             track_key("Recording", "Artist"): [
@@ -683,7 +682,7 @@ def test_catalog_library_presence_preserves_separate_recording_version(version, 
     from waves.metadata.matching import track_key
 
     title = f"Recording ({version})" if same_recording else "Recording"
-    host = SimpleNamespace(
+    host = BridgeStub(
         _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
         _library_track_index={
             track_key(title, "Artist"): [
@@ -729,7 +728,7 @@ def test_catalog_library_misses_require_a_complete_trusted_index(state, miss, fo
         index[track_key("Recording", "Artist")] = [
             {"id": "/library/Release", "album": "Release", "album_year": "2020", "length": 180}
         ]
-    host = SimpleNamespace(
+    host = BridgeStub(
         _ownership=SimpleNamespace(ownership_of=lambda *args, **kwargs: None),
         _library_track_index=index,
         **state,

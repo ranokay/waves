@@ -11,6 +11,8 @@ test_discography_video_source.py does.
 
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
@@ -18,7 +20,7 @@ def _bind(stub, name):
     return getattr(WavesBridge, name).__get__(stub, type(stub))
 
 
-class _AlbumStub:
+class _AlbumStub(BridgeStub):
     downloadAlbum = WavesBridge.downloadAlbum
 
     def __init__(self, prefs=None):

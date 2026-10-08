@@ -10,6 +10,8 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.desktop.diagnostics import export as diagnostics
 
@@ -92,7 +94,7 @@ def test_bad_arguments_fall_back_to_defaults(tmp_path, monkeypatch):
 
 
 def _slot_stub(**over):
-    stub = SimpleNamespace(_set_status=lambda *a: None)
+    stub = BridgeStub(_set_status=lambda *a: None)
     for key, value in over.items():
         setattr(stub, key, value)
     return stub

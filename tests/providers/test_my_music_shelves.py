@@ -17,9 +17,9 @@ state's words are bridge data, never QML copy.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from providers.fakes import StubProvider, stub_bridge
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import bridge_surfaces
 from waves.desktop.backend import WavesBridge
@@ -230,7 +230,7 @@ def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
             return {"id": item}
 
     provider = _Provider()
-    bridge = SimpleNamespace(providers={"tidal": provider}, _lib_sort={}, _fav_ids={})
+    bridge = BridgeStub(providers={"tidal": provider}, _lib_sort={}, _fav_ids={})
 
     # The badge path: what the library-scoped artist views and the badges read.
     badge_ids = WavesBridge._favorite_ids(bridge, "albums")

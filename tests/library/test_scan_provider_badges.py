@@ -18,6 +18,7 @@ import os
 
 import pytest
 from library.fakes import make_album_dir as _mk
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.library.bridge import _atmos_fragments, _atmos_parent
@@ -161,12 +162,11 @@ def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
     the badge's availability rests on an invariant no code enforces. Every
     presence fact carries it, and the bridge picks the SQL pair when the cache
     holds no Atmos rows (its documented gate)."""
-    from types import SimpleNamespace
 
     from waves.desktop.library.bridge import SqlPresenceIndex
 
     def _sql_pair(lib):
-        stub = SimpleNamespace()
+        stub = BridgeStub()
         return WavesBridge._sql_presence_indexes(stub, lib)
 
     root_a = tmp_path / "case_a"

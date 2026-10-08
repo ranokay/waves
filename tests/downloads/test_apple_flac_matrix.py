@@ -18,6 +18,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.desktop.backend import WavesBridge
@@ -308,7 +309,7 @@ def _apple_stub(base: Path, provider, **overrides):
     )
     for key, value in overrides.items():
         setattr(data, key, value)
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=SimpleNamespace(data=data),
         providers={CTX_APPLE: provider},
         _ownership=SimpleNamespace(ownership_of=lambda *a, **k: None),

@@ -11,6 +11,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from conftest import _Signal
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
@@ -67,7 +68,7 @@ class VideoArtist:
         return list(self._videos[offset : offset + window])
 
 
-class DiscoStub:
+class DiscoStub(BridgeStub):
     downloadArtist = WavesBridge.downloadArtist
     _provider_meta = WavesBridge._provider_meta
     _chooser_provider_of = WavesBridge._chooser_provider_of

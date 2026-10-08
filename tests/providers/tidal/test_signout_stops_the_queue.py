@@ -8,6 +8,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 from conftest import _Signal
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.providers.lifecycle import ProviderContexts
@@ -23,7 +24,7 @@ class _Pool:
         self.workers.append(worker)
 
 
-class _Bridge(QueueMixin):
+class _Bridge(BridgeStub, QueueMixin):
     logout = WavesBridge.logout
     _end_provider_context = WavesBridge._end_provider_context
     _start_provider_logout = WavesBridge._start_provider_logout

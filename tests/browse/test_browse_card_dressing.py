@@ -25,6 +25,7 @@ on. Two things about doing the work early:
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
 from support.paths import QML_MAIN
 
 from waves.desktop.backend import WavesBridge
@@ -32,7 +33,7 @@ from waves.desktop.backend import WavesBridge
 _METHODS = ("_dress_card", "_dress_cards", "_emit_dressed")
 
 
-class _Stub:
+class _Stub(BridgeStub):
     _CARD_DRESS_KINDS = WavesBridge._CARD_DRESS_KINDS
 
 

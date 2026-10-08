@@ -16,6 +16,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 from tidalapi.media import Quality
 
 from waves.config import tidal_quality_for_tier
@@ -182,7 +183,7 @@ def _bind(stub, *names):
 
 
 def _bridge(tidal_quality="HIGH"):
-    b = SimpleNamespace()
+    b = BridgeStub()
     b._quality_overrides = {}
     b._objs = {"track": {}, "album": {}}
     b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=tidal_quality))
@@ -279,7 +280,7 @@ def test_the_apple_choice_exists_with_honest_labels():
 # ---- per-provider side effects ----------------------------------------------------
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real applySettings gets bound onto."""
 
 

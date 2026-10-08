@@ -11,6 +11,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
@@ -32,7 +33,7 @@ class _Pool:
         self.workers.append(w)
 
 
-class _Stub:
+class _Stub(BridgeStub):
     loadArtist = WavesBridge.loadArtist
     prefetchArtist = WavesBridge.prefetchArtist
     _start_artist_build = WavesBridge._start_artist_build

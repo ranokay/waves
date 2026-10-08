@@ -10,6 +10,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import _queue_stub, arm_dispatch
 
 from waves.desktop import backend
@@ -187,7 +188,7 @@ class _InlinePool:
         worker.run()
 
 
-class _GateStub:
+class _GateStub(BridgeStub):
     """One job body, with the gate blocking and the rollup under observation."""
 
     def __init__(self) -> None:

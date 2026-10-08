@@ -24,12 +24,13 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.download import Download
 
 
-class GateHost:
+class GateHost(BridgeStub):
     """Just enough bridge surface for the gate methods to run on."""
 
     _BASE_OK_TTL_SEC = WavesBridge._BASE_OK_TTL_SEC

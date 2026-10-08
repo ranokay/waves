@@ -24,6 +24,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
@@ -110,7 +111,7 @@ class _WatchedDict(dict):
 # --------------------------------------------------------------------------- #
 # The search's popularity fan-out
 # --------------------------------------------------------------------------- #
-class _SearchStub:
+class _SearchStub(BridgeStub):
     search = WavesBridge.search
     dropSearchSource = WavesBridge.dropSearchSource
     _absorb_search_group = WavesBridge._absorb_search_group
@@ -244,7 +245,7 @@ def test_no_bucket_clear_is_left_outside_the_object_lock():
         assert guard.strip().startswith("with self._objs_lock:"), f"unlocked bucket clear at line {i + 1}"
 
 
-class _OpenUrlStub:
+class _OpenUrlStub(BridgeStub):
     _open_url = WavesBridge._open_url
 
     def __init__(self):
@@ -280,7 +281,7 @@ def test_a_pasted_link_preserves_existing_provider_objects():
 # --------------------------------------------------------------------------- #
 # the membership commit leaves the GUI thread
 # --------------------------------------------------------------------------- #
-class _AlbumExpandStub:
+class _AlbumExpandStub(BridgeStub):
     loadAlbumTracks = WavesBridge.loadAlbumTracks
     _dress_panel_rows = WavesBridge._dress_panel_rows
     _dress_library_row = WavesBridge._dress_library_row
@@ -319,7 +320,7 @@ def test_expanding_a_hovered_album_defers_the_ownership_commit():
 # --------------------------------------------------------------------------- #
 # one tile-art crawl at a time
 # --------------------------------------------------------------------------- #
-class _TileArtStub:
+class _TileArtStub(BridgeStub):
     _sample_links_art = WavesBridge._sample_links_art
     _tile_art_key = staticmethod(WavesBridge._tile_art_key)
     _TILE_ART_TTL = WavesBridge._TILE_ART_TTL

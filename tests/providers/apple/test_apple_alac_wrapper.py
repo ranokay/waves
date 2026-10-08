@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import QualityTier, quality_rank
 from waves.providers.apple import AppleProvider
@@ -473,7 +474,7 @@ def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypat
 
     mgr = AppleRuntimeManager(tmp_path)
     persisted = mgr.ensure_port(0)
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=SimpleNamespace(data=SimpleNamespace(apple_wrapper_port=0)),
         _apple_runtime=mgr,
     )

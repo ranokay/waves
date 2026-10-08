@@ -16,6 +16,8 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge
 from waves.providers.apple import runner
@@ -211,7 +213,7 @@ def test_delete_with_nothing_recorded_says_so(tmp_path):
 
 def test_withdrawing_a_row_forgets_its_quarantine_paths():
     row = {"qid": 7, "status": "failed", "reason": "x", "quarantineCount": 1, "media_id": "apple:1"}
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _queue=[row],
         _queue_index={7: row},
         _queue_lock=Lock(),

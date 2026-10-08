@@ -28,6 +28,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 import waves.metadata.matching as matching
 from waves.desktop.library.bridge import LibraryMixin
@@ -684,7 +685,7 @@ def test_an_old_stub_without_a_flag_still_binds_the_album_gate():
 # ---- the presence slots -----------------------------------------------------------
 
 
-class _SlotStub:
+class _SlotStub(BridgeStub):
     libraryAlbumPresence = LibraryMixin.libraryAlbumPresence
     libraryTrackPresence = LibraryMixin.libraryTrackPresence
     _mb_arbitrated = LibraryMixin._mb_arbitrated
@@ -903,7 +904,7 @@ def _page_stub(album=None, playlist=None):
     def get_object(_kind, _media_id, _obj=obj):
         return _obj
 
-    b = SimpleNamespace()
+    b = BridgeStub()
     b.providers = {CTX_TIDAL: SimpleNamespace(get_object=get_object, collection_items=lambda o, **k: [])}
     b._objs = {"album": {}, "playlist": {}, "mix": {}}
 

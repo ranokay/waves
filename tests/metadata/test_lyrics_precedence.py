@@ -1,6 +1,7 @@
 """Source precedence + standalone actions (spec section 9.1)."""
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.model.cfg import Settings
 
@@ -205,7 +206,7 @@ def test_apple_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
 
     from waves.desktop.backend import WavesBridge
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace()))
+    stub = BridgeStub(settings=SimpleNamespace(data=SimpleNamespace()))
     stub.providers = {
         "apple": SimpleNamespace(get_object=lambda kind, raw_id: {"id": raw_id}, track_facts=lambda obj: {})
     }
@@ -234,7 +235,7 @@ def test_apple_standalone_lyrics_counts_nothing_without_a_saved_file(tmp_path):
 
     from waves.desktop.backend import WavesBridge
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace()))
+    stub = BridgeStub(settings=SimpleNamespace(data=SimpleNamespace()))
     stub.providers = {
         "apple": SimpleNamespace(get_object=lambda kind, raw_id: {"id": raw_id}, track_facts=lambda obj: {})
     }
@@ -264,7 +265,7 @@ def test_tidal_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
         def _retrieve_lyrics(self, track_obj):
             return None, "[00:01.00]hi", "hi"
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace()), _dl=_Download())
+    stub = BridgeStub(settings=SimpleNamespace(data=SimpleNamespace()), _dl=_Download())
     stub._standalone_base_dir = lambda: tmp_path
     stub._standalone_tidal_tracks = lambda media_id: [(SimpleNamespace(id=1), None, False)]
     stub._tidal_standalone_dest = lambda base, track_obj, collection: (tmp_path, "S1")
@@ -292,7 +293,7 @@ def test_tidal_standalone_lyrics_without_lyrics_is_not_served(tmp_path):
         def _retrieve_lyrics(self, track_obj):
             return None, "", ""
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace()), _dl=_Download())
+    stub = BridgeStub(settings=SimpleNamespace(data=SimpleNamespace()), _dl=_Download())
     stub._standalone_base_dir = lambda: tmp_path
     stub._standalone_tidal_tracks = lambda media_id: [(SimpleNamespace(id=1), None, False)]
     embedded = []
@@ -343,7 +344,7 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
     provider = StubProvider("apple", "Apple Music", capabilities={Capability.LYRICS, Capability.ART}, logged_in=True)
     provider.get_object = lambda kind, raw_id: {"id": raw_id}
     provider.track_facts = lambda obj: {}
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=SimpleNamespace(
             data=SimpleNamespace(
                 download_base_path=str(tmp_path),

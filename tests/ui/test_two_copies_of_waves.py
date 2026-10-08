@@ -23,6 +23,8 @@ import sqlite3
 import threading
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves import config as waves_config
 from waves.config import BaseConfig
 from waves.desktop.backend import WavesBridge
@@ -165,7 +167,7 @@ def test_a_real_schema_error_is_still_raised(tmp_path):
         raise AssertionError("a missing table must not pass for a raced column")
 
 
-class _FfmpegStub:
+class _FfmpegStub(BridgeStub):
     """Just what installFfmpeg touches, with a pool that runs inline."""
 
     def __init__(self):

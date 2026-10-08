@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from conftest import _Signal
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
@@ -24,7 +25,7 @@ class _InlinePool:
 # --------------------------------------------------------------------------- #
 # sign-out during a search must not leave the spinner turning
 # --------------------------------------------------------------------------- #
-class _SearchStub:
+class _SearchStub(BridgeStub):
     """The real search slot on the attributes it reads, nothing more."""
 
     search = WavesBridge.search
@@ -77,7 +78,7 @@ def test_a_superseded_search_worker_cannot_clear_busy_itself():
 
 def _logout_stub(tmp_path):
     """A stub carrying every attribute logout touches, and nothing else."""
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub.logout = WavesBridge.logout.__get__(stub, type(stub))
     stub._end_provider_context = WavesBridge._end_provider_context.__get__(stub, type(stub))
     stub._settle_search = WavesBridge._settle_search.__get__(stub, type(stub))
@@ -167,7 +168,7 @@ def test_signing_out_clears_the_spinner_it_orphans(tmp_path):
 # --------------------------------------------------------------------------- #
 # a member that failed and then landed is not a failure
 # --------------------------------------------------------------------------- #
-class _FolderBumpStub:
+class _FolderBumpStub(BridgeStub):
     _bump_folder_group = WavesBridge._bump_folder_group
 
     def __init__(self, group: dict):
@@ -179,7 +180,7 @@ class _FolderBumpStub:
         self.folderRemaining = _Signal()
 
 
-class _ArtistBumpStub:
+class _ArtistBumpStub(BridgeStub):
     _bump_artist_group = WavesBridge._bump_artist_group
 
     def __init__(self, group: dict):
@@ -237,7 +238,7 @@ def test_a_member_that_really_failed_still_ends_red():
 # --------------------------------------------------------------------------- #
 # a released row takes both of its marks with it
 # --------------------------------------------------------------------------- #
-class _RemoveStub:
+class _RemoveStub(BridgeStub):
     _remove_rows_where = WavesBridge._remove_rows_where
     _reindex_queue = WavesBridge._reindex_queue
 

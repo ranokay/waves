@@ -37,6 +37,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QCoreApplication
 from settings.fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
+from support.bridge_stub import BridgeStub
 from support.paths import REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
@@ -1330,7 +1331,7 @@ def test_no_apple_module_touches_user_gamdl_config():
 def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     from waves.model.cfg import Settings as ModelSettings
 
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     data = ModelSettings()
     data.apple_enabled = enabled
     data.apple_cookies_path = cookies
@@ -2018,7 +2019,7 @@ def test_stale_cache_serves_immediately_and_refreshes_on_worker(tmp_path, monkey
 def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
     seen = []
     provider = SimpleNamespace(cookies_path="")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
         appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
@@ -2038,7 +2039,7 @@ def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path
     seen = []
     cookies = _cookies_file(tmp_path, with_token=True)
     provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path="")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(
             data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=""),
@@ -2063,7 +2064,7 @@ def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path
 def test_wrapper_only_account_passes_the_setup_gate(tmp_path):
     seen = []
     provider = SimpleNamespace(cookies_path="")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
         appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
@@ -2094,7 +2095,7 @@ def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
     cookies = _cookies_file(tmp_path, with_token=True)
     binary = _stub_binary(tmp_path)
     provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path=binary)
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(
             data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=binary),

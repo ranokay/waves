@@ -16,6 +16,7 @@ import re
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
 from support.paths import QML_MAIN
 from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality, Track, Video
@@ -110,7 +111,7 @@ class _Lock:
         return False
 
 
-class _Stub:
+class _Stub(BridgeStub):
     downloadPlaylistAlbums = WavesBridge.downloadPlaylistAlbums
 
     def __init__(self, playlist, albums, *, atmos=True, cached=True, fail_album=None, bulk_skip=False, claimed=()):

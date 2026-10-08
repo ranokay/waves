@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_dispatch, arm_queue
 
 from waves.desktop import backend
@@ -708,7 +709,7 @@ def test_a_settled_row_dismissed_from_the_drawer_releases_it_too():
 # longer be called off at all.
 
 
-class _StartedStub:
+class _StartedStub(BridgeStub):
     _bump_artist_group = WavesBridge._bump_artist_group
     _bump_folder_group = WavesBridge._bump_folder_group
 

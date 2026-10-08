@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from providers.fakes import BareProvider
+from support.bridge_stub import BridgeStub
 from tidalapi.media import AudioMode, Quality
 
 from waves.desktop.backend import WavesBridge
@@ -704,7 +705,7 @@ class TestJobSpecDispatch:
             def start(self, worker) -> None:
                 worker.run()
 
-        stub = SimpleNamespace()
+        stub = BridgeStub()
         stub._jobs = JobRuntime()
         stub._logged_in = True
         stub._jobs.aborts = {}

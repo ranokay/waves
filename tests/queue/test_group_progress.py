@@ -9,6 +9,8 @@ bound onto a minimal stub so no Qt app or network session is needed.
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
@@ -20,7 +22,7 @@ class _Signal:
         self.emits.append(args if len(args) != 1 else args[0])
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Carries exactly what _bump_group_progress and its callees touch."""
 
     _queue_item = WavesBridge._queue_item

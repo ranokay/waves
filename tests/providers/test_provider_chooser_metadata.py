@@ -14,6 +14,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import BareProvider
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE, CTX_TIDAL, QualityTier
 from waves.desktop.backend import WavesBridge
@@ -438,7 +439,7 @@ def test_wiring_chooser_qml_names_no_provider():
 # The search gate reads the declared capability
 # --------------------------------------------------------------------------- #
 def _search_stub(providers):
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         threadpool=_InlinePool(),
         statuses=[],
         busy=[],

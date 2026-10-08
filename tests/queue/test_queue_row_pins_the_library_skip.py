@@ -33,6 +33,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
@@ -56,7 +57,7 @@ class _HoldingPool:
         self.started += 1
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Just what _enqueue, _job_library_skip, _predict_skips and _download
     touch, with the real methods bound on wherever the answer is the thing
     under test. Every gate answers "go"."""

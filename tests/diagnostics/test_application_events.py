@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 from PySide6.QtCore import QCoreApplication
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.diagnostics.events import ApplicationEvents, operation_state, provider_failure_event
@@ -163,7 +164,7 @@ def test_bridge_only_dispatches_advertised_current_actions(event_loop, monkeypat
     event_loop.processEvents()
     row = {"status": "failed"}
     retries = []
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         _history=SimpleNamespace(finish_one=lambda *args, **kwargs: False),
         _queue_item=lambda qid: row,
@@ -210,7 +211,7 @@ def test_background_configuration_failure_reports_actual_disk_result(event_loop)
     relay = ApplicationEvents()
     seen = []
     relay.changed.connect(seen.append)
-    bridge = SimpleNamespace(_events=relay)
+    bridge = BridgeStub(_events=relay)
     writer = SingleFlightWriter(lambda key, error: WavesBridge._config_write_finished(bridge, key, error))
 
     def fail():
@@ -498,7 +499,7 @@ def test_apple_job_events_follow_the_queue_settle_and_provider_epoch(event_loop)
     relay.changed.connect(seen.append)
     contexts = ProviderContexts()
     row = {"status": "failed"}
-    bridge = SimpleNamespace(_events=relay, _provider_contexts=contexts, _queue_item=lambda qid: row)
+    bridge = BridgeStub(_events=relay, _provider_contexts=contexts, _queue_item=lambda qid: row)
     hooks = WavesBridge._apple_job_hooks(bridge)
     event = application_event(
         EventDomain.DOWNLOAD,
@@ -618,7 +619,7 @@ def test_folder_recovery_requires_proof_for_the_current_folder(event_loop, tmp_p
     seen = []
     relay = ApplicationEvents()
     relay.changed.connect(seen.append)
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         _base_ok=("", 0.0),
         _BASE_OK_TTL_SEC=WavesBridge._BASE_OK_TTL_SEC,

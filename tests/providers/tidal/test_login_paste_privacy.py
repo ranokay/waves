@@ -14,6 +14,7 @@ import logging
 from conftest import _InlinePool, _Signal
 from providers.fakes import BareProvider
 from providers.qml_auth import CallbackLoginAttempt
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.providers.auth import apply_login_event, start_login
@@ -29,7 +30,7 @@ class _Capture(logging.Handler):
         self.messages.append(self.format(record) + (record.exc_text or ""))
 
 
-class _Stub:
+class _Stub(BridgeStub):
     completeLogin = WavesBridge.completeLogin
 
     def __init__(self):

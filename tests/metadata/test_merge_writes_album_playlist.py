@@ -42,6 +42,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from support.bridge_stub import BridgeStub
 from tidalapi import Album
 
 from waves.constants import PLAYLIST_EXTENSION, PLAYLIST_PREFIX
@@ -119,7 +120,7 @@ def _plan(*names: str):
 
 
 def _run_merge(dl: _WritingDownload, plan, *, template="{album_title}/{track_title}", abort=None) -> None:
-    bridge = SimpleNamespace(settings=dl.settings)
+    bridge = BridgeStub(settings=dl.settings)
     signals = SimpleNamespace(list_item=SimpleNamespace(emit=lambda v: None))
     # Identity re-tagging is not what is measured here; the source track
     # passes straight through so item() sees the name the plan gave it.

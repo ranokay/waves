@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 from support.paths import QML_DIR, QML_MAIN
 
 from waves.desktop.backend import (
@@ -151,7 +152,7 @@ class _Tree:
         return out
 
 
-class _Stub:
+class _Stub(BridgeStub):
     downloadFavoriteTracks = WavesBridge.downloadFavoriteTracks
     downloadFavoriteAlbums = WavesBridge.downloadFavoriteAlbums
     downloadFavoriteArtists = WavesBridge.downloadFavoriteArtists
@@ -494,7 +495,7 @@ def test_the_reaper_keeps_the_rollup_while_a_discography_is_alive():
     assert _FAV_ARTISTS_GROUP_ID not in stub._folder_groups
 
 
-class _ArtistScanStub:
+class _ArtistScanStub(BridgeStub):
     """Just enough bridge for downloadArtist to end without queueing."""
 
     downloadArtist = WavesBridge.downloadArtist

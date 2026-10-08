@@ -16,6 +16,8 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.constants import CTX_APPLE
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
@@ -25,7 +27,7 @@ from waves.desktop.queue.runtime import JobRuntime
 _REASON = "Apple Music was disabled"
 
 
-class _StopStub(QueueMixin):
+class _StopStub(BridgeStub, QueueMixin):
     pass
 
 
@@ -100,7 +102,7 @@ def test_an_empty_provider_queue_stops_nothing_and_emits_nothing():
 
 
 def _retry_stub(item: dict) -> SimpleNamespace:
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub._jobs = JobRuntime()
     stub._queue_index = {item["qid"]: item}
     stub._merge_plans = {}
@@ -146,7 +148,7 @@ def test_retry_all_keeps_rows_a_refused_provider_did_not_requeue():
         {"qid": 1, "media_id": "apple:album:a", "status": "cancelled", "reason": _REASON, "type": "album"},
         {"qid": 2, "media_id": "apple:album:b", "status": "cancelled", "reason": _REASON, "type": "album"},
     ]
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _queue=rows,
         _queue_index={row["qid"]: row for row in rows},
         _queue_lock=Lock(),
@@ -173,7 +175,7 @@ def test_retry_all_keeps_rows_a_refused_provider_did_not_requeue():
 
 
 def _status_stub(item: dict) -> SimpleNamespace:
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub._queue_index = {item["qid"]: item}
     stub._queue_lock = Lock()
     stub.marked = []
