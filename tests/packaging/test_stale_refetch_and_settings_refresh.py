@@ -302,25 +302,30 @@ def test_settings_page_listens_for_external_persists():
 
 class _BrowsePageStub:
     openBrowsePage = WavesBridge.openBrowsePage
-    _page_path_ok = staticmethod(WavesBridge._page_path_ok)
+    _rendered_rows = WavesBridge._rendered_rows
 
     def __init__(self, cached, fresh_sections):
-        self._logged_in = True
-        self._browse_pages = {"pages/labels": cached}
+        self._browse_pages = {"browse:tidal:pages/labels": cached}
         self._browse_loading = set()
-        self._browse_gen = 1
         self.threadpool = _InlinePool()
         self.browsePageLoaded = _Signal()
         self.sampled: list = []
         self._fresh_sections = fresh_sections
 
-    def _browse_fetch(self, title, api_path):
+    @staticmethod
+    def browse_path_ok(path):
+        return str(path or "").startswith("pages/") and "//" not in str(path or "")
+
+    def browse_rows(self, page):
+        return None
+
+    def browse_page(self, title, api_path):
         return SimpleNamespace(title="Labels")
 
     def _page_rows(self, page):
         return self._fresh_sections
 
-    def _sample_links_art(self, links, gen, disk=None):
+    def _sample_links_art(self, links, disk=None):
         self.sampled.append(links)
 
     def _save_page_cache(self):
@@ -336,23 +341,36 @@ class _BrowsePageStub:
 _LINKS_SECTION = {"rowKind": "links", "items": [{"title": "Label A", "path": "pages/label_a"}]}
 
 
-def test_a_revalidated_page_still_fills_its_link_mosaics():
-    cached = {"key": "pages/labels", "title": "Labels", "sections": [_LINKS_SECTION], "error": False}
+def test_a_revalidated_page_still_fills_its_link_mosaics(monkeypatch):
+    from waves.desktop import backend as backend_pkg
+
+    cached = {
+        "key": "pages/labels",
+        "provider_id": "tidal",
+        "title": "Labels",
+        "sections": [_LINKS_SECTION],
+        "error": False,
+    }
     stub = _BrowsePageStub(cached, [_LINKS_SECTION])  # unchanged page: no re-emit, but art must flow
+    monkeypatch.setattr(backend_pkg, "browse_owner", lambda bridge, provider_id: stub)
     stub.openBrowsePage("pages/labels", "Labels")
 
-    assert stub.sampled == [[("Label A", "pages/label_a")]], "cache-served revisits must not render art-less"
+    assert stub.sampled == [[("Label A", "pages/label_a", "tidal")]], "cache-served revisits must not render art-less"
 
 
 def test_link_tiles_of_extracts_only_link_rows():
     payload = {
+        "provider_id": "stub",
         "sections": [
             _LINKS_SECTION,
             {"rowKind": "cards", "items": [{"title": "X", "path": "pages/x"}]},
             {"rowKind": "links", "items": [{"title": "No path"}]},
-        ]
+        ],
     }
-    assert _link_tiles_of(payload) == [("Label A", "pages/label_a")]
+    # The tile's owner rides along so the mosaic sampler routes to the
+    # provider that served the page; a payload without one is TIDAL's.
+    assert _link_tiles_of(payload) == [("Label A", "pages/label_a", "stub")]
+    assert _link_tiles_of({"sections": [_LINKS_SECTION]}) == [("Label A", "pages/label_a", "tidal")]
     assert _link_tiles_of({}) == []
 
 
@@ -375,6 +393,9 @@ class _CategoryStub:
 
     def _cached_category(self, api_path):
         return [SimpleNamespace(id="p1", name="PL")]
+
+    def _remember(self, bucket, key, obj):
+        self._objs.setdefault(bucket, {})[key] = obj
 
     def _download_gate(self):
         return "ok"
@@ -400,6 +421,38 @@ def test_category_download_warms_the_tree_under_the_rollup_id():
     assert stub.warm_calls == ["cat:pages/mood/chill"], "the failed-sweep clear must target the cat: button"
     assert stub.downloadState.emits == [("cat:pages/mood/chill", "preparing")]
     assert stub._folder_groups == {}, "no rollup state is published before the tree is warm"
+
+
+def test_category_download_reads_the_owner_qualified_cache():
+    # The resolve writes cat:<provider>:<path>; the download confirms against
+    # the same entry (issue #600's second-provider path).
+    stub = _CategoryStub()
+    seen: list = []
+    stub._cached_category = lambda key: (seen.append(key), None)[1]
+
+    stub.downloadPlaylistCategory("pages/mood/chill", "stub")
+
+    assert seen == ["cat:stub:pages/mood/chill"]
+    assert stub.statuses[-1] == "Nothing to download here, open the category again"
+
+
+def test_category_download_queues_neutral_cards_with_their_owner():
+    from contextlib import nullcontext
+
+    stub = _CategoryStub()
+    stub._needs_folder_tree = lambda: False
+    card = {"kind": "playlist", "id": "stub:pl1", "title": "PL", "tracks": 3}
+    stub._cached_category = lambda key: [card]
+    stub._playlist_template = lambda key: "templates/playlist"
+    stub._queue_batch = nullcontext
+    queued: list = []
+    stub._download = lambda obj, kind, name, template, collection, media_id, **kw: (
+        queued.append((obj, kind, name, media_id, kw.get("provider_id"))) or True
+    )
+
+    stub.downloadPlaylistCategory("pages/mood/chill", "stub")
+
+    assert queued == [(card, "playlist", "PL", "stub:pl1", "stub")]
 
 
 # Best-of-both publishes button state before its edition scan.

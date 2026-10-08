@@ -350,12 +350,21 @@ def test_disabled_provider_catalog_and_preview_do_not_call_the_service(bridge, m
     bridge.threadpool.run_all()
     _drain_gui(bridge)
     assert bridge.providers["paper"].calls == []
-    assert getattr(bridge, signal).emits == []
+    emits = getattr(bridge, signal).emits
+    if method == "openBrowseItem":
+        # A refused owner answers the page's own key with an error so the
+        # QML clears its loading state; prefetch stays silent.
+        assert emits and all(payload.get("error") for payload in emits)
+    else:
+        assert emits == []
     assert bridge.providers["tidal"].calls == []
 
 
 def test_cached_browse_root_is_checked_again_when_the_gui_receives_it(bridge):
     bridge._logged_in = True
+    # The landing composes from ready BROWSE providers; the fixture's guard
+    # otherwise declares a closed TIDAL seam (no Browse at all).
+    bridge.providers["tidal"].capabilities = bridge.providers["tidal"].capabilities | {Capability.BROWSE}
     cached = {"title": "Previous account", "sections": []}
     bridge._browse_root_cache = cached
     bridge._start_tile_art = lambda *args: None
@@ -370,6 +379,28 @@ def test_cached_browse_root_is_checked_again_when_the_gui_receives_it(bridge):
     _drain_gui(bridge)
     assert not bridge.browseLoaded.emits
     assert bridge._browse_root_cache is current
+
+
+def test_a_revocation_during_dressing_drops_the_cached_landing(bridge):
+    bridge._logged_in = True
+    bridge.providers["tidal"].capabilities = bridge.providers["tidal"].capabilities | {Capability.BROWSE}
+    bridge._browse_root_cache = {"title": "Previous", "sections": [], "sources": [{"provider_id": "tidal"}]}
+    bridge._start_tile_art = lambda *args: None
+    original = bridge._dress_cards
+
+    def dress(payload):
+        out = original(payload)
+        # A contributor is revoked INSIDE the dressing pass; the token set
+        # must be re-read before the emit.
+        bridge._provider_contexts.revoke("tidal")
+        clear_provider_caches(bridge, "tidal")
+        return out
+
+    bridge._dress_cards = dress
+    bridge._load_browse_root(emit_cached=True)
+    bridge.threadpool.run_next()
+    _drain_gui(bridge)
+    assert not bridge.browseLoaded.emits, "a revoked contributor's landing was published"
 
 
 def test_favorite_count_from_an_old_account_cannot_consume_a_new_action(bridge):

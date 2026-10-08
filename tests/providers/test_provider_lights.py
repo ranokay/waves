@@ -108,14 +108,24 @@ def test_a_third_provider_with_browse_restores_the_destination():
     }
 
 
-def test_browse_reports_the_session_of_the_provider_that_fills_it():
-    # The pane is filled by the first browse-capable provider in registry
-    # order; a second browse-capable provider's session does not stand in for
-    # it, or the landing would offer the page while the source cannot load.
+def test_browse_is_signed_in_when_any_browse_capable_provider_is_ready():
+    # The combined landing loads when ANY browse-capable provider is ready
+    # (the ready source fills the page); the sign-in call to action still
+    # names the first capable provider for the none-ready state.
     tidal = StubProvider("tidal", "TIDAL", capabilities={Capability.BROWSE}, logged_in=False)
     fake = StubProvider("fake", "Fake Music", capabilities={Capability.BROWSE}, logged_in=True)
 
     assert backend._browse_nav(stub_bridge({"tidal": tidal, "fake": fake})) == {
+        "available": True,
+        "signed_in": True,
+        "provider": "tidal",
+        "message": "Browse TIDAL",
+        "action": "signin",
+        "action_label": "Sign in to TIDAL",
+    }
+
+    idle = StubProvider("idle", "Idle Music", capabilities={Capability.BROWSE}, logged_in=False)
+    assert backend._browse_nav(stub_bridge({"tidal": tidal, "idle": idle})) == {
         "available": True,
         "signed_in": False,
         "provider": "tidal",

@@ -209,6 +209,7 @@ def test_remember_capped_evicts_oldest():
 
 class _TileArtStub:
     _sample_links_art = WavesBridge._sample_links_art
+    _tile_art_key = staticmethod(WavesBridge._tile_art_key)
     _TILE_ART_TTL = WavesBridge._TILE_ART_TTL
 
     def __init__(self, mem, disk):
@@ -227,7 +228,7 @@ class _TileArtStub:
 
 def test_a_fresh_mem_tile_entry_is_served():
     stub = _TileArtStub({"pages/x": (time.time(), ["u1"])}, {})
-    stub._sample_links_art([("X", "pages/x")], 1)
+    stub._sample_links_art([("X", "pages/x", "tidal")])
     assert stub.browseTileArt.emits == [("pages/x", ["u1"])]
     assert stub.threadpool.workers == []
 
@@ -235,7 +236,7 @@ def test_a_fresh_mem_tile_entry_is_served():
 def test_an_expired_mem_tile_entry_is_resampled():
     old = time.time() - WavesBridge._TILE_ART_TTL - 10
     stub = _TileArtStub({"pages/x": (old, ["u1"])}, {"pages/x": {"ts": old, "arts": ["u1"]}})
-    stub._sample_links_art([("X", "pages/x")], 1)
+    stub._sample_links_art([("X", "pages/x", "tidal")])
     assert stub.browseTileArt.emits == [], "week-old art must not be served forever in an always-on app"
     assert len(stub.threadpool.workers) == 1, "the stale tile goes back to the sampler"
 

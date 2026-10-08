@@ -579,31 +579,67 @@ def _provider_lights(bridge) -> list[dict]:
 _CHOOSER_KINDS: tuple[str, ...] = ("track", "album", "playlist", "mix", "video")
 
 
+def _browse_capable(provider) -> bool:
+    return Capability.BROWSE in getattr(provider, "capabilities", frozenset())
+
+
+def _browse_ready(bridge, provider) -> bool:
+    return _provider_readiness(bridge, provider).for_operation(Capability.BROWSE).state == ReadinessState.READY
+
+
+def first_browse_capable(bridge):
+    """The first provider declaring ``Capability.BROWSE`` in registry order,
+    or None. The landing's call to action names it when nothing is ready."""
+    return next((provider for provider in _provider_registry(bridge) if _browse_capable(provider)), None)
+
+
+def ready_browse_providers(bridge) -> list:
+    """The providers that can fill Browse right now, in registry order.
+
+    A provider contributes exactly when it declares ``Capability.BROWSE`` and
+    that operation is READY (its session, its enabled state and its declared
+    capability are the whole rule; provider identity never enters it). A
+    signed-out provider contributes nothing but keeps its call to action; a
+    provider that never declared Browse (Apple) is never invented one.
+    """
+    return [
+        provider
+        for provider in _provider_registry(bridge)
+        if _browse_capable(provider) and _browse_ready(bridge, provider)
+    ]
+
+
+def browse_owner(bridge, provider_id) -> object | None:
+    """The registered provider that may serve Browse for this id, or None.
+
+    A Browse fetch runs only when the id names a registered provider that
+    declares ``Capability.BROWSE`` and is READY for it: capability and
+    session, never provider identity or a global session flag. An unknown
+    id, a catalog-only provider (Apple), a disabled or signed-out provider
+    all answer None, and the caller makes no request (the page slots emit
+    their page's error payload instead).
+    """
+    provider = (getattr(bridge, "providers", None) or {}).get(str(provider_id or ""))
+    if provider is None or not _browse_capable(provider) or not _browse_ready(bridge, provider):
+        return None
+    return provider
+
+
 def _browse_nav(bridge) -> dict:
     """Browse's availability for the header and its landing pane.
 
     Browse is editorial and account-scoped: the destination exists while a
     configured provider declares ``Capability.BROWSE`` and is absent when none
     does (the capability is the whole rule; provider identity never enters
-    it). The pane is filled by the first browse-capable provider in the
-    registry's order, so ``signed_in`` reports that source's live session:
-    false, and the landing pane offers its sign-in call to action -- never a
+    it). ``signed_in`` reports whether ANY browse-capable provider is ready:
+    true, and the landing loads the combined sections; false, and the landing
+    pane offers the first capable provider's sign-in call to action -- never a
     blank page.
     """
-    source = next(
-        (
-            provider
-            for provider in _provider_registry(bridge)
-            if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
-        ),
-        None,
-    )
+    source = first_browse_capable(bridge)
     result = {
         "available": source is not None,
-        "signed_in": bool(
-            source is not None
-            and _provider_readiness(bridge, source).for_operation(Capability.BROWSE).state == ReadinessState.READY
-        ),
+        "signed_in": bool(ready_browse_providers(bridge)),
     }
     if source is not None:
         result.update(

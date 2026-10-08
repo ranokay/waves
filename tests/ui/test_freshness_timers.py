@@ -42,17 +42,19 @@ def test_the_four_ceiling_timers_exist_and_call_the_silent_slots():
 
 def test_the_timers_run_only_while_their_page_is_the_view():
     main = _main()
+    # The Browse timers gate on Browse's own readiness (any browse-capable
+    # provider), the artist/library timers on TIDAL's session.
     guards = {
-        "browseLandingFreshTimer": 'root.browsePageKey === ""',
-        "browseItemFreshTimer": 'root.browsePageKey !== ""',
-        "artistFreshTimer": "root.artistOpen",
-        "libraryFreshTimer": "root.libraryOpen",
+        "browseLandingFreshTimer": ('root.browsePageKey === ""', "root.browseSignedIn"),
+        "browseItemFreshTimer": ('root.browsePageKey !== ""', "root.browseSignedIn"),
+        "artistFreshTimer": ("root.artistOpen", "root.signedIn"),
+        "libraryFreshTimer": ("root.libraryOpen", "root.signedIn"),
     }
-    for timer, guard in guards.items():
+    for timer, (guard, session) in guards.items():
         block = main[main.index(f"id: {timer}") : main.index(f"id: {timer}") + 900]
         assert guard in block, f"{timer} lost its view guard ({guard})"
         assert "root.windowUp" in block, f"{timer} refreshes a hidden window"
-        assert "root.signedIn" in block
+        assert session in block
 
 
 def test_a_long_hide_fires_the_running_timers_once_on_reshow():

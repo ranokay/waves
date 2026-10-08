@@ -125,6 +125,18 @@ def _tidal_id(raw) -> str:
     return f"{CTX_TIDAL}:{raw}" if raw else ""
 
 
+# Item kinds a tile mosaic prefers, best first: an artist portrait or an
+# album cover reads better than a track's copy of the same art or a
+# text-heavy editorial playlist cover.
+_TILE_ART_RANK: tuple[tuple[type, int], ...] = (
+    (tidalapi.Artist, 0),
+    (tidalapi.Album, 1),
+    (Track, 2),
+    (Mix, 3),
+    (tidalapi.Playlist, 4),
+)
+
+
 class TidalProvider(Provider):
     """TIDAL, through the existing engine bodies.
 
@@ -523,6 +535,152 @@ class TidalProvider(Provider):
         with self._browse_lock:
             cat = page.page_category.parse({"type": mod_type, "title": title, "pagedList": {"items": raw}})
         return BrowseWindow(category=cat, n=len(raw), total=int(j.get("totalNumberOfItems") or 0))
+
+    def browse_landing(self) -> dict:
+        """TIDAL's landing recipe: Explore names the chip groups and the
+        New/Top quick links, those pages inline as content shelves, For You
+        follows, and the personalized home feed lands last. Only Explore is
+        read here -- its quick links decide the page list; the bridge fetches
+        the named pages through ``browse_page`` and renders them. A failed
+        Explore read fails TIDAL's whole contribution (the bridge isolates
+        it from other providers); missing quick links still ship the chips
+        and the For You page."""
+        explore = self.browse_page("Explore", "pages/explore")
+        chips, quick = self._chips_from_explore(explore)
+        pages = []
+        for name in ("New", "Top"):
+            path = quick.get(name)
+            if path:
+                pages.append({"title": name, "path": path})
+        pages.append({"title": "For You", "path": "pages/for_you"})
+        return {"chips": chips, "pages": pages, "home": True}
+
+    @staticmethod
+    def _chips_from_explore(explore) -> tuple[dict, dict]:
+        """Split the Explore page's PageLinks rows into the Genres / Moods /
+        Decades chip sets plus the untitled tail row's quick links (New / Top
+        / Videos / HiRes). The bridge stamps the chip links with their owner;
+        the quick links stay TIDAL's own page list."""
+        chips: dict[str, list] = {"genres": [], "moods": [], "decades": []}
+        quick: dict[str, str] = {}
+        for cat in list(explore.categories or []):
+            if not isinstance(cat, tidal_page.PageLinks):
+                continue
+            title = str(getattr(cat, "title", "") or "").strip().lower()
+            # Same Magazine rule as the page rows: editorial articles drill
+            # into nothing, so they never become a chip or tile.
+            links = [
+                {"title": str(link.title or ""), "path": str(link.api_path or "")}
+                for link in cat.items or []
+                if getattr(link, "api_path", None)
+                and str(link.title or "").strip()
+                and "magazine" not in str(link.title or "").lower()
+            ]
+            if title == "genres":
+                chips["genres"] = links
+            elif title.startswith("moods"):
+                chips["moods"] = links
+            elif title == "decades":
+                chips["decades"] = links
+            else:
+                quick.update({link["title"]: link["path"] for link in links})
+        return chips, quick
+
+    def browse_path_ok(self, path: str) -> bool:
+        """TIDAL editorial paths nest under ``pages/``; the neutral
+        no-scheme/no-host rule applies on top, so a payload path can never
+        carry the session's token to another host."""
+        text = str(path or "")
+        return text.startswith("pages/") and super().browse_path_ok(text)
+
+    def browse_window_path_ok(self, path: str) -> bool:
+        """TIDAL's paged handles are the ``pages/data/<id>`` endpoints only;
+        an arbitrary ``pages/`` path is not a window."""
+        text = str(path or "")
+        return text.startswith("pages/data/") and super().browse_window_path_ok(text)
+
+    @staticmethod
+    def _art_identity(obj) -> tuple | None:
+        """Who a cover "belongs to", for per-tile dedup: one cover per artist
+        (an artist portrait and two of their albums must not share a tile),
+        falling back to the item's own id when no artist is attached."""
+        if isinstance(obj, tidalapi.Artist):
+            return ("ar", str(getattr(obj, "id", "") or id(obj)))
+        if isinstance(obj, tidalapi.Album | Track):
+            artist = getattr(obj, "artist", None)
+            aid = getattr(artist, "id", None) if artist is not None else None
+            if aid is not None:
+                return ("ar", str(aid))
+            return ("it", str(getattr(obj, "id", "") or id(obj)))
+        if isinstance(obj, Mix | tidalapi.Playlist):
+            return ("md", str(getattr(obj, "id", "") or id(obj)))
+        return None
+
+    def _art_rows(self, page) -> list[list[tuple[int, str, tuple]]]:
+        """One page's covers as ranked, identity-unique rows (best item
+        first), with rows led by artist/album art ordered first."""
+        rows: list[list[tuple[int, str, tuple]]] = []
+        for cat in list(getattr(page, "categories", None) or []):
+            items = getattr(cat, "items", None)
+            if not isinstance(items, list):
+                continue
+            row: list[tuple[int, str, tuple]] = []
+            for obj in items:
+                rank = next((rank for kind, rank in _TILE_ART_RANK if isinstance(obj, kind)), None)
+                if rank is None:
+                    continue
+                ident = self._art_identity(obj)
+                url = self.cover_url(obj, 320)
+                if url and ident is not None:
+                    row.append((rank, url, ident))
+            if row:
+                row.sort(key=lambda t: t[0])
+                rows.append(row)
+        rows.sort(key=lambda r: r[0][0])  # artist/album-led rows pick first
+        return rows
+
+    @staticmethod
+    def _round_robin(rows: list[list[tuple[int, str, tuple]]], want: int) -> list[str]:
+        """Up to ``want`` covers, one per row per pass, identity- and
+        URL-unique."""
+        out: list[str] = []
+        seen_urls: set[str] = set()
+        seen_ids: set[tuple] = set()
+        i = 0
+        while len(out) < want:
+            progressed = False
+            for row in rows:
+                if i >= len(row):
+                    continue
+                progressed = True
+                _, url, ident = row[i]
+                if url not in seen_urls and ident not in seen_ids:
+                    seen_urls.add(url)
+                    seen_ids.add(ident)
+                    out.append(url)
+                    if len(out) >= want:
+                        break
+            if not progressed:
+                break
+            i += 1
+        return out
+
+    def link_art_sample(self, page, want: int = 12) -> list[str]:
+        """Sample up to ``want`` cover URLs from a TIDAL page for its tile
+        mosaic, four show at once, the rest feed the tile's slow rotation.
+
+        Diversity beats adjacency: covers are drawn round-robin ACROSS the
+        page's rows (one per row per pass), so the mosaic mixes Top Artists,
+        New/Classic Albums, Essentials… instead of four neighbours from one
+        list. Within a row, artist portraits and album covers outrank track
+        art and text-heavy editorial playlist covers; rows whose best item is
+        an artist/album get first pick. The pool is identity-unique (see
+        _art_identity), so no two covers from the same artist/album/track can
+        ever share a tile, no matter how the rotation lands. Deliberately
+        does NOT go through the row builders: sampling ~45 pages through them
+        would flood the bridge's object registry and evict live search
+        results."""
+        return self._round_robin(self._art_rows(page), want)
 
     def _favorites_parts(self, kind: str) -> tuple:
         """The favorites accessor for ``kind`` plus its total-count answer

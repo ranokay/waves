@@ -903,6 +903,69 @@ class Provider(ABC):
         input -- a parse may drop items, the offset may not rewind), and the
         collection total."""
 
+    def browse_landing(self) -> dict:
+        """This provider's own Browse landing recipe, in provider-neutral
+        descriptors the bridge renders:
+
+        ``{"chips": {group: [{"title", "path"}, ...]},  # navigation link groups
+          "pages": [{"title", "path"}, ...],            # editorial pages inlined as rows, in order
+          "home": bool}``                               # append browse_home()'s shelves last
+
+        Called on a bridge worker; a recipe may read through the provider's
+        own session (a service whose page list is discovered by reading an
+        index page does that here). Every key is optional. The neutral
+        default is an empty landing: a provider reached through its catalog
+        pages contributes nothing to the combined landing, and no service
+        inherits another's editorial composition."""
+        return {}
+
+    def browse_rows(self, page) -> list[dict] | None:
+        """The neutral section rows for one page object this provider's
+        ``browse_page``/``browse_home`` returned, or None when the bridge's
+        stock renderer reads it (TIDAL's page objects).
+
+        A provider whose pages are its own engine's objects implements
+        this: every row is a plain dict in the app's row vocabulary
+        (``rowKind``, ``title``, ``items``, ``more``), and the bridge stamps
+        the owner and dresses the cards. TIDAL keeps the default, so its
+        tolerant per-category parse stays where it was."""
+        return None
+
+    def browse_window_rows(self, category) -> list[dict] | None:
+        """The neutral card rows for one paging window's parsed category
+        (``browse_window``'s ``category``), or None when the bridge's stock
+        renderer reads it (TIDAL's). See :meth:`browse_rows`."""
+        return None
+
+    def browse_path_ok(self, path: str) -> bool:
+        """Whether an editorial path this provider handed out may be
+        requested back, validated by the provider whose API receives it.
+
+        The neutral default accepts a relative path only: no scheme, no
+        authority, no backslash, so a payload can never steer a request to
+        another host. A provider whose API nests under a known prefix
+        tightens this (TIDAL requires ``pages/``)."""
+        text = str(path or "")
+        if not text or "//" in text or "\\" in text:
+            return False
+        parts = urlsplit(text)
+        return not parts.scheme and not parts.netloc
+
+    def browse_window_path_ok(self, path: str) -> bool:
+        """Whether a paging data path may be requested back through
+        :meth:`browse_window`. The neutral default is :meth:`browse_path_ok`
+        (a window path is one of the provider's own paths); a provider whose
+        paged handles nest under a narrower prefix tightens it (TIDAL's are
+        ``pages/data/`` only)."""
+        return self.browse_path_ok(path)
+
+    def link_art_sample(self, page, want: int = 12) -> list[str]:
+        """Cover URLs sampled from one of this provider's editorial pages,
+        for the landing's link-tile mosaics. The neutral default samples
+        nothing: a provider without an implementation gets no mosaics, never
+        another provider's covers."""
+        return []
+
     @abstractmethod
     def favorites_page(
         self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None

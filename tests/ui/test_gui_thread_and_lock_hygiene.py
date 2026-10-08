@@ -16,7 +16,7 @@ WHAT THIS FENCES OFF
    buckets, and a cache-hit re-search re-emits the payload without repopulating
    them, so any artist card shown from a cached search has no live object.
 
-2. ``_browse_fetch`` must not hold the process-wide, non-reentrant
+2. ``TidalProvider.browse_page`` (reached through the bridge's Browse fetch) must not hold the process-wide, non-reentrant
    ``_browse_lock`` across that same untimed request. Only tidalapi's shared
    page parser needs serializing; the request does not. A wedged peer would
    otherwise block every other acquirer, including ``_refetch_for_download``,
@@ -117,7 +117,7 @@ def test_no_slot_resolves_media_objects_on_the_gui_thread():
     assert not offenders, "slots resolving media objects on the GUI thread:\n" + "\n".join(offenders)
 
 
-def test_browse_fetch_does_not_hold_the_lock_across_the_request():
+def test_browse_page_does_not_hold_the_lock_across_the_request():
     """The HTTP request must be issued before the lock is taken.
 
     The read-and-parse live behind the Provider seam, so the

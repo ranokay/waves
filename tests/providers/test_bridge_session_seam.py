@@ -299,9 +299,10 @@ class _AuthStub:
     """Base stand-in for the auth slots: the guard tidal, the fake provider,
     the inline pool and the signals they touch."""
 
-    _page_path_ok = staticmethod(WavesBridge._page_path_ok)
     _unbind_merge_plans = WavesBridge._unbind_merge_plans
     _end_provider_context = WavesBridge._end_provider_context
+    _rendered_rows = WavesBridge._rendered_rows
+    _rendered_cards = WavesBridge._rendered_cards
     _settle_search = WavesBridge._settle_search
     _show_search_display = WavesBridge._show_search_display
     _start_provider_logout = WavesBridge._start_provider_logout
@@ -660,13 +661,22 @@ class TestTheCatalogRoads:
         assert tree.playlist_paths == {"p1": "F"}
         assert stub._folder_tree["tidal"] is tree
 
-    def test_browse_fetch_reads_the_provider(self):
+    def test_browse_page_for_reads_the_provider_after_validating(self):
         page = object()
         stub = self._stub(browse_page=page)
+        stub._provider.browse_path_ok = lambda path: path.startswith("pages/")
 
-        result = WavesBridge._browse_fetch.__get__(stub, type(stub))("Explore", "pages/explore")
+        result = WavesBridge._browse_page_for.__get__(stub, type(stub))(stub._provider, "Explore", "pages/explore")
 
         assert result is page
+        assert stub._provider.calls == [("browse_page", "Explore", "pages/explore")]
+
+        try:
+            WavesBridge._browse_page_for.__get__(stub, type(stub))(stub._provider, "Evil", "https://evil.test/x")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an off-service path must be refused before the provider sees it")
         assert stub._provider.calls == [("browse_page", "Explore", "pages/explore")]
 
     def test_the_home_rows_read_the_provider_and_drop_the_handles(self):
@@ -683,12 +693,13 @@ class TestTheCatalogRoads:
             }
         ]
 
-        rows = WavesBridge._home_v2_rows.__get__(stub, type(stub))()
+        rows = WavesBridge._home_rows.__get__(stub, type(stub))(stub.providers["tidal"])
 
         assert stub._provider.calls == [("browse_home",)]
         assert rows == [{"title": "Shelf", "more": "", "items": []}]
 
-    def test_a_browse_more_window_reads_the_provider(self):
+    def test_a_browse_more_window_reads_the_provider(self, monkeypatch):
+        from waves.desktop import backend as backend_pkg
         from waves.providers import BrowseWindow
 
         cat = SimpleNamespace(items=[object(), None])
@@ -700,6 +711,10 @@ class TestTheCatalogRoads:
         grown: list = []
         stub._browse_grow_cached = lambda *args: grown.append(args)
         stub.browseSectionMore = _Signal()
+        # The owner guard itself is covered by the routing suite; here the
+        # slot's read path is what runs.
+        stub._provider.browse_path_ok = lambda path: True
+        monkeypatch.setattr(backend_pkg, "browse_owner", lambda bridge, provider_id: stub._provider)
 
         WavesBridge.loadBrowseSectionMore.__get__(stub, type(stub))("key", "pages/data/x", 50, "pagedList", "Genre")
 
@@ -732,7 +747,7 @@ class TestTheCatalogRoads:
         stub._provider.browse_window = window
 
         out = WavesBridge._category_page_rest.__get__(stub, type(stub))(
-            {"n": 0, "total": 9, "data": "pages/data/x", "modType": "pagedList"}, gen=1
+            {"n": 0, "total": 9, "data": "pages/data/x", "modType": "pagedList"}, 1, stub._provider
         )
 
         assert out == [pl1, pl2]  # the non-Playlist row is skipped, not counted short
@@ -741,6 +756,15 @@ class TestTheCatalogRoads:
             ("browse_window", "", "pages/data/x", "pagedList", 2),
             ("browse_window", "", "pages/data/x", "pagedList", 3),
         ]
+
+        # A handle the provider does not accept as a paging endpoint (TIDAL:
+        # anything outside pages/data/) contributes its inline window only.
+        stub._provider.calls.clear()
+        stub._provider.browse_window_path_ok = lambda path: False
+        rest = WavesBridge._category_page_rest.__get__(stub, type(stub))(
+            {"n": 0, "total": 9, "data": "pages/explore", "modType": "pagedList"}, 1, stub._provider
+        )
+        assert rest == [] and stub._provider.calls == []
 
     def test_a_refetch_resolves_through_get_object(self):
         obj = object()

@@ -11,12 +11,83 @@ from threading import Lock
 from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
+from providers.fakes import StubProvider
 from tidalapi.media import Track
 
 import waves.desktop.backend as backend
 from waves.constants import CTX_TIDAL
 from waves.desktop.backend import WavesBridge
 from waves.providers import TidalProvider
+from waves.providers.base import Capability
+
+
+class LandingProvider(StubProvider):
+    """A provider whose Browse seam is scripted for the combined-landing and
+    routing suites: a landing recipe, its pages, its home feed and its paging
+    window, each settable to an exception to simulate failure. Calls are
+    recorded in order."""
+
+    def __init__(
+        self,
+        provider_id: str,
+        name: str,
+        *,
+        landing=None,
+        pages=None,
+        home=None,
+        window=None,
+        art=None,
+        logged_in=True,
+        capabilities=frozenset({Capability.BROWSE, Capability.CATALOG}),
+    ):
+        super().__init__(provider_id, name, capabilities=capabilities, logged_in=logged_in)
+        self._landing = landing
+        self._pages = pages or {}
+        self._home = home
+        self._window = window
+        self._art = list(art or [])
+        self.calls: list[tuple] = []
+
+    def browse_landing(self):
+        self.calls.append(("browse_landing",))
+        if isinstance(self._landing, Exception):
+            raise self._landing
+        return self._landing
+
+    def browse_rows(self, page):
+        # The scripted page carries its neutral rows directly (the seam a
+        # native-object provider implements; TIDAL keeps the default and the
+        # bridge's stock parser).
+        rows = getattr(page, "rows", None)
+        return [dict(row) for row in rows] if rows is not None else []
+
+    def browse_window_rows(self, category):
+        # The bridge passes browse_window's parsed category (see _rendered_cards).
+        return [
+            {"id": str(getattr(item, "id", ""))} for item in getattr(category, "items", None) or [] if item is not None
+        ]
+
+    def browse_page(self, title, api_path):
+        self.calls.append(("browse_page", title, api_path))
+        page = self._pages.get(api_path)
+        if isinstance(page, Exception):
+            raise page
+        return page
+
+    def browse_home(self):
+        self.calls.append(("browse_home",))
+        if isinstance(self._home, Exception):
+            raise self._home
+        return self._home
+
+    def browse_window(self, title, data_path, mod_type, offset, limit=50):
+        self.calls.append(("browse_window", title, data_path, mod_type, offset, limit))
+        if isinstance(self._window, Exception):
+            raise self._window
+        return self._window
+
+    def link_art_sample(self, page, want=12):
+        return list(self._art)
 
 
 class Cover:

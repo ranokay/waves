@@ -629,7 +629,7 @@ ApplicationWindow {
       browseOpen = false
       navOrigin = "search"
     }
-    if (root.signedIn && root.browseAvailable && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && root.browseAvailable && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       waves.loadBrowse()
     }
@@ -1196,6 +1196,191 @@ ApplicationWindow {
   // browsePage, keyed by its TIDAL api path so a slow load for a chip the
   // user has already left is ignored (see onBrowsePageLoaded).
   property var browseSections: []
+  // The providers that composed this landing (bridge payload, registry
+  // order), one entry per source for the filter chips.
+  property var browseSources: []
+  // The seam's legacy default owner: a payload cached or synthesized before
+  // rows carried their `provider_id` is TIDAL's (the bare-id rule ids.py
+  // applies), named once instead of sprinkled through the browse routes.
+  readonly property string legacyBrowseProvider: "tidal"
+  // The Browse source filter: "all" or one provider id, remembered across
+  // launches (the Search page's remember-last pattern). The remembered value
+  // survives a provider's absence, so the filter applies again when that
+  // provider returns.
+  property string browseSourceFilter: {
+    var saved = waves.wavesPref("browse_source_filter")
+    return typeof saved === "string" && saved !== "" ? saved : "all"
+  }
+  onBrowseSourceFilterChanged: waves.setWavesPref("browse_source_filter", root.browseSourceFilter)
+  function browsePrefObject(name) {
+    var raw = waves.wavesPref(name)
+    if (typeof raw !== "string" || raw === "")
+      return ({})
+    try {
+      var parsed = JSON.parse(raw)
+      return parsed && typeof parsed === "object" ? parsed : ({})
+    } catch (e) {
+      return ({})
+    }
+  }
+  function browseWritePref(name, value) {
+    waves.setWavesPref(name, JSON.stringify(value))
+  }
+  // Landing section arrangement (issue #600): hidden / collapsed / per-
+  // provider order, as JSON maps keyed "<provider>|<title>", so a
+  // rearrangement follows the section across launches and provider outages.
+  property var browseHidden: root.browsePrefObject("browse_sections_hidden")
+  property var browseCollapsed: root.browsePrefObject("browse_sections_collapsed")
+  property var browseOrder: root.browsePrefObject("browse_section_order")
+  function browseSectionKey(sec) {
+    return String(sec.provider_id || root.legacyBrowseProvider) + "|" + String(sec.title || "")
+  }
+  // The filter actually applied: the remembered choice while one of the
+  // landing's sources carries it, All otherwise.
+  readonly property string effectiveBrowseSourceFilter: {
+    if (root.browseSourceFilter === "all")
+      return "all"
+    var sources = root.browseSources || []
+    for (var i = 0; i < sources.length; ++i)
+      if (String(sources[i].provider_id || "") === root.browseSourceFilter)
+        return root.browseSourceFilter
+    return "all"
+  }
+  // The source chip row's model: All first, then one entry per composing
+  // provider with its descriptor's name and mark (the bridge answers both).
+  readonly property var browseSourceChips: {
+    var out = [
+      {
+        provider: "all",
+        name: "All",
+        logo: ""
+      }
+    ]
+    var sources = root.browseSources || []
+    for (var i = 0; i < sources.length; ++i) {
+      var descriptor = waves.providerDescriptor(String(sources[i].provider_id || ""))
+      out.push({
+        provider: String(sources[i].provider_id || ""),
+        name: descriptor ? String(descriptor.name || "") : "",
+        logo: descriptor ? String(descriptor.logo || "") : ""
+      })
+    }
+    return out
+  }
+  // The visible, ordered landing sections: the source filter first, hidden
+  // sections dropped, then each provider's own order map applied within its
+  // group (titles absent from the map keep their payload order after the
+  // ranked ones; a provider's group order never crosses into another's).
+  readonly property var browseVisibleSections: root.computeBrowseSections()
+  // `override` lets a landing being applied measure the incoming sections
+  // before the assignment (the build veil's total must count exactly the
+  // delegates the model will create).
+  function computeBrowseSections(override) {
+    var secs = override !== undefined ? override : root.browseSections || []
+    var filter = root.effectiveBrowseSourceFilter
+    var groups = []
+    var byProvider = ({})
+    for (var i = 0; i < secs.length; ++i) {
+      var sec = secs[i]
+      if (filter !== "all" && String(sec.provider_id || root.legacyBrowseProvider) !== filter)
+        continue
+      if (root.browseHidden[root.browseSectionKey(sec)])
+        continue
+      var pid = String(sec.provider_id || root.legacyBrowseProvider)
+      if (byProvider[pid] === undefined) {
+        byProvider[pid] = []
+        groups.push(pid)
+      }
+      byProvider[pid].push(sec)
+    }
+    var out = []
+    for (var g = 0; g < groups.length; ++g) {
+      var list = byProvider[groups[g]]
+      var order = root.browseOrder[groups[g]] || []
+      var rank = ({})
+      for (var k = 0; k < order.length; ++k)
+        rank[String(order[k])] = k
+      var ranked = []
+      var rest = []
+      for (var m = 0; m < list.length; ++m)
+        (rank[String(list[m].title || "")] !== undefined ? ranked : rest).push(list[m])
+      ranked.sort(function (a, b) {
+        return rank[String(a.title || "")] - rank[String(b.title || "")]
+      })
+      out = out.concat(ranked, rest)
+    }
+    return out
+  }
+  // Hidden sections still present in the current payload (the restore row).
+  readonly property var browseHiddenSections: {
+    var out = []
+    var secs = root.browseSections || []
+    for (var i = 0; i < secs.length; ++i) {
+      var key = root.browseSectionKey(secs[i])
+      if (root.browseHidden[key])
+        out.push({
+          key: key,
+          provider: String(secs[i].provider_id || root.legacyBrowseProvider),
+          title: String(secs[i].title || "")
+        })
+    }
+    return out
+  }
+  function browseHideSection(sec) {
+    var m = Object.assign({}, root.browseHidden)
+    m[root.browseSectionKey(sec)] = true
+    root.browseHidden = m
+    root.browseWritePref("browse_sections_hidden", m)
+  }
+  function browseRestoreSection(key) {
+    var m = Object.assign({}, root.browseHidden)
+    delete m[key]
+    root.browseHidden = m
+    root.browseWritePref("browse_sections_hidden", m)
+  }
+  function browseToggleCollapsed(sec) {
+    var key = root.browseSectionKey(sec)
+    var m = Object.assign({}, root.browseCollapsed)
+    if (m[key])
+      delete m[key]
+    else
+      m[key] = true
+    root.browseCollapsed = m
+    root.browseWritePref("browse_sections_collapsed", m)
+  }
+  // One provider's visible section titles, in the order on screen: the
+  // shared read behind the move controls and the move itself.
+  function browseProviderTitles(pid) {
+    var list = []
+    var visible = root.browseVisibleSections
+    for (var i = 0; i < visible.length; ++i)
+      if (String(visible[i].provider_id || root.legacyBrowseProvider) === pid)
+        list.push(String(visible[i].title || ""))
+    return list
+  }
+  // Whether a move in this direction is possible within the section's own
+  // provider group (the landing's controls gray out at the ends).
+  function browseCanMove(sec, delta) {
+    var list = root.browseProviderTitles(String(sec.provider_id || root.legacyBrowseProvider))
+    var at = list.indexOf(String(sec.title || ""))
+    return at >= 0 && at + delta >= 0 && at + delta < list.length
+  }
+  // Move one section up (-1) or down (+1) within its own provider's visible
+  // order and persist the resulting title list for that provider.
+  function browseMoveSection(sec, delta) {
+    var pid = String(sec.provider_id || root.legacyBrowseProvider)
+    var list = root.browseProviderTitles(pid)
+    var at = list.indexOf(String(sec.title || ""))
+    var to = at + delta
+    if (at < 0 || to < 0 || to >= list.length)
+      return
+    var moved = list.splice(at, 1)[0]
+    list.splice(to, 0, moved)
+    var m = Object.assign({}, root.browseOrder)
+    m[pid] = list
+    root.browseOrder = m
+    root.browseWritePref("browse_section_order", m)
+  }
   // The clicked card's own title, kept while its page payload is in flight,
   // so the breadcrumb (and a snapshot of a page left mid-load) can name the
   // page immediately instead of flashing the "Browse" fallback until
@@ -1246,8 +1431,10 @@ ApplicationWindow {
     // animations.
     root._browseAsyncBuild = root.browseSections.length === 0 || !bootOverlay.done
     // +4 = the wayfinding groups (Playlists / Genres / Moods / Decades)
-    // rendered as async shelves alongside the content sections.
-    root._browseBuildStart(root._browseAsyncBuild && !p.error ? secs.length + 4 : 0)
+    // rendered as async shelves alongside the content sections. Count the
+    // VISIBLE sections: hidden/filtered ones create no delegates, so
+    // counting them would hold the veil until its stall guard.
+    root._browseBuildStart(root._browseAsyncBuild && !p.error ? root.computeBrowseSections(secs).length + 4 : 0)
     root.browseArtistsSideMap(secs)
     // Refresh of a landing already built: hold the spot across the
     // shelf rebuild (see holdScroll). The landing pane is alive even
@@ -1256,6 +1443,7 @@ ApplicationWindow {
     if (root.browseSections.length > 0)
       browseLanding.holdScroll()
     root.browseSections = secs
+    root.browseSources = p.sources || []
     root.browseChips = {
       genres: p.genres || [],
       moods: p.moods || [],
@@ -1313,7 +1501,7 @@ ApplicationWindow {
     id: browseLandingFreshTimer
     interval: 5 * 60 * 1000    // max-age: editorial rows move a few times a day
     repeat: true
-    running: root.signedIn && root.windowUp && root.browseOpen && root.browsePageKey === "" && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.browseSignedIn && root.windowUp && root.browseOpen && root.browsePageKey === "" && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: waves.refreshBrowse()   // silent, throttled; repaints only on change
   }
   // A drilled Browse page (a playlist, mix or album) and an artist page
@@ -1325,7 +1513,7 @@ ApplicationWindow {
     id: browseItemFreshTimer
     interval: 5 * 60 * 1000
     repeat: true
-    running: root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.browseSignedIn && root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: {
       var parts = root.browsePageKey.split(":")
       if (parts.length < 3 || parts[0] !== "item")
@@ -1559,6 +1747,10 @@ ApplicationWindow {
   property bool browseError: false
   property var browsePage: null          // {key, title, sections} when drilled in
   property string browsePageKey: ""      // "" = the Browse landing page
+  // The drilled page's owning provider, so a retry (openBrowsePage /
+  // openBrowsePlaylists) and the nav snapshot route back through it even
+  // when the page payload has not landed yet.
+  property string browsePageProvider: ""
   property bool browsePageLoading: false
   property bool browsePageError: false
   // "Is this album already in my local library?" for the album page on
@@ -2796,11 +2988,11 @@ ApplicationWindow {
         browsePageLoading = false
         browsePageError = false
       }
-      if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+      if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
         browseLoading = true
         browseError = false
         waves.loadBrowse()
-      } else if (root.signedIn) {
+      } else if (root.browseSignedIn) {
         waves.refreshBrowse()
         // silent, throttled; repaints only on change
       }
@@ -3286,11 +3478,11 @@ ApplicationWindow {
       setupOpen = false
       artistOpen = false
       libraryOpen = false
-      if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+      if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
         browseLoading = true
         browseError = false
         waves.loadBrowse()
-      } else if (root.signedIn) {
+      } else if (root.browseSignedIn) {
         waves.refreshBrowse()
         // silent, throttled; repaints only on change
       }
@@ -3319,16 +3511,16 @@ ApplicationWindow {
     // (the pane is alive, so a plain set is exact).
     browseLanding.pendingRestoreY = -1
     browseLanding.contentY = 0
-    if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       browseError = false
       waves.loadBrowse()
-    } else if (root.signedIn) {
+    } else if (root.browseSignedIn) {
       waves.refreshBrowse()
       // silent, throttled; repaints only on change
     }
   }
-  function openBrowseLink(path, title) {
+  function openBrowseLink(path, title, provider) {
     navPush()
     // browsePage stays set while the landing shows (the drill pane
     // is kept alive for an instant return), so "there is a page" is
@@ -3345,7 +3537,8 @@ ApplicationWindow {
     // editorial pages have no hero
     browsePageError = false
     browsePageLoading = true
-    waves.openBrowsePage(path, title)
+    root.browsePageProvider = String(provider || root.legacyBrowseProvider)
+    waves.openBrowsePage(path, title, root.browsePageProvider)
   }
   // Re-issue the current drilled page's fetch after an error. The key alone
   // says which backend entry built the page: openBrowsePage only answers
@@ -3356,14 +3549,15 @@ ApplicationWindow {
     var key = "" + browsePageKey
     browsePageError = false
     browsePageLoading = true
+    var provider = String(root.browsePageProvider || root.legacyBrowseProvider)
     if (key.indexOf("pl:") === 0) {
-      waves.openBrowsePlaylists(key.substring(3), browseTitleHint)
+      waves.openBrowsePlaylists(key.substring(3), browseTitleHint, provider)
     } else if (key.indexOf("item:") === 0) {
       var rest = key.substring(5)
       var cut = rest.indexOf(":")
       waves.openBrowseItem(rest.substring(0, cut), rest.substring(cut + 1))
     } else {
-      waves.openBrowsePage(key, browseTitleHint)
+      waves.openBrowsePage(key, browseTitleHint, provider)
     }
   }
   // Some rows (Custom mixes, Radio stations, New releases…) have no TIDAL
@@ -3390,6 +3584,7 @@ ApplicationWindow {
     browsePage = {
       key: key,
       title: sec.title || "More",
+      provider_id: String(sec.provider_id || root.legacyBrowseProvider),
       sections: [
         {
           rowKind: sec.rowKind,
@@ -3401,10 +3596,12 @@ ApplicationWindow {
           data: sec.data || "",
           total: sec.total || 0,
           offset: sec.offset || 0,
-          modType: sec.modType || ""
+          modType: sec.modType || "",
+          provider_id: String(sec.provider_id || root.legacyBrowseProvider)
         }
       ]
     }
+    root.browsePageProvider = String(sec.provider_id || root.legacyBrowseProvider)
   }
   // A local: page is a snapshot of its landing row taken at click time; a
   // background revalidation can deliver a fresher ordering afterwards (e.g.
@@ -3424,8 +3621,11 @@ ApplicationWindow {
       return out.join("\n")
     }
     for (var i = 0; i < rows.length; i++) {
-      var r = rows[i]
-      var match = cur.data ? r.data === cur.data : (r.rowKind === cur.rowKind && r.title === cur.title)
+      var r = rows[i];
+      // Same owner too: two providers can ship a local shelf under the same
+      // title/row kind, and the page must re-snapshot from its own source.
+      var sameOwner = String(r.provider_id || root.legacyBrowseProvider) === String(pg.provider_id || root.legacyBrowseProvider)
+      var match = sameOwner && (cur.data ? r.data === cur.data : (r.rowKind === cur.rowKind && r.title === cur.title))
       if (!match)
         continue
       var head = r.items || []
@@ -3434,6 +3634,7 @@ ApplicationWindow {
       // unchanged
       return {
         key: pg.key,
+        provider_id: pg.provider_id,
         title: pg.title,
         sections: [
           {
@@ -3444,7 +3645,8 @@ ApplicationWindow {
             data: r.data || "",
             total: r.total || 0,
             offset: r.offset || 0,
-            modType: r.modType || ""
+            modType: r.modType || "",
+            provider_id: r.provider_id || pg.provider_id
           }
         ]
       }
@@ -3481,13 +3683,21 @@ ApplicationWindow {
       return {
         title: c.title,
         path: c.path,
+        provider_id: c.provider_id,
         pl: true
       }
     })
   }
-  function openPlaylistsFolder(path, title) {
+  // The pending category action's key: provider AND path, so overlapping
+  // resolves for the same path spelling from two providers cannot clear or
+  // answer each other's actions.
+  function catActionKey(provider, path) {
+    return String(provider || root.legacyBrowseProvider) + "|" + String(path || "")
+  }
+  function openPlaylistsFolder(path, title, provider) {
     var key = "pl:" + path
-    if (browsePageKey === key)
+    var owner = String(provider || root.legacyBrowseProvider)
+    if (browsePageKey === key && String(root.browsePageProvider || root.legacyBrowseProvider) === owner)
       return
     navPush()
     // browsePage stays set while the landing shows (the drill pane
@@ -3505,7 +3715,8 @@ ApplicationWindow {
     // a playlist grid has no hero
     browsePageError = false
     browsePageLoading = true
-    waves.openBrowsePlaylists(path, title)
+    root.browsePageProvider = String(provider || root.legacyBrowseProvider)
+    waves.openBrowsePlaylists(path, title, root.browsePageProvider)
   }
   function openPlaylistsRoot() {
     var key = "cloud:All Playlists"
@@ -3559,8 +3770,12 @@ ApplicationWindow {
     browsePageKey = key
     browsePageError = false
     browsePageLoading = false
+    // A cloud aggregates links that keep their own owners; the page's
+    // provider is the first link's, for the crumb's badge and snapshots.
+    root.browsePageProvider = (chips && chips.length > 0) ? String(chips[0].provider_id || root.legacyBrowseProvider) : ""
     browsePage = {
       key: key,
+      provider_id: root.browsePageProvider,
       title: title,
       sections: [
         {
@@ -3585,20 +3800,24 @@ ApplicationWindow {
   // One in-flight fetch per data path; results splice into whichever views
   // hold the row at that offset (backend keeps its caches in step).
   property var browseGrowing: ({})
+  function browseGrowKey(sec) {
+    return String((sec && sec.provider_id) || root.browsePageProvider || root.legacyBrowseProvider) + "|" + String((sec && sec.data) || "")
+  }
   function browseCanGrow(sec) {
     return !!(sec && sec.data) && (sec.offset || 0) < (sec.total || 0)
   }
   function browseGrow(sec) {
-    if (!browseCanGrow(sec) || browseGrowing[sec.data])
+    var key = root.browseGrowKey(sec)
+    if (!browseCanGrow(sec) || browseGrowing[key])
       return
     var g = Object.assign({}, browseGrowing)
-    g[sec.data] = true
+    g[key] = true
     browseGrowing = g
-    waves.loadBrowseSectionMore(browsePageKey, sec.data, sec.offset || 0, sec.modType || "", sec.title || "")
+    waves.loadBrowseSectionMore(browsePageKey, sec.data, sec.offset || 0, sec.modType || "", sec.title || "", String(sec.provider_id || root.browsePageProvider || root.legacyBrowseProvider))
   }
   function browseGrew(p) {
     var g = Object.assign({}, browseGrowing)
-    delete g[p.data]
+    delete g[String(p.provider_id || root.legacyBrowseProvider) + "|" + String(p.data || "")]
     browseGrowing = g
     if (p.error || (p.items || []).length === 0)
       return
@@ -3607,6 +3826,8 @@ ApplicationWindow {
       var hit = false
       var out = (rows || []).map(function (r) {
         if (r.data !== p.data || (r.offset || 0) !== p.reqOffset)
+          return r
+        if (p.provider_id && r.provider_id && String(r.provider_id) !== String(p.provider_id))
           return r
         hit = true
         return Object.assign({}, r, {
@@ -3716,7 +3937,7 @@ ApplicationWindow {
     artistOpen = false
     libraryOpen = false
     browseOpen = true
-    if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       browseError = false
       waves.loadBrowse()
@@ -3737,7 +3958,7 @@ ApplicationWindow {
     artistOpen = false
     libraryOpen = false
     browseOpen = true
-    if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+    if (root.browseSignedIn && browseSections.length === 0 && !browseLoading) {
       browseLoading = true
       browseError = false
       waves.loadBrowse()
@@ -5689,7 +5910,18 @@ ApplicationWindow {
       return root.mediaProvider(page.header.id)
     if (String(key || "").indexOf("item:") === 0)
       return root.mediaProvider(String(key).split(":").slice(2).join(":"))
-    return String(root.browseNav.provider || "")
+    if (page && page.provider_id)
+      return String(page.provider_id)
+    return String(root.browsePageProvider || root.browseNav.provider || "")
+  }
+  // Whether a landed page payload belongs to the page the user is looking
+  // at: its key AND its owner (two providers may use the same path spelling,
+  // and the backend's page caches are owner-qualified for exactly that
+  // reason). An unstamped legacy payload reads as TIDAL's.
+  function browsePageMatches(payload) {
+    if (!payload || payload.key !== root.browsePageKey)
+      return false
+    return String(payload.provider_id || root.legacyBrowseProvider) === String(root.browsePageProvider || root.legacyBrowseProvider)
   }
   function snapshotProvider(snapshot) {
     if (snapshot.v === "artist")
@@ -5791,9 +6023,28 @@ ApplicationWindow {
       root.clearProviderViews(id)
       root.refreshProviderSurfaces()
       root.refreshBrowseNav()
-      if (root.browseOpen && root.browseSignedIn && String(root.browseNav.provider) === id) {
-        root.browseLoading = true
-        waves.loadBrowse()
+      // Any browse-capable provider's state can change the combined landing
+      // (a second source signing in, the current one signing out), so the
+      // reload is gated on Browse's own readiness, never on the event's id.
+      if (root.browseOpen && root.browseSignedIn) {
+        if (root.browseSections.length === 0) {
+          root.browseLoading = true
+          waves.loadBrowse()
+        } else {
+          waves.refreshBrowse()
+        }
+      } else if (!root.browseSignedIn && root.browseSections.length > 0) {
+        // The last browse source went away: retire the landing's rows (the
+        // pane's sign-in gate takes over) instead of leaving a signed-out
+        // provider's shelves on screen.
+        root.browseSections = []
+        root.browseSources = []
+        root.browsePageKey = ""
+        root.browsePage = null
+        root.browseStack = []
+        root.browsePageProvider = ""
+        root.browsePageLoading = false
+        root.browsePageError = false
       }
     }
     function onSetupRequested() {
@@ -5869,26 +6120,32 @@ ApplicationWindow {
     }
     // A Browse category finished resolving (count known, list cached):
     // run whichever action the user queued on the tile.
-    function onPlaylistCategoryResolved(path, title, count, firstId) {
-      if (root.catPendingPv === path) {
+    // The emit carries the category's owner, so a resolve that lands after
+    // another tile was clicked still answers for ITS provider (no shared
+    // pending-provider state to race).
+    function onPlaylistCategoryResolved(path, title, count, firstId, providerId) {
+      var key = root.catActionKey(providerId, path)
+      if (root.catPendingPv === key) {
         root.catPendingPv = ""
         if (firstId !== "")
           root.togglePreview("playlist", firstId, 0)
       }
-      if (root.catPendingDl !== path)
+      if (root.catPendingDl !== key)
         return
       root.catPendingDl = ""
       if (count <= 0)
         // backend already set the status line
         return
+      var provider = String(providerId || root.legacyBrowseProvider)
       if (waves.confirmCategoryDl)
         root.catDlPrompt = {
           path: path,
+          provider: provider,
           title: title || "this category",
           count: count
         }
       else
-        waves.downloadPlaylistCategory(path)
+        waves.downloadPlaylistCategory(path, provider)
     }
     function onHomeLoaded(source, sections) {
       var g = root.libGroupFor(source)
@@ -5968,8 +6225,9 @@ ApplicationWindow {
         root.warmArt("" + arts[i], root.discDecode, root.discDecode)
     }
     function onBrowsePageLoaded(p) {
-      if (p.key !== root.browsePageKey)
-        // stale: user already left this page
+      if (!root.browsePageMatches(p))
+        // stale: user already left this page (or it belongs to another
+        // provider's section with the same path)
         return
       root.markRender("browse page render")
       root.browsePageLoading = false
@@ -7387,11 +7645,11 @@ ApplicationWindow {
       // already on the tab); idempotent thanks to the loading flags
       // here and the in-flight guard backend-side.
       onVisibleChanged: {
-        if (visible && root.signedIn && root.browseSections.length === 0 && !root.browseLoading) {
+        if (visible && root.browseSignedIn && root.browseSections.length === 0 && !root.browseLoading) {
           root.browseLoading = true
           root.browseError = false
           waves.loadBrowse()
-        } else if (visible && root.signedIn) {
+        } else if (visible && root.browseSignedIn) {
           waves.refreshBrowse()
           // silent, throttled; repaints only on change
         }
@@ -7422,7 +7680,7 @@ ApplicationWindow {
           // The shared loading hint (WireHint.qml owns the look).
           WireHint {
             id: browseLandingHint
-            active: root.signedIn && (root.browseLoading || root.browseBuilding)
+            active: root.browseSignedIn && (root.browseLoading || root.browseBuilding)
             width: parent.width
             tint: root.textLo
             onScreen: root.onScreen
@@ -7465,7 +7723,7 @@ ApplicationWindow {
           }
 
           Column {
-            visible: root.signedIn && root.browseError
+            visible: root.browseSignedIn && root.browseError
             width: parent.width
             spacing: 12
             Text {
@@ -7505,6 +7763,60 @@ ApplicationWindow {
             }
           }
 
+          // Source chips: All plus one per provider that composed this
+          // landing. Shown once two sources are in play; a single-provider
+          // install has nothing to filter (the Search page's pattern).
+          Row {
+            objectName: "browseSourceChips"
+            visible: root.browseSignedIn && root.browseSources.length > 1 && !root.browseLoading
+            spacing: 8
+            Repeater {
+              model: root.browseSourceChips
+              delegate: Rectangle {
+                id: bsourceChip
+                objectName: "browseSourceChip"
+                required property var modelData
+                readonly property bool on: root.effectiveBrowseSourceFilter === String(modelData.provider)
+                radius: 8
+                implicitHeight: 30
+                implicitWidth: bsourceRow.implicitWidth + 26
+                color: on ? root.accentCont : "transparent"
+                border.color: on ? root.accentDim : root.border1
+                Row {
+                  id: bsourceRow
+                  anchors.centerIn: parent
+                  spacing: 7
+                  ProviderLogo {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: String(bsourceChip.modelData.provider || "") !== "all"
+                    logo: String(bsourceChip.modelData.logo || "")
+                    width: 16
+                    height: 12
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: true
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: String(bsourceChip.modelData.name || "")
+                    color: bsourceChip.on ? root.accent : root.textLo
+                    font.pixelSize: 13
+                  }
+                }
+                TapAction {
+                  objectName: "browseSourceChipAction"
+                  anchors.fill: parent
+                  accessibleLabel: "Show " + String(bsourceChip.modelData.name || "") + " sections"
+                  role: Accessible.RadioButton
+                  checkable: true
+                  checked: bsourceChip.on
+                  focusRadius: 8
+                  onTriggered: root.browseSourceFilter = String(bsourceChip.modelData.provider)
+                }
+              }
+            }
+          }
           // Landing, console style: the Genres / Moods / Decades
           // chip sets lead the page (the art-first layout renders
           // the same data as colour tiles BELOW the content
@@ -7581,7 +7893,7 @@ ApplicationWindow {
                           accessibleLabel: "Open " + bchip.modelData.title
                           anchors.fill: parent
                           cursorShape: Qt.PointingHandCursor
-                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title)
+                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || root.legacyBrowseProvider)) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title, String(bchip.modelData.provider_id || root.legacyBrowseProvider))
                         }
                       }
                     }
@@ -7599,7 +7911,7 @@ ApplicationWindow {
           // frames instead of freezing for the ~250 ms a
           // synchronous build of every shelf would take.
           Repeater {
-            model: root.browseSections
+            model: root.browseVisibleSections
             delegate: Loader {
               id: bsecLd
               required property var modelData
@@ -7616,6 +7928,76 @@ ApplicationWindow {
                 landing: true
                 pane: browseLanding
                 col: browseLandingCol
+                arrangeable: true
+                collapsed: root.browseCollapsed[root.browseSectionKey(bsecLd.modelData)] === true
+                canMoveUp: root.browseCanMove(bsecLd.modelData, -1)
+                canMoveDown: root.browseCanMove(bsecLd.modelData, 1)
+                onToggled: root.browseToggleCollapsed(bsecLd.modelData)
+                onHideRequested: root.browseHideSection(bsecLd.modelData)
+                onMoveRequested: function (delta) {
+                  root.browseMoveSection(bsecLd.modelData, delta)
+                }
+              }
+            }
+          }
+
+          // Hidden landing sections: every hidden section still present in
+          // the payload gets a restore chip, so a hide is one click to undo
+          // without touching Settings.
+          Flow {
+            objectName: "browseHiddenSections"
+            visible: root.browseHiddenSections.length > 0
+            width: parent.width
+            spacing: 8
+            Text {
+              textFormat: Text.PlainText
+              // Centred within the 26px chips beside it (a Flow cannot take
+              // per-item anchors).
+              topPadding: 5
+              text: "HIDDEN"
+              color: root.textDim
+              font.family: root.mono
+              font.pixelSize: 11
+              font.bold: true
+              font.letterSpacing: 1.9
+            }
+            Repeater {
+              model: root.browseHiddenSections
+              delegate: Rectangle {
+                id: hiddenChip
+                required property var modelData
+                radius: 8
+                implicitHeight: 26
+                implicitWidth: hiddenRow.implicitWidth + 22
+                color: "transparent"
+                border.color: root.border1
+                Row {
+                  id: hiddenRow
+                  anchors.centerIn: parent
+                  spacing: 6
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: String(hiddenChip.modelData.title || "")
+                    color: root.textLo
+                    font.pixelSize: 12
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "RESTORE"
+                    color: root.accent
+                    font.family: root.mono
+                    font.pixelSize: 10
+                    font.bold: true
+                  }
+                }
+                TapAction {
+                  objectName: "browseRestoreSection"
+                  anchors.fill: parent
+                  accessibleLabel: "Restore " + String(hiddenChip.modelData.title || "")
+                  onTriggered: root.browseRestoreSection(String(hiddenChip.modelData.key))
+                }
               }
             }
           }
@@ -7682,6 +8064,7 @@ ApplicationWindow {
                       required property int index
                       title: modelData.title
                       path: modelData.path
+                      provider: String(modelData.provider_id || root.legacyBrowseProvider)
                       idx: index
                       plOnly: !!modelData.pl
                     }
@@ -8914,7 +9297,7 @@ ApplicationWindow {
       // Browse layout switch (art-first vs console), floating over the
       // pane's bottom-right corner so it costs the landing page no row.
       Rectangle {
-        visible: root.signedIn && root.browseOpen && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && root.browsePageKey === ""
+        visible: root.browseSignedIn && root.browseOpen && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && root.browsePageKey === ""
         anchors.right: parent.right
         anchors.bottom: parent.top
         anchors.rightMargin: 22
@@ -9949,7 +10332,7 @@ ApplicationWindow {
               else if (p.kind === "favVideos")
                 waves.downloadFavoriteVideos(p.source)
               else
-                waves.downloadPlaylistCategory(p.path)
+                waves.downloadPlaylistCategory(p.path, p.provider || root.legacyBrowseProvider)
             }
           }
           GateAction {
@@ -11462,7 +11845,7 @@ ApplicationWindow {
         return
       if (!waves.sessionResolved)
         return
-      if (root.signedIn && root.browseSections.length === 0)
+      if (root.browseSignedIn && root.browseSections.length === 0)
         return
       started = true
       bootSeq.start()
@@ -11533,7 +11916,7 @@ ApplicationWindow {
       // the fetch erroring, or the cap releases it. Without this leg the
       // gate would only cover the shelf assembly, and a slow login would
       // reveal the bare "Reading the wire…" landing.
-      if (root.signedIn && root.browseSections.length === 0 && !root.browseError && !handoverCap.expired) {
+      if (root.browseSignedIn && root.browseSections.length === 0 && !root.browseError && !handoverCap.expired) {
         handoverHeld = true
         return
       }
@@ -11563,7 +11946,7 @@ ApplicationWindow {
       // at all. The hold is taken, and only the poll below, quiet on two
       // readings in a row, can lift it; the cap the other legs answer to
       // ends the hold regardless of what the count ever says.
-      if (root.signedIn && !root.browseError && !incubationQuietPoll.settled && !handoverCap.expired) {
+      if (root.browseSignedIn && !root.browseError && !incubationQuietPoll.settled && !handoverCap.expired) {
         handoverHeld = true
         // A poll already counting is left running: ITS readings are the
         // consecutive ones. Re-arming on every re-entry (each payload,

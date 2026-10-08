@@ -49,6 +49,11 @@ Rectangle {
 
   property string title: ""
   property string path: ""
+  // The tile's owning provider: its click drills back through the provider
+  // that served the link (a chip/cloud crossing providers keeps each link
+  // with its own owner). Empty is the seam's legacy default (Main's
+  // legacyBrowseProvider resolves it at the route).
+  property string provider: ""
   property int idx: 0
   // Tile lives inside the Playlists folder view: drill into the
   // playlists-only grid instead of the full editorial page.
@@ -56,7 +61,10 @@ Rectangle {
   readonly property var tones: [[accentCont, accentDim, accentContTx], [goldCont, goldDim, goldContTx], ["#0a2126", cyanDim, "#9fdbe6"], [redCont, "#8a3a34", "#ffb3ad"], [greenCont, greenDim, greenContTx], [surface3, outline, textHi],]
   readonly property var tone: tones[idx % 6]
   readonly property string era: /^\d{4}s$/.test(title) ? "'" + title.substring(2) : ""
-  readonly property var arts: host.browseTileArt[path] || []
+  // The backend's tile-art key: a TIDAL path stands alone, another
+  // provider's is namespaced (see _tile_art_key).
+  readonly property string artKey: provider === "" || provider === host.legacyBrowseProvider ? path : provider + "|" + path
+  readonly property var arts: host.browseTileArt[artKey] || []
   // 4+ covers -> 2x2 mosaic; 2-3 -> two half tiles; 1 -> full bleed.
   readonly property int artN: arts.length >= 4 ? 4 : arts.length >= 2 ? 2 : arts.length
   // Which pool index each visible cell shows; advanced one cell at a
@@ -305,7 +313,7 @@ Rectangle {
     anchors.fill: parent
     accessibleLabel: "Open " + (bt.title || "category")
     focusRadius: bt.radius
-    onTriggered: bt.plOnly ? host.openPlaylistsFolder(bt.path, bt.title) : host.openBrowseLink(bt.path, bt.title)
+    onTriggered: bt.plOnly ? host.openPlaylistsFolder(bt.path, bt.title, bt.provider) : host.openBrowseLink(bt.path, bt.title, bt.provider)
   }
   // All Playlists folder chrome: the card-style hover strip (PREVIEW |
   // DOWNLOAD ALL), swapped for the live rollup button + badge once the
@@ -398,8 +406,9 @@ Rectangle {
               anchors.fill: parent
               accessibleLabel: "Preview " + (bt.title || "category")
               onTriggered: {
-                host.catPendingPv = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title)
+                var owner = bt.provider || host.legacyBrowseProvider
+                host.catPendingPv = host.catActionKey(owner, bt.path)
+                waves.resolvePlaylistCategory(bt.path, bt.title, owner)
               }
             }
           }
@@ -439,8 +448,9 @@ Rectangle {
               anchors.fill: parent
               accessibleLabel: "Download all in " + (bt.title || "category")
               onTriggered: {
-                host.catPendingDl = bt.path
-                waves.resolvePlaylistCategory(bt.path, bt.title)
+                var owner = bt.provider || host.legacyBrowseProvider
+                host.catPendingDl = host.catActionKey(owner, bt.path)
+                waves.resolvePlaylistCategory(bt.path, bt.title, owner)
               }
             }
           }
@@ -455,7 +465,7 @@ Rectangle {
         label: "Download all"
         // Retry after a failed rollup re-queues from the cached list.
         onTap: function () {
-          waves.downloadPlaylistCategory(bt.path)
+          waves.downloadPlaylistCategory(bt.path, bt.provider || host.legacyBrowseProvider)
         }
       }
     }

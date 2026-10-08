@@ -17,6 +17,7 @@ from threading import RLock
 from typing import Protocol
 
 from waves.ids import DEFAULT_PROVIDER, provider_of_id
+from waves.providers.base import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -128,15 +129,29 @@ def _drop_members[K](cache: set[K], owns: Callable[[K], bool]) -> None:
 
 
 def page_provider(key: str) -> str:
-    """Item/playlist page keys wrap media IDs; editorial paths are TIDAL."""
+    """The provider a page-cache key belongs to.
+
+    Item page keys wrap media ids (``item:<kind>:<id>``); playlists-grid
+    keys are ``pl:<provider>:<path>`` and editorial page keys
+    ``browse:<provider>:<path>``. A legacy bare editorial path (an upgraded
+    nav snapshot or disk cache) reads as TIDAL, and ``cat:``/``root`` keys
+    are TIDAL's own rollup/landing slots.
+    """
     if key.startswith("item:"):
         return provider_of_id(key.partition(":")[2].partition(":")[2])
-    if key.startswith("pl:"):
+    if key.startswith(("pl:", "browse:", "more:")):
+        # ``pl:<provider>:<path>`` / ``browse:<provider>:<path>`` /
+        # ``more:<provider>:<data>`` carry their owner; a legacy bare
+        # editorial path reads as TIDAL (provider_of_id's bare-value rule),
+        # so pre-upgrade caches, guards and nav snapshots keep resolving.
         return provider_of_id(key.partition(":")[2])
     if key.startswith("fav:"):
         source, separator, _kind = key.partition(":")[2].partition(":")
         return source if separator else DEFAULT_PROVIDER
-    if key == "root" or key.startswith("cat:"):
+    if key.startswith("cat:"):
+        # ``cat:<provider>:<path>``; a legacy bare path reads as TIDAL.
+        return provider_of_id(key.partition(":")[2])
+    if key == "root":
         return DEFAULT_PROVIDER
     return provider_of_id(key)
 
@@ -169,9 +184,19 @@ def _clear_page_memory(
         _drop_keys(getattr(bridge, "_category_pl", {}), owns_page)
         _drop_keys(getattr(bridge, "_fav_ids", {}), owns_media)
         _clear_search_cache(bridge, provider_id)
-        if provider_id == DEFAULT_PROVIDER:
+        # The combined landing is composed from every browse-capable
+        # provider's account, so any one of them changing (sign-out, relogin,
+        # disable) invalidates it, not just TIDAL's. Its in-flight guard is
+        # released too: "root" is attributed to the default provider by
+        # page_provider, so the owns_page sweep above would leave it set and
+        # a stale worker's early return would strand the landing's load
+        # slot for the rest of the session.
+        provider = (getattr(bridge, "providers", None) or {}).get(provider_id)
+        capabilities = getattr(provider, "capabilities", frozenset()) if provider is not None else frozenset()
+        if Capability.BROWSE in capabilities:
             bridge._browse_root_cache = None
             bridge._browse_reval_ts = 0.0
+            _drop_members(getattr(bridge, "_browse_loading", set()), lambda key: key == "root")
 
 
 def _clear_search_cache(bridge, provider_id: str) -> None:
