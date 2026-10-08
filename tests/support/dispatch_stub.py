@@ -14,8 +14,6 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
-from conftest import _Signal
-
 from support.bridge_stub import BridgeStub
 from waves.desktop.backend import WavesBridge
 from waves.desktop.queue.runtime import JobRuntime
@@ -29,7 +27,10 @@ def arm_queue(stub) -> None:
 
     Defaults are only filled in where the stand-in has not set its own, so a
     test that wants a populated queue, a live abort or a running job says so
-    and this leaves it alone."""
+    and this leaves it alone. A stand-in is a BridgeStub (or a real bridge),
+    so the signals the bound family emits resolve without a declaration here."""
+    if not isinstance(stub, (BridgeStub, WavesBridge)):
+        raise TypeError(f"arm a support.bridge_stub.BridgeStub stand-in, not {type(stub).__name__}")
     stub._qdirty_added = getattr(stub, "_qdirty_added", [])
     stub._qdirty_changed = getattr(stub, "_qdirty_changed", {})
     stub._qdirty_removed = getattr(stub, "_qdirty_removed", [])
@@ -129,9 +130,6 @@ def _arm_rollups(stub) -> None:
     for lock in ("_artist_lock", "_folder_lock", "_pending_lock"):
         if not hasattr(stub, lock):
             setattr(stub, lock, _Lock())
-    for sig in ("downloadState", "downloadProgress", "folderRemaining"):
-        if not hasattr(stub, sig):
-            setattr(stub, sig, _Signal())
     for name in ("_bump_download_groups", "_bump_artist_group", "_bump_folder_group", "_reap_stranded_groups"):
         if not hasattr(stub, name):
             setattr(stub, name, getattr(WavesBridge, name).__get__(stub, type(stub)))
@@ -183,14 +181,9 @@ def _queue_stub(statuses, *, running_qid=None):
     s._pending_qids = deque(it["qid"] for it in s._queue)
     s._event_run = Event()
     s._paused = False
-    s.pausedChanged = _Signal()
     s._scan_gen = 0
     s._scans_in_flight = 0
     s._scan_count_lock = Lock()
-    s.scanningChanged = _Signal()
-    s.downloadState = _Signal()
-    s.downloadProgress = _Signal()
-    s.folderRemaining = _Signal()
     s.statuses = []
     s._set_status = s.statuses.append
     s._jobs.objs = {}

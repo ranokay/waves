@@ -10,6 +10,7 @@ module). The wiring pin at the end keeps every stand-in on that base.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 import pytest
 from conftest import _Signal
@@ -69,12 +70,14 @@ def test_private_relays_and_unknown_names_stay_absent():
 # A stand-in is any object that receives real bridge methods. These are the
 # binding forms the suite uses; `x` is the stand-in.
 #   WavesBridge.m(x, ...)                      <bridge expr>.__get__(x, ...)
-#   MethodType(<bridge expr>, x)                x.attr = <bridge expr>
-#   setattr(x, name, <bridge expr>)             helper(x, ...) where helper binds its first parameter
-#   class body: m = WavesBridge.m               a method binding onto self
+#   setattr(x, name, <bridge expr>)             x.attr = <bridge expr>
+#   helper(x, ...) where helper binds x         class body: m = WavesBridge.m
+#   a method binding onto self
 # x resolves to a class assigned from Cls(...), to the enclosing class for
 # self, or to a SimpleNamespace (directly, or returned by a builder defined in
 # the file or imported into it by name).
+
+Function = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 def _names_bridge(node: ast.AST) -> bool:
@@ -96,17 +99,14 @@ def _bound_names(scope: ast.AST, helpers: set[str]) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(scope):
         if isinstance(node, ast.Call) and node.args:
-            func, first = node.func, None
-            if isinstance(func, ast.Attribute) and _names_bridge(func):
-                first = node.args[0]
-            elif _is_call_to(node, "MethodType") and len(node.args) >= 2 and _names_bridge(node.args[0]):
-                first = node.args[1]
-            elif (_is_call_to(node, "setattr") and len(node.args) == 3 and _names_bridge(node.args[2])) or (
-                isinstance(func, ast.Name) and func.id in helpers
-            ):
-                first = node.args[0]
-            if isinstance(first, ast.Name):
-                names.add(first.id)
+            func = node.func
+            binds = (
+                (isinstance(func, ast.Attribute) and _names_bridge(func))
+                or (_is_call_to(node, "setattr") and len(node.args) == 3 and _names_bridge(node.args[2]))
+                or (isinstance(func, ast.Name) and func.id in helpers)
+            )
+            if binds and isinstance(node.args[0], ast.Name):
+                names.add(node.args[0].id)
         elif isinstance(node, ast.Assign) and _names_bridge(node.value):
             names.update(
                 t.value.id for t in node.targets if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
@@ -114,8 +114,8 @@ def _bound_names(scope: ast.AST, helpers: set[str]) -> set[str]:
     return names
 
 
-def _functions(tree: ast.AST) -> list[ast.FunctionDef]:
-    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+def _functions(tree: ast.AST) -> list[Function]:
+    return [n for n in ast.walk(tree) if isinstance(n, Function)]
 
 
 def _binding_helpers(tree: ast.AST) -> set[str]:
@@ -148,8 +148,8 @@ def _namespace_builders(tree: ast.AST) -> dict[str, int]:
     return found
 
 
-def _builders_in_reach(path, tree: ast.AST) -> dict[str, tuple]:
-    """SimpleNamespace builders defined in the file or imported into it by name."""
+def _builders_in_reach(path: Path, tree: ast.AST) -> dict[str, tuple[Path, int]]:
+    """SimpleNamespace builders defined in the file or imported into it by name, with their source line."""
     builders = {name: (path, line) for name, line in _namespace_builders(tree).items()}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
@@ -160,23 +160,21 @@ def _builders_in_reach(path, tree: ast.AST) -> dict[str, tuple]:
     return builders
 
 
-def _self_binding_classes(classes: dict[str, ast.ClassDef], helpers: set[str]) -> set[str]:
+def _self_binding_classes(class_nodes: dict[str, ast.ClassDef], helpers: set[str]) -> set[str]:
     """Classes binding bridge methods in their body or onto self."""
     return {
         cls.name
-        for cls in classes.values()
+        for cls in class_nodes.values()
         if any(isinstance(s, ast.Assign) and _names_bridge(s.value) for s in cls.body)
-        or any("self" in _bound_names(fn, helpers) for fn in cls.body if isinstance(fn, ast.FunctionDef))
+        or any("self" in _bound_names(fn, helpers) for fn in cls.body if isinstance(fn, Function))
     }
 
 
-def _stand_ins(path) -> tuple[set[str], list[str]]:
-    """(class names that stand in for the bridge, SimpleNamespace stand-in sites)."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+def _stand_ins(path: Path, tree: ast.AST, class_nodes: dict[str, ast.ClassDef]) -> tuple[set[str], list[str]]:
+    """(names of classes that stand in for the bridge, SimpleNamespace stand-in sites)."""
     helpers = _binding_helpers(tree)
-    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
     builders = _builders_in_reach(path, tree)
-    must = _self_binding_classes(classes, helpers)
+    stand_in_classes = _self_binding_classes(class_nodes, helpers)
     sites: list[str] = []
     for scope in [tree, *_functions(tree)]:
         bound = _bound_names(scope, helpers)
@@ -188,19 +186,18 @@ def _stand_ins(path) -> tuple[set[str], list[str]]:
             func = node.value.func
             if _is_call_to(node.value, "SimpleNamespace"):
                 sites.append(f"{path.relative_to(TESTS_ROOT)}:{node.value.lineno} SimpleNamespace")
-            elif isinstance(func, ast.Name) and func.id in classes:
-                must.add(func.id)
+            elif isinstance(func, ast.Name) and func.id in class_nodes:
+                stand_in_classes.add(func.id)
             elif isinstance(func, ast.Name) and func.id in builders:
                 where, line = builders[func.id]
                 sites.append(f"{where.relative_to(TESTS_ROOT)}:{line} SimpleNamespace from {func.id}()")
-    return must, sites
+    return stand_in_classes, sites
 
 
-def _reaches_bridge_stub(name: str, tree: ast.AST) -> bool:
+def _reaches_bridge_stub(name: str, tree: ast.AST, class_nodes: dict[str, ast.ClassDef]) -> bool:
     """Follow local bases. An imported root passes when it is a test class
     (its own file is scanned) or the real WavesBridge; a production base such
     as QueueMixin needs BridgeStub listed beside it."""
-    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
     imported_from = {
         alias.asname or alias.name: node.module
         for node in ast.walk(tree)
@@ -208,12 +205,12 @@ def _reaches_bridge_stub(name: str, tree: ast.AST) -> bool:
         for alias in node.names
     }
     seen: set[str] = set()
-    while name in classes and name not in seen:
+    while name in class_nodes and name not in seen:
         seen.add(name)
-        bases = [ast.unparse(b) for b in classes[name].bases]
+        bases = [ast.unparse(b) for b in class_nodes[name].bases]
         if "BridgeStub" in bases:
             return True
-        local = [b for b in bases if b in classes]
+        local = [b for b in bases if b in class_nodes]
         if local:
             name = local[0]
             continue
@@ -234,12 +231,13 @@ def test_wiring_every_bridge_stand_in_is_a_bridge_stub():
         if "WavesBridge" not in text or path.name == "bridge_stub.py":
             continue
         tree = ast.parse(text)
-        classes, sites = _stand_ins(path)
+        class_nodes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+        stand_in_classes, sites = _stand_ins(path, tree, class_nodes)
         offenders += sites
         offenders += [
             f"{path.relative_to(TESTS_ROOT)} class {name}"
-            for name in sorted(classes)
-            if not _reaches_bridge_stub(name, tree)
+            for name in sorted(stand_in_classes)
+            if not _reaches_bridge_stub(name, tree, class_nodes)
         ]
 
     assert offenders == [], "make these support.bridge_stub.BridgeStub stand-ins:\n" + "\n".join(sorted(set(offenders)))
