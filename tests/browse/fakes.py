@@ -10,8 +10,9 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from conftest import _InlinePool, _Signal
 from providers.fakes import StubProvider
+from support.doubles import InlinePool as _InlinePool
+from support.doubles import RecordingSignal as _Signal
 from tidalapi.media import Track
 
 import waves.desktop.backend as backend

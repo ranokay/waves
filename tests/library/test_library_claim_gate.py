@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import types
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import _TrackedDownload
 
 
@@ -117,7 +119,7 @@ def _adapter(media, album=None):
     from waves.desktop.backend import WavesBridge
 
     asked: list[tuple] = []
-    stub = types.SimpleNamespace(_library_track_claim=lambda *a: asked.append(a) and None)
+    stub = BridgeStub(_library_track_claim=lambda *a: asked.append(a) and None)
     WavesBridge._library_claim_media(stub, media, album=album)
     return asked[0] if asked else None
 

@@ -20,6 +20,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 from support.paths import QML_DIR, REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
@@ -40,7 +41,7 @@ class _InlinePool:
         worker.fn()
 
 
-class _RefetchStub:
+class _RefetchStub(BridgeStub):
     _refetch_for_download = WavesBridge._refetch_for_download
 
     def __init__(self):
@@ -62,7 +63,7 @@ def test_a_refetch_never_lights_the_progress_bar():
     assert stub.downloadState.calls == [("alb-9", "preparing")]
 
 
-class _WarmStub:
+class _WarmStub(BridgeStub):
     _warm_folder_tree = WavesBridge._warm_folder_tree
     _on_folder_tree_warmed = WavesBridge._on_folder_tree_warmed
     _current_folder_tree = WavesBridge._current_folder_tree

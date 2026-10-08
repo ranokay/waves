@@ -10,7 +10,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from conftest import _Signal
+from support.bridge_stub import BridgeStub
+from support.doubles import RecordingSignal as _Signal
 
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
@@ -18,7 +19,7 @@ from waves.model.cfg import Settings as CfgSettings
 from waves.providers import Capability
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 
@@ -67,7 +68,7 @@ class VideoArtist:
         return list(self._videos[offset : offset + window])
 
 
-class DiscoStub:
+class DiscoStub(BridgeStub):
     downloadArtist = WavesBridge.downloadArtist
     _provider_meta = WavesBridge._provider_meta
     _chooser_provider_of = WavesBridge._chooser_provider_of

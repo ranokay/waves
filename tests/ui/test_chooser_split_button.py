@@ -29,6 +29,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop import backend
@@ -87,7 +88,7 @@ def _settings(**over):
 
 
 def _bridge(**over):
-    b = SimpleNamespace()
+    b = BridgeStub()
     b._jobs = JobRuntime()
     b._quality_overrides = {}
     b._objs = {"track": {}, "album": {}, "playlist": {}, "mix": {}, "video": {}}
@@ -218,8 +219,8 @@ def test_chooser_defaults_audio_follows_the_default_and_atmos_only_collapses():
     # The collapse reads the provider's own advertised deliveries: an
     # Atmos-only track advertises no stereo delivery.
     tidal = b.providers[CTX_TIDAL]
-    tidal.advertised_tier = TidalProvider.advertised_tier.__get__(tidal, SimpleNamespace)
-    tidal.advertised_deliveries = TidalProvider.advertised_deliveries.__get__(tidal, SimpleNamespace)
+    tidal.advertised_tier = TidalProvider.advertised_tier.__get__(tidal)
+    tidal.advertised_deliveries = TidalProvider.advertised_deliveries.__get__(tidal)
     b._objs["track"]["tA"] = _atmos_only_track("tA")
     d = b.chooserDefaults("tA", "track")
     assert d["atmosOnly"] is True

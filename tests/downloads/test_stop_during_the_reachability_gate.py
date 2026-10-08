@@ -23,6 +23,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
@@ -56,7 +57,7 @@ class _Download:
         raise AssertionError("a stopped job must never reach the engine")
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Enough bridge for one job body, with the gate under the test's control."""
 
     def __init__(self, stop_during_the_probe: bool) -> None:

@@ -27,6 +27,7 @@ import threading
 from conftest import _InlinePool, _Signal
 from providers.fakes import BareProvider
 from providers.qml_auth import CallbackLoginAttempt
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.providers.auth import apply_login_event
@@ -78,7 +79,7 @@ def _wire_staged_auth(stub) -> None:
     stub._catalog_thread = threading.local()
 
 
-class _LoginStub:
+class _LoginStub(BridgeStub):
     """Stand-in carrying exactly what ``_try_token_login`` reads and writes."""
 
     def __init__(self, *, login_ok: bool, page_cache_raises: bool = False, login_raises: bool = False):
@@ -204,7 +205,7 @@ class _FakePkceProvider(BareProvider):
         return CallbackLoginAttempt(lambda: "https://tidal.test/authorize", self.login_complete)
 
 
-class _PkceStub:
+class _PkceStub(BridgeStub):
     """Stand-in carrying exactly what ``completeLogin`` reads and writes."""
 
     def __init__(self, *, finalize_ok: bool = True, page_cache_raises: bool = False, exchange_raises: bool = False):

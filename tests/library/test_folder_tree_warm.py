@@ -27,6 +27,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
@@ -50,7 +51,7 @@ class _InlinePool:
         worker.fn()
 
 
-class _WarmStub:
+class _WarmStub(BridgeStub):
     _warm_folder_tree = WavesBridge._warm_folder_tree
     _on_folder_tree_warmed = WavesBridge._on_folder_tree_warmed
     _current_folder_tree = WavesBridge._current_folder_tree

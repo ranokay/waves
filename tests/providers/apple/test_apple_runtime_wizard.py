@@ -37,6 +37,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QCoreApplication
 from settings.fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
+from support.bridge_stub import BridgeStub
 from support.paths import REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
@@ -460,7 +461,7 @@ def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
             "error": "",
         },
     )
-    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
 
     result = stub._refresh_apple_wrapper_auth()
 
@@ -486,7 +487,7 @@ def test_a_probe_from_before_a_sign_out_cannot_restore_the_session(tmp_path, mon
         return {"reachable": True, "state": "authenticated", "logged_in": True, "account": "", "error": ""}
 
     monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", _probe)
-    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
 
     result = stub._refresh_apple_wrapper_auth()
 
@@ -509,7 +510,7 @@ def _bind_wrapper_login(stub) -> None:
         "appleWrapperLogin",
         "appleWrapperSubmit2fa",
     ):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
 
 
 def test_login_provisions_the_wrapper_port_when_none_is_set(tmp_path):
@@ -571,7 +572,7 @@ def test_start_port_keeps_the_effective_port_when_free_or_serving(tmp_path, monk
     calls = []
     stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
     stub._apple_wrapper_port_for_job = lambda: 51234
-    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub)
 
     monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "free")
     assert stub._apple_wrapper_port_for_start() == 51234
@@ -589,7 +590,7 @@ def test_start_port_repicks_a_port_another_app_holds(tmp_path, monkeypatch):
     calls = []
     stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
     stub._apple_wrapper_port_for_job = lambda: 49152
-    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub)
     monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "foreign")
 
     assert stub._apple_wrapper_port_for_start() == 51235
@@ -604,7 +605,7 @@ def test_start_port_keeps_the_port_when_ownership_cannot_be_told(tmp_path, monke
     calls = []
     stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
     stub._apple_wrapper_port_for_job = lambda: 51234
-    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub)
 
     def _probe_fails(port):
         raise ConnectionError("probe failed")
@@ -722,10 +723,10 @@ def test_login_form_shows_busy_until_the_worker_finishes(tmp_path):
         "needs_2fa": False,
         "error": "guest did not answer",
     }
-    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub, SimpleNamespace)
-    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub, SimpleNamespace)
-    stub._run_apple_wrapper_login = WavesBridge._run_apple_wrapper_login.__get__(stub, SimpleNamespace)
-    stub.appleWrapperLogin = WavesBridge.appleWrapperLogin.__get__(stub, SimpleNamespace)
+    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub)
+    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub)
+    stub._run_apple_wrapper_login = WavesBridge._run_apple_wrapper_login.__get__(stub)
+    stub.appleWrapperLogin = WavesBridge.appleWrapperLogin.__get__(stub)
     stub._apple_wrapper_auth_cache = {
         "at": time.time(),
         "result": {"reachable": True, "state": "", "logged_in": False, "account": "", "error": ""},
@@ -751,8 +752,8 @@ def wrapper_event_bridge(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="", wrapper_logged_in=False)
     _bind_wrapper_login(stub)
-    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub, SimpleNamespace)
-    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub, SimpleNamespace)
+    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub)
+    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub)
     stub._apple_wrapper_auth_cache = {
         "at": time.time(),
         "result": {"reachable": True, "state": "logged_out", "logged_in": False, "account": "", "error": ""},
@@ -909,7 +910,7 @@ def test_apple_sign_out_clears_the_account_session(tmp_path):
     stub._configure_apple_provider = lambda: setattr(provider, "cookies_path", stub.settings.data.apple_cookies_path)
     stops = []
     stub._apple_supervisor = SimpleNamespace(stop=lambda: stops.append(True) or True)
-    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub, SimpleNamespace)
+    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub)
     session_dir = wrapper_data_host_dir(tmp_path)
     session_dir.mkdir(parents=True)
     (session_dir / "account.json").write_text("{}", encoding="utf-8")
@@ -928,7 +929,7 @@ def test_apple_sign_out_clears_the_account_session(tmp_path):
     stub.appleStatusChanged = SimpleNamespace(emit=_emit("light"))
     stub.appleRuntimeStatusChanged = SimpleNamespace(emit=_emit("runtime"))
     stub.appleRuntimeStateChanged = SimpleNamespace(emit=_emit("state"))
-    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub, SimpleNamespace)
+    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub)
 
     stub.appleSignOut()
 
@@ -954,7 +955,7 @@ def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path):
     provider = SimpleNamespace(wrapper_logged_in=True, cookies_path="")
     stub.providers["apple"] = provider
     stub._apple_supervisor = SimpleNamespace(stop=lambda: False, is_ready=lambda port: True)
-    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub, SimpleNamespace)
+    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub)
     stub._apple_wrapper_port_for_job = lambda: 51234
     session_dir = wrapper_data_host_dir(tmp_path)
     session_dir.mkdir(parents=True)
@@ -968,7 +969,7 @@ def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path):
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append("light"))
     stub.appleRuntimeStatusChanged = SimpleNamespace(emit=lambda: emitted.append("runtime"))
     stub.appleRuntimeStateChanged = SimpleNamespace(emit=lambda state, msg: emitted.append((state, msg)))
-    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub, SimpleNamespace)
+    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub)
 
     stub.appleSignOut()
 
@@ -1052,7 +1053,7 @@ def test_refresh_wrapper_auth_signals_error_text_changes(tmp_path, monkeypatch):
         ]
     )
     monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", lambda url, **kwargs: next(results))
-    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
 
     stub._refresh_apple_wrapper_auth()
     stub._refresh_apple_wrapper_auth()
@@ -1330,7 +1331,7 @@ def test_no_apple_module_touches_user_gamdl_config():
 def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     from waves.model.cfg import Settings as ModelSettings
 
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     data = ModelSettings()
     data.apple_enabled = enabled
     data.apple_cookies_path = cookies
@@ -1338,12 +1339,12 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub.settings = SimpleNamespace(data=data)
     stub.providers = {}
     stub._apple_runtime = AppleRuntimeManager(tmp_path)
-    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
-    stub._apple_runtime_ready = WavesBridge._apple_runtime_ready.__get__(stub, SimpleNamespace)
-    stub._apple_needs_attention = WavesBridge._apple_needs_attention.__get__(stub, SimpleNamespace)
-    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
-    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
-    stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub, SimpleNamespace)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
+    stub._apple_runtime_ready = WavesBridge._apple_runtime_ready.__get__(stub)
+    stub._apple_needs_attention = WavesBridge._apple_needs_attention.__get__(stub)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub)
+    stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub)
     # GUI-thread callers read the cached probe, never a live subprocess:
     # tests pin a fresh absent cache instead of touching the machine's
     # runtimes (cold-cache tests set their own stale value explicitly).
@@ -1351,18 +1352,18 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
         "at": time.time(),
         "result": {"name": "", "available": False, "running": False, "hint": ""},
     }
-    stub._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(stub)
     stub._schedule_apple_container_refresh = WavesBridge._schedule_apple_container_refresh.__get__(
         stub, SimpleNamespace
     )
     stub._scheduled_apple_container_refresh = WavesBridge._scheduled_apple_container_refresh.__get__(
         stub, SimpleNamespace
     )
-    stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub, SimpleNamespace)
-    stub._apple_container_serves = WavesBridge._apple_container_serves.__get__(stub, SimpleNamespace)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
-    stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
-    stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
+    stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub)
+    stub._apple_container_serves = WavesBridge._apple_container_serves.__get__(stub)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub.appleStatus = WavesBridge.appleStatus.__get__(stub)
+    stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub)
     stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
     stub._end_provider_context = lambda pid, _reason: provider_contexts(stub).revoke(pid)
     return stub
@@ -1462,7 +1463,7 @@ def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch)
             "error": "",
         },
     )
-    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
 
     stub._refresh_apple_wrapper_auth()
 
@@ -1478,8 +1479,8 @@ def test_a_wrapper_sign_in_does_not_lift_a_cookies_marker(tmp_path, monkeypatch)
 
     stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
     stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._apple_mark_session_expired(AppleCredential.COOKIES)
 
@@ -1490,7 +1491,7 @@ def test_a_wrapper_sign_in_does_not_lift_a_cookies_marker(tmp_path, monkeypatch)
         "waves.providers.apple.runtime.wrapper_auth_state",
         lambda url, **kwargs: {"reachable": True, "state": "authenticated", "logged_in": True, "account": "me"},
     )
-    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
     stub._refresh_apple_wrapper_auth()
     assert stub._apple_session_expired is True, "the wrapper probe cannot answer for a cookies failure"
 
@@ -1504,8 +1505,8 @@ def test_a_cookies_proof_does_not_lift_a_wrapper_marker(tmp_path):
     from waves.providers.apple.engine import AppleCredential
 
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._apple_mark_session_expired(AppleCredential.WRAPPER)
 
@@ -1665,7 +1666,7 @@ def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
     from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
 
     stub = _bridge_stub(tmp_path)
-    stub._resolve_apple_nm3u8dlre = WavesBridge._resolve_apple_nm3u8dlre.__get__(stub, SimpleNamespace)
+    stub._resolve_apple_nm3u8dlre = WavesBridge._resolve_apple_nm3u8dlre.__get__(stub)
     assert stub._resolve_apple_nm3u8dlre() == ""
     stub.settings.data.path_binary_nm3u8dlre = "/custom/N_m3u8DL-RE"
     assert stub._resolve_apple_nm3u8dlre() == "/custom/N_m3u8DL-RE"
@@ -2018,16 +2019,16 @@ def test_stale_cache_serves_immediately_and_refreshes_on_worker(tmp_path, monkey
 def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
     seen = []
     provider = SimpleNamespace(cookies_path="")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
         appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
         downloadState=SimpleNamespace(emit=lambda *a: None),
     )
     stub._set_status = lambda text: seen.append(text)
-    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
-    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
-    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     # The no-account click names the cookies step: that tier (or the wrapper
     # sign-in under it) is the missing piece the click routes to.
@@ -2038,7 +2039,7 @@ def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path
     seen = []
     cookies = _cookies_file(tmp_path, with_token=True)
     provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path="")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(
             data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=""),
@@ -2047,9 +2048,9 @@ def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path
         downloadState=SimpleNamespace(emit=lambda *a: None),
     )
     stub._set_status = lambda text: seen.append(text)
-    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
-    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
-    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
     # Cookies verify, but no fetch binary anywhere: the row must not queue
     # only to fail inside the engine.
     queued = []
@@ -2063,15 +2064,15 @@ def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path
 def test_wrapper_only_account_passes_the_setup_gate(tmp_path):
     seen = []
     provider = SimpleNamespace(cookies_path="")
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
         appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
         downloadState=SimpleNamespace(emit=lambda *a: None),
     )
     stub._set_status = lambda text: seen.append(text)
-    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
-    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub)
     stub.apple_wrapper_auth_state = lambda *a, **k: {
         "reachable": True,
         "state": "authenticated",
@@ -2079,11 +2080,11 @@ def test_wrapper_only_account_passes_the_setup_gate(tmp_path):
         "account": "me@example.com",
         "error": "",
     }
-    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
     assert stub._apple_account_ready() is True
     # The account gate opens, then the binary gate stops the click (no binary):
     # the wrapper session alone is enough to pass the sign-in gate.
-    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     assert "runtime" in seen
     assert not any("sign-in" in str(item) for item in seen)
@@ -2094,7 +2095,7 @@ def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
     cookies = _cookies_file(tmp_path, with_token=True)
     binary = _stub_binary(tmp_path)
     provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path=binary)
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": provider},
         settings=SimpleNamespace(
             data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=binary),
@@ -2103,9 +2104,9 @@ def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
         downloadState=SimpleNamespace(emit=lambda *a: None),
     )
     stub._set_status = lambda text: seen.append(text)
-    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
-    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
-    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
     stub._download_gate = lambda: "block"  # stop after the setup gates: no queueing here
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     assert seen == []

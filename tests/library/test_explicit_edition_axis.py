@@ -28,6 +28,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 import waves.metadata.matching as matching
 from waves.desktop.library.bridge import LibraryMixin
@@ -617,7 +618,7 @@ def test_a_cache_marked_by_the_current_rule_is_not_swept_again(tmp_path):
 # ---- the bridge gates -----------------------------------------------------------
 
 
-class _GateStub:
+class _GateStub(BridgeStub):
     _library_track_claim = LibraryMixin._library_track_claim
     _library_claims_track = LibraryMixin._library_claims_track
     _library_claims_album = LibraryMixin._library_claims_album
@@ -684,7 +685,7 @@ def test_an_old_stub_without_a_flag_still_binds_the_album_gate():
 # ---- the presence slots -----------------------------------------------------------
 
 
-class _SlotStub:
+class _SlotStub(BridgeStub):
     libraryAlbumPresence = LibraryMixin.libraryAlbumPresence
     libraryTrackPresence = LibraryMixin.libraryTrackPresence
     _mb_arbitrated = LibraryMixin._mb_arbitrated
@@ -903,7 +904,7 @@ def _page_stub(album=None, playlist=None):
     def get_object(_kind, _media_id, _obj=obj):
         return _obj
 
-    b = SimpleNamespace()
+    b = BridgeStub()
     b.providers = {CTX_TIDAL: SimpleNamespace(get_object=get_object, collection_items=lambda o, **k: [])}
     b._objs = {"album": {}, "playlist": {}, "mix": {}}
 
@@ -1077,5 +1078,5 @@ def test_the_reveal_stats_nothing_on_the_gui_thread(tmp_path, monkeypatch):
 def test_the_resolved_reveal_slot_routes_through_the_safe_reveal(monkeypatch):
     seen: list = []
     monkeypatch.setattr(LibraryMixin, "_reveal_in_file_manager", staticmethod(lambda t: seen.append(t)))
-    LibraryMixin._on_reveal_resolved(SimpleNamespace(), str(pathlib.Path.cwd()))
+    LibraryMixin._on_reveal_resolved(BridgeStub(), str(pathlib.Path.cwd()))
     assert seen == [str(pathlib.Path.cwd())]

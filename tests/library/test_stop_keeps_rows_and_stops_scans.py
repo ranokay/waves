@@ -36,6 +36,7 @@ from types import SimpleNamespace
 from catalog.discography_fakes import DiscoStub as _DiscoStub
 from catalog.discography_fakes import VideoArtist as _VideoArtist
 from conftest import _Signal
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_queue
 from support.paths import QML_MAIN
 
@@ -309,7 +310,7 @@ def test_stop_during_the_best_of_both_scan_queues_nothing():
 # ---------------------------------------------------------------------------
 
 
-class _QueueStub:
+class _QueueStub(BridgeStub):
     stopAll = WavesBridge.stopAll
     retryAllFailed = WavesBridge.retryAllFailed
     retryAllStopped = WavesBridge.retryAllStopped
@@ -483,7 +484,7 @@ def test_retry_accepts_exactly_failed_and_stopped():
     assert frozenset({"failed", "cancelled"}) == _RETRYABLE
 
 
-class _RetryStub:
+class _RetryStub(BridgeStub):
     retryQueueItem = WavesBridge.retryQueueItem
     _queue_item = WavesBridge._queue_item
     _reindex_queue = WavesBridge._reindex_queue

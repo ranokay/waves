@@ -16,6 +16,8 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge
 from waves.providers.apple import runner
@@ -31,8 +33,8 @@ _SLOTS = (
 )
 
 
-def _stub(root: Path, *, keep: bool = True) -> SimpleNamespace:
-    stub = SimpleNamespace()
+def _stub(root: Path, *, keep: bool = True) -> BridgeStub:
+    stub = BridgeStub()
     stub._apple_quarantine_paths = {}
     stub._queue_index = {}
     stub.marked = []
@@ -50,7 +52,7 @@ def _stub(root: Path, *, keep: bool = True) -> SimpleNamespace:
         )
     )
     for name in _SLOTS:
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     return stub
 
 
@@ -211,7 +213,7 @@ def test_delete_with_nothing_recorded_says_so(tmp_path):
 
 def test_withdrawing_a_row_forgets_its_quarantine_paths():
     row = {"qid": 7, "status": "failed", "reason": "x", "quarantineCount": 1, "media_id": "apple:1"}
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _queue=[row],
         _queue_index={7: row},
         _queue_lock=Lock(),
@@ -225,7 +227,7 @@ def test_withdrawing_a_row_forgets_its_quarantine_paths():
     )
     stub._reindex_queue = lambda: setattr(stub, "_queue_index", {it["qid"]: it for it in stub._queue})
 
-    gone = WavesBridge._remove_rows_where.__get__(stub, SimpleNamespace)(lambda it: it["qid"] == 7)
+    gone = WavesBridge._remove_rows_where.__get__(stub)(lambda it: it["qid"] == 7)
 
     assert gone == [7]
     assert stub._apple_quarantine_paths == {}

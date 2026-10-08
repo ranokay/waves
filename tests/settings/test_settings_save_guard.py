@@ -30,6 +30,7 @@ from threading import Lock
 from typing import ClassVar
 
 from conftest import _InlineWriter
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import Settings as CfgSettings
@@ -40,7 +41,7 @@ from waves.model.cfg import Settings as CfgSettings
 _MANAGED = "/Users/testuser/Library/Application Support/Waves/bin/ffmpeg"
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

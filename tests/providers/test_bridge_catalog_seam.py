@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import BareProvider
+from support.bridge_stub import BridgeStub
 from tidalapi.album import Album
 from tidalapi.artist import Artist
 
@@ -163,7 +164,7 @@ def _payload(*groups) -> dict:
 # --------------------------------------------------------------------------- #
 # search
 # --------------------------------------------------------------------------- #
-class _SearchStub:
+class _SearchStub(BridgeStub):
     search = WavesBridge.search
     dropSearchSource = WavesBridge.dropSearchSource
     _absorb_search_group = WavesBridge._absorb_search_group
@@ -333,7 +334,7 @@ def test_search_enabled_reads_every_registered_provider_and_its_gate():
     # The search row's generic gate: a registered SEARCH provider
     # with a gate that says on, or declared live readiness, keeps it live; a provider
     # without SEARCH, or with a gate that says off, does not.
-    bridge = SimpleNamespace(providers={}, _provider_search_gates={"tidal": lambda: False}, _logged_in=False)
+    bridge = BridgeStub(providers={}, _provider_search_gates={"tidal": lambda: False}, _logged_in=False)
     assert WavesBridge.searchEnabled(bridge) is False
 
     bridge.providers["tidal"] = _provider()
@@ -596,7 +597,7 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
 # --------------------------------------------------------------------------- #
 # _open_url
 # --------------------------------------------------------------------------- #
-class _OpenUrlStub:
+class _OpenUrlStub(BridgeStub):
     _open_url = WavesBridge._open_url
     _absorb_search_group = WavesBridge._absorb_search_group
     _search_display_payload = WavesBridge._search_display_payload
@@ -716,7 +717,7 @@ def test_a_pasted_artist_link_lands_in_the_artists_bucket():
 # --------------------------------------------------------------------------- #
 # _get_artist (the artist page's id resolution)
 # --------------------------------------------------------------------------- #
-class _GetArtistStub:
+class _GetArtistStub(BridgeStub):
     _get_artist = WavesBridge._get_artist
 
     def __init__(self, provider, artist=None):
@@ -761,7 +762,7 @@ def test_a_failed_artist_resolution_answers_none():
 # --------------------------------------------------------------------------- #
 # the album/playlist page re-fetches
 # --------------------------------------------------------------------------- #
-class _AlbumTracksStub:
+class _AlbumTracksStub(BridgeStub):
     _start_album_tracks_fetch = WavesBridge._start_album_tracks_fetch
     _dress_panel_rows = WavesBridge._dress_panel_rows
     _dress_library_row = WavesBridge._dress_library_row
@@ -813,7 +814,7 @@ def test_a_failed_album_refetch_emits_no_rows():
     assert stub.cached == []
 
 
-class _PlaylistTracksStub:
+class _PlaylistTracksStub(BridgeStub):
     loadPlaylistTracks = WavesBridge.loadPlaylistTracks
     _dress_panel_rows = WavesBridge._dress_panel_rows
     _dress_library_row = WavesBridge._dress_library_row
@@ -861,7 +862,7 @@ def test_a_failed_playlist_refetch_emits_no_rows():
 def test_the_media_lists_sweep_reads_the_provider(monkeypatch):
     # walk=False: the listing sweep only, no folder walk (its own read).
     provider = _provider(user_collections={"playlists": [], "mixes": []})
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         tidal=SimpleNamespace(session=_GuardSession()),
         providers={"tidal": provider},
         _media_lists_lock=Lock(),
@@ -882,7 +883,7 @@ def test_a_fresh_sweep_within_the_ttl_never_reaches_the_provider_twice(monkeypat
     import time
 
     provider = _provider(user_collections={"playlists": [], "mixes": []})
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         tidal=SimpleNamespace(session=_GuardSession()),
         providers={"tidal": provider},
         _media_lists_lock=Lock(),
@@ -911,7 +912,7 @@ def test_the_library_favorites_window_reads_the_provider():
     provider = _RowProvider(favorites_page=([o1, o2], True))
     # The source lookup and the row build are module-level helpers reading
     # ``providers`` / the provider itself, so the stub carries only those.
-    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={})
+    stub = BridgeStub(providers={"tidal": provider}, _lib_sort={})
 
     rows, more = WavesBridge._library_page(stub, "tidal", "tracks", 0, 10, order_override=("date", "desc"))
 
@@ -932,7 +933,7 @@ def test_the_library_window_drops_rows_a_provider_cannot_render():
             return {"id": "row1"} if item is o2 else {}
 
     provider = _RowProvider(favorites_page=([o1, o2], False))
-    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={})
+    stub = BridgeStub(providers={"tidal": provider}, _lib_sort={})
 
     rows, more = WavesBridge._library_page(stub, "tidal", "tracks", 0, 10)
 
@@ -941,7 +942,7 @@ def test_the_library_window_drops_rows_a_provider_cannot_render():
 
 
 def test_a_source_with_no_provider_loads_nothing():
-    stub = SimpleNamespace(providers={}, _lib_sort={})
+    stub = BridgeStub(providers={}, _lib_sort={})
 
     assert WavesBridge._library_page(stub, "gone", "tracks", 0, 10) == ([], False)
 
@@ -951,7 +952,7 @@ def test_a_source_with_no_provider_loads_nothing():
 # --------------------------------------------------------------------------- #
 def test_the_favorite_id_set_reads_the_provider_and_caches():
     provider = _provider(favorite_ids={"1", "2"})
-    stub = SimpleNamespace(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
+    stub = BridgeStub(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
 
     assert WavesBridge._favorite_ids(stub, "albums") == {"1", "2"}
     assert WavesBridge._favorite_ids(stub, "albums") == {"1", "2"}
@@ -960,7 +961,7 @@ def test_the_favorite_id_set_reads_the_provider_and_caches():
 
 def test_a_failed_favorite_id_read_serves_stale_or_the_partial_set():
     provider = _provider(favorite_ids=RuntimeError("rate limited"))
-    stub = SimpleNamespace(providers={"tidal": provider}, _fav_ids={"albums": (0.0, {"old"})}, _FAV_IDS_TTL=600.0)
+    stub = BridgeStub(providers={"tidal": provider}, _fav_ids={"albums": (0.0, {"old"})}, _FAV_IDS_TTL=600.0)
 
     assert WavesBridge._favorite_ids(stub, "albums") == {"old"}
     assert stub._fav_ids["albums"] == (0.0, {"old"})  # not re-stamped
@@ -970,13 +971,13 @@ def test_a_failed_favorite_id_read_serves_stale_or_the_partial_set():
     from waves.providers.base import FavoritesUnavailable
 
     partial = FavoritesUnavailable({"half"})
-    stub = SimpleNamespace(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
+    stub = BridgeStub(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
     provider._answers["favorite_ids"] = partial
     assert WavesBridge._favorite_ids(stub, "albums") == {"half"}
 
     # A failure that carries no partial set at all reads as empty.
     provider._answers["favorite_ids"] = RuntimeError("no ids gathered")
-    empty = SimpleNamespace(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
+    empty = BridgeStub(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
     assert WavesBridge._favorite_ids(empty, "albums") == set()
 
 

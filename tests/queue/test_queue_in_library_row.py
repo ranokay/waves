@@ -23,6 +23,7 @@ from pathlib import Path
 from threading import Lock
 
 import pytest
+from support.bridge_stub import BridgeStub
 from support.paths import QML_MAIN
 from support.qml import (
     EXIT_NO_QT,
@@ -45,7 +46,7 @@ class _Signal:
         self.calls.append(a)
 
 
-class _Stub:
+class _Stub(BridgeStub):
     def __init__(self):
         self._jobs = JobRuntime()
         from waves.desktop import backend

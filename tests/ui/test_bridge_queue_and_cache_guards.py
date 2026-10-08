@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_queue
 
 from waves.desktop.backend import WavesBridge
@@ -41,7 +42,7 @@ class _Signal:
         self.emits.append(args if len(args) != 1 else args[0])
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare stand-in for a WavesBridge, with the attributes the bound methods
     read/write. Real behaviour comes from binding WavesBridge methods below."""
 
@@ -520,7 +521,7 @@ def test_page_cache_round_trip_and_account_guard(tmp_path):
 def test_refresh_browse_throttles_and_falls_back():
     import time as _time
 
-    class _RB:
+    class _RB(BridgeStub):
         def __init__(self):
             self._browse_root_cache = None
             self._browse_reval_ts = 0.0

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend as bk
 from waves.desktop.backend import WavesBridge
@@ -24,7 +25,7 @@ def event_loop():
     app.processEvents()
 
 
-class _Stub:
+class _Stub(BridgeStub):
     pass
 
 

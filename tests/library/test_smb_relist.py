@@ -37,6 +37,7 @@ from types import SimpleNamespace
 import pytest
 from library.fakes import ScandirStub, fake_listing
 from library.fakes import make_album_dir as _mk
+from support.bridge_stub import BridgeStub
 
 from waves.library import smb_relist
 from waves.library.index import LibraryIndex
@@ -432,7 +433,7 @@ def test_the_bridge_recovers_straight_after_a_flagged_scan(tmp_path, monkeypatch
 
     cfg = tmp_path / "cfg"
     cfg.mkdir()
-    stub = SimpleNamespace(settings=SimpleNamespace(file_path=str(cfg / "settings.json")))
+    stub = BridgeStub(settings=SimpleNamespace(file_path=str(cfg / "settings.json")))
     _on_smb(monkeypatch, root)
     mount, unmount, state = _mounter(ARTISTS)
     monkeypatch.setattr(smb_relist, "mount_share", mount)
@@ -464,7 +465,7 @@ def test_a_full_recovery_is_recorded_so_settings_stops_warning(tmp_path, monkeyp
 
     cfg = tmp_path / "cfg"
     cfg.mkdir()
-    stub = SimpleNamespace(settings=SimpleNamespace(file_path=str(cfg / "settings.json")))
+    stub = BridgeStub(settings=SimpleNamespace(file_path=str(cfg / "settings.json")))
     _on_smb(monkeypatch, root)
     mount, unmount, _state = _mounter(ARTISTS)
     monkeypatch.setattr(smb_relist, "mount_share", mount)
@@ -492,7 +493,7 @@ def test_a_recovery_that_cannot_reach_everything_keeps_warning(tmp_path, monkeyp
 
     cfg = tmp_path / "cfg"
     cfg.mkdir()
-    stub = SimpleNamespace(settings=SimpleNamespace(file_path=str(cfg / "settings.json")))
+    stub = BridgeStub(settings=SimpleNamespace(file_path=str(cfg / "settings.json")))
     _on_smb(monkeypatch, root)
     mount, unmount, _state = _mounter(ARTISTS)
     monkeypatch.setattr(smb_relist, "mount_share", mount)
@@ -509,7 +510,7 @@ def test_the_bridge_leaves_a_healthy_scan_alone(tmp_path, monkeypatch):
     root, tags = _tagged_library(tmp_path)
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
     idx.refresh(root)
-    stub = SimpleNamespace(settings=SimpleNamespace(file_path=str(tmp_path / "settings.json")))
+    stub = BridgeStub(settings=SimpleNamespace(file_path=str(tmp_path / "settings.json")))
     mount, unmount, state = _mounter(ARTISTS)
     monkeypatch.setattr(smb_relist, "mount_share", mount)
     monkeypatch.setattr(smb_relist, "unmount_share", unmount)
@@ -532,7 +533,7 @@ def test_the_bridge_swallows_a_recovery_that_goes_wrong(tmp_path, monkeypatch):
     fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
     idx.refresh(root)
-    stub = SimpleNamespace(settings=SimpleNamespace(file_path=str(tmp_path / "cfg" / "settings.json")))
+    stub = BridgeStub(settings=SimpleNamespace(file_path=str(tmp_path / "cfg" / "settings.json")))
 
     def boom(*a, **k):
         raise OSError("the share went away mid-recovery")

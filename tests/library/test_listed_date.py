@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
@@ -162,7 +163,7 @@ class _Sig:
         self.emits.append(a)
 
 
-class _PageStub:
+class _PageStub(BridgeStub):
     loadArtist = WavesBridge.loadArtist
     _start_artist_build = WavesBridge._start_artist_build
 
@@ -250,7 +251,7 @@ def test_the_artist_page_leads_with_the_reissue_and_revalidates_quietly():
     assert "refresh" not in stub.artistLoaded.emits[0][0]
 
 
-class _CacheStub:
+class _CacheStub(BridgeStub):
     _load_page_cache = WavesBridge._load_page_cache
 
     def __init__(self, path):

@@ -4,6 +4,7 @@ import shutil
 import subprocess
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.metadata.lyrics import lyrics_sidecar_choices
 from waves.metadata.ttml_lyrics import (
@@ -223,7 +224,7 @@ def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
         def cover_data_cached(self, url):
             return jpeg.read_bytes()
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=data), _dl=_Download())
+    stub = BridgeStub(settings=SimpleNamespace(data=data), _dl=_Download())
     stub._standalone_base_dir = lambda: tmp_path
     stub._standalone_tidal_tracks = lambda media_id: [(track, None, False)]
     stub._tidal_standalone_dest = lambda base, track_obj, collection: (tmp_path, "S1")
@@ -233,7 +234,7 @@ def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
         "metadata_cover_embed": False,
         "cover_album_file": True,
     }.get(name, default)
-    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub)
 
     assert stub._standalone_tidal("123", "art") == 1
     target = tmp_path / "cover.png"

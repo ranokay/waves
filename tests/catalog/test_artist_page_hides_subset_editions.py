@@ -13,6 +13,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
@@ -50,7 +51,7 @@ class _Album:
         return self._rows(self._tracks)[offset : offset + limit]
 
 
-class _Stub:
+class _Stub(BridgeStub):
     _artist_page_collapses_editions = WavesBridge._artist_page_collapses_editions
     _hide_subset_editions = WavesBridge._hide_subset_editions
     _merge_pref_on = WavesBridge._merge_pref_on
@@ -164,7 +165,7 @@ class _Sig:
         self.emits.append(a)
 
 
-class _PageStub:
+class _PageStub(BridgeStub):
     """Enough of the bridge to drive loadArtist through the cache gate."""
 
     loadArtist = WavesBridge.loadArtist

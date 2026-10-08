@@ -15,6 +15,7 @@ record emits or raise like a deleted QObject would.
 from __future__ import annotations
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 
@@ -45,7 +46,7 @@ class _InlinePool:
         worker.run()
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare bridge stand-in: real checkAppUpdate/_emit_from_worker bound on."""
 
     def __init__(self, updater, signal):
@@ -100,7 +101,7 @@ def test_late_failure_report_after_teardown_is_dropped_quietly():
 def test_guard_covers_the_signal_attribute_access_too():
     # On a deleted QObject even reading the signal attribute raises, which is
     # why _emit_from_worker resolves the name inside its guard.
-    class _DeletedBridge:
+    class _DeletedBridge(BridgeStub):
         _emit_from_worker = WavesBridge._emit_from_worker
 
         @property
@@ -117,7 +118,7 @@ def test_guard_does_not_hide_programming_errors():
         def emit(self, *args):
             raise TypeError("wrong argument count")
 
-    class _Bridge:
+    class _Bridge(BridgeStub):
         _emit_from_worker = WavesBridge._emit_from_worker
         appUpdateChecked = _Arity()
 

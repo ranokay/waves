@@ -7,6 +7,7 @@ from threading import Event
 import pytest
 from providers.apple.test_apple_engine_routing import FakeEngine, audio
 from settings.fakes import schema_stub
+from support.bridge_stub import BridgeStub
 
 from waves.constants import QualityTier, QualityVideo
 from waves.desktop.backend import WavesBridge
@@ -259,7 +260,7 @@ def test_dispatch_builds_engine_from_snapshot_and_keeps_credentials_live(monkeyp
         return SimpleNamespace()
 
     monkeypatch.setattr(backend, "_TrackedDownload", build)
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         settings=SimpleNamespace(data=data),
         _resolve_ffmpeg=lambda: None,
         _event_abort=Event(),
@@ -313,7 +314,7 @@ def test_changed_destination_probes_original_folder_and_never_updates_new_defaul
         return "ok", "original"
 
     proven = []
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         settings=SimpleNamespace(data=data), _probe_download_base=probe, _note_download_base_ok=proven.append
     )
     assert WavesBridge._request_reachability(bridge, intent, lambda: None)

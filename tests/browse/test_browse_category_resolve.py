@@ -19,6 +19,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.providers.base import Capability
@@ -41,7 +42,7 @@ class _InlinePool:
         worker.fn()
 
 
-class _ResolveStub:
+class _ResolveStub(BridgeStub):
     resolvePlaylistCategory = WavesBridge.resolvePlaylistCategory
     _browse_page_for = WavesBridge._browse_page_for
     _neutral_category_members = WavesBridge._neutral_category_members

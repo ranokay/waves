@@ -9,6 +9,8 @@ unexpected. These tests drive it with stubbed playlists, no network.
 
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
@@ -24,7 +26,7 @@ def _master(heights):
     return SimpleNamespace(is_variant=True, playlists=playlists)
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Just enough bridge for the picker: a canned _load_playlist."""
 
     def __init__(self, master):

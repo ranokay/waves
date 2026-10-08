@@ -32,6 +32,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 from tidalapi.media import Quality
 
 from waves.constants import CTX_TIDAL
@@ -55,7 +56,7 @@ def _bind(stub, *names) -> None:
 
 def _bridge(setting="LOSSLESS"):
     """A bare bridge with the real override + queue methods bound on."""
-    b = SimpleNamespace()
+    b = BridgeStub()
     b._jobs = JobRuntime()
     b._quality_overrides = {}
     b._objs = {"track": {}, "album": {}}

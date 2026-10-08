@@ -15,6 +15,7 @@ import time
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
 from support.paths import QML_DIR, QML_MAIN
 
 from waves.desktop.backend import WavesBridge
@@ -48,7 +49,7 @@ class _Timer:
         self.running = False
 
 
-class RecoveryHost:
+class RecoveryHost(BridgeStub):
     _BASE_OK_TTL_SEC = WavesBridge._BASE_OK_TTL_SEC
     _WARMUP_DIALOG_DELAY_SEC = WavesBridge._WARMUP_DIALOG_DELAY_SEC
     _keepwarm_tick = WavesBridge._keepwarm_tick

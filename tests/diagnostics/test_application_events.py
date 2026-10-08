@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 from PySide6.QtCore import QCoreApplication
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.diagnostics.events import ApplicationEvents, operation_state, provider_failure_event
@@ -163,7 +164,7 @@ def test_bridge_only_dispatches_advertised_current_actions(event_loop, monkeypat
     event_loop.processEvents()
     row = {"status": "failed"}
     retries = []
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         _history=SimpleNamespace(finish_one=lambda *args, **kwargs: False),
         _queue_item=lambda qid: row,
@@ -185,7 +186,7 @@ def test_install_failure_legacy_payload_and_event_are_both_redacted(event_loop):
     events = []
     states = []
     relay.changed.connect(events.append)
-    bridge = SimpleNamespace(_events=relay, ffmpegStateChanged=SimpleNamespace(emit=lambda *args: states.append(args)))
+    bridge = BridgeStub(_events=relay, ffmpegStateChanged=SimpleNamespace(emit=lambda *args: states.append(args)))
     operation_state(
         bridge,
         EventDomain.DEPENDENCY,
@@ -210,7 +211,7 @@ def test_background_configuration_failure_reports_actual_disk_result(event_loop)
     relay = ApplicationEvents()
     seen = []
     relay.changed.connect(seen.append)
-    bridge = SimpleNamespace(_events=relay)
+    bridge = BridgeStub(_events=relay)
     writer = SingleFlightWriter(lambda key, error: WavesBridge._config_write_finished(bridge, key, error))
 
     def fail():
@@ -230,7 +231,7 @@ def test_background_configuration_failure_reports_actual_disk_result(event_loop)
 
 def test_one_update_recovery_preserves_the_other_operation_actions(event_loop):
     relay = ApplicationEvents()
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         ffmpegStateChanged=SimpleNamespace(emit=lambda *args: None),
         ffmpegProbeChanged=SimpleNamespace(emit=lambda *args: None),
@@ -254,7 +255,7 @@ def runtime_event_bridge(event_loop):
     delivered = []
     states = {"appleRuntimeStateChanged": [], "ffmpegStateChanged": []}
     relay.changed.connect(delivered.append)
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         _apple_runtime_inflight=False,
         _ffmpeg_install_inflight=False,
@@ -498,7 +499,7 @@ def test_apple_job_events_follow_the_queue_settle_and_provider_epoch(event_loop)
     relay.changed.connect(seen.append)
     contexts = ProviderContexts()
     row = {"status": "failed"}
-    bridge = SimpleNamespace(_events=relay, _provider_contexts=contexts, _queue_item=lambda qid: row)
+    bridge = BridgeStub(_events=relay, _provider_contexts=contexts, _queue_item=lambda qid: row)
     hooks = WavesBridge._apple_job_hooks(bridge)
     event = application_event(
         EventDomain.DOWNLOAD,
@@ -618,7 +619,7 @@ def test_folder_recovery_requires_proof_for_the_current_folder(event_loop, tmp_p
     seen = []
     relay = ApplicationEvents()
     relay.changed.connect(seen.append)
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         _base_ok=("", 0.0),
         _BASE_OK_TTL_SEC=WavesBridge._BASE_OK_TTL_SEC,

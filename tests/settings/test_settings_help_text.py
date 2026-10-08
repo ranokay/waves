@@ -9,11 +9,13 @@ Only the em dash may be rewritten.
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
 
 
-class _Stub:
+class _Stub(BridgeStub):
     pass
 
 

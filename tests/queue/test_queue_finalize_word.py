@@ -22,6 +22,7 @@ from threading import Event, Lock, local
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from support.bridge_stub import BridgeStub
 from tidalapi.media import Track
 
 from waves.desktop import backend
@@ -54,7 +55,7 @@ class _Signal:
         self.calls.append(a)
 
 
-class _LifecycleStub:
+class _LifecycleStub(BridgeStub):
     """Just enough bridge for _track_lifecycle: a track registry and the queue
     row the events belong to. The row is not decoration: an event for a row
     that has been cleared records nothing at all now, so that a withdrawn row

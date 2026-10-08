@@ -33,6 +33,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.download import Download
@@ -157,7 +158,7 @@ class _Pool:
         self.started += 1
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare bridge stand-in for the ownership TTL and realpath-gate tests."""
 
     def __init__(self, downloads_running: bool, symlink_to_track: bool = False):

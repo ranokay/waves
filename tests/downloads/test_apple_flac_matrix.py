@@ -18,6 +18,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.desktop.backend import WavesBridge
@@ -308,15 +309,15 @@ def _apple_stub(base: Path, provider, **overrides):
     )
     for key, value in overrides.items():
         setattr(data, key, value)
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=SimpleNamespace(data=data),
         providers={CTX_APPLE: provider},
         _ownership=SimpleNamespace(ownership_of=lambda *a, **k: None),
     )
     # The runner drives these paths through the bridge-built hooks.
-    stub._apple_job_hooks = WavesBridge._apple_job_hooks.__get__(stub, SimpleNamespace)
+    stub._apple_job_hooks = WavesBridge._apple_job_hooks.__get__(stub)
     for name in ("_psetting", "_tag_write_flags"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     return stub
 
 

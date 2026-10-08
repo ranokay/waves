@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 from updates.fakes import make_manifest as _manifest
 from updates.fakes import prep_updater as _prep
 
@@ -59,7 +60,7 @@ class _HeldPool:
 # logged-in flag BEFORE deleting the snapshot.
 
 
-class _LogoutStub:
+class _LogoutStub(BridgeStub):
     logout = WavesBridge.logout
     _unbind_merge_plans = WavesBridge._unbind_merge_plans
     _end_provider_context = WavesBridge._end_provider_context
@@ -165,7 +166,7 @@ def test_logout_revokes_old_worker_authority_before_scheduling_disk_pruning():
 
 
 def test_concurrent_capped_inserts_never_race():
-    stub = SimpleNamespace(_evict_lock=Lock())
+    stub = BridgeStub(_evict_lock=Lock())
     d: dict = {}
     errors: list = []
 
@@ -197,7 +198,7 @@ def test_browse_pages_writes_all_go_through_the_cap():
 
 
 def test_remember_capped_evicts_oldest():
-    stub = SimpleNamespace(_evict_lock=Lock())
+    stub = BridgeStub(_evict_lock=Lock())
     d: dict = {}
     for i in range(45):
         WavesBridge._remember_capped(stub, d, str(i), i, 40)
@@ -207,7 +208,7 @@ def test_remember_capped_evicts_oldest():
 # The tile-art memory cache honours the 7-day TTL.
 
 
-class _TileArtStub:
+class _TileArtStub(BridgeStub):
     _sample_links_art = WavesBridge._sample_links_art
     _tile_art_key = staticmethod(WavesBridge._tile_art_key)
     _TILE_ART_TTL = WavesBridge._TILE_ART_TTL
@@ -245,7 +246,7 @@ def test_an_expired_mem_tile_entry_is_resampled():
 
 
 def test_own_cache_is_bounded():
-    stub = SimpleNamespace(_own_cache={}, _OWN_CACHE_MAX=WavesBridge._OWN_CACHE_MAX)
+    stub = BridgeStub(_own_cache={}, _OWN_CACHE_MAX=WavesBridge._OWN_CACHE_MAX)
     for i in range(WavesBridge._OWN_CACHE_MAX + 7):
         stub._own_cache[str(i)] = (0.0, None)
         WavesBridge._evict_own_cache_locked(stub)
@@ -256,7 +257,7 @@ def test_own_cache_is_bounded():
 # An in-flight scroll page is dropped when the sort changed.
 
 
-class _MoreStub:
+class _MoreStub(BridgeStub):
     loadMoreLibrary = WavesBridge.loadMoreLibrary
     _lib_generation = WavesBridge._lib_generation
     _LIBRARY_DRESSED = WavesBridge._LIBRARY_DRESSED
@@ -313,7 +314,7 @@ def test_a_scroll_page_with_unchanged_sort_still_appends():
 # A walking caller never accepts the Mixes visit's treeless entry.
 
 
-class _MediaListsStub:
+class _MediaListsStub(BridgeStub):
     _media_lists = WavesBridge._media_lists
     _MEDIA_LISTS_TTL = WavesBridge._MEDIA_LISTS_TTL
 
@@ -415,12 +416,12 @@ def test_a_failed_probe_cleanup_still_reads_as_writable(tmp_path):
 def test_liveness_stamps_the_proven_path():
     # _remember_share_origin rides on proof of life (share-remount feature);
     # here only the stamp itself is under test.
-    stub = SimpleNamespace(_base_ok=("", 0.0), _remember_share_origin=lambda base: None)
+    stub = BridgeStub(_base_ok=("", 0.0), _remember_share_origin=lambda base: None)
     WavesBridge._note_download_base_ok(stub, "/Volumes/A/Music")
     assert stub._base_ok[0] == "/Volumes/A/Music"
 
 
-class _LifecycleStub:
+class _LifecycleStub(BridgeStub):
     _track_lifecycle = WavesBridge._track_lifecycle
 
     def __init__(self, base):
@@ -468,7 +469,7 @@ def test_a_track_landing_under_the_current_folder_stamps_liveness(tmp_path):
 
 
 def test_release_job_signals_defers_the_pop_through_the_queued_hop():
-    stub = SimpleNamespace(_jobs=JobRuntime(), _jobSignalsReleased=_Signal())
+    stub = BridgeStub(_jobs=JobRuntime(), _jobSignalsReleased=_Signal())
     dropped: list = []
     sig = SimpleNamespace(deleteLater=lambda: dropped.append("deleted"))
     stub._jobs.signals[7] = sig
@@ -484,7 +485,7 @@ def test_release_job_signals_defers_the_pop_through_the_queued_hop():
 # A failed preview remux removes its orphaned output temp.
 
 
-class _RemuxStub:
+class _RemuxStub(BridgeStub):
     _remux_preview = WavesBridge._remux_preview
 
 
@@ -527,7 +528,7 @@ class _Pool:
         self.log.append(("wait", self.name))
 
 
-class _ShutdownStub:
+class _ShutdownStub(BridgeStub):
     shutdown = WavesBridge.shutdown
 
     def __init__(self):

@@ -4,6 +4,7 @@ from dataclasses import replace
 from threading import Event
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import QualityTier
 from waves.providers.apple.engines import (
@@ -252,7 +253,7 @@ def test_bridge_engine_details_use_verified_account_facts_without_audio_binary_c
     from waves.desktop.backend import WavesBridge
 
     provider = AppleProvider()
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         providers={"apple": provider},
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": False},
         _apple_fetch_binary_ready=lambda: False,
@@ -358,7 +359,7 @@ def test_engine_detail_slot_queues_setup_reads_and_serves_cached_facts():
     from waves.desktop.backend import WavesBridge
 
     queued, publications, reads, signals = [], [], [], []
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         providers={"apple": AppleProvider()},
         threadpool=SimpleNamespace(start=queued.append),
         _get_apple_enabled=lambda: True,
@@ -390,12 +391,11 @@ def test_engine_detail_slot_queues_setup_reads_and_serves_cached_facts():
 
 
 def test_revoked_engine_detail_refresh_cannot_restore_account_readiness():
-    from types import SimpleNamespace
 
     from waves.desktop.backend import WavesBridge
     from waves.desktop.providers.lifecycle import provider_contexts
 
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": True},
         _apple_wrapper_auth_cache={"result": {"reachable": True, "state": "authenticated"}},
         _apple_fetch_binary_ready=lambda: True,
@@ -415,7 +415,7 @@ def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_c
     from waves.desktop.providers.lifecycle import provider_contexts
 
     publications, signals = [], []
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         providers={"apple": AppleProvider()},
         settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="new-export")),
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": False},
@@ -438,11 +438,10 @@ def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_c
 
 @pytest.mark.parametrize("auth", [{}, {"reachable": True, "state": "future-state"}])
 def test_unverified_control_protocol_remains_unknown(auth):
-    from types import SimpleNamespace
 
     from waves.desktop.backend import WavesBridge
 
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": False},
         _apple_wrapper_auth_cache={"result": auth},
         _apple_fetch_binary_ready=lambda: True,
@@ -455,11 +454,10 @@ def test_unverified_control_protocol_remains_unknown(auth):
 
 
 def test_unreachable_auth_probe_reports_runtime_setup_without_requesting_sign_in():
-    from types import SimpleNamespace
 
     from waves.desktop.backend import WavesBridge
 
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": False},
         _apple_wrapper_auth_cache={"result": {"reachable": False, "state": "", "logged_in": False}},
         _apple_fetch_binary_ready=lambda: True,

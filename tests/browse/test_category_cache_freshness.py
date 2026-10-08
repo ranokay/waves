@@ -19,10 +19,12 @@ confirm dialog has already been answered against the old count.
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
-class _CacheStub:
+class _CacheStub(BridgeStub):
     _cached_category = WavesBridge._cached_category
     _cache_category = WavesBridge._cache_category
     _CATEGORY_PL_TTL = WavesBridge._CATEGORY_PL_TTL

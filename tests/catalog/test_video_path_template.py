@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
 from tidalapi import Video
 
 from waves.desktop.backend import _LEGACY_FORMAT_VIDEOS, WavesBridge
@@ -77,7 +78,7 @@ def test_the_primary_artist_token_falls_back_to_the_first_of_the_list():
     assert format_path_media("{artist_name_primary}", no_primary) == "DMX"
 
 
-class _MigrateStub:
+class _MigrateStub(BridgeStub):
     _migrate_video_template = WavesBridge._migrate_video_template
 
     def __init__(self, stored: str):

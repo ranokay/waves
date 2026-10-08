@@ -23,6 +23,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.desktop.queue.runtime import JobRuntime
 
@@ -38,7 +40,7 @@ class _Signal:
         self.calls.append(a)
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """A bridge carcass with one live queue row (qid 1) and none for qid 2,
     which is the row that has just been withdrawn."""
 

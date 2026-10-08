@@ -1,7 +1,7 @@
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import QualityTier
 from waves.desktop.backend import WavesBridge
@@ -21,7 +21,7 @@ from waves.providers.catalog_offers import (
 
 def host(offer, guard=lambda: True):
     snapshot = OfferSnapshot(CatalogSelection("track", "1"), (offer,), (guard,))
-    b = SimpleNamespace(_catalog_offer_generation=7, _catalog_offer_snapshot=(7, snapshot), calls=[], statuses=[])
+    b = BridgeStub(_catalog_offer_generation=7, _catalog_offer_snapshot=(7, snapshot), calls=[], statuses=[])
     b._set_status = b.statuses.append
     b._chooser_ask_for = lambda pid, tier: (tier, tier) if tier in ("HIGH", "LOSSLESS", "") else None
     b._chooser_normalize_audio = lambda audio, pid: audio if audio in ("stereo", "") else None

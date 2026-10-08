@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend as bk
 from waves.desktop.backend import WavesBridge, _ProgressSignals
@@ -27,7 +28,7 @@ def _bind(stub, name, owner=WavesBridge):
     return getattr(owner, name).__get__(stub, type(stub))
 
 
-class _Stub:
+class _Stub(BridgeStub):
     pass
 
 

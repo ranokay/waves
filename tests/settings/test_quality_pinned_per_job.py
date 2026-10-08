@@ -40,6 +40,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 from tidalapi.media import AudioMode, Quality
 
 from waves.config import ATMOS_REQUEST_QUALITY, tidal_quality_for_tier
@@ -292,7 +293,7 @@ def test_a_run_that_mixes_atmos_and_stereo_asks_each_at_its_own_quality():
 # The queue row pins its ask.
 # --------------------------------------------------------------------------- #
 def test_the_row_records_the_setting_it_was_queued_at():
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub._queue_seq = 0
     stub._queue = []
     stub._queue_index = {}
@@ -311,7 +312,7 @@ def test_the_row_records_the_setting_it_was_queued_at():
 
 
 def test_an_unreadable_setting_pins_nothing_rather_than_failing_to_queue():
-    stub = SimpleNamespace()  # no settings at all
+    stub = BridgeStub()  # no settings at all
     assert backend.WavesBridge._queued_quality_value.__get__(stub, type(stub))() == ""
 
 
@@ -320,13 +321,13 @@ def test_an_unreadable_setting_pins_nothing_rather_than_failing_to_queue():
     [(Quality.low_320k.value, Quality.low_320k), ("", None), ("NOT_A_TIER", None)],
 )
 def test_job_quality_reads_the_row(raw, want):
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub._queue_item = lambda qid: {"qid": qid, "askQuality": raw}
     assert backend.WavesBridge._job_quality.__get__(stub, type(stub))(1) == want
 
 
 def test_a_missing_row_pins_nothing():
-    stub = SimpleNamespace(_queue_item=lambda qid: None)
+    stub = BridgeStub(_queue_item=lambda qid: None)
     assert backend.WavesBridge._job_quality.__get__(stub, type(stub))(1) is None
 
 
@@ -338,7 +339,7 @@ def test_the_runner_hands_its_rows_quality_to_the_download():
 
 
 def test_the_skip_rank_follows_the_jobs_quality_not_the_setting():
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(tidal_quality_audio="HIGH")))
+    stub = BridgeStub(settings=SimpleNamespace(data=SimpleNamespace(tidal_quality_audio="HIGH")))
     rank = backend.WavesBridge._target_quality_rank.__get__(stub, type(stub))
     assert rank() == rank("HIGH")
     assert rank("HI_RES_LOSSLESS") > rank(), "a job queued higher must still count as an upgrade"

@@ -13,11 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.providers.apple import runner
 
 
-def _stub(**data_overrides) -> SimpleNamespace:
+def _stub(**data_overrides) -> BridgeStub:
     data = SimpleNamespace(
         format_album="{artist_name}/{album_title}/{track_title}",
         format_track="{track_title}",
@@ -29,9 +31,9 @@ def _stub(**data_overrides) -> SimpleNamespace:
     )
     for key, value in data_overrides.items():
         setattr(data, key, value)
-    stub = SimpleNamespace(settings=SimpleNamespace(data=data), providers={})
+    stub = BridgeStub(settings=SimpleNamespace(data=data), providers={})
     for name in ("_apple_standalone_dest", "_apple_relative_path", "_apple_job_hooks"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     return stub
 
 

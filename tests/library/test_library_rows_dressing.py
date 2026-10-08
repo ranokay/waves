@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
-class _Stub:
+class _Stub(BridgeStub):
     _LIBRARY_DRESSED = WavesBridge._LIBRARY_DRESSED
     _dress_library_row = WavesBridge._dress_library_row
     _dress_library_rows = WavesBridge._dress_library_rows

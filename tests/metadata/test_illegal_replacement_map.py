@@ -19,6 +19,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from support.bridge_stub import BridgeStub
 from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
@@ -207,7 +208,7 @@ class TestAddingAnOverrideNeverRestructures:
         assert chosen.parent.name == "The Better Life · Dead Love"
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real bridge methods get bound onto."""
 
 

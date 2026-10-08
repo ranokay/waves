@@ -17,13 +17,14 @@ Tested with the method-bound stub pattern (no display, no live bridge).
 from __future__ import annotations
 
 from conftest import _InlinePool
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import WavesBridge
 
 
 def _stub(tmp_path, src_path):
-    class _S:
+    class _S(BridgeStub):
         pass
 
     s = _S()

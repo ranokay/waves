@@ -14,6 +14,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CoverDimensions
 from waves.model.cfg import (
@@ -225,7 +226,7 @@ def test_chooser_defaults_read_the_row_provider_mirrors():
     from waves.desktop import backend
     from waves.desktop.backend import WavesBridge
 
-    stub = SimpleNamespace()
+    stub = BridgeStub()
     stub.settings = SimpleNamespace(
         data=SimpleNamespace(
             tidal_lyrics_embed=True,

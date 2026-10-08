@@ -10,6 +10,8 @@ import pathlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 # ---- factory reset erases exported diagnostic bundles ----------------------
@@ -21,7 +23,7 @@ def test_factory_reset_wipes_diagnostic_bundles(tmp_path: pathlib.Path, monkeypa
     foreign = tmp_path / "waves-diagnostics-notes.txt"
     foreign.write_text("the user's own notes", encoding="utf-8")
 
-    stub = SimpleNamespace(_ownership=SimpleNamespace(close=lambda: None))
+    stub = BridgeStub(_ownership=SimpleNamespace(close=lambda: None))
     monkeypatch.setattr("waves.desktop.backend.path_config_base", lambda: str(tmp_path))
     monkeypatch.setattr("waves.desktop.backend.OwnershipStore", lambda _p: SimpleNamespace())
     monkeypatch.setattr("waves.desktop.backend.diagnostics.detach_disk_log", lambda: None)

@@ -12,13 +12,14 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.providers import cache
 from waves.desktop.providers.lifecycle import ProviderContexts
 
 
 @dataclass
-class _Host:
+class _Host(BridgeStub):
     _page_cache_path: Path
     _search_cache_path: Path
     _provider_contexts: ProviderContexts = field(default_factory=ProviderContexts)

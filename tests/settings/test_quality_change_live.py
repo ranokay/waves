@@ -16,10 +16,12 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real applySettings gets bound onto."""
 
 

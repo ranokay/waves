@@ -11,6 +11,8 @@ import pathlib
 import threading
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 # ---- a racing page-cache save skips the save, never crashes its caller -----
@@ -23,7 +25,7 @@ class _RacingDict(dict):
         raise RuntimeError("dictionary changed size during iteration")
 
 
-class _SaveStub:
+class _SaveStub(BridgeStub):
     _save_page_cache = WavesBridge._save_page_cache
 
     def __init__(self, path: pathlib.Path, lib=None):

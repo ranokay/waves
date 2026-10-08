@@ -10,6 +10,8 @@ value.
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.desktop.settings.schema import FIRST_RUN_OVERRIDES, shipped_field_default
 from waves.model.cfg import HelpSettings
@@ -29,7 +31,7 @@ _WITH_DEFAULT = [
 _WITHOUT_DEFAULT = ["download_base_path", "path_binary_ffmpeg"]
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

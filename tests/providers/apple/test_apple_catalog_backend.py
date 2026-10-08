@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from browse.fakes import browse_bridge
 from PySide6.QtCore import QCoreApplication
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.diagnostics.events import ApplicationEvents
@@ -107,7 +108,7 @@ def _apple_provider(**resources):
 
 
 def test_apple_link_payload_carries_the_single_row_in_the_apple_group():
-    stub = SimpleNamespace(providers={"apple": _apple_provider(album=_album())})
+    stub = BridgeStub(providers={"apple": _apple_provider(album=_album())})
     provider = stub.providers["apple"]
     resolved = {"kind": "album", "item": provider.get_object("album", "album-1")}
 
@@ -123,12 +124,12 @@ def test_apple_link_payload_carries_the_single_row_in_the_apple_group():
 
 
 def test_apple_album_expansion_rows_map_track_rows():
-    stub = SimpleNamespace(providers={"apple": _apple_provider(album=_album())})
+    stub = BridgeStub(providers={"apple": _apple_provider(album=_album())})
 
     rows = WavesBridge._apple_album_expansion_rows(stub, "apple:album-1")
 
     assert [(r["id"], r["title"], r["num"]) for r in rows] == [("apple:song-1", "Xtal", 1)]
-    empty = SimpleNamespace(providers={"apple": _apple_provider()})
+    empty = BridgeStub(providers={"apple": _apple_provider()})
     assert WavesBridge._apple_album_expansion_rows(empty, "apple:gone") == []
 
 
@@ -143,7 +144,7 @@ def test_provider_playlist_expansion_rows_number_by_position():
         },
         "relationships": {"tracks": {"data": [_song("song-1"), _song("song-2")]}},
     }
-    stub = SimpleNamespace(providers={"apple": _apple_provider(playlist=playlist)})
+    stub = BridgeStub(providers={"apple": _apple_provider(playlist=playlist)})
 
     rows = WavesBridge._provider_playlist_expansion_rows(stub, "apple:playlist-1")
 
@@ -154,7 +155,7 @@ def test_provider_playlist_expansion_rows_number_by_position():
 
 
 def test_apple_browse_item_matches_the_tidal_payload_shape():
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": _apple_provider(album=_album())},
         _ownership=SimpleNamespace(record_members_replace=lambda *a: None),
         collectionMembershipChanged=_Signal(),
@@ -213,7 +214,7 @@ def _preview_stub(**resources):
     """A signed-out bridge stub for the preview slots: signals, an inline pool,
     the meta helper and every preview entry point bound for direct calls.
     Signed out on purpose: Apple previews must not need the TIDAL session."""
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         providers={"apple": _apple_provider(**resources)},
         _logged_in=False,
         threadpool=_InlinePool(),
@@ -369,7 +370,7 @@ def test_standalone_apple_artist_ignores_a_cached_summary():
 
     provider = AppleProvider(catalog=_StrictCatalog(album=_album(), artist=canonical, song=_song()))
     provider._remember("artist", summary)
-    stub = SimpleNamespace(providers={"apple": provider})
+    stub = BridgeStub(providers={"apple": provider})
 
     rows = WavesBridge._standalone_apple_tracks(stub, "apple:artist-1")
 
@@ -392,7 +393,7 @@ def _apple_artist_catalog():
 
 
 def _prefetch_stub(**overrides):
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _logged_in=True,
         providers={"apple": AppleProvider(catalog=_apple_artist_catalog())},
         threadpool=_InlinePool(),
@@ -444,7 +445,7 @@ def test_signed_out_hover_prefetch_obeys_the_enabled_provider():
 
 def test_signed_out_apple_album_tracks_prefetch():
     fetched = []
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _logged_in=False,
         providers={"apple": AppleProvider()},
         _provider_readiness_probes={"apple": lambda: stub.providers["apple"].readiness(enabled=True, signed_in=False)},

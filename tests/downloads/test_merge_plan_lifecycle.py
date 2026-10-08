@@ -9,12 +9,13 @@ from __future__ import annotations
 import contextlib
 
 from conftest import _Signal
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import _queue_stub
 
 from waves.desktop.backend import WavesBridge
 
 
-class _EnqueueStub:
+class _EnqueueStub(BridgeStub):
     _enqueue_albums = WavesBridge._enqueue_albums
 
     def __init__(self):

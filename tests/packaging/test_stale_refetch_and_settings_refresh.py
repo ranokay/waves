@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_queue
 from support.paths import QML_DIR
 
@@ -57,7 +58,7 @@ class _HeldPool:
 # An expanded album must never sit on "Loading tracks…" forever.
 
 
-class _AlbumTracksStub:
+class _AlbumTracksStub(BridgeStub):
     loadAlbumTracks = WavesBridge.loadAlbumTracks
     _start_album_tracks_fetch = WavesBridge._start_album_tracks_fetch
     _record_album_members = WavesBridge._record_album_members
@@ -115,7 +116,7 @@ def test_a_failed_album_refetch_still_answers_the_row():
 # One updater at a time, and a pending cancel survives a re-click.
 
 
-class _InstallStub:
+class _InstallStub(BridgeStub):
     installAppUpdate = WavesBridge.installAppUpdate
 
     def __init__(self):
@@ -158,7 +159,7 @@ def test_a_pending_cancel_is_not_discarded_by_a_second_click():
 # RETRY on a failed queue row must work after any search.
 
 
-class _RetryStub:
+class _RetryStub(BridgeStub):
     retryQueueItem = WavesBridge.retryQueueItem
     _retry_queue_refetch = WavesBridge._retry_queue_refetch
     _on_queue_retry_refetched = WavesBridge._on_queue_retry_refetched
@@ -279,7 +280,7 @@ def test_appimage_claim_honoured_when_running_from_the_mount(monkeypatch):
 
 
 def test_save_settings_notifies_the_settings_page():
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         _restore_ffmpeg_flags=lambda: None,
         _restore_ffmpeg_path=lambda: None,
         settings=SimpleNamespace(save=lambda: None, data=SimpleNamespace()),
@@ -300,7 +301,7 @@ def test_settings_page_listens_for_external_persists():
 # A revalidated drill-in page re-emits its link-tile mosaics.
 
 
-class _BrowsePageStub:
+class _BrowsePageStub(BridgeStub):
     openBrowsePage = WavesBridge.openBrowsePage
     _rendered_rows = WavesBridge._rendered_rows
 
@@ -377,7 +378,7 @@ def test_link_tiles_of_extracts_only_link_rows():
 # A category download warms the folder tree before queuing.
 
 
-class _CategoryStub:
+class _CategoryStub(BridgeStub):
     downloadPlaylistCategory = WavesBridge.downloadPlaylistCategory
 
     def __init__(self):
@@ -458,7 +459,7 @@ def test_category_download_queues_neutral_cards_with_their_owner():
 # Best-of-both publishes button state before its edition scan.
 
 
-class _BestOfBothStub:
+class _BestOfBothStub(BridgeStub):
     downloadAlbumBestOfBoth = WavesBridge.downloadAlbumBestOfBoth
 
     def __init__(self, plan=None, identity_id="a1", scan_raises=False, scan_complete=True):

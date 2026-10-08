@@ -25,6 +25,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.library.ownership import OwnershipStore
 
@@ -34,7 +36,7 @@ NOT_OWNED = {"owned": False}
 PENDING = {"owned": False, "pending": True}
 
 
-class _LookupStub:
+class _LookupStub(BridgeStub):
     """A stand-in whose ownershipOf is a dict lookup, so each test states the
     per-member answers outright and only the roll-up logic is under test.
     Unknown ids answer like a firm, refreshed "not owned"."""

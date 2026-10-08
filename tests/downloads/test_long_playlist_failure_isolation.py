@@ -28,6 +28,7 @@ import pytest
 import requests
 import tidalapi
 from requests.adapters import HTTPAdapter
+from support.bridge_stub import BridgeStub
 from tidalapi import Track
 from tidalapi.exceptions import ObjectNotFound
 
@@ -242,7 +243,7 @@ def test_the_incomplete_verdict_is_the_one_exception_safe_to_repeat():
     assert issubclass(DownloadIncomplete, RuntimeError)
 
 
-class _QueueCarcass:
+class _QueueCarcass(BridgeStub):
     """Just what _enqueue and _set_queue_status touch, with the real methods
     bound on: the row dict they build is the thing under test."""
 

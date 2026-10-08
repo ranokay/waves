@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 import waves.download
 from waves.constants import CTX_TIDAL
@@ -143,7 +144,7 @@ def test_apple_rows_pass_unchanged():
 
 
 def _tidal_self():
-    return SimpleNamespace(
+    return BridgeStub(
         _remember=lambda *args: None,
         providers={CTX_TIDAL: SimpleNamespace(advertised_tier=lambda obj: None)},
     )

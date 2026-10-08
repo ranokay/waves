@@ -10,6 +10,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 from tidalapi.album import Album
 
 from waves.desktop.backend import WavesBridge
@@ -35,7 +36,7 @@ class _InlinePool:
 # ---- artist rollup must credit EVERY group holding a track ------
 
 
-class _ArtistBumpStub:
+class _ArtistBumpStub(BridgeStub):
     _bump_artist_group = WavesBridge._bump_artist_group
 
     def __init__(self, groups: dict):
@@ -66,7 +67,7 @@ def test_a_shared_album_credits_every_artist_group():
 # ---- a block-gated download must not strand a lit button --------
 
 
-class _BlockGateStub:
+class _BlockGateStub(BridgeStub):
     _download = WavesBridge._download
 
     def __init__(self):
@@ -89,7 +90,7 @@ def test_the_block_gate_returns_the_button_to_idle():
     assert stub.downloadState.emits == [("alb-1", "")]
 
 
-class _DismissStub:
+class _DismissStub(BridgeStub):
     dismissDownloadFolderNudge = WavesBridge.dismissDownloadFolderNudge
     _forget_held_queue_rows = WavesBridge._forget_held_queue_rows
 
@@ -149,7 +150,7 @@ class _FlakyArtist:
         return []
 
 
-class _LoadArtistStub:
+class _LoadArtistStub(BridgeStub):
     loadArtist = WavesBridge.loadArtist
     _start_artist_build = WavesBridge._start_artist_build
 
@@ -252,7 +253,7 @@ class _OwnershipSpy:
         self.replaced.append((album_id, ids))
 
 
-class _AlbumTracksStub:
+class _AlbumTracksStub(BridgeStub):
     def _set_status(self, text):  # a failed fetch now says so
         pass
 
@@ -329,7 +330,7 @@ class _Favorites:
         return self._count
 
 
-class _FavStub:
+class _FavStub(BridgeStub):
     _favorite_ids = WavesBridge._favorite_ids
     _FAV_IDS_TTL = WavesBridge._FAV_IDS_TTL
 
@@ -371,7 +372,7 @@ def test_a_failed_first_favourites_load_is_not_cached():
 # ---- a failed first library load is not cached or persisted -----
 
 
-class _LoadLibStub:
+class _LoadLibStub(BridgeStub):
     loadLibrary = WavesBridge.loadLibrary
     _lib_generation = WavesBridge._lib_generation
     _lib_start = WavesBridge._lib_start
@@ -439,7 +440,7 @@ def _release(aid):
     return a
 
 
-class _ReleasesStub:
+class _ReleasesStub(BridgeStub):
     _artist_releases = WavesBridge._artist_releases
 
     def __init__(self, prefs):
@@ -503,7 +504,7 @@ def test_a_creditless_release_stub_is_kept():
     assert [a.id for a in own] == ["bare"]
 
 
-class _DownloadArtistStub:
+class _DownloadArtistStub(BridgeStub):
     downloadArtist = WavesBridge.downloadArtist
     _ffmpeg_gate_holds = WavesBridge._ffmpeg_gate_holds
     _stash_pending_download = WavesBridge._stash_pending_download

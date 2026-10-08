@@ -26,6 +26,7 @@ import re
 import pytest
 from conftest import _Signal
 from PySide6.QtCore import QEvent, QObject, Qt
+from support.bridge_stub import BridgeStub
 from support.paths import QML_MAIN, REPO_ROOT
 
 from waves.desktop import backend as backend_mod
@@ -70,7 +71,7 @@ class _PlainEvent:
         return self._etype
 
 
-class _Stub:
+class _Stub(BridgeStub):
     def __init__(self):
         self.backRequested = _Signal()
         self.forwardRequested = _Signal()

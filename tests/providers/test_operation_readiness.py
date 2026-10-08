@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import _Signal
 from providers.fakes import StubProvider, stub_bridge
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge, _search_provider_on
 from waves.desktop.bridge_surfaces import (
@@ -143,7 +144,7 @@ def test_direct_private_shelf_calls_use_a_ready_third_provider():
 @pytest.mark.parametrize("audio_ready", [False, True])
 def test_apple_asset_readiness_is_independent_of_audio_fetch_setup(audio_ready):
     provider = AppleProvider()
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         providers={"apple": provider},
         _apple_live_flags=lambda: {"enabled": True, "account_signed_in": True, "signed_in": audio_ready},
     )
