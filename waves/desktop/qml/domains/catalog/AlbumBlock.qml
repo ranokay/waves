@@ -181,8 +181,8 @@ Column {
       }
       Art {
         host: ab.host
-        width: 46
-        height: 46
+        width: ab.host.albumRowArt
+        height: ab.host.albumRowArt
         hoverFx: true
         fxKind: "album"
         fxId: albumId

@@ -1910,6 +1910,19 @@ def _image(obj, dimension: int = 320) -> str:
     return ""
 
 
+def _distinct_art_urls(rows, limit: int) -> list[str]:
+    """The distinct non-empty ``art`` URLs of ``rows``, in row order, capped
+    at ``limit``: the shape both page-art summaries warm from."""
+    out: list[str] = []
+    for row in rows:
+        url = str(row.get("art") or "")
+        if url and url not in out:
+            out.append(url)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _video_image(video, width: int, height: int) -> str:
     """Still URL for a video at one of the four sizes the API serves.
 
@@ -7458,7 +7471,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if cached is not None and bool(cached.get("editions_collapsed", False)) == collapse:
             # Known page (maybe restored from disk at launch): nothing to
             # build, but its covers can still be warmed before the click.
-            self.artistPagePrefetched.emit(self._artist_art_summary(cached))
+            _catalog_emit(self, self.artistPagePrefetched, self._artist_art_summary(cached))
             return
         with self._prefetch_lock:
             if artist_id in self._artist_loading or self._artist_prefetch is not None:
@@ -7509,8 +7522,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     with ARTIST_GAUGE.working():
                         return call()
 
-                ARTIST_GAUGE.limit(len(sections))
-                with ThreadPoolExecutor(max_workers=len(sections)) as pool:
+                workers = min(_ARTIST_SECTION_WORKERS, len(sections))
+                ARTIST_GAUGE.limit(workers)
+                with ThreadPoolExecutor(max_workers=workers) as pool:
                     pending = {name: pool.submit(_section, call) for name, call in sections.items()}
                     # Any section failing marks the whole page suspect: an OR
                     # over the sections is not enough (a 429 on get_albums
@@ -7547,16 +7561,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         # round trip or more), so they are decoded by the time
                         # the page lands instead of requested when it does. A
                         # revalidate's page already has its covers.
-                        self.artistPagePrefetched.emit(
+                        _catalog_emit(
+                            self,
+                            self.artistPagePrefetched,
                             self._artist_art_summary(
                                 {
                                     "id": artist_id,
                                     "art": _image(artist, 320),
-                                    "tracks": [{"art": _image(t, 160)} for t in tops[:8]],
-                                    "albums": [{"art": _image(a)} for a in albums[:8]],
-                                    "eps": [{"art": _image(a)} for a in eps[:8]],
+                                    "tracks": [{"art": _image(t, 160)} for t in tops],
+                                    "albums": [{"art": _image(a)} for a in albums],
+                                    "eps": [{"art": _image(a)} for a in eps],
                                 }
-                            )
+                            ),
                         )
                     # Then, with 'Most-complete edition only' on, the same
                     # track-aware collapse the discography sweep runs: a 5-track
@@ -7651,7 +7667,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # must not wait behind it.
             if keep:
                 self._save_page_cache()
-            if quiet:
+            if quiet and not refresh:
                 # A page the user never opened is simply a cached page.
                 _prefetch_log.debug("prefetch artist %s done in %s", artist_id, devlog.fmt_dur(devlog.clock() - t0))
                 return
@@ -9989,18 +10005,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _page_art_summary(payload: dict, limit: int = 16) -> dict:
         """The cover URLs worth warming for a page: its hero and the first
         distinct row covers (one screen's worth), in row order."""
-        arts: list[str] = []
-        for sec in payload.get("sections") or []:
-            for it in sec.get("items") or []:
-                art = str(it.get("art") or "")
-                if art and art not in arts:
-                    arts.append(art)
-                if len(arts) >= limit:
-                    break
-            if len(arts) >= limit:
-                break
+        rows = (it for sec in payload.get("sections") or [] for it in sec.get("items") or [])
         header = payload.get("header") or {}
-        return {"key": payload.get("key", ""), "art": str(header.get("art") or ""), "rowArts": arts}
+        return {
+            "key": payload.get("key", ""),
+            "art": str(header.get("art") or ""),
+            "rowArts": _distinct_art_urls(rows, limit),
+        }
 
     @staticmethod
     def _artist_art_summary(payload: dict, limit: int = 5) -> dict:
@@ -10008,23 +10019,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         the first rows of the sections a page opens on (each shows 5 before
         SHOW ALL), in page order. Videos sit at the foot of the page, out of
         the opening screen, and their stills are the heaviest images on it."""
-
-        def arts(rows) -> list[str]:
-            out: list[str] = []
-            for row in rows or []:
-                url = str(row.get("art") or "")
-                if url and url not in out:
-                    out.append(url)
-                if len(out) >= limit:
-                    break
-            return out
-
         return {
             "id": str(payload.get("id") or ""),
             "art": str(payload.get("art") or ""),
-            "tracks": arts(payload.get("tracks")),
-            "albums": arts(payload.get("albums")),
-            "eps": arts(payload.get("eps")),
+            "tracks": _distinct_art_urls(payload.get("tracks") or [], limit),
+            "albums": _distinct_art_urls(payload.get("albums") or [], limit),
+            "eps": _distinct_art_urls(payload.get("eps") or [], limit),
         }
 
     _TILE_ART_TTL = 7 * 24 * 3600  # editorial pages shuffle slowly; a week is fine

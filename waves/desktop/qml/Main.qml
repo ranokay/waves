@@ -4746,9 +4746,9 @@ ApplicationWindow {
   // the prefetch handler warms at it, and the pool keys on the exact size,
   // so two literals that drift apart would silently warm nothing.
   readonly property int discDecode: 68
-  // The artist page's album/EP row art size, in one place: AlbumBlock draws
-  // its cover at 46 and onArtistPagePrefetched warms at twice it — the pool
-  // keys on the exact size, so the two literals must agree.
+  // The album/EP row cover size: AlbumBlock draws its row cover from this,
+  // and onArtistPagePrefetched warms at twice it — the pool keys on the
+  // exact decode size (Art seeds at 2x), so the two must agree.
   readonly property int albumRowArt: 46
   property var _warmSeen: ({})   // "url@w" -> true; mutated in place (nothing binds to it)
   function warmArt(u, w, h) {

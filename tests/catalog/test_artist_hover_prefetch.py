@@ -212,6 +212,28 @@ def test_a_fresh_build_sends_its_covers_before_the_page():
     assert order == [("covers", "7"), ("compare", None), ("page", "7")]
 
 
+def test_a_fresh_build_warms_five_distinct_covers_past_repeats():
+    """The five-cover cap counts DISTINCT URLs: a discography whose first rows
+    repeat one cover must not stop the summary short (the pre-dedupe slice
+    this replaced sent only the repeat)."""
+    b = _Stub()
+    covers = ["a"] * 8 + ["b", "c", "d", "e", "f"]
+    b._get_artist = lambda artist_id: SimpleNamespace(
+        id=artist_id,
+        name="Doomcrusher",
+        get_bio=lambda: "",
+        get_albums=lambda: [
+            SimpleNamespace(id=f"al{i}", image=lambda dimension=320, art=cover: art) for i, cover in enumerate(covers)
+        ],
+        get_ep_singles=lambda: [],
+        get_top_tracks=lambda limit=10: [],
+        get_videos=lambda limit=0: [],
+    )
+    b.loadArtist("7")
+    b.threadpool.workers[0].run()
+    assert b.artistPagePrefetched.emits[0][0]["albums"] == ["a", "b", "c", "d", "e"]
+
+
 def test_a_revalidate_sends_no_covers():
     b = _Stub()
     b._artist_cache["7"] = {"id": "7", "name": "cached", "editions_collapsed": False}
