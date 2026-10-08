@@ -170,8 +170,10 @@ cython_debug/
 # Local design mockups (not part of the shipped app)
 mockups/
 
-# Local scratch / working files (not part of the shipped app)
+# Local scratch / working files (not part of the shipped app). `.scratch/`
+# holds agent plans and handoffs (see docs/agents/implementation-workflow.md).
 scratchpad/
+/.scratch/
 
 # Deferred distribution channels (kept local until each venue actually launches)
 packaging/aur/

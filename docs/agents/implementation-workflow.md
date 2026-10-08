@@ -14,14 +14,13 @@ This repo is a fork: `upstream` is the parent project, `origin` is the fork.
 
 1. **Pre-flight**: run `/sync-upstream` and settle every reconcile verdict before starting — upstream changes are judged against our implementations and our open/closed issues and PRs before any new work begins.
 2. **Implement** with the focused tests for what you touch. The strict group is the final gate, not a per-edit ritual: it runs once, on the frozen SHA, after the reviews (see Test scope).
-3. **`mise run check`** to settle formatting and lint, so the reviewers read the text that ships.
-4. **OpenCodeReview** (`ocr_review`, or `ocr review` on the CLI) on the branch diff with the issue text as background. `.opencodereview/rule.json` carries the house rules and keeps QML/Markdown in scope (its `include` list bypasses the default extension filter). Give a full-branch run a workable task timeout: a run cut short at `--timeout` forfeits every finding it had not returned. When a run still comes back partial (timeout or budget), record the partial coverage and fall back to `ocr delegate rule` plus the two axes; repeating the same diff changes nothing. Every finding fixed or explicitly refuted, dispositions recorded in the commit/PR.
-5. **`/code-review`** findings fixed or explicitly refuted — the two axes (standards + spec) stay the gate, and they cover what OCR's filters drop. A non-trivial fix delta gets its own `/code-review`, and each correction commit runs `mise run test-fast` first: the fast group carries the cheap guards (Qt markers, BRIDGE rows, doc pins) that must not cost a reviewer round. No strict run happens between review rounds.
-6. **Local gate on the frozen SHA**: `mise run check` plus `mise run test-strict`, the merge gate in `DEVELOPER.md`'s test-group table (it excludes the live account tests, which never run in CI, and it runs alone). A fix commit after this run invalidates the tested SHA, so this is the last write before the PR.
-7. **PR → `develop`**, body linking the issue (`Closes #<n>`, which closes it on merge: `develop` is the default branch). Checks are read, not awaited: no workflow of ours gates a PR, the checks that do run on these PRs are CodeQL and SonarCloud, and neither bot review is coverage (CodeRabbit skips repos under 10 stars; Copilot's automatic request came back quota-blocked on #398). The merge stands on the local gate — `mise run check` (lock drift, qmllint, ty, ruff lint + format, prettier and deptry) plus the strict test group and the two reviews above — and the PR body says so, with the tested SHA. Request a Codex review of the pushed head and wait for it before merging; when the review is unavailable (usage-limited), record that in the PR body and merge on the local gate anyway. A finding that arrives after merge becomes a separate corrective PR that never rewrites the merged history, and that PR is babysat (its review findings watched, the valid ones fixed) through the same gate before it merges.
-8. **Squash-merge** into `develop`.
-9. **Check the issue closed**: the PR body's `Closes #<n>` auto-closes it on the squash, now that `develop` is the default branch. Close explicitly (`gh issue close <n>` with a one-line delivery note) only when the auto-close did not fire.
-10. **Delete the branch** locally and on the remote. One issue per run — the next issue waits for its own ask.
+3. **`mise run fmt`, then `mise run check`**, so the reviewers read the text that ships. `check` and the commit hooks also format, and a hook that rewrites a file fails that run or commit.
+4. **`/code-review`** against `develop`, with the issue as the spec. Its three axes are the review gate: standards ([coding standards](../../CODING_STANDARDS.md), which bind the per-path house rules), spec, and correctness (the defect classes in the standards' Correctness section). Every finding fixed or explicitly refuted, dispositions recorded in the commit/PR. A non-trivial fix delta gets its own `/code-review`, and each correction commit runs `mise run test-fast` first: the fast group carries the cheap guards (Qt markers, BRIDGE rows, doc pins) that must not cost a reviewer round. No strict run happens between review rounds.
+5. **Local gate on the frozen SHA**: `mise run check` plus `mise run test-strict`, the merge gate in `DEVELOPER.md`'s test-group table (it excludes the live account tests, which never run in CI, and it runs alone). A fix commit after this run invalidates the tested SHA, so this is the last write before the PR.
+6. **PR → `develop`**, body linking the issue (`Closes #<n>`, which closes it on merge: `develop` is the default branch). Checks are read, not awaited: no workflow of ours gates a PR, and CodeQL and SonarCloud run on every PR. A failed check is a finding like any review finding, fixed or refuted in the PR body before the merge. No bot review is requested or awaited; findings a bot posts anyway get the same disposition. The merge stands on the local gate (`mise run check`: lock drift, qmllint, ty, ruff lint + format, prettier and deptry; the strict test group; the review above), and the PR body says so, with the tested SHA. A finding that arrives after merge becomes a separate corrective PR that never rewrites the merged history and goes through the same gate.
+7. **Squash-merge** into `develop`.
+8. **Close out the issue**: the PR body's `Closes #<n>` auto-closes it on the squash. Close explicitly (`gh issue close <n>` with a one-line delivery note) only when the auto-close did not fire. Tick the issue's box in its parent map's checklist; `mise run frontier` reports any box that disagrees with the tracker.
+9. **Delete the branch** locally and on the remote. One issue per run — the next issue waits for its own ask.
 
 ## Test scope
 
@@ -35,12 +34,10 @@ The tested SHA named in the PR body holds while that SHA is the head. If a later
 
 ## Waiting on long commands
 
-A command that runs for minutes (`mise run test-strict`, an OCR run, a build) is
-started once and waited on through its own exec session: hold the session and
-call `write_stdin` with a 30 to 50 second yield, which the session API accepts.
-One such call covers one wait. A one-second peek followed by the sleep tool
-doubles the calls and the context each one costs. Where a blocking form of the
-same work exists, use it: `ocr_review` over the polled `ocr review` CLI.
+A command that runs for minutes (`mise run test-strict`, a build) starts once
+in the background (the Bash tool's `run_in_background`), and the harness
+reports its exit. Do other work or wait for that report; each `sleep` and
+`tail` peek costs a call and its context.
 
 ## UI verification ladder
 
@@ -71,6 +68,8 @@ only for native claims the offscreen layers cannot prove.
 
 Keep implementation evidence in the owning issue or PR: audit findings,
 screenshots, benchmark results, investigation notes and completion reports.
-Temporary plans, session state and handoff prompts may be used locally while
-work is active; omit them from the final change. Promote only current rules,
-contracts or supported workflows into maintained project documentation.
+Temporary plans, session state and handoff prompts live under `.scratch/`
+(gitignored) while work is active. A handoff for the next session is
+`.scratch/handoff-<issue>.md`, and the prompt that starts that session names
+it. Promote only current rules, contracts or supported workflows into
+maintained project documentation.
