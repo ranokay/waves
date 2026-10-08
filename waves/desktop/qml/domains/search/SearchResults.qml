@@ -107,6 +107,7 @@ Column {
   property alias artistsHeadItem: artistsHead
   property alias albumRepeater: albumsRep
   property alias tracksRepeater: tracksRep
+  property alias playlistRepeater: playlistsRep
   property alias videoGridItem: videoGrid
   property alias artistsFlowItem: artistFlow
 
@@ -242,9 +243,43 @@ Column {
       }
     }
   }
-  function resetReach() {
-    resultsView.reach = ({})
-    resultsView.landed = ({})
+  // Only the named sections' frontiers fall with the rows they belong to; a
+  // rebuild that leaves a section's delegates standing (the sort control
+  // rebuilds albums/tracks/videos) must not deactivate and recreate them
+  // (an expanded PlaylistBlock keeps delegate-local selection state).
+  function resetReach(names) {
+    var every = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
+    var next = {}
+    var nextLanded = {}
+    for (var i = 0; i < every.length; ++i) {
+      var n = every[i]
+      if (names !== undefined && names.indexOf(n) < 0) {
+        next[n] = resultsView.reachFor(n)
+        nextLanded[n] = resultsView.landed[n] || 0
+      }
+    }
+    resultsView.reach = next
+    resultsView.landed = nextLanded
+  }
+  // Expanded panels' extra heights, by media id, so the plan walks those
+  // rows at their real heights (their Loaders follow the item). Merged on
+  // every measurement: a panel expanded since the fill is included, while
+  // rows whose delegates are gone keep the height last seen.
+  property var _extras: ({})
+  function _captureExtrasFrom(model, rep, next, baseH) {
+    for (var i = 0; i < model.count; ++i) {
+      var d = rep.itemAt(i)
+      if (d && d.item && d.height > baseH)
+        next[model.get(i).id] = d.height - baseH
+    }
+  }
+  function captureExtras() {
+    var next = {}
+    for (var k in resultsView._extras)
+      next[k] = resultsView._extras[k]
+    resultsView._captureExtrasFrom(albumsModel, resultsView.albumRepeater, next, resultsView._listRowH.albums)
+    resultsView._captureExtrasFrom(playlistsModel, resultsView.playlistRepeater, next, resultsView._listRowH.playlists)
+    resultsView._extras = next
   }
   // --- Row windows --------------------------------------------------------
   // [from, to) per section: the rows the handler turn builds INLINE, so the
@@ -277,6 +312,9 @@ Column {
   // LESS scrolls back up to it, and the rows there must be built for that
   // frame.
   function planSync(atY, fromSection) {
+    // Panels the user expanded are taller than their collapsed pitch; the
+    // walk below advances by the same heights the Loaders will take.
+    resultsView.captureExtras()
     var host = resultsView.host
     var all = host.filterType === "all"
     var w = resultsView.width > 0 ? resultsView.width : (host.width > 0 ? host.width : 1100)
@@ -287,22 +325,56 @@ Column {
     function block(h) {
       y += h + 8
     }
-    // A 5-capped list row section's own shape: header, shown rows, SHOW ALL.
+    // One list section: header, each VISIBLE row (the source chip and the
+    // cap decide) at its own height, SHOW ALL. The walk covers every shown
+    // row, not only those above the fold, because the clamp below needs the
+    // page's height; rows inside `secs` are the ones the window can pick.
     function list(name, n, h, cap, expanded) {
       if (!resultsView.sectionVisible(name))
         return
       headY[name] = y
       block(36)
-      var shown = all ? (expanded ? n : Math.min(n, cap)) : n
-      secs[name] = {
-        y: y,
-        shown: shown,
-        pitch: h + 8,
-        per: 1
+      var rows = []
+      for (var i = 0; i < n; ++i) {
+        if (!resultsView.rowVisible(name, i))
+          continue
+        var span = h + 8 + (resultsView._extras[resultsView.modelIdFor(name, i)] || 0)
+        rows.push({
+          i: i,
+          y: y,
+          span: span
+        })
+        y += span
       }
       resultsView.batches[name] = Math.ceil(screen / (h + 8)) + 1
-      if (shown > 0)
-        block(shown * (h + 8) - 8)
+      if (rows.length > 0)
+        secs[name] = rows
+      if (all && n > cap)
+        block(16)
+    }
+    // One grid section (cards: artists, videos): visible cells pack into
+    // lines of `per`, so a cell's line is its position among the matches.
+    function grid(name, n, pitch, per, cap, visible) {
+      if (!resultsView.sectionVisible(name))
+        return
+      headY[name] = y
+      block(36)
+      var base = y
+      var rows = []
+      for (var i = 0; i < n; ++i) {
+        if (!visible(i))
+          continue
+        rows.push({
+          i: i,
+          y: base + Math.floor(rows.length / per) * pitch,
+          span: pitch
+        })
+      }
+      resultsView.batches[name] = (Math.ceil(screen / pitch) + 1) * per
+      if (rows.length > 0) {
+        secs[name] = rows
+        y = base + Math.ceil(rows.length / per) * pitch
+      }
       if (all && n > cap)
         block(16)
     }
@@ -311,49 +383,20 @@ Column {
       var kind = resultsView.topRow.kind
       block(kind === "album" || kind === "playlist" ? 64 : 62)
     }
-    var na = artistsModel.count
-    if (resultsView.sectionVisible("artists")) {
-      headY.artists = y
-      block(36)
-      var gc = Math.max(1, Math.floor((w + 12) / (190 + 12)))
-      var cardW = (w - (gc - 1) * 12) / gc
-      var rowH = cardW + 142
-      var shownA = all ? (resultsView.isExpanded("artists") ? na : Math.min(na, 5)) : na
-      secs.artists = {
-        y: y,
-        shown: shownA,
-        pitch: rowH + 12,
-        per: gc
-      }
-      resultsView.batches.artists = (Math.ceil(screen / (rowH + 12)) + 1) * gc
-      if (shownA > 0)
-        block(Math.ceil(shownA / gc) * (rowH + 12) - 12)
-      if (all && na > 5)
-        block(16)
-    }
+    var gc = Math.max(1, Math.floor((w + 12) / (190 + 12)))
+    var cardW = (w - (gc - 1) * 12) / gc
+    grid("artists", artistsModel.count, cardW + 142 + 12, gc, 5, function (i) {
+      return resultsView.rowVisible("artists", i)
+    })
     list("albums", albumsModel.count, resultsView._listRowH.albums, 5, resultsView.isExpanded("albums"))
     list("tracks", tracksModel.count, resultsView._listRowH.tracks, 5, resultsView.isExpanded("tracks"))
-    var nv = videosModel.count
-    if (resultsView.sectionVisible("videos")) {
-      headY.videos = y
-      block(36)
-      var vc = Math.max(2, Math.floor(w / 320))
-      var cellW = (w - (vc - 1) * 18) / vc
-      var cellH = Math.round(cellW * 9 / 16) + 54
-      var vcap = vc * Math.ceil(5 / vc)
-      var shownV = all ? (resultsView.isExpanded("videos") ? nv : Math.min(nv, vcap)) : nv
-      secs.videos = {
-        y: y,
-        shown: shownV,
-        pitch: cellH + 18,
-        per: vc
-      }
-      resultsView.batches.videos = (Math.ceil(screen / (cellH + 18)) + 1) * vc
-      if (shownV > 0)
-        block(Math.ceil(shownV / vc) * (cellH + 18) - 18)
-      if (all && nv > vcap)
-        block(16)
-    }
+    var vc = Math.max(2, Math.floor(w / 320))
+    var cellW = (w - (vc - 1) * 18) / vc
+    var cellH = Math.round(cellW * 9 / 16) + 54
+    var vcap = vc * Math.ceil(5 / vc)
+    grid("videos", videosModel.count, cellH + 18, vc, vcap, function (i) {
+      return resultsView.rowVisibleCapped("videos", i, vcap)
+    })
     list("playlists", playlistsModel.count, resultsView._listRowH.playlists, 5, resultsView.isExpanded("playlists"))
     list("mixes", mixesModel.count, resultsView._listRowH.mixes, 5, resultsView.isExpanded("mixes"))
     var contentH = y + 8
@@ -371,16 +414,28 @@ Column {
     var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
     for (var i = 0; i < names.length; ++i) {
       var name = names[i]
-      var s = secs[name]
-      if (!s || s.shown <= 0) {
+      var rows = secs[name]
+      if (!rows || rows.length <= 0) {
         from[name] = 0
         to[name] = 0
       } else {
-        var lines = Math.ceil(s.shown / s.per)
-        var a = Math.max(0, Math.min(lines, Math.floor((top - s.y) / s.pitch)))
-        var b = Math.max(0, Math.min(lines, Math.ceil((bottom - s.y) / s.pitch)))
-        from[name] = a * s.per
-        to[name] = Math.min(s.shown, b * s.per)
+        var a = -1
+        var b = 0
+        for (var j = 0; j < rows.length; ++j) {
+          if (a < 0 && rows[j].y + rows[j].span > top)
+            a = j
+          if (rows[j].y < bottom)
+            b = j + 1
+        }
+        if (a < 0 || b <= a) {
+          // The section sits entirely above or below the window: no inline
+          // rows here (its reach still covers the first batch).
+          from[name] = resultsView.countFor(name)
+          to[name] = resultsView.countFor(name)
+        } else {
+          from[name] = rows[a].i
+          to[name] = rows[b - 1].i + 1
+        }
       }
       // The reach always covers the window plus one batch, so the rows
       // right below the built screen exist and grow in order.
@@ -444,6 +499,8 @@ Column {
       resultsView.closeWindows()
       resultsView.seedKept()
       resultsView.resetReach()
+      resultsView.captureExtras()
+      // the outgoing page's expanded panels, before its rows go
       host.fill(artistsModel, resultsView.sections.artists || [])
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
@@ -464,12 +521,14 @@ Column {
       host.reconcileById(videosModel, host.searchOrdered(resultsView.videosRaw, false), true)
       resultsView.planSync(resultsPane.contentY)
     } else {
-      // A deliberate full rebuild (the sort control): the old rows' load
-      // counts must not carry into the new generation, or the first
-      // completions would declare a frontier complete and release far more
-      // than a batch.
+      // A deliberate full rebuild (the sort control): the rebuilt
+      // sections' load counts must not carry into the new generation, or
+      // the first completions would declare a frontier complete and release
+      // far more than a batch. Sections the sort leaves standing keep their
+      // frontiers (and their delegates).
       resultsView.closeWindows()
-      resultsView.resetReach()
+      resultsView.captureExtras()
+      resultsView.resetReach(["albums", "tracks", "videos"])
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
       host.fillMedia(videosModel, host.searchOrdered(resultsView.videosRaw, false))
@@ -614,8 +673,9 @@ Column {
         // The card's tallest shape (cover, name, source mark, meter,
         // download button) is the slot every card gets, so the flow never
         // re-lays as the off-screen cards land whatever the provider mix;
-        // a transient extra (a playing preview bar) still expands it.
-        height: Math.max(width + 121, item ? item.implicitHeight : 0)
+        // a transient extra (a playing preview bar, a progress face) still
+        // expands it.
+        height: Math.max(width + 142, item ? item.implicitHeight : 0)
         asynchronous: !shown || !resultsView.inWindow("artists", index)
         opacity: host.searchReveal
         onLoaded: resultsView.rowLanded("artists")
@@ -817,6 +877,7 @@ Column {
     count: playlistsModel.count
   }
   Repeater {
+    id: playlistsRep
     model: playlistsModel
     delegate: Loader {
       readonly property bool shown: index >= 0 && resultsView.rowVisible("playlists", index)
