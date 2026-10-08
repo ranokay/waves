@@ -17,11 +17,13 @@ import "../providers"
 // third SEARCH provider lands with no edit to this file.
 // `host` is Main.qml's root object, bound at the single instantiation and
 // required so a missed binding fails at load. It reads through it:
-//   host._searchBuildTick() / host.fill / host.fillMedia / host.filterType /
-//   host.lastSearchQuery / host.reconcileById / host.searchBuilding /
-//   host.searchSections / host.searchOrdered / host.searchRefreshMode /
-//   host.searchReveal / host.searchRowVisible / host.sectionVisible /
-//   host.rowSourcesById / host.sourceMarksOn / host.submitSearch
+//   host.fill / host.fillMedia / host.filterType / host.height / host.width /
+//   host.lastSearchQuery / host.reconcileById / host.searchSections /
+//   host.searchOrdered / host.searchRefreshMode / host.searchReveal /
+//   host.searchRowVisible / host.sectionVisible / host.rowSourcesById /
+//   host.sourceMarksOn / host.submitSearch
+// and writes host.filterType through setFilter (the type chip's route, so
+// the row windows are re-planned around the change).
 // `resultsPane` is the search results Flickable the artist strip's wheel
 // redirect drives.
 // The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
@@ -54,6 +56,12 @@ Column {
   // Neutral section prefs: one SHOW ALL state per kind, carried over from
   // the per-provider keys on first load (see the bridge's prefs migration).
   property var expanded: ({})
+  // A section a user expanded once keeps its rows BUILT through SHOW LESS
+  // and its chips until the next search: the rows become hidden, not
+  // destroyed, so a second SHOW ALL costs nothing. Seeded from the
+  // pref-backed expansion state on each page (a section left expanded keeps
+  // the same guarantee).
+  property var kept: ({})
   // The sortable rows, held raw (not the lossy model copies) so every
   // field, the full date included, survives a re-sort.
   property var albumsRaw: []
@@ -106,20 +114,41 @@ Column {
   function isExpanded(name) {
     return resultsView.expanded[name] === true
   }
+  function keptFor(name) {
+    return resultsView.kept[name] === true
+  }
   function toggleExpanded(name) {
+    // SHOW ALL builds the screen it reveals in this click, so the frame the
+    // rows appear on is finished; the rest incubate below. SHOW LESS keeps
+    // them built, hidden (the kept flags, set here before the reveal). The
+    // windows close first: a still-incubating row must not be forced to
+    // finish inline by a window opened over the old page.
+    resultsView.closeWindows()
     var next = {}
     for (var key in resultsView.expanded)
       next[key] = resultsView.expanded[key]
     next[name] = !resultsView.isExpanded(name)
+    if (next[name]) {
+      var keep = {}
+      for (var k in resultsView.kept)
+        keep[k] = resultsView.kept[k]
+      keep[name] = true
+      resultsView.kept = keep
+    }
     resultsView.expanded = next
     waves.setWavesPref("search_section_" + name + "_expanded", next[name])
+    resultsView.planSync(resultsPane.contentY, name)
   }
   function readPrefs() {
     var next = ({})
+    var keep = ({})
     var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
-    for (var i = 0; i < names.length; ++i)
+    for (var i = 0; i < names.length; ++i) {
       next[names[i]] = waves.wavesPref("search_section_" + names[i] + "_expanded") === true
+      keep[names[i]] = next[names[i]]
+    }
     resultsView.expanded = next
+    resultsView.kept = keep
   }
   // A section shows while the active chips can host its rows (the shared
   // filter rule); the source chip narrows the count the rule reads, so a
@@ -146,6 +175,154 @@ Column {
   function modelIdFor(name, index) {
     var m = resultsView.modelFor(name)
     return m && index < m.count ? m.get(index).id : ""
+  }
+  // --- Row windows --------------------------------------------------------
+  // [from, to) per section: the rows the handler turn builds INLINE, so the
+  // frame the page lands on is the finished screen. Every other shown row
+  // incubates asynchronously with its height reserved (the delegates'
+  // height bindings), so nothing on screen moves when it lands and the page
+  // fills in from the fold down. The window is planned from the Column's
+  // own layout arithmetic, not the live delegates: at plan time the new
+  // rows have not been positioned (or created) yet. Everything that makes
+  // rows appear (a fresh search, SHOW ALL or LESS, a chip, the sort
+  // control) closes the windows, makes its change, and only then plans and
+  // opens the new ones: a row whose `asynchronous` turns false finishes its
+  // incubation on the spot, and opening a window while old rows still stood
+  // would force any of them still incubating to finish on their way out.
+  property var winFrom: ({})
+  property var winTo: ({})
+  function inWindow(name, index) {
+    return index >= 0 && index >= (resultsView.winFrom[name] || 0) && index < (resultsView.winTo[name] || 0)
+  }
+  function closeWindows() {
+    resultsView.winFrom = ({})
+    resultsView.winTo = ({})
+  }
+  // The plan measures the results Column at the page's own geometry: a
+  // spacing-8 Column of 36px headers, 16px SHOW ALL lines and the rows'
+  // reserved heights. `atY` is where the pane lands after the change
+  // (results.contentY; 0 for a fresh search — a Back armed on the pane is
+  // not part of this page). `fromSection` (a section whose own SHOW ALL /
+  // SHOW LESS was clicked) keeps its header in view in the window: SHOW
+  // LESS scrolls back up to it, and the rows there must be built for that
+  // frame.
+  function planSync(atY, fromSection) {
+    var host = resultsView.host
+    var all = host.filterType === "all"
+    var w = resultsView.width > 0 ? resultsView.width : (host.width > 0 ? host.width : 1100)
+    var screen = host.height > 0 ? host.height : 900
+    var y = 8
+    var headY = ({})
+    var secs = ({})
+    function block(h) {
+      y += h + 8
+    }
+    // A 5-capped list row section's own shape: header, shown rows, SHOW ALL.
+    function list(name, n, h, cap, expanded) {
+      if (!resultsView.sectionVisible(name))
+        return
+      headY[name] = y
+      block(36)
+      var shown = all ? (expanded ? n : Math.min(n, cap)) : n
+      secs[name] = {
+        y: y,
+        shown: shown,
+        pitch: h + 8,
+        per: 1
+      }
+      if (shown > 0)
+        block(shown * (h + 8) - 8)
+      if (all && n > cap)
+        block(16)
+    }
+    if (all && resultsView.topVisible) {
+      block(36)
+      var kind = resultsView.topRow.kind
+      block(kind === "album" || kind === "playlist" ? 64 : 62)
+    }
+    var na = artistsModel.count
+    if (resultsView.sectionVisible("artists")) {
+      headY.artists = y
+      block(36)
+      var gc = Math.max(1, Math.floor((w + 12) / (190 + 12)))
+      var cardW = (w - (gc - 1) * 12) / gc
+      var rowH = cardW + 142
+      var shownA = all ? (resultsView.isExpanded("artists") ? na : Math.min(na, 5)) : na
+      secs.artists = {
+        y: y,
+        shown: shownA,
+        pitch: rowH + 12,
+        per: gc
+      }
+      if (shownA > 0)
+        block(Math.ceil(shownA / gc) * (rowH + 12) - 12)
+      if (all && na > 5)
+        block(16)
+    }
+    list("albums", albumsModel.count, 64, 5, resultsView.isExpanded("albums"))
+    list("tracks", tracksModel.count, 62, 5, resultsView.isExpanded("tracks"))
+    var nv = videosModel.count
+    if (resultsView.sectionVisible("videos")) {
+      headY.videos = y
+      block(36)
+      var vc = Math.max(2, Math.floor(w / 320))
+      var cellW = (w - (vc - 1) * 18) / vc
+      var cellH = Math.round(cellW * 9 / 16) + 54
+      var vcap = vc * Math.ceil(5 / vc)
+      var shownV = all ? (resultsView.isExpanded("videos") ? nv : Math.min(nv, vcap)) : nv
+      secs.videos = {
+        y: y,
+        shown: shownV,
+        pitch: cellH + 18,
+        per: vc
+      }
+      if (shownV > 0)
+        block(Math.ceil(shownV / vc) * (cellH + 18) - 18)
+      if (all && nv > vcap)
+        block(16)
+    }
+    list("playlists", playlistsModel.count, 64, 5, resultsView.isExpanded("playlists"))
+    list("mixes", mixesModel.count, 66, 5, resultsView.isExpanded("mixes"))
+    var contentH = y + 8
+    var land = Math.max(0, Math.min(atY || 0, contentH - screen))
+    var top = fromSection !== undefined && headY[fromSection] !== undefined ? Math.min(land, headY[fromSection]) : land
+    var bottom = land + screen + 64
+    var from = ({})
+    var to = ({})
+    var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
+    for (var i = 0; i < names.length; ++i) {
+      var name = names[i]
+      var s = secs[name]
+      if (!s || s.shown <= 0) {
+        from[name] = 0
+        to[name] = 0
+        continue
+      }
+      var lines = Math.ceil(s.shown / s.per)
+      var a = Math.max(0, Math.min(lines, Math.floor((top - s.y) / s.pitch)))
+      var b = Math.max(0, Math.min(lines, Math.ceil((bottom - s.y) / s.pitch)))
+      from[name] = a * s.per
+      to[name] = Math.min(s.shown, b * s.per)
+    }
+    resultsView.winFrom = from
+    resultsView.winTo = to
+  }
+  // A type chip: a whole section's rows show, so it builds them the way
+  // SHOW ALL does, and keeps them (the chip back to All frees nothing).
+  // The screen the page lands on is built in the click.
+  function setFilter(name) {
+    if (name === host.filterType)
+      return
+    resultsView.closeWindows()
+    if (name !== "all") {
+      var keep = {}
+      for (var k in resultsView.kept)
+        keep[k] = resultsView.kept[k]
+      keep[name] = true
+      resultsView.kept = keep
+    }
+    host.filterType = name
+    resultsView.planSync(resultsPane.contentY, name)
   }
   // A row's source marks, gated by the page: a single-source install has
   // nothing to disambiguate and draws no marks; with two or more sources
@@ -177,14 +354,21 @@ Column {
       host.reconcileById(videosModel, host.searchOrdered(resultsView.videosRaw, false), true)
       host.reconcileById(playlistsModel, resultsView.sections.playlists || [], false)
       host.reconcileById(mixesModel, resultsView.sections.mixes || [], false)
+      // Rows the refresh added inside the kept windows build inline; the
+      // re-plan keeps the windows true to the new counts.
+      resultsView.planSync(resultsPane.contentY)
     } else {
-      // A fresh search rebuilds the whole page behind the build veil.
+      // A fresh search: close the windows over the OLD rows (a dying
+      // delegate reads index -1 and must incubate, not finish inline),
+      // rebuild, then plan the screen the page opens on.
+      resultsView.closeWindows()
       host.fill(artistsModel, resultsView.sections.artists || [])
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
       host.fillMedia(videosModel, host.searchOrdered(resultsView.videosRaw, false))
       host.fill(playlistsModel, resultsView.sections.playlists || [])
       host.fill(mixesModel, resultsView.sections.mixes || [])
+      resultsView.planSync(0)
     }
   }
   function applySort(inPlace) {
@@ -196,10 +380,13 @@ Column {
       host.reconcileById(albumsModel, host.searchOrdered(resultsView.albumsRaw, true), true)
       host.reconcileById(tracksModel, host.searchOrdered(resultsView.tracksRaw, true), true)
       host.reconcileById(videosModel, host.searchOrdered(resultsView.videosRaw, false), true)
+      resultsView.planSync(resultsPane.contentY)
     } else {
+      resultsView.closeWindows()
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
       host.fillMedia(videosModel, host.searchOrdered(resultsView.videosRaw, false))
+      resultsView.planSync(resultsPane.contentY)
     }
   }
   function updateArtistPop(id, pop) {
@@ -236,9 +423,7 @@ Column {
       required property var modelData
       visible: resultsView.topVisible
       width: parent.width
-      asynchronous: host.searchBuilding
       opacity: host.searchReveal
-      onLoaded: host._searchBuildTick()
       sourceComponent: topLd.modelData.kind === "album" ? topAlbumComp : topLd.modelData.kind === "playlist" ? topPlaylistComp : topTrackComp
       Component {
         id: topAlbumComp
@@ -316,12 +501,19 @@ Column {
     Repeater {
       model: artistsModel
       delegate: Loader {
-        visible: resultsView.rowVisible("artists", index)
+        // Past the cap a card stays an empty Loader until SHOW ALL (or the
+        // Artists chip) makes it shown; once built it stays built, hidden,
+        // through SHOW LESS until the next search. `index >= 0` guards the
+        // dying delegate a model removal reads -1 on its way out: it must
+        // read as NOT shown, or the page builds every unbuilt row inline
+        // while the old page is clearing.
+        readonly property bool shown: index >= 0 && resultsView.rowVisible("artists", index)
+        active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("artists")))
+        visible: shown
         width: artistFlow.cardW
         height: item ? item.implicitHeight : width + 142
-        asynchronous: host.searchBuilding
+        asynchronous: !shown || !resultsView.inWindow("artists", index)
         opacity: host.searchReveal
-        onLoaded: host._searchBuildTick()
         sourceComponent: ArtistSearchCard {
           host: resultsView.host
           aArt: model.art
@@ -363,14 +555,18 @@ Column {
       // The section filter must hide the LOADER (the Column child);
       // an invisible item inside a sized Loader would still occupy
       // its row. In the mixed All view only the first 5 show until
-      // SHOW ALL; the delegate still loads (and fires its build-veil
-      // tick) while hidden, so the one-tick-per-item count stays
-      // exact.
-      visible: resultsView.rowVisible("albums", index)
+      // SHOW ALL; a row past the cap is not built until then, and once
+      // built it stays built (hidden) through SHOW LESS. `index >= 0`
+      // guards the dying delegate a model removal reads -1 on: it must
+      // read as NOT shown, or the clearing page builds every unbuilt
+      // row inline.
+      readonly property bool shown: index >= 0 && resultsView.rowVisible("albums", index)
+      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("albums")))
+      visible: shown
       width: parent.width
-      asynchronous: host.searchBuilding
+      height: item ? item.implicitHeight : 64
+      asynchronous: !shown || !resultsView.inWindow("albums", index)
       opacity: host.searchReveal
-      onLoaded: host._searchBuildTick()
       sourceComponent: AlbumBlock {
         host: resultsView.host
         albumId: model.id
@@ -409,11 +605,13 @@ Column {
   Repeater {
     model: tracksModel
     delegate: Loader {
-      visible: resultsView.rowVisible("tracks", index)
+      readonly property bool shown: index >= 0 && resultsView.rowVisible("tracks", index)
+      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("tracks")))
+      visible: shown
       width: parent.width
-      asynchronous: host.searchBuilding
+      height: 62   // TrackRow's fixed height, reserved while the row incubates
+      asynchronous: !shown || !resultsView.inWindow("tracks", index)
       opacity: host.searchReveal
-      onLoaded: host._searchBuildTick()
       sourceComponent: TrackRow {
         host: resultsView.host
         tId: model.id
@@ -467,12 +665,13 @@ Column {
     Repeater {
       model: videosModel
       delegate: Loader {
-        visible: resultsView.rowVisibleCapped("videos", index, videoGrid.cap)
+        readonly property bool shown: index >= 0 && resultsView.rowVisibleCapped("videos", index, videoGrid.cap)
+        active: shown || (index >= 0 && (index < videoGrid.cap || resultsView.keptFor("videos")))
+        visible: shown
         width: videoGrid.cellW
         height: Math.round(videoGrid.cellW * 9 / 16) + 54
-        asynchronous: host.searchBuilding
+        asynchronous: !shown || !resultsView.inWindow("videos", index)
         opacity: host.searchReveal
-        onLoaded: host._searchBuildTick()
         sourceComponent: VideoCell {
           host: resultsView.host
           width: videoGrid.cellW
@@ -511,16 +710,15 @@ Column {
   Repeater {
     model: playlistsModel
     delegate: Loader {
-      visible: resultsView.rowVisible("playlists", index)
+      readonly property bool shown: index >= 0 && resultsView.rowVisible("playlists", index)
+      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("playlists")))
+      visible: shown
       width: parent.width
-      asynchronous: host.searchBuilding
+      asynchronous: !shown || !resultsView.inWindow("playlists", index)
       opacity: host.searchReveal
-      // Reserve the collapsed row's height while the async build
-      // runs (same rationale as the artist strip's fixed cell):
-      // without it the section collapses to zero and pops open as
-      // each row lands.
+      // Reserve the row's height while it incubates: without it the
+      // section collapses to zero and pops open as each row lands.
       height: item ? item.implicitHeight : 64
-      onLoaded: host._searchBuildTick()
       sourceComponent: PlaylistBlock {
         host: resultsView.host
         plId: model.id
@@ -552,12 +750,13 @@ Column {
   Repeater {
     model: mixesModel
     delegate: Loader {
-      visible: resultsView.rowVisible("mixes", index)
+      readonly property bool shown: index >= 0 && resultsView.rowVisible("mixes", index)
+      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("mixes")))
+      visible: shown
       width: parent.width
       height: 66
-      asynchronous: host.searchBuilding
+      asynchronous: !shown || !resultsView.inWindow("mixes", index)
       opacity: host.searchReveal
-      onLoaded: host._searchBuildTick()
       sourceComponent: Rectangle {
         radius: 10
         color: surface

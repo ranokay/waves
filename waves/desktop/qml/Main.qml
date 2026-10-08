@@ -714,8 +714,9 @@ ApplicationWindow {
     return root.sourceIn(root.rowSourcesById[id] || [], root.effectiveSourceFilter)
   }
   // Rows a payload's sections hold: one sum for a filtered section, the
-  // empty-state gate, the build veil's total and the page count. The pinned
-  // top counts in the mixed All view, as it always did.
+  // empty-state gate, the page count and whether a fresh search has
+  // anything for the library-badge wait to cover. The pinned top counts in
+  // the mixed All view, as it always did.
   function searchRowTotal(sections, type, top) {
     var total = 0
     var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
@@ -727,7 +728,7 @@ ApplicationWindow {
         if (root.rowMatchesSource(rows[i]))
           total += 1
     }
-    // The pin counts in the mixed All view. Callers that arm the build veil
+    // The pin counts in the mixed All view. Callers that arm the badge wait
     // before the payload is applied pass the incoming top explicitly: at that
     // moment root.searchTop still holds the previous page's pin.
     var pinned = top === undefined ? root.searchTop : top
@@ -991,14 +992,39 @@ ApplicationWindow {
   property bool artistEpsCollapsed: waves.wavesPref("artist_sec_eps_collapsed") === true
   property bool artistVideosCollapsed: waves.wavesPref("artist_sec_videos_collapsed") === true
   function toggleArtistSection(which) {
+    // Unfolding builds the section's rows in place, under the header just
+    // clicked: a screenful of them in this click, the rest incubating below
+    // (see _artistPlanSync). The sync budget is set BEFORE the model
+    // reassignment creates the rows, so the ones under the header land in
+    // the click's own turn.
     var v
     if (which === "tracks") {
+      if (artistTracksCollapsed) {
+        _artistSyncFromTracks = 0
+        _artistSyncTracks = _artistScreenful(_artistTrackPitch)
+        _artistReachFrom(which, _artistSyncTracks, true)
+      }
       v = artistTracksCollapsed = !artistTracksCollapsed
     } else if (which === "albums") {
+      if (artistAlbumsCollapsed) {
+        _artistSyncFromAlbums = 0
+        _artistSyncAlbums = _artistScreenful(_artistAlbumPitch)
+        _artistReachFrom(which, _artistSyncAlbums, true)
+      }
       v = artistAlbumsCollapsed = !artistAlbumsCollapsed
     } else if (which === "videos") {
+      if (artistVideosCollapsed) {
+        _artistSyncFromVideos = 0
+        _artistSyncVideos = _artistScreenful(_artistVideoPitch()) * artistVideoGrid.cols
+        _artistReachFrom(which, _artistSyncVideos, true)
+      }
       v = artistVideosCollapsed = !artistVideosCollapsed
     } else {
+      if (artistEpsCollapsed) {
+        _artistSyncFromEps = 0
+        _artistSyncEps = _artistScreenful(_artistAlbumPitch)
+        _artistReachFrom(which, _artistSyncEps, true)
+      }
       v = artistEpsCollapsed = !artistEpsCollapsed
     }
     waves.setWavesPref("artist_sec_" + which + "_collapsed", v)
@@ -1014,16 +1040,260 @@ ApplicationWindow {
   property bool artistEpsExpanded: waves.wavesPref("artist_sec_eps_expanded") === true
   property bool artistVideosExpanded: waves.wavesPref("artist_sec_videos_expanded") === true
   function toggleArtistExpand(which) {
+    // SHOW ALL builds the rows it reveals: a screenful right under the rows
+    // already shown in this click, the rest incubating below (see
+    // _artistPlanSync). SHOW LESS keeps them built, hidden (the kept flags,
+    // set here before the reveal), so a second SHOW ALL costs nothing.
     var v
-    if (which === "tracks")
+    if (which === "tracks") {
+      if (!topTracksExpanded) {
+        _artistSyncTracks = Math.max(_artistSyncTracks, 5 + _artistScreenful(_artistTrackPitch))
+        _artistKeptTracks = true
+        _artistReachFrom(which, _artistSyncTracks, false)
+      }
       v = topTracksExpanded = !topTracksExpanded
-    else if (which === "albums")
+    } else if (which === "albums") {
+      if (!artistAlbumsExpanded) {
+        _artistSyncAlbums = Math.max(_artistSyncAlbums, 5 + _artistScreenful(_artistAlbumPitch))
+        _artistKeptAlbums = true
+        _artistReachFrom(which, _artistSyncAlbums, false)
+      }
       v = artistAlbumsExpanded = !artistAlbumsExpanded
-    else if (which === "eps")
+    } else if (which === "eps") {
+      if (!artistEpsExpanded) {
+        _artistSyncEps = Math.max(_artistSyncEps, 5 + _artistScreenful(_artistAlbumPitch))
+        _artistKeptEps = true
+        _artistReachFrom(which, _artistSyncEps, false)
+      }
       v = artistEpsExpanded = !artistEpsExpanded
-    else
+    } else {
+      if (!artistVideosExpanded) {
+        _artistSyncVideos = Math.max(_artistSyncVideos, artistVideoGrid.fillCount + _artistScreenful(_artistVideoPitch()) * artistVideoGrid.cols)
+        _artistKeptVideos = true
+        _artistReachFrom(which, _artistSyncVideos, false)
+      }
       v = artistVideosExpanded = !artistVideosExpanded
+    }
     waves.setWavesPref("artist_sec_" + which + "_expanded", v)
+  }
+  // --- Artist-page row builds: bounded, top-first ------------------------
+  // The same two rules as the search results' row windows, per section: a
+  // row past a section's cap is not built until SHOW ALL (or an unfold)
+  // makes it shown, and of the shown rows only the screen the page lands on
+  // is built inline — the rest incubate with their heights reserved. The
+  // sections grow a screenful at a time, the next batch only after the
+  // previous has landed, so a long page fills in from the fold down (Qt
+  // incubates the newest Loader first, so a section whose rows were all
+  // active at once landed its last rows first and the rows under the
+  // opening screen last of all). The reach is how far down a section's rows
+  // exist at all.
+  property int _artistSyncFromTracks: 0
+  property int _artistSyncFromAlbums: 0
+  property int _artistSyncFromEps: 0
+  property int _artistSyncFromVideos: 0
+  property int _artistSyncTracks: 0
+  property int _artistSyncAlbums: 0
+  property int _artistSyncEps: 0
+  property int _artistSyncVideos: 0
+  property int _artistReachTracks: 0
+  property int _artistReachAlbums: 0
+  property int _artistReachEps: 0
+  property int _artistReachVideos: 0
+  property int _artistLandedTracks: 0
+  property int _artistLandedAlbums: 0
+  property int _artistLandedEps: 0
+  property int _artistLandedVideos: 0
+  // Set by a section's SHOW ALL, cleared for a fresh page: the rows it
+  // built stay built (hidden) through SHOW LESS.
+  property bool _artistKeptTracks: false
+  property bool _artistKeptAlbums: false
+  property bool _artistKeptEps: false
+  property bool _artistKeptVideos: false
+  // Pitch of each kind of row in artistCol (its 12px spacing included) and
+  // of the videos' grid rows, for the plan and the growth batches. A
+  // section header is 36, a SHOW ALL line about 16.
+  readonly property int _artistTrackPitch: 62 + 12
+  readonly property int _artistAlbumPitch: 64 + 12
+  // The grid is not laid out until the page has been shown once.
+  function _artistVideoPitch() {
+    return Math.round(Math.max(artistVideoGrid.cellW, 200) * 9 / 16) + 54 + 18
+  }
+  function _artistSecKey(which) {
+    return which === "tracks" ? "Tracks" : which === "albums" ? "Albums" : which === "eps" ? "Eps" : "Videos"
+  }
+  function _artistScreenful(pitch) {
+    var h = artistView.height > 0 ? artistView.height : root.height
+    return Math.ceil(Math.max(1, h) / pitch) + 1
+  }
+  function _artistBatch(which) {
+    if (which === "videos")
+      return _artistScreenful(_artistVideoPitch()) * artistVideoGrid.cols
+    return _artistScreenful(which === "tracks" ? _artistTrackPitch : _artistAlbumPitch)
+  }
+  // The rows a section would create with no reach in the way.
+  function _artistActiveCount(which) {
+    if (which === "tracks")
+      return topTracksExpanded || _artistKeptTracks ? artistTracksModel.count : Math.min(artistTracksModel.count, 5)
+    if (which === "albums")
+      return artistAlbumsExpanded || _artistKeptAlbums ? artistAlbumsModel.count : Math.min(artistAlbumsModel.count, 5)
+    if (which === "eps")
+      return artistEpsExpanded || _artistKeptEps ? artistEpModel.count : Math.min(artistEpModel.count, 5)
+    return artistVideosExpanded || _artistKeptVideos ? artistVideosModel.count : Math.min(artistVideosModel.count, artistVideoGrid.fillCount)
+  }
+  // A section's rows exist from the start down to the end of its inline
+  // window plus a batch; called wherever a window is (re)planned.
+  function _artistReachFrom(which, syncEnd, fresh) {
+    var k = _artistSecKey(which)
+    if (fresh)
+      root["_artistLanded" + k] = 0
+    root["_artistReach" + k] = Math.max(fresh ? 0 : root["_artistReach" + k], syncEnd + _artistBatch(which))
+  }
+  // A row landed: once every row within reach has, the reach grows by a
+  // batch and the next rows are created. The growth runs from the event
+  // loop, never from the row's own loaded signal: a row built inline loads
+  // while its Loader is still writing `active`, which reads the reach, and
+  // growing it there is a binding loop.
+  function _artistRowLanded(which) {
+    root["_artistLanded" + _artistSecKey(which)] = root["_artistLanded" + _artistSecKey(which)] + 1
+    Qt.callLater(root._artistReachCheck)
+  }
+  function _artistReachCheck() {
+    var secs = ["tracks", "albums", "eps", "videos"]
+    for (var i = 0; i < secs.length; ++i) {
+      var k = _artistSecKey(secs[i])
+      var reach = root["_artistReach" + k]
+      if (root["_artistLanded" + k] >= Math.min(_artistActiveCount(secs[i]), reach))
+        root["_artistReach" + k] = reach + _artistBatch(secs[i])
+    }
+  }
+  // The rows to build in the fill for page p: every shown row that starts
+  // above the bottom of the screen the page opens on (the top, or the spot
+  // a Back restores, atY). Measured from the header at its shortest (150:
+  // the photo row; the bio is capped to it), the collapsed row heights and
+  // the WINDOW's height (the page's own is stale or zero while it is
+  // hidden, and the layout only sizes it after this), so an error builds a
+  // row more inline, never one fewer.
+  function _artistPlanSync(p, atY) {
+    var top = atY > 0 ? atY : 0
+    var bottom = top + root.height + 64
+    var y = 8 + 150 + 12
+    var tracks = (p.tracks || []).length
+    var albums = (p.albums || []).length
+    var eps = (p.eps || []).length
+    var videos = (p.videos || []).length
+    var w = null
+    // n rows at `pitch`; folded shows `cap`, collapsed shows none. Returns
+    // [from, to) rows overlapping [top, bottom).
+    function fit(n, pitch, collapsed, cap, expanded) {
+      if (n <= 0)
+        return [0, 0]
+      y += 36 + 12
+      if (collapsed)
+        return [0, 0]
+      var shown = expanded ? n : Math.min(n, cap)
+      var k = 0
+      var from = -1
+      while (k < shown && y < bottom) {
+        if (from < 0 && y + pitch > top)
+          from = k
+        y += pitch
+        ++k
+      }
+      if (k < shown)
+        y += (shown - k) * pitch
+      if (n > cap)
+        y += 16 + 12
+      return [from < 0 ? k : from, k]
+    }
+    w = fit(tracks, _artistTrackPitch, artistTracksCollapsed, 5, topTracksExpanded)
+    _artistSyncFromTracks = w[0]
+    _artistSyncTracks = w[1]
+    w = fit(albums, _artistAlbumPitch, artistAlbumsCollapsed, 5, artistAlbumsExpanded)
+    _artistSyncFromAlbums = w[0]
+    _artistSyncAlbums = w[1]
+    w = fit(eps, _artistAlbumPitch, artistEpsCollapsed, 5, artistEpsExpanded)
+    _artistSyncFromEps = w[0]
+    _artistSyncEps = w[1]
+    // Videos are whole grid rows: the window covers the lines that overlap
+    // the screen, converted back to cell indices.
+    var cols = Math.max(1, artistVideoGrid.cols)
+    var vcap = artistVideoGrid.fillCount
+    _artistSyncFromVideos = 0
+    _artistSyncVideos = 0
+    if (videos > 0) {
+      y += 36 + 12
+      if (!artistVideosCollapsed) {
+        var vpitch = _artistVideoPitch()
+        var vlines = Math.ceil((artistVideosExpanded ? videos : Math.min(videos, vcap)) / cols)
+        var vk = 0
+        var vfrom = -1
+        while (vk < vlines && y < bottom) {
+          if (vfrom < 0 && y + vpitch > top)
+            vfrom = vk
+          y += vpitch
+          ++vk
+        }
+        if (vk < vlines)
+          y += (vlines - vk) * vpitch
+        if (videos > vcap)
+          y += 16 + 12
+        _artistSyncFromVideos = (vfrom < 0 ? vk : vfrom) * cols
+        _artistSyncVideos = vk * cols
+      }
+    }
+    _artistReachFrom("tracks", _artistSyncTracks, true)
+    _artistReachFrom("albums", _artistSyncAlbums, true)
+    _artistReachFrom("eps", _artistSyncEps, true)
+    _artistReachFrom("videos", _artistSyncVideos, true)
+  }
+  // The one place that fills the four artist-page models. A fresh page
+  // clears the old rows, THEN plans its inline rows and appends: each row's
+  // Loader reads its budget as it is created. atY: where the caller lands
+  // the page, when it lands it itself (a Back restore). A revalidate's
+  // refresh reconciles by id instead (inPlace), keeping the rows the user
+  // is reading and any expanded panel.
+  function fillArtistPage(p, inPlace, atY) {
+    var albums = p.albums || []
+    var eps = p.eps || []
+    var tracks = p.tracks || []
+    var videos = p.videos || []
+    if (inPlace) {
+      // Rows kept, so every row the payload carries may exist.
+      _artistReachFrom("tracks", tracks.length, false)
+      _artistReachFrom("albums", albums.length, false)
+      _artistReachFrom("eps", eps.length, false)
+      _artistReachFrom("videos", videos.length, false)
+      reconcileById(artistAlbumsModel, albums, true)
+      reconcileById(artistEpModel, eps, true)
+      reconcileById(artistTracksModel, tracks, true)
+      reconcileById(artistVideosModel, videos, true)
+      return
+    }
+    // Close the sync windows over the old rows (a dying delegate reads
+    // index -1 and must incubate, not finish inline), then plan.
+    _artistSyncFromTracks = 0
+    _artistSyncTracks = 0
+    _artistSyncFromAlbums = 0
+    _artistSyncAlbums = 0
+    _artistSyncFromEps = 0
+    _artistSyncEps = 0
+    _artistSyncFromVideos = 0
+    _artistSyncVideos = 0
+    artistAlbumsModel.clear()
+    artistEpModel.clear()
+    artistTracksModel.clear()
+    artistVideosModel.clear()
+    _artistPlanSync(p, atY)
+    // A section that opens expanded keeps its rows through SHOW LESS
+    // exactly as one expanded by a click does.
+    _artistKeptTracks = topTracksExpanded
+    _artistKeptAlbums = artistAlbumsExpanded
+    _artistKeptEps = artistEpsExpanded
+    _artistKeptVideos = artistVideosExpanded
+    appendMedia(artistAlbumsModel, albums)
+    appendMedia(artistEpModel, eps)
+    appendMedia(artistTracksModel, tracks)
+    appendMedia(artistVideosModel, videos)
   }
   // The search page (mixed All view) shows each section's first 5 results with
   // a SHOW ALL beneath it, so the page reads as a quick overview instead of a
@@ -1624,28 +1894,20 @@ ApplicationWindow {
     }
   }
   // --- Search results build veil ----------------------------------------
-  // Same treatment for a fresh search: every result card (artists, albums,
-  // tracks, videos, playlists, mixes) incubates through an asynchronous
-  // Loader while searchBuilding holds the pane at opacity 0 behind the
-  // "Reading the wire…" hint, then the finished page appears in one paint.
-  // The Loaders' asynchronous flag reads searchBuilding itself, so refills
-  // outside a fresh search (the albums sort control) stay synchronous, an
-  // in-place swap with no loading flash.
-  property int _searchBuildTotal: 0
-  property int _searchBuildReady: 0
+  // A fresh search's page is finished the frame its payload arrives: the
+  // rows on the screen it opens on are built inline by the results view's
+  // own row windows (see SearchResults.planSync), and the rest incubate
+  // with their heights reserved. What remains to wait for is the LIBRARY:
+  // until the presence index has answered, every badge the finished rows
+  // will wear resolves to "not present", and revealing then would light
+  // them a frame later over the page the veil was holding back. So the
+  // veil stays up only while the library has not answered, with the guard
+  // as the ceiling when it never does.
   property bool searchBuilding: false
-  // The library has not answered yet, so the badges the finished cards will
-  // wear are not knowable and every pill would resolve to "not present".
-  // Revealing here would render the search bare and then light every badge
-  // one frame later; the veil is already up, so waiting costs nothing but
-  // the wait, and searchBuildGuard is still the ceiling that ends it
-  // whatever the library is doing.
   property bool _searchAwaitingLibrary: false
   function _searchBuildStart(n) {
-    _searchBuildTotal = n
-    _searchBuildReady = 0
     _searchAwaitingLibrary = n > 0 && !waves.libraryIndexReady()
-    searchBuilding = n > 0
+    searchBuilding = _searchAwaitingLibrary
     // A pending release from the PREVIOUS build would clear this one's wait
     // a pass after it started, revealing the new page unanswered.
     searchLibraryReveal.stop()
@@ -1654,30 +1916,15 @@ ApplicationWindow {
     else
       searchBuildGuard.stop()
   }
-  function _searchBuildTick() {
-    if (!searchBuilding)
-      return
-    searchBuildGuard.restart()
-    // progress: the guard watches for a STALL
-    if (++_searchBuildReady >= _searchBuildTotal)
-      _searchBuildMaybeReveal()
-  }
-  // Both conditions, from either side: the last card can finish before the
-  // index publishes or after it, and whichever lands second drops the veil.
   function _searchBuildMaybeReveal() {
-    if (!searchBuilding)
-      return
-    if (_searchBuildReady < _searchBuildTotal || _searchAwaitingLibrary)
+    if (!searchBuilding || _searchAwaitingLibrary)
       return
     searchBuilding = false
     searchBuildGuard.stop()
   }
-  // A loader that errors (or a miscount) must never pin the veil, and neither
-  // must a library that never answers. Re-armed by every loader that reports,
-  // so this is an inactivity timeout rather than a budget for the whole
-  // build: a full result set is well over a hundred async Loaders and would
-  // blow through a fixed 800ms, dropping the veil mid-incubation so the rest
-  // of the page (its badges included) arrives card by card.
+  // A library that never answers must not pin the veil. The guard is the
+  // ceiling on the wait, not a budget for the build (no row ticks re-arm
+  // it any more).
   Timer {
     id: searchBuildGuard
     interval: 800
@@ -3266,12 +3513,8 @@ ApplicationWindow {
           // against in onArtistLoaded.
           var pageLoaded = artistData && ("" + artistData.id) === ("" + s.artistData.id) && !!artistData.libraryScoped === !!s.artistData.libraryScoped
           artistData = s.artistData
-          if (!pageLoaded) {
-            fillMedia(artistAlbumsModel, s.artistData.albums || [])
-            fillMedia(artistEpModel, s.artistData.eps || [])
-            fillArtistTracks(s.artistData.tracks || [])
-            fillMedia(artistVideosModel, s.artistData.videos || [])
-          }
+          if (!pageLoaded)
+            fillArtistPage(s.artistData, false, s.artistY || 0)
           resetExpandedAlbums(s.expandedAlbums)
           bioExpanded = !!s.bio
           artistOpen = true
@@ -5183,9 +5426,6 @@ ApplicationWindow {
   ListModel {
     id: artistTracksModel
   }
-  ListModel {
-    id: artistTracksPreviewModel
-  }
   // folder_id -> playlists remaining in its "download all" (badge digit).
   // Pane-wide: folder ids are the library's, and the badge rides the folder
   // button wherever its row renders.
@@ -5778,11 +6018,6 @@ ApplicationWindow {
   function fillMedia(model, arr) {
     model.clear()
     appendMedia(model, arr)
-  }
-  function fillArtistTracks(tracks) {
-    var rows = tracks || []
-    fillMedia(artistTracksPreviewModel, rows.slice(0, 5))
-    fillMedia(artistTracksModel, rows)
   }
 
   // In-place refill keyed by id, for the search page's stale-then-refresh.
@@ -6446,12 +6681,11 @@ ApplicationWindow {
       root.filterType = "all"
       // A section a user expanded stays expanded on the next search (the
       // pref-backed flags), so nothing is reset here.
-      // Arm the build veil BEFORE the sections fill: the Loaders each
-      // delegate creates read searchBuilding for their asynchronous flag,
-      // and the ready ticks only ever arrive on later frames, never
-      // mid-fill. One tick per row the page will instantiate, with the
-      // incoming pin passed explicitly (root.searchTop still holds the
-      // previous page's at this point).
+      // Arm the library-badge wait BEFORE the sections fill: the incoming
+      // pin counts explicitly (root.searchTop still holds the previous
+      // page's at this point). The rows themselves need no veil accounting:
+      // the results view's row windows build the opening screen inline and
+      // incubate the rest.
       root._searchBuildStart(root.searchRowTotal(r.sections || ({}), "all", r.top !== undefined ? r.top : null))
       root.applySearchResults(r, false)
       root.registerPinnedArtists()
@@ -6500,12 +6734,10 @@ ApplicationWindow {
         if (!root.artistOpen || !root.artistData || root.artistData.libraryScoped || ("" + root.artistData.id) !== ("" + p.id))
           return
         artistView.holdScroll()
-        // in-place swap: keep the user's spot
+        // in-place swap: keep the user's spot and the rows (reconcile by
+        // id), so an expanded panel stays expanded and nothing flickers
         root.artistData = p
-        root.fillMedia(artistAlbumsModel, p.albums)
-        root.fillMedia(artistEpModel, p.eps)
-        root.fillArtistTracks(p.tracks)
-        root.fillMedia(artistVideosModel, p.videos || [])
+        root.fillArtistPage(p, true, 0)
         return
       }
       if (root.videoNow)
@@ -6521,9 +6753,16 @@ ApplicationWindow {
       // (armed in navBack); any other load starts the page collapsed.
       var pr = root._artistRestoreState
       root._artistRestoreState = null
+      // A Back into this artist lands the page on its saved spot: the fill
+      // plans its inline rows around THAT screen, not the top (see
+      // _artistPlanSync), so the restored viewport is built for the frame
+      // it appears in.
+      var atY = 0
       if (pr && pr.id === ("" + p.id)) {
         root.resetExpandedAlbums(pr.ex)
         root.bioExpanded = !!pr.bio
+        if (artistView.pendingRestoreKey === ("" + p.id) && artistView.pendingRestoreY > 0)
+          atY = artistView.pendingRestoreY
       } else {
         root.bioExpanded = false
         root.resetExpandedAlbums({})
@@ -6531,10 +6770,7 @@ ApplicationWindow {
       root.artistOpen = true
       // target-first (see openLibrary): keep Search inactive mid-switch
       root.libraryOpen = false
-      root.fillMedia(artistAlbumsModel, p.albums)
-      root.fillMedia(artistEpModel, p.eps)
-      root.fillArtistTracks(p.tracks)
-      root.fillMedia(artistVideosModel, p.videos || [])
+      root.fillArtistPage(p, false, atY)
     }
     // The whole queue (a full resync); updateQueueCounts, at the end of
     // the reconcile, rebuilds every mirror and count from it.
@@ -7479,13 +7715,13 @@ ApplicationWindow {
                   checkable: true
                   checked: tchip.on
                   focusRadius: 8
-                  onTriggered: root.filterType = tchip.modelData[0]
+                  onTriggered: searchResultsView.setFilter(tchip.modelData[0])
                 }
                 // Cascade in left-to-right the moment results land, decoupled
-                // from the card build veil (searchBuilding): gating the chips on
-                // the veil made them arrive late on a cold first search and flicker
-                // out then back in on every re-search. They now appear as soon as
-                // results exist and stay put while the cards paint behind the veil.
+                // from the build state (searchBuilding): gating the chips on it
+                // made them arrive late on a cold first search and flicker out
+                // then back in on every re-search. They now appear as soon as
+                // results exist and stay put while the rows build by window.
                 // Reset when cleared.
                 states: State {
                   name: "in"
@@ -8924,30 +9160,47 @@ ApplicationWindow {
             collapsed: root.artistTracksCollapsed
             onToggled: root.toggleArtistSection("tracks")
           }
+          // Every section builds only the rows it shows (see the artist
+          // row-build block): a row past the cap is an empty, hidden
+          // Loader until SHOW ALL, and once built it stays built, so a
+          // second SHOW ALL costs nothing. Of the shown rows, those under
+          // the section's sync window build inline and the rest incubate; a
+          // row's height is reserved either way, so the page has its height
+          // (and a Back restore its target) at once. A row being removed (a
+          // refill clears the model) reads index -1 before it dies: it must
+          // read as NOT shown, or every unbuilt row past the cap is built
+          // inline on its way out, and as asynchronous, or one still
+          // incubating is forced to finish at that moment.
           Repeater {
             id: artistTopTracksRep
             // null model while collapsed: no delegates exist at all,
             // cheaper than count instances with visible: false.
-            model: root.artistTracksCollapsed ? null : root.topTracksExpanded ? artistTracksModel : artistTracksPreviewModel
-            delegate: TrackRow {
-              host: root
-              required property var model
-              required property int index
+            model: root.artistTracksCollapsed ? null : artistTracksModel
+            delegate: Loader {
+              readonly property bool shown: index >= 0 && (index < 5 || root.topTracksExpanded)
+              active: (shown || (index >= 0 && root._artistKeptTracks)) && index < root._artistReachTracks
+              visible: shown
               width: artistCol.width
-              tId: model.id
-              title: model.title
-              artistName: model.artist
-              artistId: ""
-              album: model.album
-              art: model.art
-              year: model.year
-              date: model.date
-              duration: model.duration
-              durationSec: model.duration_sec || 0
-              quality: model.quality
-              popularity: model.popularity
-              explicit: model.explicit === true
-              albumId: model.album_id || ""
+              height: 62   // TrackRow's fixed height, reserved while the row incubates
+              asynchronous: index < root._artistSyncFromTracks || index >= root._artistSyncTracks
+              onLoaded: root._artistRowLanded("tracks")
+              sourceComponent: TrackRow {
+                host: root
+                tId: model.id
+                title: model.title
+                artistName: model.artist
+                artistId: ""
+                album: model.album
+                art: model.art
+                year: model.year
+                date: model.date
+                duration: model.duration
+                durationSec: model.duration_sec || 0
+                quality: model.quality
+                popularity: model.popularity
+                explicit: model.explicit === true
+                albumId: model.album_id || ""
+              }
             }
           }
           ShowAllLabel {
@@ -8971,25 +9224,34 @@ ApplicationWindow {
             onToggled: root.toggleArtistSection("albums")
           }
           Repeater {
+            id: artistAlbumsRep
             model: root.artistAlbumsCollapsed ? null : artistAlbumsModel
-            delegate: AlbumBlock {
-              host: root
-              required property var model
-              required property int index
-              visible: index < 5 || root.artistAlbumsExpanded
+            delegate: Loader {
+              readonly property bool shown: index >= 0 && (index < 5 || root.artistAlbumsExpanded)
+              active: (shown || (index >= 0 && root._artistKeptAlbums)) && index < root._artistReachAlbums
+              visible: shown
               width: artistCol.width
-              albumId: model.id
-              title: model.title
-              artistName: model.artist
-              artistId: ""
-              art: model.art
-              year: model.year
-              releaseDate: model.date
-              listedDate: model.listed || ""
-              trackCount: model.tracks
-              durationSec: model.duration_sec || 0
-              quality: model.quality
-              popularity: model.popularity
+              // The collapsed row's height until the block exists; the
+              // block's own height from then on, so an expanded panel
+              // still grows the row.
+              height: item ? item.implicitHeight : 64
+              asynchronous: index < root._artistSyncFromAlbums || index >= root._artistSyncAlbums
+              onLoaded: root._artistRowLanded("albums")
+              sourceComponent: AlbumBlock {
+                host: root
+                albumId: model.id
+                title: model.title
+                artistName: model.artist
+                artistId: ""
+                art: model.art
+                year: model.year
+                releaseDate: model.date
+                listedDate: model.listed || ""
+                trackCount: model.tracks
+                durationSec: model.duration_sec || 0
+                quality: model.quality
+                popularity: model.popularity
+              }
             }
           }
           ShowAllLabel {
@@ -9012,25 +9274,31 @@ ApplicationWindow {
             onToggled: root.toggleArtistSection("eps")
           }
           Repeater {
+            id: artistEpsRep
             model: root.artistEpsCollapsed ? null : artistEpModel
-            delegate: AlbumBlock {
-              host: root
-              required property var model
-              required property int index
-              visible: index < 5 || root.artistEpsExpanded
+            delegate: Loader {
+              readonly property bool shown: index >= 0 && (index < 5 || root.artistEpsExpanded)
+              active: (shown || (index >= 0 && root._artistKeptEps)) && index < root._artistReachEps
+              visible: shown
               width: artistCol.width
-              albumId: model.id
-              title: model.title
-              artistName: model.artist
-              artistId: ""
-              art: model.art
-              year: model.year
-              releaseDate: model.date
-              listedDate: model.listed || ""
-              trackCount: model.tracks
-              durationSec: model.duration_sec || 0
-              quality: model.quality
-              popularity: model.popularity
+              height: item ? item.implicitHeight : 64
+              asynchronous: index < root._artistSyncFromEps || index >= root._artistSyncEps
+              onLoaded: root._artistRowLanded("eps")
+              sourceComponent: AlbumBlock {
+                host: root
+                albumId: model.id
+                title: model.title
+                artistName: model.artist
+                artistId: ""
+                art: model.art
+                year: model.year
+                releaseDate: model.date
+                listedDate: model.listed || ""
+                trackCount: model.tracks
+                durationSec: model.duration_sec || 0
+                quality: model.quality
+                popularity: model.popularity
+              }
             }
           }
           ShowAllLabel {
@@ -9083,22 +9351,29 @@ ApplicationWindow {
             readonly property real cellW: (width - (cols - 1) * spacing) / cols
             readonly property int fillCount: Math.ceil(6 / cols) * cols
             Repeater {
+              id: artistVideosRep
               model: root.artistVideosCollapsed ? null : artistVideosModel
-              delegate: VideoCell {
-                host: root
-                required property var model
-                required property int index
-                visible: index < artistVideoGrid.fillCount || root.artistVideosExpanded
+              delegate: Loader {
+                readonly property bool shown: index >= 0 && (index < artistVideoGrid.fillCount || root.artistVideosExpanded)
+                active: (shown || (index >= 0 && root._artistKeptVideos)) && index < root._artistReachVideos
+                visible: shown
                 width: artistVideoGrid.cellW
-                vid: model.id
-                vcTitle: model.title
-                vcArtist: model.artist
-                artUrl: model.art
-                artBigUrl: model.art_big || ""
-                vcDuration: model.duration
-                vcExplicit: model.explicit === true
-                vcSpec: model.quality || ""
-                vcDate: model.date
+                height: Math.round(artistVideoGrid.cellW * 9 / 16) + 54
+                asynchronous: index < root._artistSyncFromVideos || index >= root._artistSyncVideos
+                onLoaded: root._artistRowLanded("videos")
+                sourceComponent: VideoCell {
+                  host: root
+                  width: artistVideoGrid.cellW
+                  vid: model.id
+                  vcTitle: model.title
+                  vcArtist: model.artist
+                  artUrl: model.art
+                  artBigUrl: model.art_big || ""
+                  vcDuration: model.duration
+                  vcExplicit: model.explicit === true
+                  vcSpec: model.quality || ""
+                  vcDate: model.date
+                }
               }
             }
           }
