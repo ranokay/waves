@@ -2,14 +2,16 @@
 
 The bridge tests are Qt-free: they bind the real, unbound ``WavesBridge`` methods
 onto a minimal stand-in and drive them with fakes instead of a live QObject, a
-QThreadPool, or an event loop. ``_Signal`` and ``_InlinePool`` live here as the
-single source of truth; import them with
+QThreadPool, or an event loop. ``_Signal`` (``support.signals.RecordingSignal``)
+and ``_InlinePool`` are the shared doubles; import them with
 ``from conftest import _Signal, _InlinePool``.
 
 Deliberately NOT centralized:
   * ``_Stub`` stays per-file. It is not one fake but many: each test's stand-in
     carries exactly the state that test's bound methods read and write, so a
-    shared version would be a grab-bag, not a contract.
+    shared version would be a grab-bag, not a contract. Each inherits
+    ``support.bridge_stub.BridgeStub``, which only answers the bridge's public
+    signals.
   * A couple of purpose-built variants keep their own copy where the extra
     behavior is the point (e.g. an _InlinePool that counts ``start()`` calls, or
     a signal double that records single values under a different name).
@@ -20,9 +22,11 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
+import sys
 import tempfile
 
 import pytest
+from support.signals import RecordingSignal
 
 # Every test in this suite runs against a throwaway config directory.
 #
@@ -49,20 +53,9 @@ os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
 atexit.register(shutil.rmtree, _TEST_CONFIG_HOME, True)
 
 
-class _Signal:
-    """Stand-in for a Qt signal that records what was emitted.
-
-    ``emit`` stores a single argument as itself and multiple arguments as a
-    tuple, so a test can assert on ``sig.emits`` exactly what QML (or a connected
-    slot) would have received. It has no ``connect``: the bound code paths under
-    test only ever ``emit`` these, never connect to them.
-    """
-
-    def __init__(self) -> None:
-        self.emits: list = []
-
-    def emit(self, *args) -> None:
-        self.emits.append(args[0] if len(args) == 1 else args)
+# The recording signal double lives in support.signals (QML scenario children
+# import it without this conftest); `_Signal` stays its name here.
+_Signal = RecordingSignal
 
 
 class _InlinePool:
@@ -90,6 +83,27 @@ class _InlineWriter:
 
     def flush(self, timeout: float = 0.0) -> None:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _bridge_stand_ins_are_bridge_stubs():
+    """Every object a test runs bridge methods on is a support.bridge_stub
+    BridgeStub (or a real bridge or a mock), so a new bridge signal reaches it
+    without an edit. Tests that never load the bridge skip the check."""
+    if "waves.desktop.backend" not in sys.modules:
+        yield
+        return
+    from support import bridge_stub
+
+    bridge_stub.watch_stand_ins()
+    bridge_stub.take_offenders()
+    yield
+    offenders = bridge_stub.take_offenders()
+    if offenders:
+        pytest.fail(
+            "bridge methods ran on stand-ins that are not support.bridge_stub.BridgeStub:\n" + "\n".join(offenders),
+            pytrace=False,
+        )
 
 
 @pytest.fixture

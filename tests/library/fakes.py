@@ -12,6 +12,7 @@ import threading
 from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.library.index import LibraryIndex, cache_file_for_root
@@ -95,7 +96,7 @@ _METHODS = (
 )
 
 
-class LibraryStub:
+class LibraryStub(BridgeStub):
     pass
 
 
@@ -184,11 +185,6 @@ def make_library_bridge(
     # The Library section's file-page state (ADR 0007).
     s._library_files_gen = {}
     s._library_files_loading = {}
-    s.libraryPresenceChanged = _Signal()
-    s.libraryScanStatusChanged = _Signal()
-    s.librarySourceChanged = _Signal()
-    s.libraryFilesLoaded = _Signal()
-    s.libraryFilesMore = _Signal()
     # The change-of-source path tears down the file watcher and persists prefs;
     # both are Qt/disk side effects out of scope for this glue test, so stub them
     # to no-ops. _logged_in is False so nothing re-initialises Download.

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop import backend as backend_mod
 from waves.desktop.library.bridge import _IN_PROCESS, LibraryMixin
 from waves.desktop.library.scan_process import LibraryWorker, WorkerFailed
@@ -52,7 +54,7 @@ class _Worker(LibraryWorker):
 
 
 def _stub(worker):
-    s = SimpleNamespace(
+    s = BridgeStub(
         _library_worker=worker,
         settings=SimpleNamespace(file_path="/tmp/cfg/waves.json"),
         _library_gen=1,

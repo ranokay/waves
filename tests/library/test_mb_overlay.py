@@ -20,11 +20,13 @@ tests/library/test_library_claim_gate.py: no Qt, no network, no files.
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 import waves.metadata.matching as matching
 from waves.desktop.library.bridge import LibraryMixin
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """A bare object carrying just what the overlay methods consult."""
 
     _mb_arbitrated = LibraryMixin._mb_arbitrated

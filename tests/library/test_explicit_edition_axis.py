@@ -1078,5 +1078,5 @@ def test_the_reveal_stats_nothing_on_the_gui_thread(tmp_path, monkeypatch):
 def test_the_resolved_reveal_slot_routes_through_the_safe_reveal(monkeypatch):
     seen: list = []
     monkeypatch.setattr(LibraryMixin, "_reveal_in_file_manager", staticmethod(lambda t: seen.append(t)))
-    LibraryMixin._on_reveal_resolved(SimpleNamespace(), str(pathlib.Path.cwd()))
+    LibraryMixin._on_reveal_resolved(BridgeStub(), str(pathlib.Path.cwd()))
     assert seen == [str(pathlib.Path.cwd())]

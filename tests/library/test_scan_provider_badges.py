@@ -65,7 +65,7 @@ def _index(tmp_path, tagmap, audiomap=None):
 def _presence_for(lib, placement=None):
     stub = type(
         "S",
-        (),
+        (BridgeStub,),
         {
             "_sql_presence_indexes": WavesBridge._sql_presence_indexes,
             "_dict_presence_indexes": WavesBridge._dict_presence_indexes,

@@ -12,11 +12,13 @@ clock exercises the time branch without sleeping.
 
 from __future__ import annotations
 
+from support.bridge_stub import BridgeStub
+
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Minimal stand-in carrying only the state the gate touches."""
 
     def __init__(self) -> None:

@@ -27,6 +27,8 @@ import threading
 import time
 from typing import ClassVar
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 from waves.desktop.settings.persistence import SingleFlightWriter
 
@@ -73,7 +75,7 @@ def test_prefs_save_fsyncs_off_the_calling_thread_and_snapshots(tmp_path, monkey
     real_fsync = os.fsync
     monkeypatch.setattr(os, "fsync", lambda fd: (fsync_threads.append(threading.get_ident()), real_fsync(fd))[1])
 
-    stub = type("_S", (), {})()
+    stub = BridgeStub()
     stub._factory_reset = False
     stub._waves_prefs = {"motion_background": True}
     stub._waves_prefs_path = str(tmp_path / "waves.json")
@@ -91,7 +93,7 @@ def test_prefs_save_fsyncs_off_the_calling_thread_and_snapshots(tmp_path, monkey
 
 
 def test_settings_write_serializes_before_returning():
-    stub = type("_S", (), {})()
+    stub = BridgeStub()
 
     class _Cfg:
         captured: ClassVar[list[str]] = []
@@ -120,7 +122,7 @@ def test_settings_write_serializes_before_returning():
 
 
 def test_shutdown_flush_lands_a_last_moment_pref(tmp_path):
-    stub = type("_S", (), {})()
+    stub = BridgeStub()
     stub._factory_reset = False
     stub._waves_prefs = {"volume": 11}
     stub._waves_prefs_path = str(tmp_path / "waves.json")
