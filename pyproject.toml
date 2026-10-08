@@ -31,6 +31,9 @@ dependencies = [
   # Direct import in waves/providers/apple/engine.py (the cookies-tier fallback shells
   # through it); pinned to gamdl's own floor so the two can never disagree.
   "yt-dlp>=2025.10.22",
+  # Direct import in waves/providers/apple/gamdl_logs.py, which configures the
+  # structlog gamdl logs through; floored at gamdl's own requirement.
+  "structlog>=25.5.0",
   "pycryptodome>=3.23.0,<4",
   "certifi>=2026.7.22",
   "urllib3>=2.8.0,<3",

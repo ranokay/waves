@@ -28,6 +28,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from waves.constants import quality_rank
+from waves.providers.apple.gamdl_logs import quiet_gamdl_logs
 
 logger = logging.getLogger("waves.providers.apple.engine")
 
@@ -290,6 +291,7 @@ async def _close_client(owner, label: str = "Apple API session") -> None:
 
 async def _create_cookies_stack(cookies_path: str):
     """The cookies tier's API and base interface, built once per session."""
+    quiet_gamdl_logs()
     from gamdl.api.apple_music import AppleMusicApi
     from gamdl.interface.base import AppleMusicBaseInterface
 
@@ -671,6 +673,7 @@ class AppleFetchSession:
 
 async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_port: int):
     """A logged-in wrapper session, or AppleCredentialsError when logged out."""
+    quiet_gamdl_logs()
     from gamdl.api.wrapper import WrapperApi
 
     try:
