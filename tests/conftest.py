@@ -75,10 +75,19 @@ class _InlineWriter:
         pass
 
 
-def pytest_sessionstart(session):
-    from support import bridge_stub
+# The stand-in watcher (support.bridge_stub), armed per session. A run without
+# PySide6 has no bridge to stand in for, so the check stands down there.
+_bridge_watch = None
 
+
+def pytest_sessionstart(session):
+    global _bridge_watch
+    try:
+        from support import bridge_stub
+    except ImportError:
+        return
     bridge_stub.watch_stand_ins()
+    _bridge_watch = bridge_stub
 
 
 @pytest.fixture(autouse=True)
@@ -87,10 +96,8 @@ def _bridge_stand_ins_are_bridge_stubs():
     BridgeStub (or a real bridge or a mock), so a new bridge signal reaches it
     without an edit. A worker thread that outlives its test reports into the
     test running when it calls in; the message names the stand-in's class."""
-    from support import bridge_stub
-
     yield
-    offenders = bridge_stub.take_offenders()
+    offenders = _bridge_watch.take_offenders() if _bridge_watch else []
     if offenders:
         pytest.fail(
             "bridge methods ran on stand-ins that are not support.bridge_stub.BridgeStub:\n" + "\n".join(offenders),
@@ -100,9 +107,7 @@ def _bridge_stand_ins_are_bridge_stubs():
 
 def pytest_sessionfinish(session, exitstatus):
     """Stand-ins recorded outside any test (fixture setup, after the last test)."""
-    from support import bridge_stub
-
-    leftovers = bridge_stub.take_offenders()
+    leftovers = _bridge_watch.take_offenders() if _bridge_watch else []
     if leftovers:
         print("\nbridge methods ran on stand-ins that are not support.bridge_stub.BridgeStub:\n" + "\n".join(leftovers))
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
