@@ -18,6 +18,13 @@ repos:
         exclude: ^(LICENSE|assets/star-history/.*)$
       - id: trailing-whitespace
         exclude: ^assets/star-history/
+      # Work reaches develop and main through PRs. The upstream sync merge is
+      # the one direct write: a clean `git merge` skips this hook, and a
+      # conflicted one concludes with SKIP=no-commit-to-branch (the
+      # sync-upstream skill). `mise run check` skips it, since it commits nothing.
+      - id: no-commit-to-branch
+        args: [--branch, develop, --branch, main]
+        stages: [pre-commit]
 
   # ruff runs from the project's own environment (the dev dependency is
   # pinned in pyproject.toml), not a separately-installed hook: one ruff
