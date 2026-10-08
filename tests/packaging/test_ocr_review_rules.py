@@ -1,12 +1,13 @@
-"""OpenCodeReview's project rules keep QML and Markdown in scope.
+"""The per-path house rules stay complete, and in scope for OpenCodeReview.
 
 WHAT THIS FENCES OFF
 --------------------
-OCR's default filters skip `.qml` and `.md` as unsupported extensions, so a
-Waves review would silently cover only the Python/JS part of a diff. The
-project rule file's `include` list is the documented bypass, and the per-path
-rules carry the house invariants into OCR's prompt. This guard pins both, so
-the coverage cannot silently regress when someone edits the file.
+`.opencodereview/rule.json` carries the house invariants that CODING_STANDARDS.md
+binds to every review, and it is also OpenCodeReview's project file for a
+manual OCR run (OCR is not part of the merge gate). OCR's default filters skip
+`.qml` and `.md` as unsupported extensions; the file's `include` list is the
+documented bypass. This guard pins a house rule for each language the repo
+writes, plus that bypass, so neither regresses when someone edits the file.
 
 The rule file is repo config, not product behaviour: the guard reads it as
 JSON and asserts the two things a review needs — the extension bypass and a

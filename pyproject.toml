@@ -93,12 +93,12 @@ module-root = ""
 include = ["waves"]
 
 [tool.ty.terminal]
-# Warnings stay visible but do not fail the gate, the same shape as the
-# basedpyright warning level this replaces: errors exit non-zero, warnings
-# exit zero. The warnings that remain are the accepted baseline of the four
-# files the first override below names; every other module is held to the
-# error level. Re-check each override reason when a seam, a stub, or the
-# inherited engine moves.
+# Warnings do not fail the gate, the same shape as the basedpyright warning
+# level this replaces: errors exit non-zero, warnings exit zero. The warnings
+# that remain are the accepted baseline of the files the overrides below
+# name; tools/typecheck.sh counts those and prints every other diagnostic.
+# Every other module is held to the error level. Re-check each override
+# reason when a seam, a stub, or the inherited engine moves.
 error-on-warning = false
 
 # The accepted baseline, scoped to the files that carry it; the reasons the

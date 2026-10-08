@@ -2,15 +2,18 @@
 """Report a wayfinder map's frontier: the next issue an agent may take.
 
 A map is an open issue labelled `wayfinder:map` whose children are GitHub
-sub-issues (docs/agents/issue-tracker.md). One GraphQL call per map returns
-every child with its live state, assignees, labels and blockers. A child is
-ready for an agent when it is open, labelled `ready-for-agent`, unassigned,
-and every issue blocking it is closed; the first ready child in map order is
-the frontier. When nothing is ready, the open children that nothing blocks
-name what the roadmap waits on. The report ends with the map's checklist
-boxes that disagree with the tracker, for the delivering run to correct.
+sub-issues, each also listed in the map body's checklist
+(docs/agents/issue-tracker.md). One GraphQL call per map returns every child
+with its live state, assignees, labels and native blockers. A child is ready
+for an agent when it is open, labelled `ready-for-agent` (and not
+`ready-for-human`), unassigned, and every issue blocking it is closed; the
+first ready child in map order is the frontier. When nothing is ready, the
+open children that nothing blocks name what the map waits on. The report ends
+with checklist entries that disagree with the tracker: a tick against the
+live state, or a checklist child that is not linked as a sub-issue and so
+reaches no other part of the report.
 
-Usage: frontier.py [MAP ...]    (no argument reports every open map)
+Usage: wayfinder_frontier.py [MAP ...]    (no argument reports every open map)
 """
 
 from __future__ import annotations
@@ -29,16 +32,18 @@ MAP_LABEL = "wayfinder:map"
 AGENT_LABEL = "ready-for-agent"
 HUMAN_LABEL = "ready-for-human"
 
+# GitHub's own ceilings: 100 sub-issues per parent, 50 blocked-by edges per
+# issue, 10 assignees, 100 labels; so every connection below reads in full.
 MAP_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
-      number title state body
+      number title body
       subIssues(first: 100) {
         nodes {
           number title state
           assignees(first: 10) { nodes { login } }
-          labels(first: 20) { nodes { name } }
+          labels(first: 100) { nodes { name } }
           blockedBy(first: 50) { nodes { number state } }
         }
       }
@@ -71,12 +76,8 @@ class Child:
             open_blockers=tuple(b["number"] for b in node["blockedBy"]["nodes"] if b["state"] == "OPEN"),
         )
 
-    @property
-    def ready(self) -> bool:
-        return self.open and not self.open_blockers and not self.assignees and AGENT_LABEL in self.labels
-
-    def reason(self) -> str:
-        """Why an open child is not ready, in the order an agent acts on it."""
+    def holdup(self) -> str | None:
+        """Why an open child is not ready for an agent, or None when it is."""
         if self.open_blockers:
             return "blocked by " + ", ".join(f"#{n}" for n in self.open_blockers)
         owner = f" ({', '.join(self.assignees)})" if self.assignees else ""
@@ -86,16 +87,41 @@ class Child:
             return f"claimed{owner}"
         if AGENT_LABEL not in self.labels:
             return f"not labelled {AGENT_LABEL}"
-        return "ready"
+        return None
+
+    @property
+    def ready(self) -> bool:
+        return self.open and self.holdup() is None
+
+    def line(self) -> str:
+        return f"    #{self.number} {self.holdup()}: {self.title}"
 
 
-def checklist_drift(body: str, children: list[Child]) -> list[str]:
-    """Checklist boxes whose tick disagrees with the child's live state."""
-    by_number = {child.number: child for child in children}
+@dataclass(frozen=True)
+class WayfinderMap:
+    number: int
+    title: str
+    body: str
+    children: tuple[Child, ...]
+
+    @classmethod
+    def from_issue(cls, issue: dict) -> WayfinderMap:
+        return cls(
+            number=issue["number"],
+            title=issue["title"],
+            body=issue["body"] or "",
+            children=tuple(Child.from_node(node) for node in issue["subIssues"]["nodes"]),
+        )
+
+
+def checklist_drift(wmap: WayfinderMap) -> list[str]:
+    """Checklist entries that disagree with the tracker."""
+    by_number = {child.number: child for child in wmap.children}
     drift = []
-    for mark, number in CHECKBOX.findall(body or ""):
+    for mark, number in CHECKBOX.findall(wmap.body):
         child = by_number.get(int(number))
         if child is None:
+            drift.append(f"#{number} is in the checklist but not a sub-issue")
             continue
         ticked = mark != " "
         if ticked and child.open:
@@ -105,9 +131,12 @@ def checklist_drift(body: str, children: list[Child]) -> list[str]:
     return drift
 
 
-def report(number: int, title: str, body: str, children: list[Child]) -> list[str]:
-    open_children = [child for child in children if child.open]
-    lines = [f"#{number} {title}", f"  {len(open_children)} open, {len(children) - len(open_children)} closed"]
+def report(wmap: WayfinderMap) -> list[str]:
+    lines = [f"#{wmap.number} {wmap.title}"]
+    if not wmap.children:
+        return [*lines, "  no sub-issues: link each child as a sub-issue of the map"]
+    open_children = [child for child in wmap.children if child.open]
+    lines.append(f"  {len(open_children)} open, {len(wmap.children) - len(open_children)} closed")
     ready = [child for child in open_children if child.ready]
     if ready:
         lines.append(f"  frontier: #{ready[0].number} {ready[0].title}")
@@ -117,12 +146,12 @@ def report(number: int, title: str, body: str, children: list[Child]) -> list[st
         unblocked = [child for child in open_children if not child.open_blockers]
         if unblocked:
             lines.append("  unblocked but not ready:")
-            lines.extend(f"    #{child.number} {child.reason()}: {child.title}" for child in unblocked)
+            lines.extend(child.line() for child in unblocked)
     blocked = [child for child in open_children if child.open_blockers]
     if blocked:
         lines.append("  blocked:")
-        lines.extend(f"    #{child.number} {child.reason()}: {child.title}" for child in blocked)
-    drift = checklist_drift(body, children)
+        lines.extend(child.line() for child in blocked)
+    drift = checklist_drift(wmap)
     if drift:
         lines.append("  checklist drift:")
         lines.extend(f"    {entry}" for entry in drift)
@@ -149,7 +178,7 @@ def _open_maps() -> list[int]:
     return sorted(entry["number"] for entry in json.loads(out))
 
 
-def _fetch_map(number: int) -> tuple[str, str, list[Child]]:
+def _fetch_map(number: int) -> WayfinderMap:
     owner, name = REPO.split("/", 1)
     out = _gh(
         "api",
@@ -166,8 +195,7 @@ def _fetch_map(number: int) -> tuple[str, str, list[Child]]:
     issue = json.loads(out)["data"]["repository"]["issue"]
     if issue is None:
         _fail(f"#{number} not found in {REPO}")
-    children = [Child.from_node(node) for node in issue["subIssues"]["nodes"]]
-    return issue["title"], issue["body"], children
+    return WayfinderMap.from_issue(issue)
 
 
 def main(argv: list[str]) -> int:
@@ -179,14 +207,7 @@ def main(argv: list[str]) -> int:
     if not maps:
         print(f"frontier: no open {MAP_LABEL} issue in {REPO}")
         return 0
-    for index, number in enumerate(maps):
-        title, body, children = _fetch_map(number)
-        if index:
-            print()
-        if not children:
-            print(f"#{number} {title}\n  no sub-issues: link the children as sub-issues of the map")
-            continue
-        print("\n".join(report(number, title, body, children)))
+    print("\n\n".join("\n".join(report(_fetch_map(number))) for number in maps))
     return 0
 
 
