@@ -79,7 +79,7 @@ class OfferProvider(BareProvider):
 
 
 def bridge(*providers):
-    return SimpleNamespace(
+    return BridgeStub(
         providers={p.id: p for p in providers},
         settings=SimpleNamespace(data=SimpleNamespace(download_policies=DownloadPolicies())),
         _provider_contexts=ProviderContexts(),

@@ -19,7 +19,7 @@ from waves.model.cfg import Settings as CfgSettings
 from waves.providers import Capability
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

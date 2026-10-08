@@ -39,7 +39,7 @@ def _bind(stub, name):
     return getattr(WavesBridge, name).__get__(stub, type(stub))
 
 
-class _Stub:
+class _Stub(BridgeStub):
     pass
 
 

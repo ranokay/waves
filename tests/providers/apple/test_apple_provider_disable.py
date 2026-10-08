@@ -101,23 +101,23 @@ def test_an_empty_provider_queue_stops_nothing_and_emits_nothing():
     assert stub.queue_emits == 0
 
 
-def _retry_stub(item: dict) -> SimpleNamespace:
+def _retry_stub(item: dict) -> BridgeStub:
     stub = BridgeStub()
     stub._jobs = JobRuntime()
     stub._queue_index = {item["qid"]: item}
     stub._merge_plans = {}
     stub.removed = []
-    stub._queue_item = WavesBridge._queue_item.__get__(stub, SimpleNamespace)
+    stub._queue_item = WavesBridge._queue_item.__get__(stub)
     stub._row_object = lambda it: object()
-    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub, SimpleNamespace)
+    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub)
     # The provider's download surface: the bridge implements Apple's and binds
     # it where the providers are wired, so a retry stub binds it too.
     stub.providers = {"apple": SimpleNamespace(downloads=backend._AppleDownloads(stub))}
     stub._download_apple = lambda *a, **k: False
     stub._remove_row = lambda qid, withdrawn=None: stub.removed.append(qid) or True
     stub._emit_queue = lambda: None
-    stub._start_retry = WavesBridge._start_retry.__get__(stub, SimpleNamespace)
-    stub.retryQueueItem = WavesBridge.retryQueueItem.__get__(stub, SimpleNamespace)
+    stub._start_retry = WavesBridge._start_retry.__get__(stub)
+    stub.retryQueueItem = WavesBridge.retryQueueItem.__get__(stub)
     return stub
 
 
@@ -164,17 +164,17 @@ def test_retry_all_keeps_rows_a_refused_provider_did_not_requeue():
         _emit_queue=lambda: None,
     )
     stub._reindex_queue = lambda: None
-    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub, SimpleNamespace)
-    stub._remove_rows_where = WavesBridge._remove_rows_where.__get__(stub, SimpleNamespace)
-    stub._queue_batch = WavesBridge._queue_batch.__get__(stub, SimpleNamespace)
-    stub._retry_all_with_status = WavesBridge._retry_all_with_status.__get__(stub, SimpleNamespace)
+    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub)
+    stub._remove_rows_where = WavesBridge._remove_rows_where.__get__(stub)
+    stub._queue_batch = WavesBridge._queue_batch.__get__(stub)
+    stub._retry_all_with_status = WavesBridge._retry_all_with_status.__get__(stub)
 
     stub._retry_all_with_status("cancelled")
 
     assert [row["status"] for row in rows] == ["cancelled", "cancelled"]
 
 
-def _status_stub(item: dict) -> SimpleNamespace:
+def _status_stub(item: dict) -> BridgeStub:
     stub = BridgeStub()
     stub._queue_index = {item["qid"]: item}
     stub._queue_lock = Lock()
@@ -182,7 +182,7 @@ def _status_stub(item: dict) -> SimpleNamespace:
     stub._queue_item = lambda qid: stub._queue_index.get(int(qid))
     stub._queue_mark_changed = lambda qid: stub.marked.append(int(qid))
     stub._emit_queue = lambda: None
-    stub._set_queue_status = WavesBridge._set_queue_status.__get__(stub, SimpleNamespace)
+    stub._set_queue_status = WavesBridge._set_queue_status.__get__(stub)
     return stub
 
 

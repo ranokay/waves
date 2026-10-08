@@ -234,7 +234,7 @@ def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
         "metadata_cover_embed": False,
         "cover_album_file": True,
     }.get(name, default)
-    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub)
 
     assert stub._standalone_tidal("123", "art") == 1
     target = tmp_path / "cover.png"

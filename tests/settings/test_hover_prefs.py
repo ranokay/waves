@@ -15,6 +15,7 @@ the QML, which re-reads the pref on that signal (see Main.qml's
 from __future__ import annotations
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 
@@ -26,7 +27,7 @@ HOVER_PREFS = [
 ]
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

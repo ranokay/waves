@@ -618,7 +618,7 @@ def test_a_cache_marked_by_the_current_rule_is_not_swept_again(tmp_path):
 # ---- the bridge gates -----------------------------------------------------------
 
 
-class _GateStub:
+class _GateStub(BridgeStub):
     _library_track_claim = LibraryMixin._library_track_claim
     _library_claims_track = LibraryMixin._library_claims_track
     _library_claims_album = LibraryMixin._library_claims_album

@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.library.ownership import OwnershipStore
@@ -107,7 +108,7 @@ def test_ownership_verdict_at_every_tier_boundary(rec, target_rank, verdict):
     assert _upgrade_gate(rec, target_rank)._ownership_decision(_plain_track()) == (verdict, rec)
 
 
-class _OwnBridge:
+class _OwnBridge(BridgeStub):
     """The slice of WavesBridge that ownershipOf touches, bound onto a real
     OwnershipStore (the shape tests/library/test_ownership_bridge.py uses), with the
     refresh pool run inline so the second query serves the refreshed cache."""

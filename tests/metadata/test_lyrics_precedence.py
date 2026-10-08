@@ -222,7 +222,7 @@ def test_apple_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
         "lyrics_ttml_file": False,
         "lyrics_embed": True,
     }.get(name, default)
-    stub._standalone_apple = WavesBridge._standalone_apple.__get__(stub, SimpleNamespace)
+    stub._standalone_apple = WavesBridge._standalone_apple.__get__(stub)
 
     served = stub._standalone_apple("apple:s1", "lyrics")
 
@@ -249,9 +249,9 @@ def test_apple_standalone_lyrics_counts_nothing_without_a_saved_file(tmp_path):
         "lyrics_ttml_file": False,
         "lyrics_embed": True,
     }.get(name, default)
-    stub._apple_standalone_embed = WavesBridge._apple_standalone_embed.__get__(stub, SimpleNamespace)
-    stub._apple_standalone_embed_lyrics = WavesBridge._apple_standalone_embed_lyrics.__get__(stub, SimpleNamespace)
-    stub._standalone_apple = WavesBridge._standalone_apple.__get__(stub, SimpleNamespace)
+    stub._apple_standalone_embed = WavesBridge._apple_standalone_embed.__get__(stub)
+    stub._apple_standalone_embed_lyrics = WavesBridge._apple_standalone_embed_lyrics.__get__(stub)
+    stub._standalone_apple = WavesBridge._standalone_apple.__get__(stub)
 
     assert stub._standalone_apple("apple:s1", "lyrics") == 0
 
@@ -276,7 +276,7 @@ def test_tidal_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
         "lyrics_file_synced_only": False,
         "lyrics_embed": True,
     }.get(name, default)
-    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub)
 
     served = stub._standalone_tidal("123", "lyrics")
 
@@ -303,7 +303,7 @@ def test_tidal_standalone_lyrics_without_lyrics_is_not_served(tmp_path):
         "lyrics_file_synced_only": False,
         "lyrics_embed": True,
     }.get(name, default)
-    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub)
 
     assert stub._standalone_tidal("123", "lyrics") == 0
     assert embedded == [], "nothing to embed never tags a file or reports a serve"
@@ -386,7 +386,7 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
         "downloadArtOnly",
         "_standalone_apple",
     ):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     return stub, folder, statuses, states
 
 
@@ -472,7 +472,7 @@ def test_download_art_only_keeps_saved_covers_at_publication(tmp_path, monkeypat
             _retrieve_lyrics=lambda track: ("", "", ""),
             cover_data_cached=lambda url: b"\xff\xd8\xff\xdbjpeg-bytes",
         )
-        stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+        stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub)
     target = folder / "cover.jpg"
     original = b"custom saved artwork"
     if saved_cover == "existing":

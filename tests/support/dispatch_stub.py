@@ -14,7 +14,9 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
-from support.bridge_stub import RecordingSignal
+from conftest import _Signal
+
+from support.bridge_stub import BridgeStub
 from waves.desktop.backend import WavesBridge
 from waves.desktop.queue.runtime import JobRuntime
 from waves.providers import Refusal, RefusalKind
@@ -129,7 +131,7 @@ def _arm_rollups(stub) -> None:
             setattr(stub, lock, _Lock())
     for sig in ("downloadState", "downloadProgress", "folderRemaining"):
         if not hasattr(stub, sig):
-            setattr(stub, sig, RecordingSignal())
+            setattr(stub, sig, _Signal())
     for name in ("_bump_download_groups", "_bump_artist_group", "_bump_folder_group", "_reap_stranded_groups"):
         if not hasattr(stub, name):
             setattr(stub, name, getattr(WavesBridge, name).__get__(stub, type(stub)))
@@ -167,7 +169,7 @@ def _queue_stub(statuses, *, running_qid=None):
     also carries the per-row stores and the discography rollup those slots
     sweep, so a test reads what a withdrawal aborted, released or emitted.
     """
-    s = SimpleNamespace()
+    s = BridgeStub()
     s._queue = [
         {"qid": n, "media_id": f"m{n}", "status": st, "type": "album", "name": f"r{n}"}
         for n, st in enumerate(statuses, 1)
@@ -181,14 +183,14 @@ def _queue_stub(statuses, *, running_qid=None):
     s._pending_qids = deque(it["qid"] for it in s._queue)
     s._event_run = Event()
     s._paused = False
-    s.pausedChanged = RecordingSignal()
+    s.pausedChanged = _Signal()
     s._scan_gen = 0
     s._scans_in_flight = 0
     s._scan_count_lock = Lock()
-    s.scanningChanged = RecordingSignal()
-    s.downloadState = RecordingSignal()
-    s.downloadProgress = RecordingSignal()
-    s.folderRemaining = RecordingSignal()
+    s.scanningChanged = _Signal()
+    s.downloadState = _Signal()
+    s.downloadProgress = _Signal()
+    s.folderRemaining = _Signal()
     s.statuses = []
     s._set_status = s.statuses.append
     s._jobs.objs = {}

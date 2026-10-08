@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import re
 
+from support.bridge_stub import BridgeStub
 from support.paths import QML_MAIN
 
 from waves.desktop.backend import WavesBridge
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

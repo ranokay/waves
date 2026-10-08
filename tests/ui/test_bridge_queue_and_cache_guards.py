@@ -521,7 +521,7 @@ def test_page_cache_round_trip_and_account_guard(tmp_path):
 def test_refresh_browse_throttles_and_falls_back():
     import time as _time
 
-    class _RB:
+    class _RB(BridgeStub):
         def __init__(self):
             self._browse_root_cache = None
             self._browse_reval_ts = 0.0

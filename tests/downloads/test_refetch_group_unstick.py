@@ -20,6 +20,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_TIDAL
 from waves.desktop.backend import WavesBridge
@@ -28,7 +29,7 @@ from waves.desktop.queue.runtime import JobRuntime
 from waves.providers import Capability
 
 
-class _Stub(QueueMixin):
+class _Stub(BridgeStub, QueueMixin):
     """Bare object the real methods get bound onto."""
 
 

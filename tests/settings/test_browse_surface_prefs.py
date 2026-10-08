@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import json
 
+from support.bridge_stub import BridgeStub
+
 from waves.desktop.backend import WavesBridge
 
 
-class _PrefsStub:
+class _PrefsStub(BridgeStub):
     """Bare stand-in carrying only the waves-prefs surface, with the real
     load/save methods bound on and a real waves.json on disk."""
 

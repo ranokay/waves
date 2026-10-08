@@ -17,6 +17,7 @@ import os
 from threading import Event, Thread
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.settings.schema import FIRST_RUN_OVERRIDES
 
@@ -26,7 +27,7 @@ from waves.desktop import backend as backend_mod
 from waves.desktop.backend import WavesBridge
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

@@ -2,40 +2,34 @@
 
 A stand-in binds real bridge methods onto a small object of its own, and
 those methods emit bridge signals, so the stand-in must answer every signal
-name they reach. Declared by hand, that list breaks every stand-in the moment
-the bridge grows a signal. `BridgeStub` answers any public name WavesBridge
-(or one of its mixins) declares as a Signal with a `RecordingSignal`, created
-on first read and kept on the instance so its `emits` accumulate. Attributes the
-stand-in sets itself win, and any other missing name still raises
-AttributeError.
+name they reach. `BridgeStub` answers any public signal that WavesBridge or
+one of its mixins declares with the suite's recording double (conftest's
+`_Signal`), created on first read and kept on the instance so its `emits`
+accumulate. Attributes the stand-in sets itself win, and any other missing
+name still raises AttributeError.
+
+Private signals stay absent. Each is a thread-crossing relay whose delivery
+is behaviour: `_jobFinished` starts the next queued job, and bridge code
+probes `_catalogEvent` and `_searchEvent` with getattr to deliver inline when
+they are missing. A double that records a relay without delivering it would
+change what the code does next without failing, so a stand-in models each
+relay it reaches.
 """
 
 from __future__ import annotations
 
+from conftest import _Signal
 from PySide6.QtCore import Signal
 
 from waves.desktop.backend import WavesBridge
 
-# Public signals only. A private one (`_catalogEvent`, `_searchEvent`) is a
-# thread-crossing relay that bridge code probes with getattr: a stand-in
-# without it gets inline delivery, so it must stay absent unless the
-# stand-in models the relay itself.
 BRIDGE_SIGNALS = frozenset(
     name
     for klass in WavesBridge.__mro__
+    if klass.__module__.startswith("waves.")
     for name, value in vars(klass).items()
     if isinstance(value, Signal) and not name.startswith("_")
 )
-
-
-class RecordingSignal:
-    """Minimal stand-in for a Qt signal: records every emit."""
-
-    def __init__(self):
-        self.emits: list = []
-
-    def emit(self, *args):
-        self.emits.append(args if len(args) != 1 else args[0])
 
 
 class BridgeStub:
@@ -50,7 +44,7 @@ class BridgeStub:
 
     def __getattr__(self, name: str):
         if name in BRIDGE_SIGNALS:
-            signal = RecordingSignal()
+            signal = _Signal()
             setattr(self, name, signal)
             return signal
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")

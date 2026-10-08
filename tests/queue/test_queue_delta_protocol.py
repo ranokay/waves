@@ -27,6 +27,7 @@ import threading
 from threading import Lock
 from unittest.mock import patch
 
+from support.bridge_stub import BridgeStub
 from support.dispatch_stub import arm_dispatch, arm_queue
 
 from waves.desktop import backend
@@ -49,7 +50,7 @@ class _Sig:
         self._log.append((self._name, args[0] if len(args) == 1 else args))
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """A queue carcass with the real delta pipeline bound on."""
 
 

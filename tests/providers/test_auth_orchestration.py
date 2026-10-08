@@ -8,6 +8,7 @@ from threading import Event, Thread
 
 import pytest
 from providers.fakes import BareProvider
+from support.bridge_stub import BridgeStub
 
 from waves.desktop import backend
 from waves.desktop.providers import auth
@@ -108,7 +109,7 @@ class _Provider(BareProvider):
         return candidate
 
 
-class _Bridge:
+class _Bridge(BridgeStub):
     def __init__(self, *providers: _Provider) -> None:
         self.providers = {provider.id: provider for provider in providers}
         self._provider_contexts = ProviderContexts()

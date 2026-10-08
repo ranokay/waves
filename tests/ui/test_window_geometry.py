@@ -23,6 +23,7 @@ import types
 
 import pytest
 from conftest import _InlineWriter
+from support.bridge_stub import BridgeStub
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge, _fit_frame
@@ -110,7 +111,7 @@ def _assert_fully_inside(frame, screens):
 # ---------------------------------------------------------------------------
 
 
-class _PrefsStub:
+class _PrefsStub(BridgeStub):
     """Bare stand-in for WavesBridge carrying only the geometry-persistence
     surface, with the real methods bound on and a real waves.json on disk. The
     screen clamp delegates to the real pure _fit_frame against a synthetic

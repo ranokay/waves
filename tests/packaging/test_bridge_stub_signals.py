@@ -1,12 +1,10 @@
 """Bridge stand-ins answer every public bridge signal without declaring it.
 
-A stand-in binds real WavesBridge methods, and a signal added to the bridge
-used to break each stand-in whose method reached it, one test run at a time.
-`support.bridge_stub.BridgeStub` derives the signal names from WavesBridge
-itself, so a new public signal reaches every stand-in with no edit. Private
-relays (`_catalogEvent`, `_searchEvent`) stay absent: bridge code probes them
-with getattr and delivers inline without them. The guard at the end keeps
-every stand-in class that binds bridge methods on that base.
+A stand-in receives real WavesBridge methods, and those methods emit bridge
+signals. `support.bridge_stub.BridgeStub` resolves each public signal the
+bridge declares, so a signal added to the bridge reaches every stand-in with
+no edit. Private relays stay absent (their delivery is behaviour; see the
+module). The wiring pin at the end keeps every stand-in on that base.
 """
 
 from __future__ import annotations
@@ -14,23 +12,30 @@ from __future__ import annotations
 import ast
 
 import pytest
-from PySide6.QtCore import Signal
-from support.bridge_stub import BRIDGE_SIGNALS, BridgeStub, RecordingSignal
+from conftest import _Signal
+from PySide6.QtCore import QMetaMethod, QObject
+from support.bridge_stub import BRIDGE_SIGNALS, BridgeStub
 from support.paths import TESTS_ROOT
 
 from waves.desktop.backend import WavesBridge
 
 
-def _declared_signals() -> set[str]:
-    return {name for klass in WavesBridge.__mro__ for name, value in vars(klass).items() if isinstance(value, Signal)}
+def _qt_public_signals() -> set[str]:
+    """The bridge's public signals as Qt's own meta-object lists them."""
+    meta = WavesBridge.staticMetaObject
+    names = {
+        bytes(meta.method(i).name()).decode()
+        for i in range(QObject.staticMetaObject.methodCount(), meta.methodCount())
+        if meta.method(i).methodType() == QMetaMethod.MethodType.Signal
+    }
+    return {name for name in names if not name.startswith("_")}
 
 
-def test_every_public_bridge_signal_resolves_on_a_bare_stand_in():
+def test_every_public_signal_qt_registers_on_the_bridge_resolves():
     stub = BridgeStub()
-    public = {name for name in _declared_signals() if not name.startswith("_")}
 
-    assert public == set(BRIDGE_SIGNALS)
-    assert all(isinstance(getattr(stub, name), RecordingSignal) for name in public)
+    assert set(BRIDGE_SIGNALS) == _qt_public_signals()
+    assert all(isinstance(getattr(stub, name), _Signal) for name in BRIDGE_SIGNALS)
 
 
 def test_a_resolved_signal_keeps_its_emits_on_the_instance():
@@ -55,49 +60,186 @@ def test_the_stand_ins_own_attributes_win():
 def test_private_relays_and_unknown_names_stay_absent():
     stub = BridgeStub()
 
-    assert getattr(stub, "_catalogEvent", None) is None, "a stand-in delivers catalog results inline"
-    assert getattr(stub, "_searchEvent", None) is None, "a stand-in delivers search results inline"
+    for relay in ("_catalogEvent", "_searchEvent", "_jobFinished"):
+        assert getattr(stub, relay, None) is None, f"{relay} must be modelled by the stand-in that reaches it"
     with pytest.raises(AttributeError):
         _ = stub.noSuchSignal
 
 
-def _binds_bridge_methods(cls: ast.ClassDef) -> bool:
+# A stand-in is any object that receives real bridge methods. These are the
+# binding forms the suite uses; `x` is the stand-in.
+#   WavesBridge.m(x, ...)                      <bridge expr>.__get__(x, ...)
+#   MethodType(<bridge expr>, x)                x.attr = <bridge expr>
+#   setattr(x, name, <bridge expr>)             helper(x, ...) where helper binds its first parameter
+#   class body: m = WavesBridge.m               a method binding onto self
+# x resolves to a class assigned from Cls(...), to the enclosing class for
+# self, or to a SimpleNamespace (directly, or returned by a builder defined in
+# the file or imported into it by name).
+
+
+def _names_bridge(node: ast.AST) -> bool:
     return any(
-        isinstance(node, ast.Assign)
-        and isinstance(node.value, ast.Attribute)
-        and isinstance(node.value.value, ast.Name)
-        and node.value.value.id == "WavesBridge"
-        for node in ast.walk(cls)
+        (isinstance(n, ast.Name) and n.id == "WavesBridge")
+        or (isinstance(n, ast.Attribute) and n.attr == "WavesBridge")
+        for n in ast.walk(node)
     )
 
 
-def _reaches_bridge_stub(cls: ast.ClassDef, local: dict[str, ast.ClassDef]) -> bool:
-    """Follow the class's local bases; an imported root is scanned in its own file."""
-    seen = set()
-    while cls.name not in seen:
-        seen.add(cls.name)
-        names = [base.id for base in cls.bases if isinstance(base, ast.Name)]
-        if "BridgeStub" in names:
+def _is_call_to(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id == name) or (isinstance(func, ast.Attribute) and func.attr == name)
+
+
+def _bound_names(scope: ast.AST, helpers: set[str]) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Call) and node.args:
+            func, first = node.func, None
+            if isinstance(func, ast.Attribute) and _names_bridge(func):
+                first = node.args[0]
+            elif _is_call_to(node, "MethodType") and len(node.args) >= 2 and _names_bridge(node.args[0]):
+                first = node.args[1]
+            elif (_is_call_to(node, "setattr") and len(node.args) == 3 and _names_bridge(node.args[2])) or (
+                isinstance(func, ast.Name) and func.id in helpers
+            ):
+                first = node.args[0]
+            if isinstance(first, ast.Name):
+                names.add(first.id)
+        elif isinstance(node, ast.Assign) and _names_bridge(node.value):
+            names.update(
+                t.value.id for t in node.targets if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+            )
+    return names
+
+
+def _functions(tree: ast.AST) -> list[ast.FunctionDef]:
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _binding_helpers(tree: ast.AST) -> set[str]:
+    helpers: set[str] = set()
+    for _ in range(2):  # a helper may bind through another helper
+        for fn in _functions(tree):
+            params = [a.arg for a in fn.args.args]
+            if params and params[0] != "self" and params[0] in _bound_names(fn, helpers):
+                helpers.add(fn.name)
+    return helpers
+
+
+def _namespace_builders(tree: ast.AST) -> dict[str, int]:
+    """Functions returning a SimpleNamespace, with that namespace's line."""
+    found: dict[str, int] = {}
+    for fn in _functions(tree):
+        made = {
+            t.id: node.value.lineno
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Assign) and _is_call_to(node.value, "SimpleNamespace")
+            for t in node.targets
+            if isinstance(t, ast.Name)
+        }
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Return) and node.value is not None:
+                if _is_call_to(node.value, "SimpleNamespace"):
+                    found[fn.name] = node.value.lineno
+                elif isinstance(node.value, ast.Name) and node.value.id in made:
+                    found[fn.name] = made[node.value.id]
+    return found
+
+
+def _builders_in_reach(path, tree: ast.AST) -> dict[str, tuple]:
+    """SimpleNamespace builders defined in the file or imported into it by name."""
+    builders = {name: (path, line) for name, line in _namespace_builders(tree).items()}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            module = TESTS_ROOT.joinpath(*node.module.split(".")).with_suffix(".py")
+            if module.is_file():
+                theirs = _namespace_builders(ast.parse(module.read_text(encoding="utf-8")))
+                builders.update({a.asname or a.name: (module, theirs[a.name]) for a in node.names if a.name in theirs})
+    return builders
+
+
+def _self_binding_classes(classes: dict[str, ast.ClassDef], helpers: set[str]) -> set[str]:
+    """Classes binding bridge methods in their body or onto self."""
+    return {
+        cls.name
+        for cls in classes.values()
+        if any(isinstance(s, ast.Assign) and _names_bridge(s.value) for s in cls.body)
+        or any("self" in _bound_names(fn, helpers) for fn in cls.body if isinstance(fn, ast.FunctionDef))
+    }
+
+
+def _stand_ins(path) -> tuple[set[str], list[str]]:
+    """(class names that stand in for the bridge, SimpleNamespace stand-in sites)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    helpers = _binding_helpers(tree)
+    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    builders = _builders_in_reach(path, tree)
+    must = _self_binding_classes(classes, helpers)
+    sites: list[str] = []
+    for scope in [tree, *_functions(tree)]:
+        bound = _bound_names(scope, helpers)
+        for node in ast.walk(scope):
+            if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
+                continue
+            if not any(isinstance(t, ast.Name) and t.id in bound for t in node.targets):
+                continue
+            func = node.value.func
+            if _is_call_to(node.value, "SimpleNamespace"):
+                sites.append(f"{path.relative_to(TESTS_ROOT)}:{node.value.lineno} SimpleNamespace")
+            elif isinstance(func, ast.Name) and func.id in classes:
+                must.add(func.id)
+            elif isinstance(func, ast.Name) and func.id in builders:
+                where, line = builders[func.id]
+                sites.append(f"{where.relative_to(TESTS_ROOT)}:{line} SimpleNamespace from {func.id}()")
+    return must, sites
+
+
+def _reaches_bridge_stub(name: str, tree: ast.AST) -> bool:
+    """Follow local bases. An imported root passes when it is a test class
+    (its own file is scanned) or the real WavesBridge; a production base such
+    as QueueMixin needs BridgeStub listed beside it."""
+    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    imported_from = {
+        alias.asname or alias.name: node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+    seen: set[str] = set()
+    while name in classes and name not in seen:
+        seen.add(name)
+        bases = [ast.unparse(b) for b in classes[name].bases]
+        if "BridgeStub" in bases:
             return True
-        parents = [local[name] for name in names if name in local]
-        if not parents:
-            return bool(names) and all(name not in local for name in names) and "QueueMixin" not in names
-        cls = parents[0]
+        local = [b for b in bases if b in classes]
+        if local:
+            name = local[0]
+            continue
+        return bool(bases) and all(
+            b == "WavesBridge" or not imported_from.get(b, "waves").startswith("waves") for b in bases
+        )
     return False
 
 
-def test_every_stand_in_class_that_binds_bridge_methods_is_a_bridge_stub():
+def test_wiring_every_bridge_stand_in_is_a_bridge_stub():
+    # Fences: a signal added to WavesBridge reaches every stand-in with no stub
+    # edit. No behavioural seam shows it: a stand-in that lacks the base only
+    # fails once some future signal reaches it, so the pin reads the suite's
+    # source for objects that receive bridge methods.
     offenders = []
     for path in sorted(TESTS_ROOT.rglob("*.py")):
         text = path.read_text(encoding="utf-8")
-        if "WavesBridge." not in text:
+        if "WavesBridge" not in text or path.name == "bridge_stub.py":
             continue
         tree = ast.parse(text)
-        local = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
-        offenders.extend(
-            f"{path.relative_to(TESTS_ROOT)}:{cls.lineno} {cls.name}"
-            for cls in local.values()
-            if _binds_bridge_methods(cls) and not _reaches_bridge_stub(cls, local)
-        )
+        classes, sites = _stand_ins(path)
+        offenders += sites
+        offenders += [
+            f"{path.relative_to(TESTS_ROOT)} class {name}"
+            for name in sorted(classes)
+            if not _reaches_bridge_stub(name, tree)
+        ]
 
-    assert offenders == [], "give these stand-ins support.bridge_stub.BridgeStub as a base:\n" + "\n".join(offenders)
+    assert offenders == [], "make these support.bridge_stub.BridgeStub stand-ins:\n" + "\n".join(sorted(set(offenders)))

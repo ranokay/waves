@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from support.bridge_stub import BridgeStub
+
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
@@ -28,7 +30,7 @@ APPLE_SETUP_PILLS = [
 APPLE_SIGN_OUT_PILL = {"label": "Sign out", "action": "apple_signout"}
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Bare object the real methods get bound onto."""
 
 

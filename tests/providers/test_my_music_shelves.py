@@ -287,7 +287,7 @@ def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C90
         def start(self, worker):
             self.workers.append(worker)
 
-    class _Bridge:
+    class _Bridge(BridgeStub):
         _lib_generation = WavesBridge._lib_generation
         _lib_start = WavesBridge._lib_start
         loadLibrary = WavesBridge.loadLibrary

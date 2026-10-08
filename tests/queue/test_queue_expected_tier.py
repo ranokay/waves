@@ -34,6 +34,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 from support.paths import QML_MAIN
 from support.qml import (
     EXIT_NO_QT,
@@ -57,7 +58,7 @@ class _Signal:
         self.calls.append(a)
 
 
-class _Stub:
+class _Stub(BridgeStub):
     """Just enough bridge for the registry."""
 
     def __init__(self, target="HI-RES"):

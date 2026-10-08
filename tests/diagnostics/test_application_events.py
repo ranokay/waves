@@ -186,7 +186,7 @@ def test_install_failure_legacy_payload_and_event_are_both_redacted(event_loop):
     events = []
     states = []
     relay.changed.connect(events.append)
-    bridge = SimpleNamespace(_events=relay, ffmpegStateChanged=SimpleNamespace(emit=lambda *args: states.append(args)))
+    bridge = BridgeStub(_events=relay, ffmpegStateChanged=SimpleNamespace(emit=lambda *args: states.append(args)))
     operation_state(
         bridge,
         EventDomain.DEPENDENCY,
@@ -231,7 +231,7 @@ def test_background_configuration_failure_reports_actual_disk_result(event_loop)
 
 def test_one_update_recovery_preserves_the_other_operation_actions(event_loop):
     relay = ApplicationEvents()
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         ffmpegStateChanged=SimpleNamespace(emit=lambda *args: None),
         ffmpegProbeChanged=SimpleNamespace(emit=lambda *args: None),
@@ -255,7 +255,7 @@ def runtime_event_bridge(event_loop):
     delivered = []
     states = {"appleRuntimeStateChanged": [], "ffmpegStateChanged": []}
     relay.changed.connect(delivered.append)
-    bridge = SimpleNamespace(
+    bridge = BridgeStub(
         _events=relay,
         _apple_runtime_inflight=False,
         _ffmpeg_install_inflight=False,

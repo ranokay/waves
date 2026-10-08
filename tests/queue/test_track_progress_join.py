@@ -28,6 +28,7 @@ import pathlib
 from threading import Lock, local
 from unittest.mock import MagicMock, patch
 
+from support.bridge_stub import BridgeStub
 from tidalapi.media import Track
 
 from waves import download as download_mod
@@ -61,7 +62,7 @@ def _bare_tracked(progress: Progress) -> _TrackedDownload:
     return dl
 
 
-class _PollStub:
+class _PollStub(BridgeStub):
     """Stand-in for WavesBridge carrying only what _poll_track_progress touches,
     with the real poller and the real roll-up bound on."""
 

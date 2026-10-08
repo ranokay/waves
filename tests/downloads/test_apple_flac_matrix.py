@@ -315,9 +315,9 @@ def _apple_stub(base: Path, provider, **overrides):
         _ownership=SimpleNamespace(ownership_of=lambda *a, **k: None),
     )
     # The runner drives these paths through the bridge-built hooks.
-    stub._apple_job_hooks = WavesBridge._apple_job_hooks.__get__(stub, SimpleNamespace)
+    stub._apple_job_hooks = WavesBridge._apple_job_hooks.__get__(stub)
     for name in ("_psetting", "_tag_write_flags"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     return stub
 
 

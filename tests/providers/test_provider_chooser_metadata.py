@@ -48,7 +48,7 @@ class _Signal:
 
 
 def _bridge(providers=None, **settings_over):
-    b = SimpleNamespace()
+    b = BridgeStub()
     settings = {
         "tidal_quality_audio": "HIGH",
         "apple_quality_audio": "LOSSLESS",
@@ -91,7 +91,7 @@ def _bridge(providers=None, **settings_over):
         "_psetting",
         "_get_apple_enabled",
     ):
-        setattr(b, name, getattr(WavesBridge, name).__get__(b, SimpleNamespace))
+        setattr(b, name, getattr(WavesBridge, name).__get__(b))
     return b
 
 
@@ -453,14 +453,14 @@ def _search_stub(providers):
         _logged_in=True,
         settings=SimpleNamespace(data=SimpleNamespace(apple_enabled=True)),
     )
-    stub.search = WavesBridge.search.__get__(stub, SimpleNamespace)
-    stub._remember_search = WavesBridge._remember_search.__get__(stub, SimpleNamespace)
-    stub._top_hit_dict = WavesBridge._top_hit_dict.__get__(stub, SimpleNamespace)
-    stub._absorb_search_group = WavesBridge._absorb_search_group.__get__(stub, SimpleNamespace)
-    stub._search_display_payload = WavesBridge._search_display_payload.__get__(stub, SimpleNamespace)
-    stub._paint_search_display = WavesBridge._paint_search_display.__get__(stub, SimpleNamespace)
-    stub._settle_search = WavesBridge._settle_search.__get__(stub, SimpleNamespace)
-    stub._show_search_display = WavesBridge._show_search_display.__get__(stub, SimpleNamespace)
+    stub.search = WavesBridge.search.__get__(stub)
+    stub._remember_search = WavesBridge._remember_search.__get__(stub)
+    stub._top_hit_dict = WavesBridge._top_hit_dict.__get__(stub)
+    stub._absorb_search_group = WavesBridge._absorb_search_group.__get__(stub)
+    stub._search_display_payload = WavesBridge._search_display_payload.__get__(stub)
+    stub._paint_search_display = WavesBridge._paint_search_display.__get__(stub)
+    stub._settle_search = WavesBridge._settle_search.__get__(stub)
+    stub._show_search_display = WavesBridge._show_search_display.__get__(stub)
     stub._search_total = staticmethod(WavesBridge._search_total)
     stub._SEARCH_TTL = WavesBridge._SEARCH_TTL
     stub._SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX

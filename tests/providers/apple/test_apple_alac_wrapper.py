@@ -478,7 +478,7 @@ def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypat
         settings=SimpleNamespace(data=SimpleNamespace(apple_wrapper_port=0)),
         _apple_runtime=mgr,
     )
-    stub._resolve_apple_wrapper_url = WavesBridge._resolve_apple_wrapper_url.__get__(stub, SimpleNamespace)
+    stub._resolve_apple_wrapper_url = WavesBridge._resolve_apple_wrapper_url.__get__(stub)
     assert stub._resolve_apple_wrapper_url().endswith(f":{persisted}")
     override = 50000 if persisted != 50000 else 50001
     stub.settings.data.apple_wrapper_port = override

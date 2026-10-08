@@ -33,8 +33,8 @@ _SLOTS = (
 )
 
 
-def _stub(root: Path, *, keep: bool = True) -> SimpleNamespace:
-    stub = SimpleNamespace()
+def _stub(root: Path, *, keep: bool = True) -> BridgeStub:
+    stub = BridgeStub()
     stub._apple_quarantine_paths = {}
     stub._queue_index = {}
     stub.marked = []
@@ -52,7 +52,7 @@ def _stub(root: Path, *, keep: bool = True) -> SimpleNamespace:
         )
     )
     for name in _SLOTS:
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     return stub
 
 
@@ -227,7 +227,7 @@ def test_withdrawing_a_row_forgets_its_quarantine_paths():
     )
     stub._reindex_queue = lambda: setattr(stub, "_queue_index", {it["qid"]: it for it in stub._queue})
 
-    gone = WavesBridge._remove_rows_where.__get__(stub, SimpleNamespace)(lambda it: it["qid"] == 7)
+    gone = WavesBridge._remove_rows_where.__get__(stub)(lambda it: it["qid"] == 7)
 
     assert gone == [7]
     assert stub._apple_quarantine_paths == {}

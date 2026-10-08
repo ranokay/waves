@@ -961,7 +961,7 @@ def test_the_favorite_id_set_reads_the_provider_and_caches():
 
 def test_a_failed_favorite_id_read_serves_stale_or_the_partial_set():
     provider = _provider(favorite_ids=RuntimeError("rate limited"))
-    stub = SimpleNamespace(providers={"tidal": provider}, _fav_ids={"albums": (0.0, {"old"})}, _FAV_IDS_TTL=600.0)
+    stub = BridgeStub(providers={"tidal": provider}, _fav_ids={"albums": (0.0, {"old"})}, _FAV_IDS_TTL=600.0)
 
     assert WavesBridge._favorite_ids(stub, "albums") == {"old"}
     assert stub._fav_ids["albums"] == (0.0, {"old"})  # not re-stamped

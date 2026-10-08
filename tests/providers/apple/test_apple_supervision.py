@@ -10,6 +10,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from support.bridge_stub import BridgeStub
 
 from waves.constants import CTX_APPLE
 from waves.desktop.backend import WavesBridge
@@ -580,7 +581,7 @@ def _bridge_stub(**settings_overrides):
     data = SimpleNamespace(apple_pacing_batch_size=0, apple_pacing_delay_sec=0.0, apple_wrapper_idle_sec=0.0)
     for key, value in settings_overrides.items():
         setattr(data, key, value)
-    stub = SimpleNamespace(settings=SimpleNamespace(data=data), _apple_runtime=None, _apple_supervisor=None)
+    stub = BridgeStub(settings=SimpleNamespace(data=data), _apple_runtime=None, _apple_supervisor=None)
     for name in (
         "_apple_setting",
         "_apple_effective_wrapper_port",
@@ -600,7 +601,7 @@ def _bridge_stub(**settings_overrides):
         "_apple_sleep_abortable",
         "_apple_job_hooks",
     ):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     stub._queue_index = {}
     stub._queue_item = lambda qid: stub._queue_index.get(qid)
     stub._set_queue_status = lambda qid, status, reason="": (
@@ -845,7 +846,7 @@ def test_idle_stop_decides_under_the_sidecar_guard():
         seen["stop_held"] = guard.held
         return True
 
-    stub = SimpleNamespace(
+    stub = BridgeStub(
         settings=SimpleNamespace(data=SimpleNamespace(apple_wrapper_idle_sec=300.0)),
         _apple_supervisor=SimpleNamespace(should_stop=should_stop, stop=stop),
         _apple_sidecar_lock=guard,
@@ -853,7 +854,7 @@ def test_idle_stop_decides_under_the_sidecar_guard():
         _schedule_apple_idle_stop=lambda: seen.setdefault("rescheduled", True),
     )
     for name in ("_apple_setting", "_apple_idle_timeout", "_apple_sidecar_guard", "_apple_idle_stop_if_idle"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
 
     stub._apple_idle_stop_if_idle()
 

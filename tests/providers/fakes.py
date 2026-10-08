@@ -12,7 +12,7 @@ so a descriptor-driven test names only what it asserts on.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from support.bridge_stub import BridgeStub
 
 from waves.desktop.providers.presentation import apple_status
 from waves.providers.base import Provider, ProviderDescriptor, StatusKind
@@ -82,14 +82,14 @@ class StubProvider(BareProvider):
         return ProviderDescriptor(id=self.id, name=self.name, status_kind=self._status_kind)
 
 
-def stub_bridge(providers, *, logged_in=False, tracked=frozenset(), probes=None) -> SimpleNamespace:
+def stub_bridge(providers, *, logged_in=False, tracked=frozenset(), probes=None) -> BridgeStub:
     """The minimal bridge the module-level provider-surface helpers read.
 
     Only the attributes those helpers touch: the provider registry, the
     bridge's own session flag (what a tracked provider's light reads), the
     tracked-session set and the setup-status probes.
     """
-    return SimpleNamespace(
+    return BridgeStub(
         providers=dict(providers),
         _logged_in=logged_in,
         _tracked_sessions=tracked,
