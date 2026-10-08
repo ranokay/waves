@@ -10,8 +10,8 @@ for an agent when it is open, labelled `ready-for-agent` (and not
 first ready child in map order is the frontier. When nothing is ready, the
 open children that nothing blocks name what the map waits on. The report ends
 with checklist entries that disagree with the tracker: a tick against the
-live state, or a checklist child that is not linked as a sub-issue and so
-reaches no other part of the report.
+live state, a checklist child that is not linked as a sub-issue (and so
+reaches no other part of the report), or a sub-issue with no checklist row.
 
 Usage: wayfinder_frontier.py [MAP ...]    (no argument reports every open map)
 """
@@ -119,7 +119,9 @@ def checklist_drift(wmap: WayfinderMap) -> list[str]:
     """Checklist entries that disagree with the tracker."""
     by_number = {child.number: child for child in wmap.children}
     drift: list[str] = []
+    listed: set[int] = set()
     for mark, number in CHECKBOX.findall(wmap.body):
+        listed.add(int(number))
         child = by_number.get(int(number))
         if child is None:
             drift.append(f"#{number} is in the checklist but not a sub-issue")
@@ -129,6 +131,11 @@ def checklist_drift(wmap: WayfinderMap) -> list[str]:
             drift.append(f"#{child.number} is ticked but open")
         elif not ticked and not child.open:
             drift.append(f"#{child.number} is closed but unticked")
+    drift += [
+        f"#{child.number} is a sub-issue but not in the checklist"
+        for child in wmap.children
+        if child.number not in listed
+    ]
     # A child listed twice reports once.
     return list(dict.fromkeys(drift))
 
@@ -183,7 +190,10 @@ def _gh(*args: str) -> str:
 
 
 def _open_maps() -> list[int]:
-    out = _gh("issue", "list", "--repo", REPO, "--label", MAP_LABEL, "--state", "open", "--json", "number")
+    # gh lists 30 issues unless told otherwise; ask for more maps than a repo holds.
+    out = _gh(
+        "issue", "list", "--repo", REPO, "--label", MAP_LABEL, "--state", "open", "--limit", "1000", "--json", "number"
+    )
     return sorted(entry["number"] for entry in json.loads(out))
 
 

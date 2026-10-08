@@ -85,22 +85,27 @@ def test_checklist_entries_that_disagree_with_the_tracker_are_reported_once():
             "- [ ] #33: open and unticked",
             "- [ ] #99: listed but never linked as a sub-issue",
             "- [ ] #99: listed twice",
-            "Prose mentioning #30 is not a box.",
+            "Prose mentioning #34 is not a box.",
         ]
     )
 
-    lines = _report(module, _node(30, state="CLOSED"), _node(31), _node(32, state="CLOSED"), _node(33), body=body)
+    lines = _report(
+        module, _node(30, state="CLOSED"), _node(31), _node(32, state="CLOSED"), _node(33), _node(34), body=body
+    )
 
     drift = lines[lines.index("  checklist drift:") + 1 :]
     assert drift == [
         "    #30 is closed but unticked",
         "    #31 is ticked but open",
         "    #99 is in the checklist but not a sub-issue",
+        "    #34 is a sub-issue but not in the checklist",
     ]
 
 
-def _fake_gh(answers, open_maps=()):
+def _fake_gh(answers, open_maps=(), calls=None):
     def fake_gh(*args):
+        if calls is not None:
+            calls.append(args)
         if args[0] == "issue":
             return json.dumps([{"number": n} for n in open_maps])
         number = next(arg.removeprefix("number=") for arg in args if arg.startswith("number="))
@@ -126,10 +131,13 @@ def test_main_prints_a_report_for_each_named_map(monkeypatch, capsys):
 
 def test_main_without_arguments_reports_every_open_map(monkeypatch, capsys):
     module = _frontier_module()
-    monkeypatch.setattr(module, "_gh", _fake_gh({"7": _issue(_node(50))}, open_maps=[7]))
+    calls: list = []
+    monkeypatch.setattr(module, "_gh", _fake_gh({"7": _issue(_node(50))}, open_maps=[7], calls=calls))
 
     assert module.main(["wayfinder_frontier.py"]) == 0
     assert "  frontier: #50 Child 50" in capsys.readouterr().out
+    listing = next(call for call in calls if call[0] == "issue")
+    assert int(listing[listing.index("--limit") + 1]) > 30, "gh lists only 30 maps by default"
 
 
 def test_an_unknown_map_fails_after_the_reports_already_printed(monkeypatch, capsys):

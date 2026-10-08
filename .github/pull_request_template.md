@@ -17,7 +17,7 @@ Gate (frozen SHA `<sha>`, no writes since):
 - `mise run check` — exit <n>
 - `mise run test-strict` — <passed> passed[, <failed> failed (<one-line disposition>)]
 - /code-review (standards, spec, correctness) — <n> fixed, <n> refuted
-- PR checks — <all green | each failed check with its fix or refutation>
+- PR checks — <all green | pending at merge | each failed check with its fix or refutation>
 
 Merge stands on the local gate; checks read, not awaited.
 
