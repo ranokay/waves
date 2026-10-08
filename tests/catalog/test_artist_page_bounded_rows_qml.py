@@ -10,11 +10,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
+from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until_true
 
 _FIRST_BUILT_ALBUM = (
     "(function () { for (var i = 0; i < artistAlbumsModel.count; ++i) "
     "if (artistAlbumsRep.itemAt(i).item !== null) return i; return -1; })()"
+)
+# The albums row a content y falls on, from the section header's own
+# geometry and the shared row pitch (the delegates have no y until a layout
+# pass, and this must be read in the fill's own turn).
+_ALBUM_AT_Y = (
+    "Math.floor((%d - (artistAlbumsHead.y + artistAlbumsHead.height + artistCol.spacing)) / root._artistAlbumPitch)"
 )
 
 
@@ -95,19 +101,13 @@ def _scenario() -> int:
             failures.append(what)
 
     def wait(expr: str, what: str, timeout_ms: int = 15000) -> None:
-        try:
-            wait_until(lambda: bool(q(expr)), timeout_ms=timeout_ms, message=what)
-        except AssertionError:
-            failures.append(what)
+        check(wait_until_true(q, expr, what, timeout_ms=timeout_ms), what)
 
     bridge.artistLoaded.emit(_payload())
 
     # The fill builds the opening screen's rows in the payload's own turn,
     # before any incubation lands.
-    check(
-        q(_FIRST_BUILT_ALBUM) >= 0,
-        "the opening screen built no album row in the payload's own turn",
-    )
+    check(q(_FIRST_BUILT_ALBUM) >= 0, "the opening screen built no album row in the payload's own turn")
     # Realise the page: without a layout the rest of the rows are never
     # built.
     q("artistView.contentHeight")
@@ -131,13 +131,11 @@ def _scenario() -> int:
         q("artistAlbumsRep.itemAt(119).item === null") is True,
         "SHOW ALL built the far albums rows inline instead of incubating them",
     )
-    # Top-first: a moment later the batches are still filling from the fold
-    # down, so the last row is not there yet.
-    settle(200)  # a batch needs frames to land; 200ms is less than a full fill
-    check(
-        q("artistAlbumsRep.itemAt(119).item === null") is True,
-        "the albums rows did not fill from the top down",
-    )
+    # Top-first: once a middle row has landed, the last row is still not
+    # there (the batches grow in order, so nothing near the end can exist
+    # before the middle does).
+    wait("artistAlbumsRep.itemAt(20).item !== null", "the albums fill never reached a middle row")
+    check(q("artistAlbumsRep.itemAt(119).item === null") is True, "the albums rows did not fill from the top down")
     wait("artistAlbumsRep.itemAt(119).item !== null", "the incubated albums rows never arrived")
 
     # SHOW LESS keeps the built rows: hidden, not destroyed.
@@ -157,10 +155,7 @@ def _scenario() -> int:
     settle(50)  # the model reassignment's delegate teardown pass
     check(q("artistAlbumsRep.count") == 0, "collapsing the albums section left its rows built")
     q("root.toggleArtistSection('albums')")
-    check(
-        q("artistAlbumsRep.itemAt(5).item !== null") is True,
-        "unfolding left the albums screen unbuilt in the click",
-    )
+    check(q("artistAlbumsRep.itemAt(5).item !== null") is True, "unfolding left the albums screen unbuilt in the click")
     wait("artistAlbumsRep.itemAt(119).item !== null", "the unfolded albums rows never filled in")
 
     # A background revalidate swaps the payload in place: the rows the user
@@ -186,21 +181,47 @@ def _scenario() -> int:
     check(q("root.artistAlbumsExpanded") is True, "the revalidate collapsed the expanded section")
 
     # A Back into a long artist arms its saved spot: the fresh fill plans
-    # the window around THAT screen, so rows far above and below it stay
-    # unbuilt while the landing spot is there for the frame it appears in.
+    # the window around THAT screen, so the row at the landing spot is built
+    # for the frame it appears in while rows above and below it stay
+    # unbuilt. The state armed here is the one navBack leaves behind before
+    # it reloads the artist (see _artistRestoreState).
     q("root.artistAlbumsExpanded = true")
     q("root._artistRestoreState = ({ id: 'artist-1', ex: {}, bio: false })")
     q("artistView.pendingRestoreKey = 'artist-1'")
     q("artistView.pendingRestoreY = 3000")
     bridge.artistLoaded.emit(_payload())
+    # The plan's own turn: the window open around the landing spot, its rows
+    # built, nothing above or below it yet.
+    spot = q(_ALBUM_AT_Y % 3000)
     first_built = q(_FIRST_BUILT_ALBUM)
+    check(spot >= 0, "the restore spot falls above the albums section")
     check(first_built > 0, f"a Back restore built the rows above the landing spot (first built {first_built})")
+    check(
+        spot >= 0 and q(f"artistAlbumsRep.itemAt({spot}).item !== null") is True,
+        "a Back restore left the row at the landing spot unbuilt",
+    )
     check(
         q("artistAlbumsRep.itemAt(119).item === null") is True,
         "a Back restore built the rows below the landing spot inline",
     )
     q("artistView.contentHeight")
     wait("artistAlbumsRep.itemAt(119).item !== null", "the restored page's rows never filled in")
+
+    # A saved spot past the page's own end clamps to the bottom screen
+    # instead of planning every window past its section.
+    q("root.artistAlbumsExpanded = true")
+    q("root._artistRestoreState = ({ id: 'artist-1', ex: {}, bio: false })")
+    q("artistView.pendingRestoreKey = 'artist-1'")
+    q("artistView.pendingRestoreY = 1000000")
+    bridge.artistLoaded.emit(_payload())
+    check(
+        q("artistAlbumsRep.itemAt(0).item === null") is True,
+        "a restore past the page's end built the rows at the top",
+    )
+    check(
+        q("artistVideosRep.itemAt(0).item !== null") is True,
+        "a restore past the page's end did not land on the bottom screen",
+    )
 
     if failures:
         for f in failures:

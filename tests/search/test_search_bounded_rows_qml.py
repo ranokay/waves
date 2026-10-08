@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
+from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until_true
 
 
 @pytest.mark.qml
@@ -72,10 +72,7 @@ def _scenario() -> int:
             failures.append(what)
 
     def wait(expr: str, what: str, timeout_ms: int = 15000) -> None:
-        try:
-            wait_until(lambda: bool(q(expr)), timeout_ms=timeout_ms, message=what)
-        except AssertionError:
-            failures.append(what)
+        check(wait_until_true(q, expr, what, timeout_ms=timeout_ms), what)
 
     q("openSearch()")
     settle(50)  # the tab's own layout pass, so the payload realizes rows
