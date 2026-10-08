@@ -1,14 +1,15 @@
 # Code-review graph
 
-Read before exploring code, tracing impact, or reviewing changes. Narrow scope
-with the graph first, then verify in the source. Documentation-only edits do
-not require code graph analysis.
+Read before reviewing changes or tracing impact. Narrow scope with the graph
+first, then verify in the source. Documentation-only edits do not require code
+graph analysis. Locating code goes faster with `rg` and source reads.
 
 ## Procedure
 
 1. Check `list_graph_stats_tool`. If `head_matches_build` is false, run
-   `mise run graph` and check freshness again. The edit hook is best-effort;
-   semantic search is keyword fallback until embeddings are intentionally generated.
+   `mise run graph` and check freshness again. A server started with
+   `--auto-watch` re-indexes files as they change; semantic search is
+   keyword fallback until embeddings are intentionally generated.
 2. Choose the tools for the task below. For changes, account for affected
    callers, execution flows, and tests before concluding.
 3. Read the relevant implementation and tests. Verify exact source for

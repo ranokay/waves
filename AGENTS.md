@@ -3,7 +3,7 @@
 - Explore code: read [domain guidance](docs/agents/domain.md) for vocabulary
   and decisions, then [the architecture map](docs/architecture.md) for owners
   and dependency direction.
-- Explore code or review changes: read
+- Review changes or trace impact: read
   [the graph workflow](docs/agents/code-review-graph.md) before using graph tools
   to narrow scope.
 - Implement an issue or prepare a PR: read
