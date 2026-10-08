@@ -28,6 +28,10 @@ def test_browse_opens_and_grows_in_place():
     )
 
 
+def _landing(*sections) -> dict:
+    return {"sections": list(sections), "sources": [], "genres": [], "moods": [], "decades": []}
+
+
 def _card(ident: str, title: str) -> dict:
     return {
         "id": ident,
@@ -89,7 +93,7 @@ def _scenario() -> int:
     # A landing with two card shelves; the first grows in the refresh below.
     first = _shelf("one", "First Shelf", [_card("al1", "One"), _card("al2", "Two"), _card("al3", "Three")])
     second = _shelf("two", "Second Shelf", [_card("al4", "Four")])
-    bridge.browseLoaded.emit({"sections": [first, second], "sources": [], "genres": [], "moods": [], "decades": []})
+    bridge.browseLoaded.emit(_landing(first, second))
     wait("root.browseBuilding === false && browseSecRep.count === 2", "the landing never built")
     settle(200)
     check(q("browseSecRep.count") == 2, f"the landing lost sections: {q('browseSecRep.count')}")
@@ -138,7 +142,7 @@ def _scenario() -> int:
     # keep their cards, and a released slot does not throw while its dying
     # delegate still reads the previous row.
     shorter = _shelf("one", "First Shelf", [_card("al1", "One"), _card("al2", "Two")])
-    bridge.browseLoaded.emit({"sections": [shorter], "sources": [], "genres": [], "moods": [], "decades": []})
+    bridge.browseLoaded.emit(_landing(shorter))
     settle(200)
     check(q("browseVisibleSections.length") == 1, "the shorter landing kept its trailing section")
     check(q("browseVisibleSections[0].items.length") == 2, "the shorter shelf kept its trailing rows")

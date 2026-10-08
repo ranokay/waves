@@ -1669,12 +1669,17 @@ ApplicationWindow {
       prev: [],
       cur: []
     })
-  function browseSecAt(slot) {
-    var cur = root._browseSecHeld.cur
+  // A released slot's binding still evaluates until its delegate is deleted,
+  // so it falls back to the section it had from prev for that instant.
+  function _browseSecSlotAt(held, slot) {
+    var cur = held.cur
     if (cur[slot] !== undefined)
       return cur[slot]
-    var prev = root._browseSecHeld.prev
+    var prev = held.prev
     return prev[slot] !== undefined ? prev[slot] : null
+  }
+  function browseSecAt(slot) {
+    return root._browseSecSlotAt(root._browseSecHeld, slot)
   }
   // The grow/trim machine behind both section slot lists: keeps the count,
   // the held arrays (a released slot's binding still evaluates until its
@@ -1726,11 +1731,7 @@ ApplicationWindow {
       cur: []
     })
   function browsePageSecAt(slot) {
-    var cur = root._browsePageSecHeld.cur
-    if (cur[slot] !== undefined)
-      return cur[slot]
-    var prev = root._browsePageSecHeld.prev
-    return prev[slot] !== undefined ? prev[slot] : null
+    return root._browseSecSlotAt(root._browsePageSecHeld, slot)
   }
   function _browseSyncPageSecSlots() {
     var secs = root.browsePage && root.browsePage.sections ? root.browsePage.sections : []

@@ -67,27 +67,17 @@ Column {
   // covers: its card binding still fires around the trim, and reading past
   // the new array's end would put the dying card on undefined for that
   // instant.
-  readonly property var _itemsHeld: ({
+  property var _itemsHeld: ({
       prev: [],
       cur: []
     })
+  // The same grow/trim machine every Browse slot list runs (see Main's
+  // _browseSyncSlots): a shorter section drops its trailing slots only, so
+  // the rows that remain keep their cards.
   function syncSlots() {
-    var n = bsec.items.length
-    if (bsec._itemsHeld.cur.length > n)
-      bsec._itemsHeld.prev = bsec._itemsHeld.cur
-    bsec._itemsHeld.cur = bsec.items
-    // A shorter section drops its trailing slots only: the rows that remain
-    // keep their cards.
-    if (bsec._slotN > n) {
-      bsecSlots.remove(n, bsec._slotN - n)
-      bsec._slotN = n
-    }
-    while (bsec._slotN < n) {
-      bsecSlots.append({
-        slot: bsec._slotN
-      })
-      bsec._slotN++
-    }
+    var r = host._browseSyncSlots(bsecSlots, bsec._itemsHeld, bsec._slotN, bsec.items, undefined)
+    bsec._itemsHeld = r.held
+    bsec._slotN = r.slotN
   }
   onItemsChanged: bsec.syncSlots()
   // One counting path for both card views: a card created while a veil is
