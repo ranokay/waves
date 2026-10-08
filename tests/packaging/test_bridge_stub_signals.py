@@ -46,7 +46,7 @@ def test_a_bound_bridge_method_emits_onto_a_signal_the_stand_in_never_declared()
     WavesBridge._set_status(stub, "Downloading")
 
     assert stub._status == "Downloading"
-    assert stub.statusChanged.emits == [()], "the real slot's emit lands on the stand-in's recording double"
+    assert stub.statusChanged.emits == [()], "the real method's emit lands on the stand-in's recording double"
 
 
 def test_a_resolved_signal_keeps_its_emits_on_the_instance():
