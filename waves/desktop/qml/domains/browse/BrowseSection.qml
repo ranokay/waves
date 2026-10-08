@@ -37,6 +37,73 @@ Column {
   property var sec: null
   property int secIndex: 0
   property bool landing: false
+  // A shelf a landing refresh appended: its cards incubate on their own
+  // (no veil is up to count them).
+  property bool late: false
+  // The rows this section holds. A refresh or endless-scroll growth
+  // rebuilds `sec` with the new items; the slot model below hands the views
+  // stable slots so only the changed rows rebind and the appended ones
+  // join at the end.
+  readonly property var items: (sec && sec.items) || []
+  // Rows that arrived with the section; everything past them is growth (a
+  // 50-row fetch created inline is the freeze again). The caller marks the
+  // boundary as it grows the section.
+  readonly property int baseCount: sec && sec.base !== undefined ? sec.base : bsec.items.length
+  // One slot per row. The views take THIS model, never the array: a JS
+  // array handed to a view is a reset on every change (every row torn down
+  // and rebuilt), while a model that only grows appends delegates at the
+  // end and leaves the rows above alone. Filled from handlers, never from a
+  // binding: a model binding that appended as it was evaluated could run
+  // inside the column's own layout pass (the rows it created changed the
+  // heights being positioned), after which the column stayed at height 0
+  // and the page showed nothing.
+  ListModel {
+    id: bsecSlots
+  }
+  property int _slotN: 0
+  // The rows before the latest trim, for a slot a shorter row no longer
+  // covers: its card binding still fires around the trim, and reading past
+  // the new array's end would put the dying card on undefined for that
+  // instant.
+  readonly property var _itemsHeld: ({
+      prev: [],
+      cur: []
+    })
+  function syncSlots() {
+    var n = bsec.items.length
+    if (bsec._itemsHeld.cur.length > n)
+      bsec._itemsHeld.prev = bsec._itemsHeld.cur
+    bsec._itemsHeld.cur = bsec.items
+    // A shorter section drops its trailing slots only: the rows that remain
+    // keep their cards.
+    if (bsec._slotN > n) {
+      bsecSlots.remove(n, bsec._slotN - n)
+      bsec._slotN = n
+    }
+    while (bsec._slotN < n) {
+      bsecSlots.append({
+        slot: bsec._slotN
+      })
+      bsec._slotN++
+    }
+  }
+  onItemsChanged: bsec.syncSlots()
+  Component.onCompleted: {
+    bsec.syncSlots()
+    // A list view applies an insert on its next polish; applied now, the
+    // cards exist inside the section's own creation, where the build veils
+    // count them. A card created a frame later would join the count after
+    // the section had already reported in.
+    if (consoleShelf.model)
+      consoleShelf.forceLayout()
+    if (artShelf.model)
+      artShelf.forceLayout()
+    // A drilled section is one unit of its page's veil: the cards above
+    // (created by the forceLayout calls) have joined the count by now, so
+    // this section reports in last.
+    if (!bsec.landing)
+      host._browsePageBuildTick()
+  }
   // Landing arrangement (issue #600): the caller owns the persisted state.
   // An arranged section keeps its header (and these controls) and hides its
   // body while collapsed; hide and move are signals the landing handles.
@@ -203,30 +270,57 @@ Column {
   // of dumped on the right until the window grows enough to add
   // another column.
   Flow {
+    id: bgridFlow
     visible: bsec.grid && !bsec.collapsed
     readonly property real cardW: bsec.artStyle ? 200 : 156
     spacing: bsec.artStyle ? 14 : 12
-    readonly property int cols: host.gridCols(cardW, spacing, (bsec.sec.items || []).length, parent.width)
+    readonly property int cols: host.gridCols(cardW, spacing, bsec.items.length, parent.width)
     width: cols * (cardW + spacing) - spacing
     x: Math.max(0, (parent.width - width) / 2)
     Repeater {
-      model: bsec.grid ? bsec.sec.items : []
+      model: bsec.grid ? bsecSlots : null
       delegate: Loader {
         id: bgridLd
-        required property var modelData
+        required property int index
+        required property int slot
+        readonly property var card: bsec.items[slot] || bsec._itemsHeld.prev[slot] || ({})
+        // The card's own size, held while it incubates, so the grid keeps
+        // its geometry (and the page its height).
+        width: bgridFlow.cardW
+        height: bsec.artStyle ? 246 : 236
+        // Where this card sits in the pane's scroll space, from the grid's
+        // own arithmetic (the Flow has not placed it when asynchronous is
+        // read).
+        readonly property real cardTop: bsec.secTop + bgridFlow.y + Math.floor(index / Math.max(1, bgridFlow.cols)) * (height + bgridFlow.spacing)
+        // Growth cards incubate (a 50-card fetch created inline is the
+        // freeze again), except the ones on the screen the page is shown
+        // at: a Back to a grown listing builds what it lands on inline and
+        // lets the rest come in. Behind a fresh drilled page's veil every
+        // card incubates and reports in.
+        readonly property bool inView: cardTop < bsec.pane.rowAnchorY + bsec.pane.height + height && cardTop + height > bsec.pane.rowAnchorY - height
+        asynchronous: host.browsePageBuilding || (index >= bsec.baseCount && !inView)
+        property bool counted: false
+        Component.onCompleted: counted = host._browsePageCardStart(asynchronous)
+        onLoaded: {
+          host._browsePageCardTick(counted)
+          counted = false
+        }
+        // A card taken down mid-build reports in as it goes, or the veil
+        // waits for the guard.
+        Component.onDestruction: host._browsePageCardTick(counted)
         sourceComponent: bsec.artStyle ? bgridArt : bgridConsole
         Component {
           id: bgridArt
           ArtCard {
             host: bsec.host
-            card: bgridLd.modelData
+            card: bgridLd.card
           }
         }
         Component {
           id: bgridConsole
           BrowseCard {
             host: bsec.host
-            card: bgridLd.modelData
+            card: bgridLd.card
           }
         }
       }
@@ -271,6 +365,8 @@ Column {
   }
   // horizontal card shelf, console (framed cards)
   ListView {
+    id: consoleShelf
+    objectName: "browseConsoleShelf"
     visible: !bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" && !bsec.collapsed
     width: parent.width
     height: 238
@@ -285,19 +381,35 @@ Column {
     // returning click's turn, ~180ms of jank on every switch back
     // to Browse. Keeping the cards alive across a hidden pane is
     // the whole point of the two-pane design.
-    model: !bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" ? bsec.sec.items : []
-    // Async per card, as the art shelf below (see its comment).
+    model: !bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" ? bsecSlots : null
+    // Async per card, as the art shelf below (see its comment). A landing
+    // shelf a refresh appended (`late`) and a shelf's growth rows incubate
+    // on their own; a drilled page's cards incubate behind its veil and
+    // report in.
     delegate: Loader {
       id: bcLd
-      required property var modelData
+      required property int index
+      required property int slot
+      readonly property var card: bsec.items[slot] || bsec._itemsHeld.prev[slot] || ({})
       width: 156
       height: 236
-      asynchronous: bsec.landing && host._browseAsyncBuild
-      Component.onCompleted: host._browseCardStart(asynchronous)
-      onLoaded: host._browseCardTick(asynchronous)
+      asynchronous: bsec.landing ? (host._browseAsyncBuild || bsec.late || index >= bsec.baseCount) : host.browsePageBuilding
+      property bool counted: false
+      Component.onCompleted: counted = bsec.landing ? host._browseCardStart(asynchronous) : host._browsePageCardStart(asynchronous)
+      function tick() {
+        if (bsec.landing)
+          host._browseCardTick(asynchronous)
+        else
+          host._browsePageCardTick(counted)
+        counted = false
+      }
+      onLoaded: tick()
+      // A card taken down mid-build (the page re-cut under it) reports in
+      // as it goes, or the veil waits for the guard.
+      Component.onDestruction: tick()
       sourceComponent: BrowseCard {
         host: bsec.host
-        card: bcLd.modelData
+        card: bcLd.card
       }
     }
     ShelfWheelRedirect {
@@ -311,6 +423,8 @@ Column {
   }
   // horizontal card shelf, art-first (unframed covers)
   ListView {
+    id: artShelf
+    objectName: "browseArtShelf"
     visible: bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" && !bsec.collapsed
     width: parent.width
     height: bsec.hero ? 284 : 250
@@ -319,7 +433,7 @@ Column {
     clip: true
     boundsBehavior: Flickable.StopAtBounds
     // Local terms, not `visible` (see the console shelf above).
-    model: bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" ? bsec.sec.items : []
+    model: bsec.artStyle && !bsec.grid && bsec.sec.rowKind === "cards" ? bsecSlots : null
     // Each card incubates behind an asynchronous Loader of the card's
     // fixed size, so the shelf's own creation is a row of empty slots
     // (cheap) and the cards fill in across frames. A shelf whose eight
@@ -328,23 +442,32 @@ Column {
     // turn behind the library scan), which the launch animation and
     // any later shelf scroll dropped frames on. The veil accounting
     // (host._browseCardStart / host._browseCardTick) keeps the landing
-    // covered until the cards are in, not just the shelves.
+    // covered until the cards are in, not just the shelves; a landing
+    // shelf a refresh appended, its growth rows, and every drilled
+    // page's cards incubate the same way.
     delegate: Loader {
       id: acLd
-      required property var modelData
+      required property int index
+      required property int slot
+      readonly property var card: bsec.items[slot] || bsec._itemsHeld.prev[slot] || ({})
       readonly property real artSize: bsec.hero ? 280 : 200
       width: artSize
       height: bsec.hero ? artSize : artSize + 46
-      // Only while the landing itself builds asynchronously (behind
-      // the veil): a synchronous in-place refresh, and every drilled
-      // page, still creates its cards inline so nothing is watched
-      // filling in.
-      asynchronous: bsec.landing && host._browseAsyncBuild
-      Component.onCompleted: host._browseCardStart(asynchronous)
-      onLoaded: host._browseCardTick(asynchronous)
+      asynchronous: bsec.landing ? (host._browseAsyncBuild || bsec.late || index >= bsec.baseCount) : host.browsePageBuilding
+      property bool counted: false
+      Component.onCompleted: counted = bsec.landing ? host._browseCardStart(asynchronous) : host._browsePageCardStart(asynchronous)
+      function tick() {
+        if (bsec.landing)
+          host._browseCardTick(asynchronous)
+        else
+          host._browsePageCardTick(counted)
+        counted = false
+      }
+      onLoaded: tick()
+      Component.onDestruction: tick()
       sourceComponent: ArtCard {
         host: bsec.host
-        card: acLd.modelData
+        card: acLd.card
         hero: bsec.hero
       }
     }
@@ -361,24 +484,27 @@ Column {
     visible: bsec.sec.rowKind === "tracks" && !bsec.collapsed
     width: parent.width
     Repeater {
-      model: bsec.sec.rowKind === "tracks" ? bsec.sec.items : []
+      model: bsec.sec.rowKind === "tracks" ? bsecSlots : null
       // Fixed-height shells, content windowed: building every
       // TrackRow of a long playlist in one synchronous pass costs
       // 1.7s of frozen GUI per click (measured, budget 100ms).
       // The shells give the column its full geometry in the
       // assignment turn (so the scroll range and highlight
       // positions are exact from the first frame), then each
-      // row's real content loads asynchronously. Rows near the
-      // viewport (or the spot a hold is armed for) and the
-      // highlight target load synchronously, so what the user is
-      // actually looking at is never a shell.
+      // row's real content loads asynchronously. Only the screen
+      // itself loads synchronously (the band's slack incubates:
+      // building the slack inline stalled scrolling a long shelf
+      // in ~100ms steps), plus the highlight target at any
+      // distance, so what the user is actually looking at is
+      // never a shell.
       delegate: Loader {
         id: btrLd
-        required property var modelData
         required property int index
+        required property int slot
+        readonly property var row: bsec.items[slot] || bsec._itemsHeld.prev[slot]
         width: bsec.width
         height: 62   // TrackRow's fixed height
-        readonly property bool hiRow: host.browseHighlightId !== "" && modelData.id === host.browseHighlightId
+        readonly property bool hiRow: host.browseHighlightId !== "" && row.id === host.browseHighlightId
         // A screenful of rows: the live window's measure.
         readonly property real rps: Math.max(1, bsec.pane.height / 62)
         // Row 0 of THIS shelf, in the pane's scroll space, so the
@@ -388,7 +514,7 @@ Column {
         // A shelf no longer than the window it would be measured
         // against is never worth windowing, and a short shelf is
         // exactly the case an aiming error can blank completely.
-        readonly property bool shortSec: (bsec.sec.items || []).length <= 3 * rps
+        readonly property bool shortSec: bsec.items.length <= 3 * rps
         // WINDOWED, not just incubated. Incubating every row
         // spread the build cost out but still left them all
         // alive: a 579-track playlist put ~76,000 items under
@@ -408,12 +534,38 @@ Column {
         asynchronous: {
           if (hiRow)
             return false
-          // A few rows of slack either side absorb the fact
-          // that anchorRow moves in bands, not per pixel.
+          // Behind a fresh drilled page's veil every in-view row
+          // incubates too (and reports in like a card, see
+          // counted below), so the payload's turn builds nothing
+          // but shells.
+          if (!bsec.landing && host.browsePageBuilding)
+            return true
+          // Only the screen itself builds inline; the slack rows
+          // ahead of it incubate, and they are created two
+          // screens early, so a scroll meets them built. The
+          // anchor is floored to a ten-row band, so the screen
+          // starts up to ten rows below it: the band reaches a
+          // row above and ten rows plus one below the screen.
           // rowAnchorY, not contentY: this binding must not
           // re-evaluate on every scrolled frame (see there).
-          return index < anchorRow - 8 || index > anchorRow + rps + 12
+          return index < anchorRow - 1 || index > anchorRow + rps + 11
         }
+        property bool counted: false
+        Component.onCompleted: if (!bsec.landing && active)
+          counted = host._browsePageCardStart(asynchronous)
+        onLoaded: {
+          host._browsePageCardTick(counted)
+          counted = false
+        }
+        // A counted row that leaves the window before it lands (the layout
+        // placed the section lower and the band moved under it) or goes
+        // down with the page reports in as it goes: a long list kept its
+        // veil up until the guard, waiting on rows that no longer existed.
+        onActiveChanged: if (!active) {
+          host._browsePageCardTick(counted)
+          counted = false
+        }
+        Component.onDestruction: host._browsePageCardTick(counted)
         // Empty row card while the content incubates, so a
         // streaming list reads as rows filling in, not holes.
         Rectangle {
@@ -429,25 +581,25 @@ Column {
           id: btr
           host: bsec.host
           width: btrLd.width
-          tId: btrLd.modelData.id
-          kind: btrLd.modelData.kind || "track"
-          title: btrLd.modelData.title
-          artistName: btrLd.modelData.artist || ""
-          artistId: btrLd.modelData.artist_id || ""
-          album: btrLd.modelData.album || ""
-          art: btrLd.modelData.art || ""
-          year: "" + (btrLd.modelData.year || "")
-          date: btrLd.modelData.date || ""
-          duration: btrLd.modelData.duration || ""
-          durationSec: btrLd.modelData.duration_sec || 0
-          quality: btrLd.modelData.quality || ""
-          popularity: btrLd.modelData.popularity || 0
-          explicit: btrLd.modelData.explicit === true
+          tId: btrLd.row.id
+          kind: btrLd.row.kind || "track"
+          title: btrLd.row.title
+          artistName: btrLd.row.artist || ""
+          artistId: btrLd.row.artist_id || ""
+          album: btrLd.row.album || ""
+          art: btrLd.row.art || ""
+          year: "" + (btrLd.row.year || "")
+          date: btrLd.row.date || ""
+          duration: btrLd.row.duration || ""
+          durationSec: btrLd.row.duration_sec || 0
+          quality: btrLd.row.quality || ""
+          popularity: btrLd.row.popularity || 0
+          explicit: btrLd.row.explicit === true
           // Numbers only on item pages, where they're ordered
           // (album track #s / playlist positions), editorial
           // track shelves would all read "1".
-          num: (!bsec.landing && host.browsePage && host.browsePage.header) ? (btrLd.modelData.num || 0) : 0
-          albumId: btrLd.modelData.album_id || ""
+          num: (!bsec.landing && host.browsePage && host.browsePage.header) ? (btrLd.row.num || 0) : 0
+          albumId: btrLd.row.album_id || ""
           hi: btrLd.hiRow
           // Track click landed here: hide the page while it
           // lays out, center this row, then reveal, so the
@@ -480,25 +632,26 @@ Column {
     readonly property bool tiled: bsec.artStyle
     readonly property real cardW: 200
     spacing: tiled ? 14 : 8
-    readonly property int cols: host.gridCols(cardW, spacing, (bsec.sec.items || []).length, parent.width)
+    readonly property int cols: host.gridCols(cardW, spacing, bsec.items.length, parent.width)
     width: tiled ? cols * (cardW + spacing) - spacing : parent.width
     x: tiled ? Math.max(0, (parent.width - width) / 2) : 0
     Repeater {
-      model: bsec.sec.rowKind === "links" ? bsec.sec.items : []
+      model: bsec.sec.rowKind === "links" ? bsecSlots : null
       delegate: Loader {
         id: blinkLd
-        required property var modelData
         required property int index
+        required property int slot
+        readonly property var row: bsec.items[slot] || bsec._itemsHeld.prev[slot] || ({})
         sourceComponent: bsec.artStyle ? blinkTile : blinkChip
         Component {
           id: blinkTile
           BrowseTile {
             host: bsec.host
-            title: blinkLd.modelData.title
-            path: blinkLd.modelData.path
-            provider: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || bsec.host.legacyBrowseProvider)
+            title: blinkLd.row.title
+            path: blinkLd.row.path
+            provider: String(blinkLd.row.provider_id || bsec.sec.provider_id || bsec.host.legacyBrowseProvider)
             idx: blinkLd.index
-            plOnly: !!blinkLd.modelData.pl
+            plOnly: !!blinkLd.row.pl
           }
         }
         Component {
@@ -524,19 +677,19 @@ Column {
               Text {
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
-                text: blinkLd.modelData.title
+                text: blinkLd.row.title
                 color: textLo
                 font.pixelSize: 13
               }
             }
             TapAction {
               anchors.fill: parent
-              accessibleLabel: "Open " + (blinkLd.modelData.title || "category")
+              accessibleLabel: "Open " + (blinkLd.row.title || "category")
               focusRadius: 8
               // The link's own owner rides along; a drilled page's links have
               // none individually and inherit the page's provider.
-              readonly property string owner: String(blinkLd.modelData.provider_id || bsec.sec.provider_id || bsec.host.legacyBrowseProvider)
-              onTriggered: blinkLd.modelData.pl ? host.openPlaylistsFolder(blinkLd.modelData.path, blinkLd.modelData.title, owner) : host.openBrowseLink(blinkLd.modelData.path, blinkLd.modelData.title, owner)
+              readonly property string owner: String(blinkLd.row.provider_id || bsec.sec.provider_id || bsec.host.legacyBrowseProvider)
+              onTriggered: blinkLd.row.pl ? host.openPlaylistsFolder(blinkLd.row.path, blinkLd.row.title, owner) : host.openBrowseLink(blinkLd.row.path, blinkLd.row.title, owner)
             }
           }
         }

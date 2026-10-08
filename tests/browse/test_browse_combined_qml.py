@@ -279,13 +279,16 @@ def _run_scenario() -> int:
     q("bootOverlay.done = true")  # otherwise the landing build takes the veiled path
     settle()
     # One section pre-hidden: the build veil must count only the delegates the
-    # model will create (2 sections + the 4 wayfinding loaders), not all 3.
+    # model will create (the 2 visible sections), not all 3. This payload
+    # carries no wayfinding chips and the shelves already hold that (empty)
+    # set, so the four tile loaders do not join the count either: they are
+    # only rebuilt when the chip set changes.
     q("root.browseHidden = {'tidal|Tidal New': true}")
     bridge.browseLoaded.emit(dict(_PAYLOAD))
     if not wait(lambda: q("browseSections.length === 3 && root.browseBuilding === false") and len(sections()) == 2):
         print(f"the combined landing never built: {sections()}", file=sys.stderr)
         return EXIT_PRECONDITION
-    if q("root._browseBuildTotal") != 6:
+    if q("root._browseBuildTotal") != 2:
         return fail(f"the build veil counted hidden sections: {q('root._browseBuildTotal')}")
     q("root.browseHidden = {}")
     if not wait(lambda: len(titles()) == 3):
