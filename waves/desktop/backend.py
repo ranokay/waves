@@ -7522,7 +7522,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     with ARTIST_GAUGE.working():
                         return call()
 
-                workers = min(_ARTIST_SECTION_WORKERS, len(sections))
+                workers = _ARTIST_SECTION_WORKERS
                 ARTIST_GAUGE.limit(workers)
                 with ThreadPoolExecutor(max_workers=workers) as pool:
                     pending = {name: pool.submit(_section, call) for name, call in sections.items()}

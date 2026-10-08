@@ -74,8 +74,8 @@ def _scenario() -> int:
 
     disc = int(q("root.discDecode"))
     row = int(q("root.albumRowArt")) * 2
-    if int(q("root.albumRowArt")) != 46:  # AlbumBlock draws its row cover at 46; the pool warms at 2x
-        print("regressed: albumRowArt drifted from AlbumBlock's 46 px row cover", file=sys.stderr)
+    if int(q("root.albumRowArt")) != 46:  # the shared row-cover size AlbumBlock draws at; the pool warms at 2x it
+        print("regressed: the shared album row-cover size moved; revisit the warm sizes with it", file=sys.stderr)
         return EXIT_REGRESSED
     expected = {(photo, 300), *{(u, disc) for u in track_arts}, *{(u, row) for u in album_arts}, (ep_art, row)}
 
