@@ -13,10 +13,10 @@ import "../search"
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load.
 // It reads through it:
-//   host.artistsById / host.expandMoveMs / host.expandedAlbums /
-//   host.hoverPrefetch / host.hoverPrefetchCancel / host.isNewRelease /
-//   host.onAlbumPage / host.openAlbumPage / host.qualMixList /
-//   host.rememberExpandReturn / host.scrollCollapsedBack /
+//   host.albumRowArt / host.artistsById / host.expandMoveMs /
+//   host.expandedAlbums / host.hoverPrefetch / host.hoverPrefetchCancel /
+//   host.isNewRelease / host.onAlbumPage / host.openAlbumPage /
+//   host.qualMixList / host.rememberExpandReturn / host.scrollCollapsedBack /
 //   host.scrollExpandedIntoView / host.trackCache
 // The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
@@ -181,8 +181,8 @@ Column {
       }
       Art {
         host: ab.host
-        width: 46
-        height: 46
+        width: ab.host.albumRowArt
+        height: ab.host.albumRowArt
         hoverFx: true
         fxKind: "album"
         fxId: albumId

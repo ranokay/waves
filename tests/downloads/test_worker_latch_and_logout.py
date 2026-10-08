@@ -89,6 +89,8 @@ class _LoadArtistStub(_StubBase):
     loadArtist = WavesBridge.loadArtist
     _start_artist_build = WavesBridge._start_artist_build
 
+    _artist_art_summary = staticmethod(WavesBridge._artist_art_summary)
+
     def __init__(self, artist):
         super().__init__()
         self._artist = artist
@@ -99,6 +101,7 @@ class _LoadArtistStub(_StubBase):
         self._prefetch_lock = Lock()
         self.artistLoaded = _Signal()
         self.artistLoadFailed = _Signal()
+        self.artistPagePrefetched = _Signal()
 
     def _get_artist(self, artist_id):
         return self._artist

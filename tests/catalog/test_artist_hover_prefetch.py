@@ -37,6 +37,8 @@ class _Stub:
     prefetchArtist = WavesBridge.prefetchArtist
     _start_artist_build = WavesBridge._start_artist_build
 
+    _artist_art_summary = staticmethod(WavesBridge._artist_art_summary)
+
     def __init__(self, *, fail=False, collapse=False):
         self.threadpool = _Pool()
         self._logged_in = True
@@ -55,6 +57,7 @@ class _Stub:
         self._browse_gen = 0
         self.artistLoaded = _Sig()
         self.artistLoadFailed = _Sig()
+        self.artistPagePrefetched = _Sig()
         self.busy = []
         self.statuses = []
         self.saves = 0
@@ -155,14 +158,88 @@ def test_a_second_hover_while_one_runs_is_dropped_not_queued():
     assert len(b.threadpool.workers) == 2 and b._artist_prefetch == "8"
 
 
-def test_a_hover_on_a_cached_page_is_a_no_op_but_the_other_edition_rule_rebuilds():
+def test_a_hover_on_a_cached_page_builds_nothing_but_the_other_edition_rule_rebuilds():
     b = _Stub()
-    b._artist_cache["7"] = {"name": "cached", "editions_collapsed": False}
+    b._artist_cache["7"] = {"id": "7", "name": "cached", "editions_collapsed": False, "art": "photo"}
     b.prefetchArtist("7")
     assert b.threadpool.workers == []
     b._collapse = True  # the page on disk was built under the other rule
     b.prefetchArtist("7")
     assert len(b.threadpool.workers) == 1
+
+
+def test_a_hover_on_a_cached_page_warms_its_opening_covers():
+    """Nothing to build, but the click that follows paints its covers from the
+    warm pool: the hover sends the photo and each section's first covers, in
+    page order, and never the page itself."""
+    b = _Stub()
+    b._artist_cache["7"] = {
+        "id": "7",
+        "name": "cached",
+        "editions_collapsed": False,
+        "art": "photo",
+        "tracks": [{"art": f"t{i}"} for i in range(8)],
+        "albums": [{"art": "a0"}, {"art": "a0"}, {"art": ""}, {"art": "a1"}],
+        "eps": [],
+        "videos": [{"art": "v0", "art_big": "V0"}],
+    }
+    b.prefetchArtist("7")
+    assert b.artistPagePrefetched.emits == [
+        (
+            {
+                "id": "7",
+                "art": "photo",
+                "tracks": ["t0", "t1", "t2", "t3", "t4"],
+                "albums": ["a0", "a1"],
+                "eps": [],
+            },
+        )
+    ], "the opening screen's covers, deduped, five a section, videos left to the page"
+    assert b.artistLoaded.emits == [] and b.busy == [] and b.statuses == []
+
+
+def test_a_fresh_build_sends_its_covers_before_the_page():
+    """A click on an artist not yet cached: the opening covers go out as soon
+    as the sections are in, ahead of the edition compare and the page, so they
+    download while the page is still being put together."""
+    b = _Stub(collapse=True)
+    order = []
+    b.artistPagePrefetched.emit = lambda *a: order.append(("covers", a[0]["id"]))
+    b._hide_subset_editions = lambda albums, eps: (order.append(("compare", None)), (albums, eps))[1]
+    b.artistLoaded.emit = lambda *a: order.append(("page", a[0]["id"]))
+    b.loadArtist("7")
+    b.threadpool.workers[0].run()
+    assert order == [("covers", "7"), ("compare", None), ("page", "7")]
+
+
+def test_a_fresh_build_warms_five_distinct_covers_past_repeats():
+    """The five-cover cap counts DISTINCT URLs: a discography whose first rows
+    repeat one cover must not stop the summary short (the pre-dedupe slice
+    this replaced sent only the repeat)."""
+    b = _Stub()
+    covers = ["a"] * 8 + ["b", "c", "d", "e", "f"]
+    b._get_artist = lambda artist_id: SimpleNamespace(
+        id=artist_id,
+        name="Doomcrusher",
+        get_bio=lambda: "",
+        get_albums=lambda: [
+            SimpleNamespace(id=f"al{i}", image=lambda dimension=320, art=cover: art) for i, cover in enumerate(covers)
+        ],
+        get_ep_singles=lambda: [],
+        get_top_tracks=lambda limit=10: [],
+        get_videos=lambda limit=0: [],
+    )
+    b.loadArtist("7")
+    b.threadpool.workers[0].run()
+    assert b.artistPagePrefetched.emits[0][0]["albums"] == ["a", "b", "c", "d", "e"]
+
+
+def test_a_revalidate_sends_no_covers():
+    b = _Stub()
+    b._artist_cache["7"] = {"id": "7", "name": "cached", "editions_collapsed": False}
+    b.loadArtist("7")  # served from the cache, then revalidated on the pool
+    b.threadpool.workers[0].run()
+    assert b.artistPagePrefetched.emits == [], "the page on screen already has its covers"
 
 
 def test_a_hover_while_a_click_is_loading_that_artist_is_a_no_op():

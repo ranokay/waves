@@ -4746,6 +4746,10 @@ ApplicationWindow {
   // the prefetch handler warms at it, and the pool keys on the exact size,
   // so two literals that drift apart would silently warm nothing.
   readonly property int discDecode: 68
+  // The album/EP row cover size: AlbumBlock draws its row cover from this,
+  // and onArtistPagePrefetched warms at twice it — the pool keys on the
+  // exact decode size (Art seeds at 2x), so the two must agree.
+  readonly property int albumRowArt: 46
   property var _warmSeen: ({})   // "url@w" -> true; mutated in place (nothing binds to it)
   function warmArt(u, w, h) {
     if (!u || w <= 0)
@@ -6223,6 +6227,27 @@ ApplicationWindow {
       var arts = p.rowArts || []
       for (var i = 0; i < arts.length && i < 16; ++i)
         root.warmArt("" + arts[i], root.discDecode, root.discDecode)
+    }
+    // The artist page's twin: a hover found or built the page, or a
+    // click's build has its sections in. Its opening covers go into the
+    // warm pool at the sizes the page decodes them (the 150 px photo at
+    // 300, the track discs at discDecode, album and EP rows at twice
+    // albumRowArt), for the sections the page shows unfolded, so it
+    // paints them from the pixmap cache. Five a section at most (the
+    // backend sends no more), against the pool's 220; warmArt dedupes.
+    function onArtistPagePrefetched(p) {
+      if (p.art)
+        root.warmArt("" + p.art, 300, 300)
+      function warm(arts, size) {
+        for (var i = 0; i < (arts || []).length; ++i)
+          root.warmArt("" + arts[i], size, size)
+      }
+      if (!root.artistTracksCollapsed)
+        warm(p.tracks, root.discDecode)
+      if (!root.artistAlbumsCollapsed)
+        warm(p.albums, root.albumRowArt * 2)
+      if (!root.artistEpsCollapsed)
+        warm(p.eps, root.albumRowArt * 2)
     }
     function onBrowsePageLoaded(p) {
       if (!root.browsePageMatches(p))
