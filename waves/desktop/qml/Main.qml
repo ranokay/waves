@@ -766,6 +766,10 @@ ApplicationWindow {
     var sources = payload.sources || []
     var top = payload.top !== undefined ? payload.top : null
     root.searchRefreshMode = refresh === true
+    // The pin lands BEFORE the sections: a fresh page's row windows are
+    // planned as the sections change, and the planner must measure the
+    // incoming pin, not the previous page's.
+    root.searchTop = top
     if (refresh !== true) {
       // The empty step is load-bearing: assigning the same-shaped object
       // back would not force the results view's rebuild from scratch. The
@@ -778,7 +782,6 @@ ApplicationWindow {
       root.searchSections = payload.sections || ({})
     }
     root.searchSources = sources
-    root.searchTop = top
     root.searchRefreshMode = false
   }
   // The pinned row reads its clickable artists from the same side map the
@@ -1319,10 +1322,12 @@ ApplicationWindow {
   // The one place that fills the four artist-page models. A fresh page
   // clears the old rows, THEN plans its inline rows and appends: each row's
   // Loader reads its budget as it is created. atY: where the caller lands
-  // the page, when it lands it itself (a Back restore). A revalidate's
-  // refresh reconciles by id instead (inPlace), keeping the rows the user
-  // is reading and any expanded panel.
-  function fillArtistPage(p, inPlace, atY) {
+  // the page, when it lands it itself (a Back restore). extras: the
+  // expanded panel heights the restoring snapshot carried, when the
+  // mounted page is not the one being restored. A revalidate's refresh
+  // reconciles by id instead (inPlace), keeping the rows the user is
+  // reading and any expanded panel.
+  function fillArtistPage(p, inPlace, atY, extras) {
     var albums = p.albums || []
     var eps = p.eps || []
     var tracks = p.tracks || []
@@ -1341,8 +1346,10 @@ ApplicationWindow {
     }
     // Close the sync windows over the old rows (a dying delegate reads
     // index -1 and must incubate, not finish inline), then plan. The
-    // expanded panels' heights are read first: the plan walks the new rows
-    // at their real heights, and a restore re-applies the same panels.
+    // expanded panels' heights are settled first: the plan walks the new
+    // rows at their real heights, and a restore re-applies the same panels
+    // (their heights ride the snapshot when the mounted page is another
+    // artist).
     _artistSyncFromTracks = 0
     _artistSyncTracks = 0
     _artistSyncFromAlbums = 0
@@ -1351,7 +1358,10 @@ ApplicationWindow {
     _artistSyncEps = 0
     _artistSyncFromVideos = 0
     _artistSyncVideos = 0
-    _artistCaptureExtras()
+    if (extras !== undefined && extras !== null)
+      _artistExtras = extras
+    else
+      _artistCaptureExtras()
     artistAlbumsModel.clear()
     artistEpModel.clear()
     artistTracksModel.clear()
@@ -3120,6 +3130,10 @@ ApplicationWindow {
         // and onArtistLoaded already guard against.
         scoped: !!(artistData && artistData.libraryScoped),
         scrollY: artistView.contentY,
+        // The expanded panels' measured heights, so a reload of this page
+        // (the models may hold another artist by then) still plans its
+        // restored rows at their real heights.
+        extras: root._artistExtras,
         ex: expandedAlbums,
         bio: bioExpanded
       }
@@ -3250,7 +3264,8 @@ ApplicationWindow {
         _artistRestoreState = {
           id: s.id,
           ex: s.ex,
-          bio: s.bio
+          bio: s.bio,
+          extras: s.extras
         }
         // Back to the page that was actually saved: the two share an
         // id and a signal, so loading the wrong one puts the other
@@ -3543,6 +3558,7 @@ ApplicationWindow {
       expandedAlbums: expandedAlbums,
       bio: bioExpanded,
       artistY: artistView.contentY,
+      extras: _artistExtras,
       resultsY: results.contentY
     } : {
       resultsY: results.contentY
@@ -3586,10 +3602,14 @@ ApplicationWindow {
           // against in onArtistLoaded.
           var pageLoaded = artistData && ("" + artistData.id) === ("" + s.artistData.id) && !!artistData.libraryScoped === !!s.artistData.libraryScoped
           artistData = s.artistData
-          if (!pageLoaded)
-            fillArtistPage(s.artistData, false, s.artistY || 0)
+          // The saved state lands BEFORE the fill: the row plan measures
+          // the bio and the expanded panels the restored page will show
+          // (their saved heights come with the snapshot when the outgoing
+          // page is not this artist).
           resetExpandedAlbums(s.expandedAlbums)
           bioExpanded = !!s.bio
+          if (!pageLoaded)
+            fillArtistPage(s.artistData, false, s.artistY || 0, s.extras)
           artistOpen = true
           browseOpen = false
           libraryOpen = false
@@ -6831,9 +6851,13 @@ ApplicationWindow {
       // _artistPlanSync), so the restored viewport is built for the frame
       // it appears in.
       var atY = 0
+      var extras
       if (pr && pr.id === ("" + p.id)) {
         root.resetExpandedAlbums(pr.ex)
         root.bioExpanded = !!pr.bio
+        // The saved panel heights ride the snapshot: the mounted page is
+        // another artist by now, so its delegates cannot be measured.
+        extras = pr.extras
         if (artistView.pendingRestoreKey === ("" + p.id) && artistView.pendingRestoreY > 0)
           atY = artistView.pendingRestoreY
       } else {
@@ -6843,7 +6867,7 @@ ApplicationWindow {
       root.artistOpen = true
       // target-first (see openLibrary): keep Search inactive mid-switch
       root.libraryOpen = false
-      root.fillArtistPage(p, false, atY)
+      root.fillArtistPage(p, false, atY, extras)
     }
     // The whole queue (a full resync); updateQueueCounts, at the end of
     // the reconcile, rebuilds every mirror and count from it.

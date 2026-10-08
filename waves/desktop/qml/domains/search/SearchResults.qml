@@ -194,6 +194,58 @@ Column {
     var m = resultsView.modelFor(name)
     return m && index < m.count ? m.get(index).id : ""
   }
+  // --- Row reaches --------------------------------------------------------
+  // The window builds the opening screen inline; every other shown row is
+  // ACTIVE but starts incubating, and Qt incubates the newest Loader first,
+  // so a long section used to fill from its far end while the rows right
+  // below the opening screen stayed blank longest. The reach bounds how far
+  // down a section's rows exist at all, and grows one batch at a time once
+  // the batch before it has landed, so the page fills in from the fold
+  // down. The window is rows 0..to built inline; the reach is to..to+batch.
+  // Reset for each fresh page, extended by every re-plan.
+  property var reach: ({})
+  property var landed: ({})
+  property var batches: ({})
+  function reachFor(name) {
+    return resultsView.reach[name] || 0
+  }
+  // The rows a section would eventually build with no reach in the way: the
+  // shown count, capped while folded and uncapped for a section chip.
+  function activeRowCount(name) {
+    var count = resultsView.countFor(name)
+    if (host.filterType === name || resultsView.keptFor(name))
+      return count
+    return Math.min(count, name === "videos" ? videoGrid.cap : 5)
+  }
+  function rowLanded(name) {
+    resultsView.landed[name] = (resultsView.landed[name] || 0) + 1
+    Qt.callLater(resultsView.reachCheck)
+  }
+  function reachCheck() {
+    var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
+    for (var i = 0; i < names.length; ++i) {
+      var name = names[i]
+      var active = resultsView.activeRowCount(name)
+      var reach = resultsView.reachFor(name)
+      var batch = resultsView.batches[name] || 0;
+      // Grow only while the reach has rows still to cover: a folded
+      // section's active count stays at its cap while its reach already
+      // sits past it, and a later SHOW ALL must still find its rows
+      // unbuilt. The map is REASSIGNED (an in-place write fires no change
+      // signal, and every row's `active` binding reads it).
+      if (batch > 0 && reach < active && (resultsView.landed[name] || 0) >= Math.min(active, reach)) {
+        var next = {}
+        for (var key in resultsView.reach)
+          next[key] = resultsView.reach[key]
+        next[name] = reach + batch
+        resultsView.reach = next
+      }
+    }
+  }
+  function resetReach() {
+    resultsView.reach = ({})
+    resultsView.landed = ({})
+  }
   // --- Row windows --------------------------------------------------------
   // [from, to) per section: the rows the handler turn builds INLINE, so the
   // frame the page lands on is the finished screen. Every other shown row
@@ -248,6 +300,7 @@ Column {
         pitch: h + 8,
         per: 1
       }
+      resultsView.batches[name] = Math.ceil(screen / (h + 8)) + 1
       if (shown > 0)
         block(shown * (h + 8) - 8)
       if (all && n > cap)
@@ -272,6 +325,7 @@ Column {
         pitch: rowH + 12,
         per: gc
       }
+      resultsView.batches.artists = (Math.ceil(screen / (rowH + 12)) + 1) * gc
       if (shownA > 0)
         block(Math.ceil(shownA / gc) * (rowH + 12) - 12)
       if (all && na > 5)
@@ -294,6 +348,7 @@ Column {
         pitch: cellH + 18,
         per: vc
       }
+      resultsView.batches.videos = (Math.ceil(screen / (cellH + 18)) + 1) * vc
       if (shownV > 0)
         block(Math.ceil(shownV / vc) * (cellH + 18) - 18)
       if (all && nv > vcap)
@@ -302,11 +357,17 @@ Column {
     list("playlists", playlistsModel.count, resultsView._listRowH.playlists, 5, resultsView.isExpanded("playlists"))
     list("mixes", mixesModel.count, resultsView._listRowH.mixes, 5, resultsView.isExpanded("mixes"))
     var contentH = y + 8
-    var land = Math.max(0, Math.min(atY || 0, contentH - screen))
+    var land = Math.max(0, Math.min(atY || 0, contentH - screen));
+    // A section whose own SHOW ALL/LESS or chip was clicked keeps its
+    // header in view (SHOW LESS scrolls back up to it): when that header is
+    // above the landing spot, the window spans one screen from THERE, not
+    // the whole gap down to the old scroll position, which could be
+    // thousands of pixels and force every row in between synchronous.
     var top = fromSection !== undefined && headY[fromSection] !== undefined ? Math.min(land, headY[fromSection]) : land
-    var bottom = land + screen + 64
+    var bottom = top + screen + 64
     var from = ({})
     var to = ({})
+    var nextReach = ({})
     var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
     for (var i = 0; i < names.length; ++i) {
       var name = names[i]
@@ -314,16 +375,20 @@ Column {
       if (!s || s.shown <= 0) {
         from[name] = 0
         to[name] = 0
-        continue
+      } else {
+        var lines = Math.ceil(s.shown / s.per)
+        var a = Math.max(0, Math.min(lines, Math.floor((top - s.y) / s.pitch)))
+        var b = Math.max(0, Math.min(lines, Math.ceil((bottom - s.y) / s.pitch)))
+        from[name] = a * s.per
+        to[name] = Math.min(s.shown, b * s.per)
       }
-      var lines = Math.ceil(s.shown / s.per)
-      var a = Math.max(0, Math.min(lines, Math.floor((top - s.y) / s.pitch)))
-      var b = Math.max(0, Math.min(lines, Math.ceil((bottom - s.y) / s.pitch)))
-      from[name] = a * s.per
-      to[name] = Math.min(s.shown, b * s.per)
+      // The reach always covers the window plus one batch, so the rows
+      // right below the built screen exist and grow in order.
+      nextReach[name] = Math.max(resultsView.reachFor(name), to[name] + (resultsView.batches[name] || 0))
     }
     resultsView.winFrom = from
     resultsView.winTo = to
+    resultsView.reach = nextReach
   }
   // A type chip: a whole section's rows show, so it builds them the way
   // SHOW ALL does, and keeps them (the chip back to All frees nothing).
@@ -374,9 +439,11 @@ Column {
       // A fresh search: close the windows over the OLD rows (a dying
       // delegate reads index -1 and must incubate, not finish inline),
       // rebuild, then plan the screen the page opens on. The kept flags
-      // reset to the expansion state this page starts with.
+      // reset to the expansion state this page starts with, and the reaches
+      // go with the old rows.
       resultsView.closeWindows()
       resultsView.seedKept()
+      resultsView.resetReach()
       host.fill(artistsModel, resultsView.sections.artists || [])
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
@@ -419,6 +486,19 @@ Column {
   }
   onSectionsChanged: if (resultsView.ready)
     resultsView.apply(host.searchRefreshMode)
+  // A provider source chip changes what the sections show (whole sections
+  // can appear or disappear), so the planned windows no longer match the
+  // page: close and plan them again around the same screen.
+  Connections {
+    target: resultsView.host
+
+    function onEffectiveSourceFilterChanged() {
+      if (resultsView.ready) {
+        resultsView.closeWindows()
+        resultsView.planSync(resultsPane.contentY)
+      }
+    }
+  }
 
   // TOP RESULT: the first provider's own best match, pinned above every
   // section of the mixed All view (a provider that answers none pins
@@ -523,12 +603,17 @@ Column {
         // read as NOT shown, or the page builds every unbuilt row inline
         // while the old page is clearing.
         readonly property bool shown: index >= 0 && resultsView.rowVisible("artists", index)
-        active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("artists")))
+        active: (shown || (index >= 0 && (index < 5 || resultsView.keptFor("artists")))) && index < resultsView.reachFor("artists")
         visible: shown
         width: artistFlow.cardW
-        height: item ? item.implicitHeight : width + 142
+        // The card's tallest shape (cover, name, source mark, meter,
+        // download button) is the slot every card gets, so the flow never
+        // re-lays as the off-screen cards land whatever the provider mix;
+        // a transient extra (a playing preview bar) still expands it.
+        height: Math.max(width + 121, item ? item.implicitHeight : 0)
         asynchronous: !shown || !resultsView.inWindow("artists", index)
         opacity: host.searchReveal
+        onLoaded: resultsView.rowLanded("artists")
         sourceComponent: ArtistSearchCard {
           host: resultsView.host
           aArt: model.art
@@ -576,12 +661,13 @@ Column {
       // read as NOT shown, or the clearing page builds every unbuilt
       // row inline.
       readonly property bool shown: index >= 0 && resultsView.rowVisible("albums", index)
-      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("albums")))
+      active: (shown || (index >= 0 && (index < 5 || resultsView.keptFor("albums")))) && index < resultsView.reachFor("albums")
       visible: shown
       width: parent.width
       height: item ? item.implicitHeight : resultsView._listRowH.albums
       asynchronous: !shown || !resultsView.inWindow("albums", index)
       opacity: host.searchReveal
+      onLoaded: resultsView.rowLanded("albums")
       sourceComponent: AlbumBlock {
         host: resultsView.host
         albumId: model.id
@@ -622,12 +708,13 @@ Column {
     model: tracksModel
     delegate: Loader {
       readonly property bool shown: index >= 0 && resultsView.rowVisible("tracks", index)
-      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("tracks")))
+      active: (shown || (index >= 0 && (index < 5 || resultsView.keptFor("tracks")))) && index < resultsView.reachFor("tracks")
       visible: shown
       width: parent.width
       height: resultsView._listRowH.tracks   // TrackRow's fixed height
       asynchronous: !shown || !resultsView.inWindow("tracks", index)
       opacity: host.searchReveal
+      onLoaded: resultsView.rowLanded("tracks")
       sourceComponent: TrackRow {
         host: resultsView.host
         tId: model.id
@@ -682,12 +769,13 @@ Column {
       model: videosModel
       delegate: Loader {
         readonly property bool shown: index >= 0 && resultsView.rowVisibleCapped("videos", index, videoGrid.cap)
-        active: shown || (index >= 0 && (index < videoGrid.cap || resultsView.keptFor("videos")))
+        active: (shown || (index >= 0 && (index < videoGrid.cap || resultsView.keptFor("videos")))) && index < resultsView.reachFor("videos")
         visible: shown
         width: videoGrid.cellW
         height: Math.round(videoGrid.cellW * 9 / 16) + 54
         asynchronous: !shown || !resultsView.inWindow("videos", index)
         opacity: host.searchReveal
+        onLoaded: resultsView.rowLanded("videos")
         sourceComponent: VideoCell {
           host: resultsView.host
           width: videoGrid.cellW
@@ -727,7 +815,7 @@ Column {
     model: playlistsModel
     delegate: Loader {
       readonly property bool shown: index >= 0 && resultsView.rowVisible("playlists", index)
-      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("playlists")))
+      active: (shown || (index >= 0 && (index < 5 || resultsView.keptFor("playlists")))) && index < resultsView.reachFor("playlists")
       visible: shown
       width: parent.width
       asynchronous: !shown || !resultsView.inWindow("playlists", index)
@@ -735,6 +823,7 @@ Column {
       // Reserve the row's height while it incubates: without it the
       // section collapses to zero and pops open as each row lands.
       height: item ? item.implicitHeight : resultsView._listRowH.playlists
+      onLoaded: resultsView.rowLanded("playlists")
       sourceComponent: PlaylistBlock {
         host: resultsView.host
         plId: model.id
@@ -767,12 +856,13 @@ Column {
     model: mixesModel
     delegate: Loader {
       readonly property bool shown: index >= 0 && resultsView.rowVisible("mixes", index)
-      active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("mixes")))
+      active: (shown || (index >= 0 && (index < 5 || resultsView.keptFor("mixes")))) && index < resultsView.reachFor("mixes")
       visible: shown
       width: parent.width
       height: resultsView._listRowH.mixes
       asynchronous: !shown || !resultsView.inWindow("mixes", index)
       opacity: host.searchReveal
+      onLoaded: resultsView.rowLanded("mixes")
       sourceComponent: Rectangle {
         radius: 10
         color: surface

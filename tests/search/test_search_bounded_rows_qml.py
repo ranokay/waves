@@ -79,7 +79,7 @@ def _scenario() -> int:
 
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(
-        qml_search_payload(albums=[_album(i) for i in range(30)], tracks=[_track(i) for i in range(30)])
+        qml_search_payload(albums=[_album(i) for i in range(120)], tracks=[_track(i) for i in range(30)])
     )
 
     # The handler builds the screen the page opens on in its own turn, so
@@ -103,7 +103,7 @@ def _scenario() -> int:
     # nothing waits, and no row's load can raise it.
     check(q("root.searchBuilding") is False, "the veil is still waiting on result rows")
 
-    wait("searchResultsView.countFor('albums') == 30", "the albums section never filled")
+    wait("searchResultsView.countFor('albums') == 120", "the albums section never filled")
 
     # The mixed view shows five; every row past the cap must stay unbuilt
     # (its Loader exists for count/geometry, but loads nothing).
@@ -127,7 +127,15 @@ def _scenario() -> int:
         q("searchResultsView.albumRepeater.itemAt(29).item === null") is True,
         "SHOW ALL built the far rows inline instead of incubating them",
     )
+    # The reach bounds how far rows exist: past the window plus one batch
+    # they stay inactive, so the section fills from the fold down instead of
+    # the newest rows incubating first.
+    check(
+        q("searchResultsView.albumRepeater.itemAt(100).active") is False,
+        "a row beyond the reach is active before its batch",
+    )
     wait("searchResultsView.albumRepeater.itemAt(29).item !== null", "the incubated rows never arrived")
+    wait("searchResultsView.albumRepeater.itemAt(119).item !== null", "the batching never reached the last row")
 
     # SHOW LESS keeps the built rows: hidden, not destroyed, so a second
     # SHOW ALL costs nothing.
@@ -159,10 +167,48 @@ def _scenario() -> int:
     wait("searchResultsView.tracksRepeater.itemAt(29).item !== null", "the chip's incubated rows never arrived")
     wait("searchResultsView.countFor('tracks') == 30", "the tracks section never filled")
 
+    # A provider source chip can hide a whole section, moving the others:
+    # the windows re-plan, so a later chip that brings the section back
+    # builds its opening screen in the click. TIDAL first, so the plan that
+    # lands while it is selected has no albums at all.
+    q("searchResultsView.setFilter('all')")
+    q("root.searchSourceFilter = 'tidal'")
+    wait("root.effectiveSourceFilter === 'tidal'", "the tidal filter never applied")
+    tidal = qml_search_payload(provider="tidal", tracks=[_track(i) for i in range(10)])
+    apple = qml_search_payload(provider="apple", albums=[_album(i) for i in range(10)])
+    q("root._searchSeq = root._navSeq")
+    bridge.searchResults.emit(
+        {
+            "sources": [*tidal["sources"], *apple["sources"]],
+            "sections": {
+                **tidal["sections"],
+                **{name: [*tidal["sections"].get(name, []), *rows] for name, rows in apple["sections"].items()},
+            },
+            "top": None,
+        }
+    )
+    wait(
+        "searchResultsView.countFor('albums') == 10 && searchResultsView.countFor('tracks') == 10",
+        "the two-source payload never filled",
+    )
+    check(
+        q("searchResultsView.sectionVisible('albums')") is False,
+        "the tidal filter still shows the apple albums section",
+    )
+    q("root.searchSourceFilter = 'apple'")
+    check(
+        q("root.effectiveSourceFilter") == "apple" and q("searchResultsView.sectionVisible('albums')") is True,
+        "the apple filter never applied",
+    )
+    check(
+        q("searchResultsView.albumRepeater.itemAt(0).item !== null") is True,
+        "a source chip left the newly visible section's opening screen unbuilt",
+    )
+    q("root.searchSourceFilter = 'all'")
+
     # A fresh search re-seeds the kept flags from the expansion state: a
     # section is not still kept because an earlier search's SHOW ALL built
     # it, so its rows past the cap go back to unbuilt.
-    q("searchResultsView.setFilter('all')")
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(
         qml_search_payload(albums=[_album(i) for i in range(30)], tracks=[_track(i) for i in range(30)])
