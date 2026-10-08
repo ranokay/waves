@@ -211,10 +211,14 @@ Column {
     return resultsView.reach[name] || 0
   }
   // The rows a section would eventually build with no reach in the way: the
-  // shown count, capped while folded and uncapped for a section chip.
+  // SHOWN count, capped while folded and uncapped for a section chip. A
+  // kept section (SHOW ALL then SHOW LESS) does not extend this: its built
+  // rows stay active inside the frontier they already reached, but a
+  // folded section must not keep growing its reach (and building hidden
+  // rows) after the user collapsed it.
   function activeRowCount(name) {
     var count = resultsView.countFor(name)
-    if (host.filterType === name || resultsView.keptFor(name))
+    if (host.filterType === name || resultsView.isExpanded(name))
       return count
     return Math.min(count, name === "videos" ? videoGrid.cap : 5)
   }
@@ -269,8 +273,15 @@ Column {
   function _captureExtrasFrom(model, rep, next, baseH) {
     for (var i = 0; i < model.count; ++i) {
       var d = rep.itemAt(i)
-      if (d && d.item && d.height > baseH)
-        next[model.get(i).id] = d.height - baseH
+      if (!d || !d.item)
+        // an unbuilt row has no state to measure; its old entry stands
+        continue
+      var id = model.get(i).id
+      if (d.height > baseH)
+        next[id] = d.height - baseH
+      else
+        delete next[id]
+      // a live collapsed row clears any stale height
     }
   }
   function captureExtras() {
@@ -550,6 +561,16 @@ Column {
   }
   onSectionsChanged: if (resultsView.ready)
     resultsView.apply(host.searchRefreshMode)
+  // A resize changes the column counts and pitches the plan measures (and
+  // where the rows fall): close and plan again around the same screen.
+  onWidthChanged: if (resultsView.ready) {
+    resultsView.closeWindows()
+    resultsView.planSync(resultsPane.contentY)
+  }
+  onHeightChanged: if (resultsView.ready) {
+    resultsView.closeWindows()
+    resultsView.planSync(resultsPane.contentY)
+  }
   // A provider source chip changes what the sections show (whole sections
   // can appear or disappear), so the planned windows no longer match the
   // page: close and plan them again around the same screen.

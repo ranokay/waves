@@ -15,7 +15,12 @@ from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until_true
 
 @pytest.mark.qml
 def test_search_sections_build_only_the_rows_they_show():
-    run_scenario(Path(__file__), "--run-scenario", sandbox_prefix="waves-search-bounded-test-")
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        sandbox_prefix="waves-search-bounded-test-",
+        drop=("waves.qt",),
+    )
 
 
 def _album(i: int) -> dict:

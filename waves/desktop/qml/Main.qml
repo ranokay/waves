@@ -1138,15 +1138,19 @@ ApplicationWindow {
       return _artistScreenful(_artistVideoPitch()) * artistVideoGrid.cols
     return _artistScreenful(which === "tracks" ? _artistTrackPitch : _artistAlbumPitch)
   }
-  // The rows a section would create with no reach in the way.
+  // The rows a section would create with no reach in the way: the SHOWN
+  // count. A kept section (SHOW ALL then SHOW LESS) does not extend it: its
+  // built rows stay active inside the frontier they already reached, but a
+  // folded section must not keep growing its reach (and building hidden
+  // rows) after the user collapsed it.
   function _artistActiveCount(which) {
     if (which === "tracks")
-      return topTracksExpanded || _artistKeptTracks ? artistTracksModel.count : Math.min(artistTracksModel.count, 5)
+      return topTracksExpanded ? artistTracksModel.count : Math.min(artistTracksModel.count, 5)
     if (which === "albums")
-      return artistAlbumsExpanded || _artistKeptAlbums ? artistAlbumsModel.count : Math.min(artistAlbumsModel.count, 5)
+      return artistAlbumsExpanded ? artistAlbumsModel.count : Math.min(artistAlbumsModel.count, 5)
     if (which === "eps")
-      return artistEpsExpanded || _artistKeptEps ? artistEpModel.count : Math.min(artistEpModel.count, 5)
-    return artistVideosExpanded || _artistKeptVideos ? artistVideosModel.count : Math.min(artistVideosModel.count, artistVideoGrid.fillCount)
+      return artistEpsExpanded ? artistEpModel.count : Math.min(artistEpModel.count, 5)
+    return artistVideosExpanded ? artistVideosModel.count : Math.min(artistVideosModel.count, artistVideoGrid.fillCount)
   }
   // A section's rows exist from the start down to the end of its inline
   // window plus a batch; called wherever a window is (re)planned.
@@ -1197,8 +1201,15 @@ ApplicationWindow {
   function _artistCaptureSection(model, rep, extras, baseH) {
     for (var i = 0; i < model.count; ++i) {
       var d = rep.itemAt(i)
-      if (d && d.item && d.height > baseH)
-        extras[model.get(i).id] = d.height - baseH
+      if (!d || !d.item)
+        // an unbuilt row has no state to measure; its old entry stands
+        continue
+      var id = model.get(i).id
+      if (d.height > baseH)
+        extras[id] = d.height - baseH
+      else
+        delete extras[id]
+      // a live collapsed row clears any stale height
     }
   }
   function _artistCaptureExtras() {

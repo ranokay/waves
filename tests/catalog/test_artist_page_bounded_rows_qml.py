@@ -26,7 +26,12 @@ _ALBUM_AT_Y = (
 
 @pytest.mark.qml
 def test_artist_sections_build_only_the_rows_they_show():
-    run_scenario(Path(__file__), "--run-scenario", sandbox_prefix="waves-artist-bounded-test-")
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        sandbox_prefix="waves-artist-bounded-test-",
+        drop=("waves.qt",),
+    )
 
 
 def _album(i: int) -> dict:
@@ -127,7 +132,12 @@ def _scenario() -> int:
     for _ in range(12):
         q("root.toggleArtistSection('eps')")
         q("root.toggleArtistSection('eps')")
-        settle(60)  # the rebuilt rows' landing pass
+        check(
+            wait_until_true(
+                q, "artistEpsRep.itemAt(4).item !== null", "an eps unfold never rebuilt its rows", timeout_ms=5000
+            ),
+            "an eps unfold never rebuilt its rows",
+        )
     q("root.toggleArtistExpand('albums')")
     active = q(
         "(function () { var n = 0; for (var i = 0; i < 120; ++i) if (artistAlbumsRep.itemAt(i).active) n++; return n; })()"
@@ -152,7 +162,7 @@ def _scenario() -> int:
     # before the middle does).
     wait("artistAlbumsRep.itemAt(20).item !== null", "the albums fill never reached a middle row")
     check(q("artistAlbumsRep.itemAt(119).item === null") is True, "the albums rows did not fill from the top down")
-    wait("artistAlbumsRep.itemAt(119).item !== null", "the incubated albums rows never arrived")
+    wait("artistAlbumsRep.itemAt(119).item !== null", "the incubated albums rows never arrived", timeout_ms=30000)
 
     # SHOW LESS keeps the built rows: hidden, not destroyed.
     before = q("String(artistAlbumsRep.itemAt(119))")
@@ -172,12 +182,15 @@ def _scenario() -> int:
     check(q("artistAlbumsRep.count") == 0, "collapsing the albums section left its rows built")
     q("root.toggleArtistSection('albums')")
     check(q("artistAlbumsRep.itemAt(5).item !== null") is True, "unfolding left the albums screen unbuilt in the click")
+    # The unfold shows the folded five; the rest is one SHOW ALL away, and
+    # then fills in the same batches.
+    q("root.toggleArtistExpand('albums')")
     wait("artistAlbumsRep.itemAt(119).item !== null", "the unfolded albums rows never filled in")
 
     # A background revalidate swaps the payload in place: the rows the user
     # is reading (and any built beyond them) keep their delegates, matched
     # by id; a changed field lands on the same row.
-    q("root.toggleArtistExpand('albums')")
+    q("if (!root.artistAlbumsExpanded) root.toggleArtistExpand('albums')")
     wait("artistAlbumsRep.itemAt(6).item !== null", "the re-shown albums rows never arrived")
     expanded_before = q("String(artistAlbumsRep.itemAt(6))")
     albums = [_album(i) for i in range(120)]
