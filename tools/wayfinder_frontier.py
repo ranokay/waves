@@ -93,7 +93,8 @@ class Child:
     def ready(self) -> bool:
         return self.open and self.holdup() is None
 
-    def line(self) -> str:
+    def report_line(self) -> str:
+        """An open, not-ready child as the report lists it."""
         return f"    #{self.number} {self.holdup()}: {self.title}"
 
 
@@ -117,7 +118,7 @@ class WayfinderMap:
 def checklist_drift(wmap: WayfinderMap) -> list[str]:
     """Checklist entries that disagree with the tracker."""
     by_number = {child.number: child for child in wmap.children}
-    drift = []
+    drift: list[str] = []
     for mark, number in CHECKBOX.findall(wmap.body):
         child = by_number.get(int(number))
         if child is None:
@@ -128,15 +129,14 @@ def checklist_drift(wmap: WayfinderMap) -> list[str]:
             drift.append(f"#{child.number} is ticked but open")
         elif not ticked and not child.open:
             drift.append(f"#{child.number} is closed but unticked")
-    return drift
+    # A child listed twice reports once.
+    return list(dict.fromkeys(drift))
 
 
-def report(wmap: WayfinderMap) -> list[str]:
-    lines = [f"#{wmap.number} {wmap.title}"]
-    if not wmap.children:
-        return [*lines, "  no sub-issues: link each child as a sub-issue of the map"]
-    open_children = [child for child in wmap.children if child.open]
-    lines.append(f"  {len(open_children)} open, {len(wmap.children) - len(open_children)} closed")
+def frontier_lines(children: tuple[Child, ...]) -> list[str]:
+    """The frontier, or what the map waits on, then the blocked children."""
+    open_children = [child for child in children if child.open]
+    lines = [f"  {len(open_children)} open, {len(children) - len(open_children)} closed"]
     ready = [child for child in open_children if child.ready]
     if ready:
         lines.append(f"  frontier: #{ready[0].number} {ready[0].title}")
@@ -146,11 +146,20 @@ def report(wmap: WayfinderMap) -> list[str]:
         unblocked = [child for child in open_children if not child.open_blockers]
         if unblocked:
             lines.append("  unblocked but not ready:")
-            lines.extend(child.line() for child in unblocked)
+            lines.extend(child.report_line() for child in unblocked)
     blocked = [child for child in open_children if child.open_blockers]
     if blocked:
         lines.append("  blocked:")
-        lines.extend(child.line() for child in blocked)
+        lines.extend(child.report_line() for child in blocked)
+    return lines
+
+
+def report(wmap: WayfinderMap) -> list[str]:
+    lines = [f"#{wmap.number} {wmap.title}"]
+    if wmap.children:
+        lines.extend(frontier_lines(wmap.children))
+    else:
+        lines.append("  no sub-issues: link each child as a sub-issue of the map")
     drift = checklist_drift(wmap)
     if drift:
         lines.append("  checklist drift:")
@@ -207,7 +216,10 @@ def main(argv: list[str]) -> int:
     if not maps:
         print(f"frontier: no open {MAP_LABEL} issue in {REPO}")
         return 0
-    print("\n\n".join("\n".join(report(_fetch_map(number))) for number in maps))
+    for index, number in enumerate(maps):
+        # Each report prints before the next fetch, so a failing map keeps
+        # the reports already printed.
+        print(("\n" if index else "") + "\n".join(report(_fetch_map(number))), flush=True)
     return 0
 
 

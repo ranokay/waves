@@ -104,9 +104,10 @@ error-on-warning = false
 # The accepted baseline, scoped to the files that carry it; the reasons the
 # rules are accepted are recorded here. These three rules are errors
 # everywhere else: a new diagnostic in a hand-written module fails the gate
-# instead of joining a burn-down. In these files they stay visible as
-# warnings, like ty's own default-warn rules (redundant-condition,
-# deprecated); error-level categories fail the gate.
+# instead of joining a burn-down. In these files they are warnings, which
+# tools/typecheck.sh counts rather than prints, while ty's own default-warn
+# rules (redundant-condition, deprecated) still print; error-level categories
+# fail the gate.
 # - unresolved-attribute: catalog/engine objects cross the provider seam as
 #   plain objects by design (the row-dict contract), and the cooperative
 #   library mixin's methods resolve `self` to the mixin, so its Qt members
@@ -135,7 +136,7 @@ invalid-attribute-access = "warn"
 # see the download.py entry in [tool.ruff.lint.per-file-ignores]) predates the
 # gate: its Optional-vs-declared attributes, string-vs-enum/path assignments,
 # m3u8 union and raise path need upstream-shaped fixes, so those diagnostics
-# stay visible as accepted warnings rather than failing the gate. Hand-written
+# are accepted warnings rather than failing the gate. Hand-written
 # modules are not covered by this override.
 [[tool.ty.overrides]]
 include = ["waves/download.py"]

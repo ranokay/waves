@@ -14,6 +14,7 @@ import importlib.util
 import json
 import sys
 
+import pytest
 from support.paths import REPO_ROOT
 
 
@@ -74,7 +75,7 @@ def test_a_map_with_nothing_ready_names_what_it_waits_on():
     assert "    #21 blocked by #20: Child 21" in lines
 
 
-def test_checklist_entries_that_disagree_with_the_tracker_are_reported():
+def test_checklist_entries_that_disagree_with_the_tracker_are_reported_once():
     module = _frontier_module()
     body = "\n".join(
         [
@@ -83,37 +84,65 @@ def test_checklist_entries_that_disagree_with_the_tracker_are_reported():
             "- [x] #32: ticked and closed",
             "- [ ] #33: open and unticked",
             "- [ ] #99: listed but never linked as a sub-issue",
+            "- [ ] #99: listed twice",
             "Prose mentioning #30 is not a box.",
         ]
     )
-    wmap = module.WayfinderMap.from_issue(
-        _issue(_node(30, state="CLOSED"), _node(31), _node(32, state="CLOSED"), _node(33), body=body)
-    )
 
-    assert module.checklist_drift(wmap) == [
-        "#30 is closed but unticked",
-        "#31 is ticked but open",
-        "#99 is in the checklist but not a sub-issue",
+    lines = _report(module, _node(30, state="CLOSED"), _node(31), _node(32, state="CLOSED"), _node(33), body=body)
+
+    drift = lines[lines.index("  checklist drift:") + 1 :]
+    assert drift == [
+        "    #30 is closed but unticked",
+        "    #31 is ticked but open",
+        "    #99 is in the checklist but not a sub-issue",
     ]
 
 
-def test_main_reports_each_named_map_from_its_graphql_answer(monkeypatch, capsys):
+def _fake_gh(answers, open_maps=()):
+    def fake_gh(*args):
+        if args[0] == "issue":
+            return json.dumps([{"number": n} for n in open_maps])
+        number = next(arg.removeprefix("number=") for arg in args if arg.startswith("number="))
+        return json.dumps({"data": {"repository": {"issue": answers.get(number)}}})
+
+    return fake_gh
+
+
+def test_main_prints_a_report_for_each_named_map(monkeypatch, capsys):
     module = _frontier_module()
     answers = {
         "1": _issue(_node(40), body="- [ ] #40: next"),
-        "2": {"number": 2, "title": "Empty map", "body": None, "subIssues": {"nodes": []}},
+        "2": {"number": 2, "title": "Empty map", "body": "- [ ] #41: listed only", "subIssues": {"nodes": []}},
     }
-
-    def fake_gh(*args):
-        number = next(arg.removeprefix("number=") for arg in args if arg.startswith("number="))
-        return json.dumps({"data": {"repository": {"issue": answers[number]}}})
-
-    monkeypatch.setattr(module, "_gh", fake_gh)
+    monkeypatch.setattr(module, "_gh", _fake_gh(answers))
 
     assert module.main(["wayfinder_frontier.py", "1", "#2"]) == 0
     out = capsys.readouterr().out
     assert "  frontier: #40 Child 40" in out
     assert "#2 Empty map\n  no sub-issues: link each child as a sub-issue of the map" in out
+    assert "    #41 is in the checklist but not a sub-issue" in out
+
+
+def test_main_without_arguments_reports_every_open_map(monkeypatch, capsys):
+    module = _frontier_module()
+    monkeypatch.setattr(module, "_gh", _fake_gh({"7": _issue(_node(50))}, open_maps=[7]))
+
+    assert module.main(["wayfinder_frontier.py"]) == 0
+    assert "  frontier: #50 Child 50" in capsys.readouterr().out
+
+
+def test_an_unknown_map_fails_after_the_reports_already_printed(monkeypatch, capsys):
+    module = _frontier_module()
+    monkeypatch.setattr(module, "_gh", _fake_gh({"1": _issue(_node(60))}))
+
+    with pytest.raises(SystemExit) as exit_info:
+        module.main(["wayfinder_frontier.py", "1", "9999"])
+
+    assert exit_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "  frontier: #60 Child 60" in captured.out
+    assert "#9999 not found" in captured.err
 
 
 def test_a_non_numeric_map_argument_is_a_usage_error(capsys):

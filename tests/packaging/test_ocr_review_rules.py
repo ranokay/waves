@@ -6,12 +6,11 @@ WHAT THIS FENCES OFF
 binds to every review, and it is also OpenCodeReview's project file for a
 manual OCR run (OCR is not part of the merge gate). OCR's default filters skip
 `.qml` and `.md` as unsupported extensions; the file's `include` list is the
-documented bypass. This guard pins a house rule for each language the repo
-writes, plus that bypass, so neither regresses when someone edits the file.
+documented bypass.
 
 The rule file is repo config, not product behaviour: the guard reads it as
-JSON and asserts the two things a review needs — the extension bypass and a
-house rule for each language the repo writes.
+JSON and asserts the two things a review needs, the extension bypass and a
+house rule for each surface in HOUSE_RULES.
 """
 
 from __future__ import annotations
