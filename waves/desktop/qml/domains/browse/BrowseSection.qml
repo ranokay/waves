@@ -18,10 +18,10 @@ import "../catalog"
 //   host._browseAsyncBuild / host._browseCardStart / host._browseCardTick /
 //   host._browsePageBuildTick / host._browsePageCardStart /
 //   host._browsePageCardTick / host.browseCanGrow / host.browseGrow /
-//   host.browseGrowing / host.browseHighlightId / host.browseHighlightPending /
-//   host.browsePage / host.browsePageBuilding / host.browseStyle /
-//   host.gridCols / host.openBrowseLink / host.openBrowseSection /
-//   host.openPlaylistsFolder
+//   host.browseGrowKey / host.browseGrowing / host.browseHighlightId /
+//   host.browseHighlightPending / host.browsePage / host.browsePageBuilding /
+//   host.browseStyle / host.gridCols / host.legacyBrowseProvider /
+//   host.openBrowseLink / host.openBrowseSection / host.openPlaylistsFolder
 // The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
@@ -92,13 +92,18 @@ Column {
   onItemsChanged: bsec.syncSlots()
   // One counting path for both card views: a card created while a veil is
   // up joins its count and reports in when it lands (or goes down mid-
-  // build, which must not pin the veil).
+  // build, which must not pin the veil). A shelf a refresh appended is not
+  // part of the build: its cards incubate and join no count, so a refresh
+  // landing mid-build can neither extend nor complete that build.
   function _cardCreated(loader) {
-    loader.counted = bsec.landing ? host._browseCardStart(loader.asynchronous) : host._browsePageCardStart(loader.asynchronous)
+    if (bsec.landing)
+      loader.counted = !bsec.late && host._browseCardStart(loader.asynchronous)
+    else
+      loader.counted = host._browsePageCardStart(loader.asynchronous)
   }
   function _cardLanded(loader) {
     if (bsec.landing)
-      host._browseCardTick(loader.asynchronous)
+      host._browseCardTick(loader.counted)
     else
       host._browsePageCardTick(loader.counted)
     loader.counted = false

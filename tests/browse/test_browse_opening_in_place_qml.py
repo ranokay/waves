@@ -173,6 +173,12 @@ def _scenario() -> int:
     check(q("root.browsePageBuilding") is True, "a fresh drilled page raised no veil")
     check(q("root.browsePageReveal") == 0, "the drilled pane was not covered while building")
     wait("root.browsePageBuilding === false", "the drilled veil never lifted")
+    # Complete, not spent on the stall guard: every counted section/card/row
+    # reported in.
+    check(
+        q("root._browsePageBuildTotal") > 0 and q("root._browsePageBuildReady") == q("root._browsePageBuildTotal"),
+        f"the veil lifted before the page was ready ({q('root._browsePageBuildReady')}/{q('root._browsePageBuildTotal')})",
+    )
     settle(250)  # the reveal animation's 180ms
     check(q("root.browsePageReveal") == 1, "the drilled pane never faded in")
     check(q("browsePageSecRep.count") == 2, f"the drilled page lost sections: {q('browsePageSecRep.count')}")

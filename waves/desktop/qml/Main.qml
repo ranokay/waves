@@ -1690,7 +1690,9 @@ ApplicationWindow {
       slotN = n
     }
     while (slotN < n) {
-      model.append({
+      model.append(late === undefined ? {
+        slot: slotN
+      } : {
         slot: slotN,
         late: late
       })
@@ -1732,7 +1734,7 @@ ApplicationWindow {
   }
   function _browseSyncPageSecSlots() {
     var secs = root.browsePage && root.browsePage.sections ? root.browsePage.sections : []
-    var r = root._browseSyncSlots(browsePageSecSlots, root._browsePageSecHeld, root._browsePageSecSlotN, secs, false)
+    var r = root._browseSyncSlots(browsePageSecSlots, root._browsePageSecHeld, root._browsePageSecSlotN, secs, undefined)
     root._browsePageSecHeld = r.held
     root._browsePageSecSlotN = r.slotN
   }
@@ -1910,12 +1912,8 @@ ApplicationWindow {
       root._browseBuildStart(p.error ? 0 : root.computeBrowseSections(secs).length + (chipsChanged ? 4 : 0))
     }
     root.browseArtistsSideMap(secs)
-    // A refresh holds the spot across the rebind (see holdScroll), for the
-    // rare shelf that changes height. The landing pane is alive even
-    // behind a drilled page, and the clamp does not care that it is
-    // hidden, so the hold arms regardless of which pane is showing.
-    if (!fresh)
-      browseLanding.holdScroll()
+    // The refresh's scroll hold comes with the section-slot sync below
+    // (see _browseSyncSecSlots), which runs for every landing re-lay.
     root.browseSections = secs
     root.browseSources = p.sources || []
     // The wayfinding tile shelves hang off the chips: a refresh carrying
@@ -4385,12 +4383,12 @@ ApplicationWindow {
     var ps = (browsePage && browsePage.sections) ? grown(browsePage.sections) : null
     // Growth rebuilds a column in place; hold the user's spot across it,
     // on whichever pane actually re-lays.
-    if (s)
-      browseLanding.holdScroll()
+    // The landing's hold comes with the section-slot sync (the assignment
+    // below re-lays it); the drilled page has no such sync, so it holds
+    // here. A growth rebind is not a page swap: an in-flight page build
+    // keeps its veil while the grown rows append through their slots.
     if (ps) {
       browseDrill.holdScroll()
-      // A growth rebind is not a page swap: an in-flight page build keeps
-      // its veil while the grown rows append through their slots.
       root._browsePageWire = true
     }
     if (s)
@@ -8494,9 +8492,9 @@ ApplicationWindow {
               required property bool late
               readonly property var sec: root.browseSecAt(slot)
               width: browseLandingCol.width
-              // A shelf a refresh appended incubates on its own and reports
-              // in to nobody: the veil counts only the shelves the build
-              // itself created.
+              // A shelf a refresh appended incubates on its own and joins
+              // no build: it reports in to nobody, and its cards (which
+              // know its `late` mark) stay out of the count too.
               asynchronous: root._browseAsyncBuild || late
               // Invisible while the veil is up, but still laid out.
               opacity: root.browseBuilding ? 0 : 1
