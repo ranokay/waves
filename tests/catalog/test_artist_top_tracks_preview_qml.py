@@ -12,22 +12,12 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.qml import EXIT_OK, boot_main_qml, run_scenario
+from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 
 
 @pytest.mark.qml
 def test_artist_top_tracks_preview_limits_rendered_rows():
     run_scenario(Path(__file__), "--run-scenario", sandbox_prefix="waves-artist-preview-test-")
-
-
-def _wait_until(q, settle, expr: str, timeout_ms: int = 15000, step_ms: int = 250) -> bool:
-    waited = 0
-    while waited < timeout_ms:
-        if q(expr):
-            return True
-        settle(step_ms)
-        waited += step_ms
-    return bool(q(expr))
 
 
 def _scenario() -> int:
@@ -64,9 +54,9 @@ def _scenario() -> int:
             "videos": [],
         }
     )
-    settle(250)
+    settle(250)  # the pane's first layout pass, before the page is read
     q("artistView.contentHeight")
-    settle(300)
+    settle(300)  # a second pass, so the folded five have landed
 
     failures: list[str] = []
 
@@ -88,15 +78,19 @@ def _scenario() -> int:
     q("root.toggleArtistExpand('tracks')")
     check(q("artistTopTracksRep.itemAt(5).item !== null") is True, "SHOW ALL left the screen under the cap unbuilt")
     check(q("artistTopTracksRep.itemAt(241).item === null") is True, "SHOW ALL built the far rows inline")
-    check(
-        _wait_until(q, settle, "artistTopTracksRep.itemAt(241).item !== null"),
-        "the incubated rows never arrived",
-    )
+    try:
+        wait_until(
+            lambda: bool(q("artistTopTracksRep.itemAt(241).item !== null")),
+            timeout_ms=15000,
+            message="the incubated rows never arrived",
+        )
+    except AssertionError:
+        check(False, "the incubated rows never arrived")
 
     # SHOW LESS hides the built rows without destroying them.
     before = q("String(artistTopTracksRep.itemAt(241))")
     q("root.toggleArtistExpand('tracks')")
-    settle(100)
+    settle(100)  # one layout pass for the visibility bindings
     check(q("artistTopTracksRep.itemAt(241).item !== null") is True, "SHOW LESS destroyed the built rows")
     check(q("artistTopTracksRep.itemAt(241).visible") is False, "a kept row stayed visible after SHOW LESS")
     check(

@@ -1109,14 +1109,19 @@ ApplicationWindow {
   property bool _artistKeptAlbums: false
   property bool _artistKeptEps: false
   property bool _artistKeptVideos: false
-  // Pitch of each kind of row in artistCol (its 12px spacing included) and
-  // of the videos' grid rows, for the plan and the growth batches. A
-  // section header is 36, a SHOW ALL line about 16.
-  readonly property int _artistTrackPitch: 62 + 12
-  readonly property int _artistAlbumPitch: 64 + 12
+  // Height of each kind of artist row (the components' own heights) and
+  // the pitch the plan walks with (spacing included), shared so a height
+  // change is one edit. A section header is 36, a SHOW ALL line about 16.
+  readonly property int _artistTrackH: 62
+  readonly property int _artistAlbumH: 64
+  readonly property int _artistTrackPitch: _artistTrackH + 12
+  readonly property int _artistAlbumPitch: _artistAlbumH + 12
   // The grid is not laid out until the page has been shown once.
+  function _artistVideoCellH() {
+    return Math.round(Math.max(artistVideoGrid.cellW, 200) * 9 / 16) + 54
+  }
   function _artistVideoPitch() {
-    return Math.round(Math.max(artistVideoGrid.cellW, 200) * 9 / 16) + 54 + 18
+    return _artistVideoCellH() + 18
   }
   function _artistSecKey(which) {
     return which === "tracks" ? "Tracks" : which === "albums" ? "Albums" : which === "eps" ? "Eps" : "Videos"
@@ -1174,79 +1179,65 @@ ApplicationWindow {
   // hidden, and the layout only sizes it after this), so an error builds a
   // row more inline, never one fewer.
   function _artistPlanSync(p, atY) {
-    var top = atY > 0 ? atY : 0;
-    // A restore spot comes from the page that was left; a shorter page
-    // cannot scroll there, and an unclamped top would put every window past
-    // its section. Clamp against the height on screen at plan time (the
-    // outgoing page is the only scale there is while the new one lays out).
-    if (artistView.contentHeight > 0 && artistView.height > 0)
-      top = Math.min(top, Math.max(0, artistView.contentHeight - artistView.height))
-    var bottom = top + root.height + 64
     var y = 8 + 150 + 12
-    var tracks = (p.tracks || []).length
-    var albums = (p.albums || []).length
-    var eps = (p.eps || []).length
-    var videos = (p.videos || []).length
-    var w = null
-    // n rows at `pitch`; folded shows `cap`, collapsed shows none. Returns
-    // [from, to) rows overlapping [top, bottom).
-    function fit(n, pitch, collapsed, cap, expanded) {
+    var secs = ({});
+    // name's own shape: its first row's y, the rows it shows and their
+    // pitch (a grid: `per` cells to a line). The walk covers EVERY row, not
+    // only those above the fold, because the clamp below needs the page's
+    // full height; a collapsed section contributes its header only.
+    function measure(name, n, pitch, per, collapsed, cap, expanded) {
       if (n <= 0)
-        return [0, 0]
+        return
       y += 36 + 12
       if (collapsed)
-        return [0, 0]
+        return
       var shown = expanded ? n : Math.min(n, cap)
-      var k = 0
-      var from = -1
-      while (k < shown && y < bottom) {
-        if (from < 0 && y + pitch > top)
-          from = k
-        y += pitch
-        ++k
+      secs[name] = {
+        y: y,
+        shown: shown,
+        pitch: pitch,
+        per: per
       }
-      if (k < shown)
-        y += (shown - k) * pitch
+      y += Math.ceil(shown / per) * pitch
       if (n > cap)
         y += 16 + 12
-      return [from < 0 ? k : from, k]
     }
-    w = fit(tracks, _artistTrackPitch, artistTracksCollapsed, 5, topTracksExpanded)
-    _artistSyncFromTracks = w[0]
-    _artistSyncTracks = w[1]
-    w = fit(albums, _artistAlbumPitch, artistAlbumsCollapsed, 5, artistAlbumsExpanded)
-    _artistSyncFromAlbums = w[0]
-    _artistSyncAlbums = w[1]
-    w = fit(eps, _artistAlbumPitch, artistEpsCollapsed, 5, artistEpsExpanded)
-    _artistSyncFromEps = w[0]
-    _artistSyncEps = w[1]
-    // Videos are whole grid rows: the window covers the lines that overlap
-    // the screen, converted back to cell indices.
-    var cols = Math.max(1, artistVideoGrid.cols)
-    var vcap = artistVideoGrid.fillCount
-    _artistSyncFromVideos = 0
-    _artistSyncVideos = 0
-    if (videos > 0) {
-      y += 36 + 12
-      if (!artistVideosCollapsed) {
-        var vpitch = _artistVideoPitch()
-        var vlines = Math.ceil((artistVideosExpanded ? videos : Math.min(videos, vcap)) / cols)
-        var vk = 0
-        var vfrom = -1
-        while (vk < vlines && y < bottom) {
-          if (vfrom < 0 && y + vpitch > top)
-            vfrom = vk
-          y += vpitch
-          ++vk
-        }
-        if (vk < vlines)
-          y += (vlines - vk) * vpitch
-        if (videos > vcap)
-          y += 16 + 12
-        _artistSyncFromVideos = (vfrom < 0 ? vk : vfrom) * cols
-        _artistSyncVideos = vk * cols
+    measure("tracks", (p.tracks || []).length, _artistTrackPitch, 1, artistTracksCollapsed, 5, topTracksExpanded)
+    measure("albums", (p.albums || []).length, _artistAlbumPitch, 1, artistAlbumsCollapsed, 5, artistAlbumsExpanded)
+    measure("eps", (p.eps || []).length, _artistAlbumPitch, 1, artistEpsCollapsed, 5, artistEpsExpanded)
+    measure("videos", (p.videos || []).length, _artistVideoPitch(), Math.max(1, artistVideoGrid.cols), artistVideosCollapsed, artistVideoGrid.fillCount, artistVideosExpanded)
+    // The landing screen, clamped to where THIS page can scroll: the walk
+    // above is the page's own height, not the one on screen while it lays
+    // out (a restore spot comes from the artist being left).
+    var screen = root.height > 0 ? root.height : 900
+    var land = Math.max(0, Math.min(atY > 0 ? atY : 0, y + 16 - screen))
+    var top = land
+    var bottom = land + screen + 64
+    var from = ({})
+    var to = ({})
+    var names = ["tracks", "albums", "eps", "videos"]
+    for (var i = 0; i < names.length; ++i) {
+      var name = names[i]
+      var s = secs[name]
+      if (!s || s.shown <= 0) {
+        from[name] = 0
+        to[name] = 0
+        continue
       }
+      var lines = Math.ceil(s.shown / s.per)
+      var a = Math.max(0, Math.min(lines, Math.floor((top - s.y) / s.pitch)))
+      var b = Math.max(0, Math.min(lines, Math.ceil((bottom - s.y) / s.pitch)))
+      from[name] = a * s.per
+      to[name] = Math.min(s.shown, b * s.per)
     }
+    _artistSyncFromTracks = from.tracks
+    _artistSyncTracks = to.tracks
+    _artistSyncFromAlbums = from.albums
+    _artistSyncAlbums = to.albums
+    _artistSyncFromEps = from.eps
+    _artistSyncEps = to.eps
+    _artistSyncFromVideos = from.videos
+    _artistSyncVideos = to.videos
     _artistReachFrom("tracks", _artistSyncTracks, true)
     _artistReachFrom("albums", _artistSyncAlbums, true)
     _artistReachFrom("eps", _artistSyncEps, true)
@@ -7723,12 +7714,10 @@ ApplicationWindow {
                   focusRadius: 8
                   onTriggered: searchResultsView.setFilter(tchip.modelData[0])
                 }
-                // Cascade in left-to-right the moment results land, decoupled
-                // from the build state (searchBuilding): gating the chips on it
-                // made them arrive late on a cold first search and flicker out
-                // then back in on every re-search. They now appear as soon as
-                // results exist and stay put while the rows build by window.
-                // Reset when cleared.
+                // Cascade in left-to-right the moment results land. The gate
+                // is results existing, never the build state: the rows build
+                // by window (the opening screen inline), so the chips and the
+                // page arrive together. Reset when cleared.
                 states: State {
                   name: "in"
                   when: root.hasResults
@@ -9187,7 +9176,7 @@ ApplicationWindow {
               active: (shown || (index >= 0 && root._artistKeptTracks)) && index < root._artistReachTracks
               visible: shown
               width: artistCol.width
-              height: 62   // TrackRow's fixed height, reserved while the row incubates
+              height: root._artistTrackH
               asynchronous: index < root._artistSyncFromTracks || index >= root._artistSyncTracks
               onLoaded: root._artistRowLanded("tracks")
               sourceComponent: TrackRow {
@@ -9240,7 +9229,7 @@ ApplicationWindow {
               // The collapsed row's height until the block exists; the
               // block's own height from then on, so an expanded panel
               // still grows the row.
-              height: item ? item.implicitHeight : 64
+              height: item ? item.implicitHeight : root._artistAlbumH
               asynchronous: index < root._artistSyncFromAlbums || index >= root._artistSyncAlbums
               onLoaded: root._artistRowLanded("albums")
               sourceComponent: AlbumBlock {
@@ -9287,7 +9276,7 @@ ApplicationWindow {
               active: (shown || (index >= 0 && root._artistKeptEps)) && index < root._artistReachEps
               visible: shown
               width: artistCol.width
-              height: item ? item.implicitHeight : 64
+              height: item ? item.implicitHeight : root._artistAlbumH
               asynchronous: index < root._artistSyncFromEps || index >= root._artistSyncEps
               onLoaded: root._artistRowLanded("eps")
               sourceComponent: AlbumBlock {
@@ -9364,7 +9353,7 @@ ApplicationWindow {
                 active: (shown || (index >= 0 && root._artistKeptVideos)) && index < root._artistReachVideos
                 visible: shown
                 width: artistVideoGrid.cellW
-                height: Math.round(artistVideoGrid.cellW * 9 / 16) + 54
+                height: root._artistVideoCellH()
                 asynchronous: index < root._artistSyncFromVideos || index >= root._artistSyncVideos
                 onLoaded: root._artistRowLanded("videos")
                 sourceComponent: VideoCell {

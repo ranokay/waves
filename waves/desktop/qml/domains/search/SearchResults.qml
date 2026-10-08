@@ -62,6 +62,14 @@ Column {
   // pref-backed expansion state on each page (a section left expanded keeps
   // the same guarantee).
   property var kept: ({})
+  // The list rows' reserved heights (their components' own heights), shared
+  // with the plan's pitch arithmetic so a row-height change is one edit.
+  readonly property var _listRowH: ({
+      albums: 64,
+      tracks: 62,
+      playlists: 64,
+      mixes: 66
+    })
   // The sortable rows, held raw (not the lossy model copies) so every
   // field, the full date included, survives a re-sort.
   property var albumsRaw: []
@@ -98,6 +106,7 @@ Column {
   property alias topRepeater: topRep
   property alias artistsHeadItem: artistsHead
   property alias albumRepeater: albumsRep
+  property alias tracksRepeater: tracksRep
   property alias videoGridItem: videoGrid
   property alias artistsFlowItem: artistFlow
 
@@ -117,6 +126,23 @@ Column {
   function keptFor(name) {
     return resultsView.kept[name] === true
   }
+  function markKept(name) {
+    var keep = {}
+    for (var k in resultsView.kept)
+      keep[k] = resultsView.kept[k]
+    keep[name] = true
+    resultsView.kept = keep
+  }
+  // A fresh page seeds the kept flags from the pref-backed expansion state,
+  // so a section the user left expanded keeps its rows, while a flag left
+  // from the last search (SHOW ALL then SHOW LESS) cannot build every row
+  // past this page's caps.
+  function seedKept() {
+    var keep = {}
+    for (var k in resultsView.expanded)
+      keep[k] = resultsView.expanded[k]
+    resultsView.kept = keep
+  }
   function toggleExpanded(name) {
     // SHOW ALL builds the screen it reveals in this click, so the frame the
     // rows appear on is finished; the rest incubate below. SHOW LESS keeps
@@ -128,27 +154,19 @@ Column {
     for (var key in resultsView.expanded)
       next[key] = resultsView.expanded[key]
     next[name] = !resultsView.isExpanded(name)
-    if (next[name]) {
-      var keep = {}
-      for (var k in resultsView.kept)
-        keep[k] = resultsView.kept[k]
-      keep[name] = true
-      resultsView.kept = keep
-    }
+    if (next[name])
+      resultsView.markKept(name)
     resultsView.expanded = next
     waves.setWavesPref("search_section_" + name + "_expanded", next[name])
     resultsView.planSync(resultsPane.contentY, name)
   }
   function readPrefs() {
     var next = ({})
-    var keep = ({})
     var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
-    for (var i = 0; i < names.length; ++i) {
+    for (var i = 0; i < names.length; ++i)
       next[names[i]] = waves.wavesPref("search_section_" + names[i] + "_expanded") === true
-      keep[names[i]] = next[names[i]]
-    }
     resultsView.expanded = next
-    resultsView.kept = keep
+    resultsView.seedKept()
   }
   // A section shows while the active chips can host its rows (the shared
   // filter rule); the source chip narrows the count the rule reads, so a
@@ -259,8 +277,8 @@ Column {
       if (all && na > 5)
         block(16)
     }
-    list("albums", albumsModel.count, 64, 5, resultsView.isExpanded("albums"))
-    list("tracks", tracksModel.count, 62, 5, resultsView.isExpanded("tracks"))
+    list("albums", albumsModel.count, resultsView._listRowH.albums, 5, resultsView.isExpanded("albums"))
+    list("tracks", tracksModel.count, resultsView._listRowH.tracks, 5, resultsView.isExpanded("tracks"))
     var nv = videosModel.count
     if (resultsView.sectionVisible("videos")) {
       headY.videos = y
@@ -281,8 +299,8 @@ Column {
       if (all && nv > vcap)
         block(16)
     }
-    list("playlists", playlistsModel.count, 64, 5, resultsView.isExpanded("playlists"))
-    list("mixes", mixesModel.count, 66, 5, resultsView.isExpanded("mixes"))
+    list("playlists", playlistsModel.count, resultsView._listRowH.playlists, 5, resultsView.isExpanded("playlists"))
+    list("mixes", mixesModel.count, resultsView._listRowH.mixes, 5, resultsView.isExpanded("mixes"))
     var contentH = y + 8
     var land = Math.max(0, Math.min(atY || 0, contentH - screen))
     var top = fromSection !== undefined && headY[fromSection] !== undefined ? Math.min(land, headY[fromSection]) : land
@@ -314,13 +332,8 @@ Column {
     if (name === host.filterType)
       return
     resultsView.closeWindows()
-    if (name !== "all") {
-      var keep = {}
-      for (var k in resultsView.kept)
-        keep[k] = resultsView.kept[k]
-      keep[name] = true
-      resultsView.kept = keep
-    }
+    if (name !== "all")
+      resultsView.markKept(name)
     host.filterType = name
     resultsView.planSync(resultsPane.contentY, name)
   }
@@ -360,8 +373,10 @@ Column {
     } else {
       // A fresh search: close the windows over the OLD rows (a dying
       // delegate reads index -1 and must incubate, not finish inline),
-      // rebuild, then plan the screen the page opens on.
+      // rebuild, then plan the screen the page opens on. The kept flags
+      // reset to the expansion state this page starts with.
       resultsView.closeWindows()
+      resultsView.seedKept()
       host.fill(artistsModel, resultsView.sections.artists || [])
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
@@ -564,7 +579,7 @@ Column {
       active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("albums")))
       visible: shown
       width: parent.width
-      height: item ? item.implicitHeight : 64
+      height: item ? item.implicitHeight : resultsView._listRowH.albums
       asynchronous: !shown || !resultsView.inWindow("albums", index)
       opacity: host.searchReveal
       sourceComponent: AlbumBlock {
@@ -603,13 +618,14 @@ Column {
     count: tracksModel.count
   }
   Repeater {
+    id: tracksRep
     model: tracksModel
     delegate: Loader {
       readonly property bool shown: index >= 0 && resultsView.rowVisible("tracks", index)
       active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("tracks")))
       visible: shown
       width: parent.width
-      height: 62   // TrackRow's fixed height, reserved while the row incubates
+      height: resultsView._listRowH.tracks   // TrackRow's fixed height
       asynchronous: !shown || !resultsView.inWindow("tracks", index)
       opacity: host.searchReveal
       sourceComponent: TrackRow {
@@ -718,7 +734,7 @@ Column {
       opacity: host.searchReveal
       // Reserve the row's height while it incubates: without it the
       // section collapses to zero and pops open as each row lands.
-      height: item ? item.implicitHeight : 64
+      height: item ? item.implicitHeight : resultsView._listRowH.playlists
       sourceComponent: PlaylistBlock {
         host: resultsView.host
         plId: model.id
@@ -754,7 +770,7 @@ Column {
       active: shown || (index >= 0 && (index < 5 || resultsView.keptFor("mixes")))
       visible: shown
       width: parent.width
-      height: 66
+      height: resultsView._listRowH.mixes
       asynchronous: !shown || !resultsView.inWindow("mixes", index)
       opacity: host.searchReveal
       sourceComponent: Rectangle {

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.qml import EXIT_OK, boot_main_qml, run_scenario
+from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 
 
 @pytest.mark.qml
@@ -37,6 +37,27 @@ def _album(i: int) -> dict:
     }
 
 
+def _track(i: int) -> dict:
+    return {
+        "id": f"tr{i}",
+        "title": f"Track {i}",
+        "artist": "Lab Artist",
+        "artist_id": "ar0",
+        "album": "Album 0",
+        "album_id": "al0",
+        "art": "",
+        "year": 2020,
+        "date": "2020-01-01",
+        "duration": "3:00",
+        "duration_sec": 180,
+        "quality": "LOSSLESS",
+        "popularity": 10,
+        "explicit": False,
+        "kind": "track",
+        "artists": [{"id": "ar0", "name": "Lab Artist"}],
+    }
+
+
 def _scenario() -> int:
     booted = boot_main_qml()
     if not isinstance(booted, tuple):
@@ -44,36 +65,53 @@ def _scenario() -> int:
     _root, q, settle, bridge = booted
     from search.fakes import qml_search_payload
 
-    q("openSearch()")
-    settle(50)
-    q("root._searchSeq = root._navSeq")
-    bridge.searchResults.emit(qml_search_payload(albums=[_album(i) for i in range(30)]))
-    # Realise the page: without a layout the rows are never built and this
-    # scenario would pass against nothing at all.
-    q("results.contentHeight")
-    settle(50)
-
     failures: list[str] = []
 
     def check(cond, what: str) -> None:
         if not cond:
             failures.append(what)
 
-    # The only thing a fresh search still waits for is the library (the
-    # badges): the page's rows build by window from the frame they arrive,
-    # so the veil must be down without waiting on rows beyond the opening
-    # screen.
-    check(
-        q("root.searchBuilding") is False,
-        "the veil is still waiting on result rows",
+    def wait(expr: str, what: str, timeout_ms: int = 15000) -> None:
+        try:
+            wait_until(lambda: bool(q(expr)), timeout_ms=timeout_ms, message=what)
+        except AssertionError:
+            failures.append(what)
+
+    q("openSearch()")
+    settle(50)  # the tab's own layout pass, so the payload realizes rows
+
+    q("root._searchSeq = root._navSeq")
+    bridge.searchResults.emit(
+        qml_search_payload(albums=[_album(i) for i in range(30)], tracks=[_track(i) for i in range(30)])
     )
-    settle(1150)
+
+    # The handler builds the screen the page opens on in its own turn, so
+    # the first frame is the finished one; rows below the fold and past a
+    # cap are still empty Loaders right after the payload applies.
+    check(
+        q("searchResultsView.albumRepeater.itemAt(0).item !== null") is True,
+        "the opening screen's first album was not built in the payload's own turn",
+    )
+    check(
+        q("searchResultsView.albumRepeater.itemAt(29).item === null") is True,
+        "a far album row was built before its incubation",
+    )
+    check(
+        q("searchResultsView.tracksRepeater.itemAt(0).item !== null") is True,
+        "the opening screen's first track was not built in the payload's own turn",
+    )
+
+    q("results.contentHeight")
+    # The veil is the library-badge wait, and this sandbox has no library:
+    # nothing waits, and no row's load can raise it.
+    check(q("root.searchBuilding") is False, "the veil is still waiting on result rows")
+
+    wait("searchResultsView.countFor('albums') == 30", "the albums section never filled")
 
     # The mixed view shows five; every row past the cap must stay unbuilt
     # (its Loader exists for count/geometry, but loads nothing).
     check(
-        q("searchResultsView.albumRepeater.itemAt(6).active") is False,
-        "a row past the cap is active before SHOW ALL",
+        q("searchResultsView.albumRepeater.itemAt(6).active") is False, "a row past the cap is active before SHOW ALL"
     )
     check(
         q("searchResultsView.albumRepeater.itemAt(6).item === null") is True,
@@ -92,20 +130,14 @@ def _scenario() -> int:
         q("searchResultsView.albumRepeater.itemAt(29).item === null") is True,
         "SHOW ALL built the far rows inline instead of incubating them",
     )
-    settle(1500)
-    check(
-        q("searchResultsView.albumRepeater.itemAt(29).item !== null") is True,
-        "the incubated rows never arrived",
-    )
+    wait("searchResultsView.albumRepeater.itemAt(29).item !== null", "the incubated rows never arrived")
+
     # SHOW LESS keeps the built rows: hidden, not destroyed, so a second
     # SHOW ALL costs nothing.
     before = q("String(searchResultsView.albumRepeater.itemAt(29))")
     q("searchResultsView.toggleExpanded('albums')")
-    settle(100)
-    check(
-        q("searchResultsView.albumRepeater.itemAt(29).item !== null") is True,
-        "SHOW LESS destroyed the built rows",
-    )
+    settle(50)  # one layout pass for the visibility bindings
+    check(q("searchResultsView.albumRepeater.itemAt(29).item !== null") is True, "SHOW LESS destroyed the built rows")
     check(
         q("searchResultsView.albumRepeater.itemAt(29).visible") is False,
         "a row past the cap stayed visible after SHOW LESS",
@@ -113,6 +145,36 @@ def _scenario() -> int:
     check(
         q("String(searchResultsView.albumRepeater.itemAt(29))") == before,
         "SHOW LESS rebuilt the kept rows instead of hiding them",
+    )
+
+    # A type chip shows its whole section the way SHOW ALL does: the screen
+    # the page lands on builds in the click, the rest incubates.
+    q("searchResultsView.setFilter('tracks')")
+    check(q("root.filterType") == "tracks", "the chip did not switch the section filter")
+    check(
+        q("searchResultsView.tracksRepeater.itemAt(5).item !== null") is True,
+        "the chip left the section's opening screen unbuilt in the click",
+    )
+    check(
+        q("searchResultsView.tracksRepeater.itemAt(29).item === null") is True,
+        "the chip built the far rows inline instead of incubating them",
+    )
+    wait("searchResultsView.tracksRepeater.itemAt(29).item !== null", "the chip's incubated rows never arrived")
+    wait("searchResultsView.countFor('tracks') == 30", "the tracks section never filled")
+
+    # A fresh search re-seeds the kept flags from the expansion state: a
+    # section is not still kept because an earlier search's SHOW ALL built
+    # it, so its rows past the cap go back to unbuilt.
+    q("searchResultsView.setFilter('all')")
+    q("root._searchSeq = root._navSeq")
+    bridge.searchResults.emit(
+        qml_search_payload(albums=[_album(i) for i in range(30)], tracks=[_track(i) for i in range(30)])
+    )
+    q("results.contentHeight")
+    wait("searchResultsView.countFor('albums') == 30", "the second payload never filled")
+    check(
+        q("searchResultsView.albumRepeater.itemAt(6).active") is False,
+        "a kept flag from the previous search survived into the fresh page",
     )
 
     if failures:
