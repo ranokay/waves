@@ -4,7 +4,7 @@ A stand-in binds real bridge methods onto a small object of its own, and
 those methods emit bridge signals, so the stand-in must answer every signal
 name they reach. `BridgeStub` answers any public signal that WavesBridge or
 one of its mixins declares with the suite's recording double
-(`support.signals.RecordingSignal`), created on first read and kept on the
+(`support.doubles.RecordingSignal`), created on first read and kept on the
 instance so its `emits` accumulate. Attributes the stand-in sets itself win, and any other missing
 name still raises AttributeError.
 
@@ -25,17 +25,24 @@ from __future__ import annotations
 
 import inspect
 import sys
+import warnings
+from types import CodeType
 from unittest import mock
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Property, Signal
 
-from support.signals import RecordingSignal
+from support.doubles import RecordingSignal
 from waves.desktop.backend import WavesBridge
+
+
+def _bridge_classes() -> list[type]:
+    """WavesBridge and the waves mixins it composes (not QObject's own bases)."""
+    return [klass for klass in WavesBridge.__mro__ if klass.__module__.startswith("waves.")]
+
 
 BRIDGE_SIGNALS = frozenset(
     name
-    for klass in WavesBridge.__mro__
-    if klass.__module__.startswith("waves.")
+    for klass in _bridge_classes()
     for name, value in vars(klass).items()
     if isinstance(value, Signal) and not name.startswith("_")
 )
@@ -66,14 +73,14 @@ _offenders: list[str] = []
 _watching = False
 
 
-def _bridge_methods() -> dict:
-    """The code object of every bridge and mixin method that takes self."""
+def _bridge_methods() -> dict[CodeType, str]:
+    """The code object of every bridge and mixin method that takes self,
+    property getters and decorated methods included (by their inner function)."""
     methods = {}
-    for klass in WavesBridge.__mro__:
-        if not klass.__module__.startswith("waves."):
-            continue
+    for klass in _bridge_classes():
         for name, value in vars(klass).items():
-            func = value.fget if isinstance(value, property) else value
+            func = value.fget if isinstance(value, (property, Property)) else value
+            func = inspect.unwrap(func) if callable(func) else func
             if inspect.isfunction(func) and func.__code__.co_varnames[:1] == ("self",):
                 methods[func.__code__] = f"{klass.__name__}.{name}"
     return methods
@@ -86,7 +93,11 @@ def watch_stand_ins() -> None:
         return
     try:
         sys.monitoring.use_tool_id(_WATCH_TOOL, "bridge-stand-ins")
-    except ValueError:  # another tool holds the id; the check stands down
+    except ValueError:
+        warnings.warn(
+            f"sys.monitoring tool id {_WATCH_TOOL} is taken; bridge stand-ins are not checked this run",
+            stacklevel=2,
+        )
         return
     methods = _bridge_methods()
 

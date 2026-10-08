@@ -2,9 +2,10 @@
 
 The bridge tests are Qt-free: they bind the real, unbound ``WavesBridge`` methods
 onto a minimal stand-in and drive them with fakes instead of a live QObject, a
-QThreadPool, or an event loop. ``_Signal`` (``support.signals.RecordingSignal``)
-and ``_InlinePool`` are the shared doubles; import them with
-``from conftest import _Signal, _InlinePool``.
+QThreadPool, or an event loop. ``_Signal`` and ``_InlinePool`` are the shared
+doubles (defined in ``support.doubles``); test modules import them with
+``from conftest import _Signal, _InlinePool``, and fakes modules, which QML
+scenario children also load, import ``support.doubles`` directly.
 
 Deliberately NOT centralized:
   * ``_Stub`` stays per-file. It is not one fake but many: each test's stand-in
@@ -22,11 +23,10 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
-import sys
 import tempfile
 
 import pytest
-from support.signals import RecordingSignal
+from support.doubles import InlinePool, RecordingSignal
 
 # Every test in this suite runs against a throwaway config directory.
 #
@@ -53,22 +53,12 @@ os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
 atexit.register(shutil.rmtree, _TEST_CONFIG_HOME, True)
 
 
-# The recording signal double lives in support.signals (QML scenario children
-# import it without this conftest); `_Signal` stays its name here.
+# The shared doubles live in support.doubles, which fakes modules import
+# without running this conftest; these are their names for test modules.
 _Signal = RecordingSignal
 
 
-class _InlinePool:
-    """Stand-in for a ``QThreadPool`` that runs a dispatched ``Worker``
-    synchronously on the calling thread, so worker dispatch is exercised without
-    a real thread or event loop and the slot completes before ``start`` returns.
-    """
-
-    def start(self, worker, priority: int = 0) -> None:
-        # Priority is accepted and ignored: QThreadPool takes one (the library
-        # seed is dispatched raised, to jump a queue busy with downloads), and
-        # running inline there is no queue for it to jump.
-        worker.run()
+_InlinePool = InlinePool
 
 
 class _InlineWriter:
@@ -85,18 +75,20 @@ class _InlineWriter:
         pass
 
 
+def pytest_sessionstart(session):
+    from support import bridge_stub
+
+    bridge_stub.watch_stand_ins()
+
+
 @pytest.fixture(autouse=True)
 def _bridge_stand_ins_are_bridge_stubs():
     """Every object a test runs bridge methods on is a support.bridge_stub
     BridgeStub (or a real bridge or a mock), so a new bridge signal reaches it
-    without an edit. Tests that never load the bridge skip the check."""
-    if "waves.desktop.backend" not in sys.modules:
-        yield
-        return
+    without an edit. A worker thread that outlives its test reports into the
+    test running when it calls in; the message names the stand-in's class."""
     from support import bridge_stub
 
-    bridge_stub.watch_stand_ins()
-    bridge_stub.take_offenders()
     yield
     offenders = bridge_stub.take_offenders()
     if offenders:
@@ -104,6 +96,16 @@ def _bridge_stand_ins_are_bridge_stubs():
             "bridge methods ran on stand-ins that are not support.bridge_stub.BridgeStub:\n" + "\n".join(offenders),
             pytrace=False,
         )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Stand-ins recorded outside any test (fixture setup, after the last test)."""
+    from support import bridge_stub
+
+    leftovers = bridge_stub.take_offenders()
+    if leftovers:
+        print("\nbridge methods ran on stand-ins that are not support.bridge_stub.BridgeStub:\n" + "\n".join(leftovers))
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture

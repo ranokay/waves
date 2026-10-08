@@ -4,18 +4,20 @@ A stand-in receives real WavesBridge methods, and those methods emit bridge
 signals. `support.bridge_stub.BridgeStub` resolves each public signal the
 bridge declares, so a signal added to the bridge reaches every stand-in with
 no edit. Private relays stay absent (their delivery is behaviour; see the
-module). The watcher conftest arms reports a stand-in outside the base.
+module). `watch_stand_ins`, armed by conftest, reports a bridge method run on
+any other stand-in.
 """
 
 from __future__ import annotations
 
+import contextlib
 from unittest import mock
 
 import pytest
 from PySide6.QtCore import QMetaMethod, QObject
 from support import bridge_stub
 from support.bridge_stub import BRIDGE_SIGNALS, BridgeStub
-from support.signals import RecordingSignal
+from support.doubles import RecordingSignal
 
 from waves.desktop.backend import WavesBridge
 
@@ -71,7 +73,6 @@ def test_a_bridge_method_on_a_stand_in_outside_the_base_is_reported():
         def __init__(self):
             self._waves_prefs = {}
 
-    bridge_stub.watch_stand_ins()
     bridge_stub.take_offenders()
 
     WavesBridge._waves_pref_bool(_Plain(), "x")
@@ -81,8 +82,22 @@ def test_a_bridge_method_on_a_stand_in_outside_the_base_is_reported():
     ]
 
 
+def test_a_qt_property_getter_on_a_stand_in_outside_the_base_is_reported():
+    class _Plain:
+        def __init__(self):
+            self.settings = None
+
+    bridge_stub.take_offenders()
+
+    with contextlib.suppress(Exception):
+        WavesBridge.confirmCategoryDl.fget(_Plain())
+
+    assert bridge_stub.take_offenders() == [
+        f"{_Plain.__module__}.{_Plain.__qualname__} ran WavesBridge.confirmCategoryDl"
+    ]
+
+
 def test_bridge_stubs_mocks_and_unbound_calls_are_not_reported():
-    bridge_stub.watch_stand_ins()
     bridge_stub.take_offenders()
 
     WavesBridge._waves_pref_bool(BridgeStub(_waves_prefs={}), "x")

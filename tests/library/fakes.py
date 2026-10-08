@@ -11,8 +11,9 @@ import os
 import threading
 from types import SimpleNamespace
 
-from conftest import _InlinePool, _Signal
 from support.bridge_stub import BridgeStub
+from support.doubles import InlinePool as _InlinePool
+from support.doubles import RecordingSignal as _Signal
 
 from waves.desktop.backend import WavesBridge
 from waves.library.index import LibraryIndex, cache_file_for_root

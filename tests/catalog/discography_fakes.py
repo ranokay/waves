@@ -10,8 +10,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from conftest import _Signal
 from support.bridge_stub import BridgeStub
+from support.doubles import RecordingSignal as _Signal
 
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
