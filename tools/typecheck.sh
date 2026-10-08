@@ -14,7 +14,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-baseline="$(uv run --locked --all-extras python - <<'PY'
+# Reading pyproject.toml needs only the standard library: no project
+# environment, so nothing is built or installed to read it.
+baseline="$(uv run --no-project --no-build python - <<'PY'
 import tomllib
 
 with open("pyproject.toml", "rb") as f:
