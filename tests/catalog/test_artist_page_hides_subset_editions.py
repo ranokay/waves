@@ -170,6 +170,8 @@ class _PageStub:
     loadArtist = WavesBridge.loadArtist
     _start_artist_build = WavesBridge._start_artist_build
 
+    _artist_art_summary = staticmethod(WavesBridge._artist_art_summary)
+
     def __init__(self, collapse, artist):
         self.threadpool = _Pool()
         self._collapse = collapse
@@ -187,6 +189,7 @@ class _PageStub:
         self._browse_gen = 0
         self.artistLoaded = _Sig()
         self.artistLoadFailed = _Sig()
+        self.artistPagePrefetched = _Sig()
         self.statuses = []
         self.hidden_calls = 0
 

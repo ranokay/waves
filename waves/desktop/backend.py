@@ -394,6 +394,12 @@ MERGE_GAUGE = PoolGauge(1)
 #: round trip (measured ~110 ms serial, so a 60-edition catalogue was 7 s).
 _EDITION_WORKERS = 6
 EDITION_GAUGE = PoolGauge(_EDITION_WORKERS)
+#: An artist page's five section reads (bio, albums, EPs & singles, top
+#: tracks, videos): independent requests about one artist, fanned out for the
+#: same reason (a round trip each, ~1.35 s serial on a big artist's first
+#: open, before the edition compare had even started).
+_ARTIST_SECTION_WORKERS = 5
+ARTIST_GAUGE = PoolGauge(_ARTIST_SECTION_WORKERS)
 
 
 def _register_preview_gauge() -> None:
@@ -3880,6 +3886,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     playlistTracksLoaded = Signal(str, "QVariantList")
     artistLoaded = Signal("QVariant")
     artistLoadFailed = Signal(str)  # id; a Back-restore clears its latch on this
+    # An artist page's first covers, {id, art, tracks, albums, eps} (URLs),
+    # for the QML's warm pool before the page opens: from a hover, and from
+    # a fresh build as soon as its sections are in. The artist half of
+    # browsePagePrefetched, same rule: never the page payload itself.
+    artistPagePrefetched = Signal("QVariant")
     artistMetaLoaded = Signal(str, int)
     # My Music shelves are per SOURCE (a provider whose session can fill them)
     # and, within a source, per category: both travel on every emit, so a
@@ -4360,6 +4371,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         diagnostics.register_pool("pop", POP_GAUGE)
         diagnostics.register_pool("merge", MERGE_GAUGE)
         diagnostics.register_pool("edition", EDITION_GAUGE)
+        diagnostics.register_pool("artist", ARTIST_GAUGE)
         # The download engine's two fan-outs, the same gauge pattern: their
         # executors are job-scoped, so the stable in-flight counters register.
         diagnostics.register_pool("dlseg", SEGMENT_GAUGE)
@@ -7408,10 +7420,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         second hover while one runs is dropped rather than queued, and a
         click on the hovered card mid-flight claims the build (loadArtist)
         so the page lands as that click's. A page already cached under the
-        current edition rule is left alone: the click paints it at once
-        and revalidates, a hover has nothing to add. Cheaper than a browse
-        prefetch in one way, it records no membership, and dearer in
-        another: with "Most-complete edition only" on, the build compares
+        current edition rule is not rebuilt (the click paints it at once
+        and revalidates); the hover only warms its first covers. Cheaper than
+        a browse prefetch in one way, it records no membership, and dearer
+        in another: with "Most-complete edition only" on, the build compares
         same-titled editions (a track fetch each, cached per session)."""
         artist_id = str(artist_id or "")
         if not artist_id:
@@ -7444,6 +7456,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         collapse = self._artist_page_collapses_editions()
         cached = self._artist_cache.get(artist_id)
         if cached is not None and bool(cached.get("editions_collapsed", False)) == collapse:
+            # Known page (maybe restored from disk at launch): nothing to
+            # build, but its covers can still be warmed before the click.
+            self.artistPagePrefetched.emit(self._artist_art_summary(cached))
             return
         with self._prefetch_lock:
             if artist_id in self._artist_loading or self._artist_prefetch is not None:
@@ -7477,54 +7492,85 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if artist is None:
                     failed = True
                     return
-                try:
-                    bio = _clean_bio(artist.get_bio() or "")
-                except Exception:
-                    bio = ""
-                # Any section failing marks the whole page suspect: an OR over the
-                # sections is not enough (a 429 on get_albums alone, with EPs back
-                # fine, would otherwise cache and persist a gutted page, and the
-                # refresh emit would wipe the album grid on screen).
-                complete = True
-                try:
-                    albums = artist.get_albums()
-                except Exception:
-                    logger.exception("artist albums failed")
-                    albums = []
-                    complete = False
-                try:
-                    eps = artist.get_ep_singles()
-                except Exception:
-                    eps = []
-                    complete = False
-                try:
-                    tops = artist.get_top_tracks(limit=10)
-                except Exception:
-                    tops = []
-                    complete = False
-                # Same-name conflation guard: TIDAL has served a top track by a
-                # completely different artist here, so keep only tracks whose
-                # credits include this page's artist (stubs with no credits pass).
-                tops = [t for t in tops if not _foreign_credit(t, artist_id)]
-                try:
-                    vids = artist.get_videos(limit=_ARTIST_VIDEO_PAGE)
-                except Exception:
-                    vids = []
-                    complete = False
+                # The five sections are independent requests about this one
+                # artist, so they go out together instead of one after another
+                # (a round trip each), and the edition compare below starts the
+                # moment the opening screen's sections are in, while the bio and
+                # the videos may still be landing.
+                sections = {
+                    "bio": artist.get_bio,
+                    "albums": artist.get_albums,
+                    "eps": artist.get_ep_singles,
+                    "tops": lambda: artist.get_top_tracks(limit=10),
+                    "vids": lambda: artist.get_videos(limit=_ARTIST_VIDEO_PAGE),
+                }
 
-                # Collapse duplicate editions and apply the Settings quality cap,
-                # exactly as the search path does, otherwise an artist's page
-                # lists every regional/quality edition of the same release.
-                albums = self._dedup_albums(albums)
-                eps = self._dedup_albums(eps)
-                # Then, with 'Most-complete edition only' on, the same
-                # track-aware collapse the discography sweep runs: a 5-track
-                # cut whose songs all sit in the 7-track cut beside it is the
-                # edition the sweep would skip, so the page skips it too.
-                if collapse:
-                    if not refresh and not silent:
-                        self._set_status("Scanning editions…")
-                    albums, eps = self._hide_subset_editions(albums, eps)
+                def _section(call):
+                    with ARTIST_GAUGE.working():
+                        return call()
+
+                ARTIST_GAUGE.limit(len(sections))
+                with ThreadPoolExecutor(max_workers=len(sections)) as pool:
+                    pending = {name: pool.submit(_section, call) for name, call in sections.items()}
+                    # Any section failing marks the whole page suspect: an OR
+                    # over the sections is not enough (a 429 on get_albums
+                    # alone, with EPs back fine, would otherwise cache and
+                    # persist a gutted page, and the refresh emit would wipe the
+                    # album grid on screen). The bio alone is optional.
+                    complete = True
+
+                    def landed(name: str):
+                        nonlocal complete
+                        try:
+                            return pending[name].result()
+                        except Exception:
+                            if name == "albums":
+                                logger.exception("artist albums failed")
+                            if name != "bio":
+                                complete = False
+                            return None
+
+                    # Collapse duplicate editions and apply the Settings quality
+                    # cap, exactly as the search path does, otherwise an
+                    # artist's page lists every regional/quality edition of the
+                    # same release.
+                    albums = self._dedup_albums(landed("albums") or [])
+                    eps = self._dedup_albums(landed("eps") or [])
+                    # Same-name conflation guard: TIDAL has served a top track
+                    # by a completely different artist here, so keep only tracks
+                    # whose credits include this page's artist (stubs with no
+                    # credits pass).
+                    tops = self._dedup_tracks([t for t in landed("tops") or [] if not _foreign_credit(t, artist_id)])
+                    if not refresh and _provider_result_current(self, gen):
+                        # The opening screen's covers go out to the warm pool
+                        # now, while the edition compare below still runs (a
+                        # round trip or more), so they are decoded by the time
+                        # the page lands instead of requested when it does. A
+                        # revalidate's page already has its covers.
+                        self.artistPagePrefetched.emit(
+                            self._artist_art_summary(
+                                {
+                                    "id": artist_id,
+                                    "art": _image(artist, 320),
+                                    "tracks": [{"art": _image(t, 160)} for t in tops[:8]],
+                                    "albums": [{"art": _image(a)} for a in albums[:8]],
+                                    "eps": [{"art": _image(a)} for a in eps[:8]],
+                                }
+                            )
+                        )
+                    # Then, with 'Most-complete edition only' on, the same
+                    # track-aware collapse the discography sweep runs: a 5-track
+                    # cut whose songs all sit in the 7-track cut beside it is
+                    # the edition the sweep would skip, so the page skips it too.
+                    if collapse:
+                        if not refresh and not silent:
+                            self._set_status("Scanning editions…")
+                        albums, eps = self._hide_subset_editions(albums, eps)
+                    try:
+                        bio = _clean_bio(landed("bio") or "")
+                    except Exception:
+                        bio = ""
+                    vids = landed("vids") or []
                 # A reissue sits where the day it was really listed belongs,
                 # not in the original album's year (see _listed_date).
                 lifted = sum(1 for a in albums + eps if _listed_date(a) is not None)
@@ -7542,7 +7588,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "bio": bio,
                     "albums": [self._album_dict(a) for a in albums],
                     "eps": [self._album_dict(a) for a in eps],
-                    "tracks": [self._track_dict(t) for t in self._dedup_tracks(tops)],
+                    "tracks": [self._track_dict(t) for t in tops],
                     "videos": [self._video_dict(v) for v in self._dedup_videos(vids)],
                 }
             except Exception:
@@ -7586,9 +7632,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # A page with a failed or empty-everywhere fetch is more likely a
             # transient failure than a real artist with no catalogue, show it
             # (first load) but never cache it or overwrite good data.
-            if changed and complete and (payload["albums"] or payload["eps"] or payload["tracks"]):
+            keep = changed and complete and bool(payload["albums"] or payload["eps"] or payload["tracks"])
+            if keep:
                 self._remember_artist_page(artist_id, payload)
-                self._save_page_cache()
             elif refresh:
                 return
             if refresh:
@@ -7596,14 +7642,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # In-place update: the QML drops this if the user has
                     # since navigated away (see onArtistLoaded).
                     _catalog_emit(self, self.artistLoaded, {**payload, "refresh": True})
-            elif quiet:
-                # A page the user never opened is simply a cached page.
-                _prefetch_log.debug("prefetch artist %s done in %s", artist_id, devlog.fmt_dur(devlog.clock() - t0))
-                return
-            else:
+            elif not quiet:
                 _catalog_emit(self, self.artistLoaded, payload)
                 self._set_status(getattr(artist, "name", "Artist"))
                 self._set_busy(False)
+            # Last, as the browse workers do: the snapshot is a whole-map
+            # re-serialize plus an fsync, and a page someone is waiting on
+            # must not wait behind it.
+            if keep:
+                self._save_page_cache()
+            if quiet:
+                # A page the user never opened is simply a cached page.
+                _prefetch_log.debug("prefetch artist %s done in %s", artist_id, devlog.fmt_dur(devlog.clock() - t0))
+                return
             devlog.done(
                 "artist",
                 f"id={artist_id}",
@@ -9950,6 +10001,31 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 break
         header = payload.get("header") or {}
         return {"key": payload.get("key", ""), "art": str(header.get("art") or ""), "rowArts": arts}
+
+    @staticmethod
+    def _artist_art_summary(payload: dict, limit: int = 5) -> dict:
+        """The covers worth warming before an artist page opens: its photo and
+        the first rows of the sections a page opens on (each shows 5 before
+        SHOW ALL), in page order. Videos sit at the foot of the page, out of
+        the opening screen, and their stills are the heaviest images on it."""
+
+        def arts(rows) -> list[str]:
+            out: list[str] = []
+            for row in rows or []:
+                url = str(row.get("art") or "")
+                if url and url not in out:
+                    out.append(url)
+                if len(out) >= limit:
+                    break
+            return out
+
+        return {
+            "id": str(payload.get("id") or ""),
+            "art": str(payload.get("art") or ""),
+            "tracks": arts(payload.get("tracks")),
+            "albums": arts(payload.get("albums")),
+            "eps": arts(payload.get("eps")),
+        }
 
     _TILE_ART_TTL = 7 * 24 * 3600  # editorial pages shuffle slowly; a week is fine
     _TILE_ART_V = 3  # bump to invalidate cached samples when the sampler changes
