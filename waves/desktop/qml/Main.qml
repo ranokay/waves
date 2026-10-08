@@ -1676,27 +1676,41 @@ ApplicationWindow {
     var prev = root._browseSecHeld.prev
     return prev[slot] !== undefined ? prev[slot] : null
   }
-  function _browseSyncSecSlots() {
-    var secs = root.browseVisibleSections
+  // The grow/trim machine behind both section slot lists: keeps the count,
+  // the held arrays (a released slot's binding still evaluates until its
+  // delegate dies, so it reads the section it had from prev) and the
+  // appended slots' `late` mark.
+  function _browseSyncSlots(model, held, slotN, secs, late) {
     var n = secs.length
-    if (root._browseSecHeld.cur.length > n)
-      root._browseSecHeld.prev = root._browseSecHeld.cur
-    root._browseSecHeld = {
-      prev: root._browseSecHeld.prev,
-      cur: secs
+    var prev = held.prev
+    if (held.cur.length > n)
+      prev = held.cur
+    if (slotN > n) {
+      model.remove(n, slotN - n)
+      slotN = n
     }
-    if (root._browseSecSlotN > n) {
-      browseSecSlots.remove(n, root._browseSecSlotN - n)
-      root._browseSecSlotN = n
-    }
-    var late = root._browseSecSlotN > 0
-    while (root._browseSecSlotN < n) {
-      browseSecSlots.append({
-        slot: root._browseSecSlotN,
+    while (slotN < n) {
+      model.append({
+        slot: slotN,
         late: late
       })
-      root._browseSecSlotN++
+      slotN++
     }
+    return {
+      held: {
+        prev: prev,
+        cur: secs
+      },
+      slotN: slotN
+    }
+  }
+  function _browseSyncSecSlots() {
+    // A source-filter change (or an arrange action) re-lays the landing
+    // too: hold the user's spot across it.
+    browseLanding.holdScroll()
+    var r = root._browseSyncSlots(browseSecSlots, root._browseSecHeld, root._browseSecSlotN, root.browseVisibleSections, root._browseSecSlotN > 0)
+    root._browseSecHeld = r.held
+    root._browseSecSlotN = r.slotN
   }
   onBrowseVisibleSectionsChanged: root._browseSyncSecSlots()
   // The same slots for a drilled page's sections, so a growth reassign (a
@@ -1718,23 +1732,9 @@ ApplicationWindow {
   }
   function _browseSyncPageSecSlots() {
     var secs = root.browsePage && root.browsePage.sections ? root.browsePage.sections : []
-    var n = secs.length
-    if (root._browsePageSecHeld.cur.length > n)
-      root._browsePageSecHeld.prev = root._browsePageSecHeld.cur
-    root._browsePageSecHeld = {
-      prev: root._browsePageSecHeld.prev,
-      cur: secs
-    }
-    if (root._browsePageSecSlotN > n) {
-      browsePageSecSlots.remove(n, root._browsePageSecSlotN - n)
-      root._browsePageSecSlotN = n
-    }
-    while (root._browsePageSecSlotN < n) {
-      browsePageSecSlots.append({
-        slot: root._browsePageSecSlotN
-      })
-      root._browsePageSecSlotN++
-    }
+    var r = root._browseSyncSlots(browsePageSecSlots, root._browsePageSecHeld, root._browsePageSecSlotN, secs, false)
+    root._browsePageSecHeld = r.held
+    root._browsePageSecSlotN = r.slotN
   }
   // `override` lets a landing being applied measure the incoming sections
   // before the assignment (the build veil's total must count exactly the
@@ -2288,9 +2288,9 @@ ApplicationWindow {
     root._resolveLibraryPresence()
     // Only a wire payload builds behind the veil (onBrowsePageLoaded arms
     // it before assigning). Every other assignment (Back, a history
-    // restore, a local listing) lands in place, and drops a veil the page
-    // it replaces may still have up: Back from a page mid-build used to
-    // hide the page returned to until the guard.
+    // restore, a local listing) lands in place, and drops a veil the
+    // replaced page may still have up: a Back off a page mid-build must
+    // not hide the page it returns to until the guard.
     if (!root._browsePageWire)
       root._browsePageBuildStart(0)
     root._browsePageWire = false
@@ -4387,8 +4387,12 @@ ApplicationWindow {
     // on whichever pane actually re-lays.
     if (s)
       browseLanding.holdScroll()
-    if (ps)
+    if (ps) {
       browseDrill.holdScroll()
+      // A growth rebind is not a page swap: an in-flight page build keeps
+      // its veil while the grown rows append through their slots.
+      root._browsePageWire = true
+    }
     if (s)
       browseSections = s
     if (ps)
@@ -8490,10 +8494,14 @@ ApplicationWindow {
               required property bool late
               readonly property var sec: root.browseSecAt(slot)
               width: browseLandingCol.width
-              asynchronous: root._browseAsyncBuild
+              // A shelf a refresh appended incubates on its own and reports
+              // in to nobody: the veil counts only the shelves the build
+              // itself created.
+              asynchronous: root._browseAsyncBuild || late
               // Invisible while the veil is up, but still laid out.
               opacity: root.browseBuilding ? 0 : 1
-              onLoaded: root._browseBuildTick()
+              onLoaded: if (!late)
+                root._browseBuildTick()
               sourceComponent: BrowseSection {
                 host: root
                 sec: bsecLd.sec

@@ -58,7 +58,7 @@ _FIRST_SHELF_CARD = """
 (function () {
     function walk(o) {
         if (!o) return null;
-        if (o.objectName === "browseConsoleShelf" && o.count > 0) return o.itemAt(0);
+        if (o.objectName === "browseConsoleShelf" && o.visible === true && o.count > 0) return o.itemAt(0);
         var kids = o.children || [];
         for (var i = 0; i < kids.length; i++) { var hit = walk(kids[i]); if (hit) return hit; }
         if (o.item) { var it = walk(o.item); if (it) return it; }
@@ -133,6 +133,16 @@ def _scenario() -> int:
     check(q("String(browseSecRep.itemAt(0))") == shelf_before, "growth rebuilt the shelf delegate")
     check(q(f"String({_FIRST_SHELF_CARD.strip()})") == card_before, "growth rebuilt the existing cards")
     check(q("browseVisibleSections[0].items.length") == 5, "growth never appended its item")
+
+    # A shorter payload drops only its trailing slots: the rows that remain
+    # keep their cards, and a released slot does not throw while its dying
+    # delegate still reads the previous row.
+    shorter = _shelf("one", "First Shelf", [_card("al1", "One"), _card("al2", "Two")])
+    bridge.browseLoaded.emit({"sections": [shorter], "sources": [], "genres": [], "moods": [], "decades": []})
+    settle(200)
+    check(q("browseVisibleSections.length") == 1, "the shorter landing kept its trailing section")
+    check(q("browseVisibleSections[0].items.length") == 2, "the shorter shelf kept its trailing rows")
+    check(q(f"String({_FIRST_SHELF_CARD.strip()})") == card_before, "the shorter shelf rebuilt the rows that remain")
 
     # A fresh drilled page builds behind its own veil and fades in complete.
     q('openBrowseItem("playlist", "p1")')

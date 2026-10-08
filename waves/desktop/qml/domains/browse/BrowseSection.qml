@@ -16,10 +16,12 @@ import "../catalog"
 // so a missed binding fails at load.
 // It reads through it:
 //   host._browseAsyncBuild / host._browseCardStart / host._browseCardTick /
-//   host.browseCanGrow / host.browseGrow / host.browseGrowing /
-//   host.browseHighlightId / host.browseHighlightPending / host.browsePage /
-//   host.browseStyle / host.gridCols / host.openBrowseLink /
-//   host.openBrowseSection / host.openPlaylistsFolder
+//   host._browsePageBuildTick / host._browsePageCardStart /
+//   host._browsePageCardTick / host.browseCanGrow / host.browseGrow /
+//   host.browseGrowing / host.browseHighlightId / host.browseHighlightPending /
+//   host.browsePage / host.browsePageBuilding / host.browseStyle /
+//   host.gridCols / host.openBrowseLink / host.openBrowseSection /
+//   host.openPlaylistsFolder
 // The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
@@ -88,6 +90,19 @@ Column {
     }
   }
   onItemsChanged: bsec.syncSlots()
+  // One counting path for both card views: a card created while a veil is
+  // up joins its count and reports in when it lands (or goes down mid-
+  // build, which must not pin the veil).
+  function _cardCreated(loader) {
+    loader.counted = bsec.landing ? host._browseCardStart(loader.asynchronous) : host._browsePageCardStart(loader.asynchronous)
+  }
+  function _cardLanded(loader) {
+    if (bsec.landing)
+      host._browseCardTick(loader.asynchronous)
+    else
+      host._browsePageCardTick(loader.counted)
+    loader.counted = false
+  }
   Component.onCompleted: {
     bsec.syncSlots()
     // A list view applies an insert on its next polish; applied now, the
@@ -98,11 +113,20 @@ Column {
       consoleShelf.forceLayout()
     if (artShelf.model)
       artShelf.forceLayout()
-    // A drilled section is one unit of its page's veil: the cards above
-    // (created by the forceLayout calls) have joined the count by now, so
-    // this section reports in last.
+    // A drilled section is one unit of its page's veil. The report is
+    // deferred one turn: the shelves are ListViews, so their visible
+    // delegates (which join the veil count as they are created) only exist
+    // after the view's own polish; ticking here made the count complete
+    // before a single card had joined it and the veil dropped early.
     if (!bsec.landing)
-      host._browsePageBuildTick()
+      Qt.callLater(bsec._reportSection)
+  }
+  function _reportSection() {
+    if (consoleShelf.model)
+      consoleShelf.forceLayout()
+    if (artShelf.model)
+      artShelf.forceLayout()
+    host._browsePageBuildTick()
   }
   // Landing arrangement (issue #600): the caller owns the persisted state.
   // An arranged section keeps its header (and these controls) and hides its
@@ -395,18 +419,9 @@ Column {
       height: 236
       asynchronous: bsec.landing ? (host._browseAsyncBuild || bsec.late || index >= bsec.baseCount) : host.browsePageBuilding
       property bool counted: false
-      Component.onCompleted: counted = bsec.landing ? host._browseCardStart(asynchronous) : host._browsePageCardStart(asynchronous)
-      function tick() {
-        if (bsec.landing)
-          host._browseCardTick(asynchronous)
-        else
-          host._browsePageCardTick(counted)
-        counted = false
-      }
-      onLoaded: tick()
-      // A card taken down mid-build (the page re-cut under it) reports in
-      // as it goes, or the veil waits for the guard.
-      Component.onDestruction: tick()
+      Component.onCompleted: bsec._cardCreated(bcLd)
+      onLoaded: bsec._cardLanded(bcLd)
+      Component.onDestruction: bsec._cardLanded(bcLd)
       sourceComponent: BrowseCard {
         host: bsec.host
         card: bcLd.card
@@ -455,16 +470,9 @@ Column {
       height: bsec.hero ? artSize : artSize + 46
       asynchronous: bsec.landing ? (host._browseAsyncBuild || bsec.late || index >= bsec.baseCount) : host.browsePageBuilding
       property bool counted: false
-      Component.onCompleted: counted = bsec.landing ? host._browseCardStart(asynchronous) : host._browsePageCardStart(asynchronous)
-      function tick() {
-        if (bsec.landing)
-          host._browseCardTick(asynchronous)
-        else
-          host._browsePageCardTick(counted)
-        counted = false
-      }
-      onLoaded: tick()
-      Component.onDestruction: tick()
+      Component.onCompleted: bsec._cardCreated(acLd)
+      onLoaded: bsec._cardLanded(acLd)
+      Component.onDestruction: bsec._cardLanded(acLd)
       sourceComponent: ArtCard {
         host: bsec.host
         card: acLd.card
