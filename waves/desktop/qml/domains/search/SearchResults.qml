@@ -464,7 +464,12 @@ Column {
       host.reconcileById(videosModel, host.searchOrdered(resultsView.videosRaw, false), true)
       resultsView.planSync(resultsPane.contentY)
     } else {
+      // A deliberate full rebuild (the sort control): the old rows' load
+      // counts must not carry into the new generation, or the first
+      // completions would declare a frontier complete and release far more
+      // than a batch.
       resultsView.closeWindows()
+      resultsView.resetReach()
       host.fillMedia(albumsModel, host.searchOrdered(resultsView.albumsRaw, true))
       host.fillMedia(tracksModel, host.searchOrdered(resultsView.tracksRaw, true))
       host.fillMedia(videosModel, host.searchOrdered(resultsView.videosRaw, false))

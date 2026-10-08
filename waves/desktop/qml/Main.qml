@@ -1333,11 +1333,15 @@ ApplicationWindow {
     var tracks = p.tracks || []
     var videos = p.videos || []
     if (inPlace) {
-      // Rows kept, so every row the payload carries may exist.
-      _artistReachFrom("tracks", tracks.length, false)
-      _artistReachFrom("albums", albums.length, false)
-      _artistReachFrom("eps", eps.length, false)
-      _artistReachFrom("videos", videos.length, false)
+      // Rows kept, so every row the payload carries may exist — but the
+      // frontier is NOT advanced to the whole payload: a section still
+      // filling keeps its batches (only the rows the current window covers
+      // must exist now), and a section that had fully filled already has
+      // its reach there.
+      _artistReachFrom("tracks", Math.min(tracks.length, _artistSyncTracks), false)
+      _artistReachFrom("albums", Math.min(albums.length, _artistSyncAlbums), false)
+      _artistReachFrom("eps", Math.min(eps.length, _artistSyncEps), false)
+      _artistReachFrom("videos", Math.min(videos.length, _artistSyncVideos), false)
       reconcileById(artistAlbumsModel, albums, true)
       reconcileById(artistEpModel, eps, true)
       reconcileById(artistTracksModel, tracks, true)
@@ -3115,7 +3119,11 @@ ApplicationWindow {
         cat: libraryCategory,
         label: "My Music"
       }
-    if (artistOpen)
+    if (artistOpen) {
+      // The live page is the only place its expanded panels' heights can be
+      // measured; the snapshot below carries them (the cache may predate a
+      // panel the user expanded since the page filled).
+      root._artistCaptureExtras()
       return {
         v: "artist",
         id: artistData ? "" + artistData.id : "",
@@ -3137,6 +3145,7 @@ ApplicationWindow {
         ex: expandedAlbums,
         bio: bioExpanded
       }
+    }
     if (browseOpen)
       return {
         v: "browse",
@@ -3553,6 +3562,9 @@ ApplicationWindow {
   function saveSearchView() {
     if (navOrigin !== "search" || settingsOpen)
       return
+    if (artistOpen && artistData && artistData.id)
+      _artistCaptureExtras()
+    // the live page: panels may have expanded since the fill
     searchSaved = (artistOpen && artistData && artistData.id) ? {
       artistData: artistData,
       expandedAlbums: expandedAlbums,
