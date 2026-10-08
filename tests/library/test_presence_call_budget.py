@@ -232,25 +232,22 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     q("bootContentShown = 1")
     q(PARK_LOGIN_QML)
     q("root.openSearch()")
-    # Chosen BEFORE the rows land, unlike the album and track sections. The
-    # artists section has two forms (a strip when collapsed, a grid when
-    # expanded) and switching between them tears one set of cards down and
-    # builds the other, so flipping it afterwards would count two page builds
-    # and read as a fan-out that is not there. The group's pref is read when
-    # the payload creates it, so it is written before the seed.
-    q("waves.setWavesPref('tidal_search_sec_artists_expanded', true)")
     settle(200)
 
     calls["n"] = 0  # count the page build only, not the boot
     tcalls["n"] = 0
     acalls["n"] = 0
+    # Every capped section is expanded: a row past the cap is not built until
+    # SHOW ALL makes it shown, so an unexpanded section would leave its cards
+    # unbuilt and the consumer precondition below would read a window rather
+    # than a page.
     seed_tidal_search(
         q,
         bridge,
         albums=[json.loads(a) for a in albums],
         tracks=[json.loads(t) for t in tracks],
         artists=[json.loads(ar) for ar in artists],
-        expanded=("albums", "tracks"),
+        expanded=("artists", "albums", "tracks"),
     )
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")

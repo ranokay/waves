@@ -27,8 +27,8 @@ from support.qml import (
 # Apple-owned safe copy for a catalog protocol incompatibility.
 APPLE_WORDS = "Apple's catalog format has changed. Check for a Waves update."
 
-# The Apple rows the stub catalog answers with. Enough for the build veil to
-# have a total to wait on (a total of 0 raises no veil at all).
+# The Apple rows the stub catalog answers with: the unified sections stand on
+# them, and their cards exercise the row windows' inline opening screen.
 _ARTISTS = [{"id": f"apple:artist-{n}", "name": f"Artist {n}", "art": "", "popularity": -1} for n in range(1, 5)]
 
 
@@ -152,25 +152,18 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool, bool]:
     def sources() -> str:
         return q("(root.searchSources || []).map(function (s) { return s.provider }).join(',')")
 
-    # The loading hint follows the providers that can issue a search, and the
-    # veil's build total counts the Apple rows: an Apple-only signed-out
-    # search has to enter the building state (a total of 0 raises no veil at
-    # all, so the hint would never show). The one source is listed, and its
-    # rows stand in the unified sections.
+    # The veil is the LIBRARY's wait now, never the rows': rows build by
+    # window (the opening screen inline, the rest incubating with reserved
+    # heights). This sandbox has no library configured, so
+    # libraryIndexReady() is true and a fresh search has nothing to wait
+    # for: the page is done without any hint standing.
     q("root.submitSearch('hello')")
-    hint_seen = False
 
     def _rows_landed() -> bool:
-        nonlocal hint_seen
-        hint_seen = hint_seen or bool(q("searchBuildHint.active"))
         return q("searchResultsView.countFor('artists')") == len(_ARTISTS)
 
     rows_landed = _settle_until(q, settle, _rows_landed, step_ms=0)
-    # The veil's total is what holds it up until every Apple card has loaded:
-    # the rendered hint proves it rose, this proves it counted the rows.
-    build_total_ok = q("root._searchBuildTotal") == len(_ARTISTS)
-    veil_down = _settle_until(q, settle, lambda: not bool(q("searchBuildHint.active")))
-    loading_ok = rows_landed and build_total_ok and hint_seen and veil_down and sources() == "apple"
+    loading_ok = rows_landed and not bool(q("searchBuildHint.active")) and sources() == "apple"
 
     # The type chips show for an Apple-only signed-out search with results,
     # and clicking one filters the unified sections.

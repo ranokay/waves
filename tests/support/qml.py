@@ -224,6 +224,20 @@ def wait_until(
             time.sleep(interval_ms / 1000)
 
 
+def wait_until_true(q, expression: str, message: str, timeout_ms: int = 15000) -> bool:
+    """``wait_until`` for a scenario's QML expression, as a bool.
+
+    A scenario that collects its failures wants the wait folded into its own
+    list rather than raised; the message becomes the failure line either way.
+    """
+    try:
+        wait_until(lambda: bool(q(expression)), timeout_ms=timeout_ms, message=message)
+    except AssertionError:
+        return False
+    else:
+        return True
+
+
 def checkpoint(name: str, detail: str = "") -> None:
     """Name a multi-checkpoint step so the child's tail attributes the failure."""
     line = f"CHECKPOINT {name}" + (f": {detail}" if detail else "")

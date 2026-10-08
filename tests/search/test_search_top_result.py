@@ -187,12 +187,9 @@ def _run_scenario() -> int:
     # 1. A search whose top hit is the pop-0 album.
     q("_searchSeq = _navSeq")
     payload = _results(top=True)
-    rows = sum(len(rows) for rows in payload["sections"].values())
     bridge.searchResults.emit(payload)
-    # The build veil counts the INCOMING pin, not the previous page's: the
-    # fresh handler arms the total before the payload is applied.
-    if q("root._searchBuildTotal") != rows + 1:
-        failures.append(f"the veil total ignored the incoming pin ({q('root._searchBuildTotal')} != {rows + 1})")
+    # The pin is part of the page the window plan measures: the rows the
+    # handler builds inline account for the pinned row above them.
     if not pump(lambda: not q("searchBuilding")):
         print("search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION
@@ -248,14 +245,10 @@ def _run_scenario() -> int:
     q('filterType = "all"')
     settle(50)
 
-    # 5. A reply without a top hit renders no pin, and the veil total drops
-    # the pin it counted for the previous page.
+    # 5. A reply without a top hit renders no pin.
     q("_searchSeq = _navSeq")
     payload = _results(top=False)
-    rows = sum(len(rows) for rows in payload["sections"].values())
     bridge.searchResults.emit(payload)
-    if q("root._searchBuildTotal") != rows:
-        failures.append(f"the veil total kept the previous pin ({q('root._searchBuildTotal')} != {rows})")
     if not pump(lambda: not q("searchBuilding")):
         print("second search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION
