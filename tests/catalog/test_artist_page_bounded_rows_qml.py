@@ -120,6 +120,22 @@ def _scenario() -> int:
     check(q("artistAlbumsRep.itemAt(6).item === null") is True, "an albums row past the cap was built before SHOW ALL")
     check(q("artistVideosRep.itemAt(29).active") is False, "a videos cell past the preview stayed active while folded")
 
+    # Repeated landings elsewhere must not grow a folded section's reach: a
+    # later SHOW ALL would otherwise activate the whole model at once and
+    # the top-first batches would be gone. Another section's unfold rebuilds
+    # its rows, and each landing re-checks every frontier.
+    for _ in range(12):
+        q("root.toggleArtistSection('eps')")
+        q("root.toggleArtistSection('eps')")
+        settle(60)  # the rebuilt rows' landing pass
+    q("root.toggleArtistExpand('albums')")
+    active = q(
+        "(function () { var n = 0; for (var i = 0; i < 120; ++i) if (artistAlbumsRep.itemAt(i).active) n++; return n; })()"
+    )
+    check(active <= 40, f"a folded section's reach pre-grew ({active} rows active on SHOW ALL)")
+    q("root.toggleArtistExpand('albums')")
+    settle(50)  # one layout pass for the visibility bindings
+
     # SHOW ALL builds the screen under the rows already shown in the click;
     # the rest incubate and arrive in batches from the top down.
     q("root.toggleArtistExpand('albums')")
@@ -192,6 +208,7 @@ def _scenario() -> int:
     bridge.artistLoaded.emit(_payload())
     # The plan's own turn: the window open around the landing spot, its rows
     # built, nothing above or below it yet.
+    from_without_bio = q("root._artistSyncFromAlbums")
     spot = q(_ALBUM_AT_Y % 3000)
     first_built = q(_FIRST_BUILT_ALBUM)
     check(spot >= 0, "the restore spot falls above the albums section")
@@ -206,6 +223,32 @@ def _scenario() -> int:
     )
     q("artistView.contentHeight")
     wait("artistAlbumsRep.itemAt(119).item !== null", "the restored page's rows never filled in")
+
+    # An expanded bio stands above the sections: the same restore spot
+    # lands lower in the albums list (the plan walks the bio's real height,
+    # not the bare header), and the row there is still the built one.
+    with_bio = _payload()
+    with_bio["bio"] = "Long biography line. " * 200
+    bridge.artistLoaded.emit(with_bio)
+    q("root.bioExpanded = true")
+    settle(300)  # the expanded bio's layout pass, so its height is real
+    q("root._artistRestoreState = ({ id: 'artist-1', ex: {}, bio: true })")
+    q("artistView.pendingRestoreKey = 'artist-1'")
+    q("artistView.pendingRestoreY = 3000")
+    bridge.artistLoaded.emit(with_bio)
+    # The bio pushes the sections down, so the same scroll offset lands on
+    # an EARLIER albums row: the window start moves up, not down.
+    check(
+        q("root._artistSyncFromAlbums") < from_without_bio,
+        "the plan ignored the expanded bio above the restore spot",
+    )
+    spot = q(_ALBUM_AT_Y % 3000)
+    check(
+        spot >= 0 and q(f"artistAlbumsRep.itemAt({spot}).item !== null") is True,
+        "an expanded bio left the row at the landing spot unbuilt",
+    )
+    q("artistView.contentHeight")
+    wait("artistAlbumsRep.itemAt(119).item !== null", "the expanded-bio page's rows never filled in")
 
     # A saved spot past the page's own end clamps to the bottom screen
     # instead of planning every window past its section.

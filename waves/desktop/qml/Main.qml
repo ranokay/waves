@@ -1167,7 +1167,14 @@ ApplicationWindow {
     for (var i = 0; i < secs.length; ++i) {
       var k = _artistSecKey(secs[i])
       var reach = root["_artistReach" + k]
-      if (root["_artistLanded" + k] >= Math.min(_artistActiveCount(secs[i]), reach))
+      var active = _artistActiveCount(secs[i]);
+      // Grow only while the reach has rows still to cover. A folded
+      // section's active count stays at its cap while its reach already
+      // sits past it, and the landed check would then stay true forever:
+      // every other section's row would grow this one a batch at a time,
+      // so a later SHOW ALL found its whole model already active and the
+      // top-first batching gone (Qt incubates the newest Loader first).
+      if (reach < active && root["_artistLanded" + k] >= Math.min(active, reach))
         root["_artistReach" + k] = reach + _artistBatch(secs[i])
     }
   }
@@ -1178,34 +1185,86 @@ ApplicationWindow {
   // the WINDOW's height (the page's own is stale or zero while it is
   // hidden, and the layout only sizes it after this), so an error builds a
   // row more inline, never one fewer.
+  // Extra heights the last page's expanded album/EP panels contributed, by
+  // media id. A restore re-applies the same expansion state, and its plan
+  // must walk those rows at their real heights: measured at the collapsed
+  // height, every row below a restored panel drifts up by the panel's
+  // height, and the window ends up above the viewport it restores.
+  property var _artistExtras: ({})
+  function _artistCaptureSection(model, rep, extras, baseH) {
+    for (var i = 0; i < model.count; ++i) {
+      var d = rep.itemAt(i)
+      if (d && d.item && d.height > baseH)
+        extras[model.get(i).id] = d.height - baseH
+    }
+  }
+  function _artistCaptureExtras() {
+    var extras = ({})
+    _artistCaptureSection(artistAlbumsModel, artistAlbumsRep, extras, _artistAlbumH)
+    _artistCaptureSection(artistEpModel, artistEpsRep, extras, _artistAlbumH)
+    _artistExtras = extras
+  }
   function _artistPlanSync(p, atY) {
     var y = 8 + 150 + 12
-    var secs = ({});
-    // name's own shape: its first row's y, the rows it shows and their
-    // pitch (a grid: `per` cells to a line). The walk covers EVERY row, not
-    // only those above the fold, because the clamp below needs the page's
+    // An expanded bio sits below the photo row, above every section.
+    if (bioExpanded && artistFullBio.height > 0)
+      y += artistFullBio.height + 12
+    var secs = ({})
+    function idsOf(rows) {
+      var out = []
+      for (var i = 0; i < (rows || []).length; ++i)
+        out.push(rows[i].id)
+      return out
+    }
+    // Rows of one list section, each at its own height (an expanded panel
+    // is taller than its collapsed row and shifts every row below it); the
+    // window below is read from these positions. The walk covers EVERY row,
+    // not only those above the fold, because the clamp needs the page's
     // full height; a collapsed section contributes its header only.
-    function measure(name, n, pitch, per, collapsed, cap, expanded) {
-      if (n <= 0)
+    function measureRows(name, ids, pitch, collapsed, cap, expanded) {
+      if (ids.length <= 0)
         return
       y += 36 + 12
       if (collapsed)
         return
-      var shown = expanded ? n : Math.min(n, cap)
-      secs[name] = {
-        y: y,
-        shown: shown,
-        pitch: pitch,
-        per: per
+      var shown = expanded ? ids.length : Math.min(ids.length, cap)
+      var ys = []
+      var spans = []
+      for (var i = 0; i < shown; ++i) {
+        var span = pitch + (_artistExtras[ids[i]] || 0)
+        ys.push(y)
+        spans.push(span)
+        y += span
       }
-      y += Math.ceil(shown / per) * pitch
-      if (n > cap)
+      secs[name] = {
+        ys: ys,
+        spans: spans,
+        shown: shown
+      }
+      if (ids.length > cap)
         y += 16 + 12
     }
-    measure("tracks", (p.tracks || []).length, _artistTrackPitch, 1, artistTracksCollapsed, 5, topTracksExpanded)
-    measure("albums", (p.albums || []).length, _artistAlbumPitch, 1, artistAlbumsCollapsed, 5, artistAlbumsExpanded)
-    measure("eps", (p.eps || []).length, _artistAlbumPitch, 1, artistEpsCollapsed, 5, artistEpsExpanded)
-    measure("videos", (p.videos || []).length, _artistVideoPitch(), Math.max(1, artistVideoGrid.cols), artistVideosCollapsed, artistVideoGrid.fillCount, artistVideosExpanded)
+    measureRows("tracks", idsOf(p.tracks), _artistTrackPitch, artistTracksCollapsed, 5, topTracksExpanded)
+    measureRows("albums", idsOf(p.albums), _artistAlbumPitch, artistAlbumsCollapsed, 5, artistAlbumsExpanded)
+    measureRows("eps", idsOf(p.eps), _artistAlbumPitch, artistEpsCollapsed, 5, artistEpsExpanded)
+    // Videos are whole grid lines at one pitch.
+    var vids = idsOf(p.videos)
+    if (vids.length > 0) {
+      y += 36 + 12
+      if (!artistVideosCollapsed) {
+        var cols = Math.max(1, artistVideoGrid.cols)
+        var shownV = artistVideosExpanded ? vids.length : Math.min(vids.length, artistVideoGrid.fillCount)
+        secs.videos = {
+          y0: y,
+          lines: Math.ceil(shownV / cols),
+          cols: cols,
+          pitch: _artistVideoPitch()
+        }
+        y += secs.videos.lines * secs.videos.pitch
+        if (vids.length > artistVideoGrid.fillCount)
+          y += 16 + 12
+      }
+    }
     // The landing screen, clamped to where THIS page can scroll: the walk
     // above is the page's own height, not the one on screen while it lays
     // out (a restore spot comes from the artist being left).
@@ -1215,20 +1274,34 @@ ApplicationWindow {
     var bottom = land + screen + 64
     var from = ({})
     var to = ({})
-    var names = ["tracks", "albums", "eps", "videos"]
-    for (var i = 0; i < names.length; ++i) {
-      var name = names[i]
+    var names = ["tracks", "albums", "eps"]
+    for (var k = 0; k < names.length; ++k) {
+      var name = names[k]
       var s = secs[name]
-      if (!s || s.shown <= 0) {
+      if (!s) {
         from[name] = 0
         to[name] = 0
         continue
       }
-      var lines = Math.ceil(s.shown / s.per)
-      var a = Math.max(0, Math.min(lines, Math.floor((top - s.y) / s.pitch)))
-      var b = Math.max(0, Math.min(lines, Math.ceil((bottom - s.y) / s.pitch)))
-      from[name] = a * s.per
-      to[name] = Math.min(s.shown, b * s.per)
+      var a = -1
+      var b = 0
+      for (var i = 0; i < s.shown; ++i) {
+        if (a < 0 && s.ys[i] + s.spans[i] > top)
+          a = i
+        if (s.ys[i] < bottom)
+          b = i + 1
+      }
+      from[name] = a < 0 ? s.shown : a
+      to[name] = b
+    }
+    var vs = secs.videos
+    from.videos = 0
+    to.videos = 0
+    if (vs) {
+      var va = Math.max(0, Math.min(vs.lines, Math.floor((top - vs.y0) / vs.pitch)))
+      var vb = Math.max(0, Math.min(vs.lines, Math.ceil((bottom - vs.y0) / vs.pitch)))
+      from.videos = va * vs.cols
+      to.videos = Math.min(vids.length, vb * vs.cols)
     }
     _artistSyncFromTracks = from.tracks
     _artistSyncTracks = to.tracks
@@ -1267,7 +1340,9 @@ ApplicationWindow {
       return
     }
     // Close the sync windows over the old rows (a dying delegate reads
-    // index -1 and must incubate, not finish inline), then plan.
+    // index -1 and must incubate, not finish inline), then plan. The
+    // expanded panels' heights are read first: the plan walks the new rows
+    // at their real heights, and a restore re-applies the same panels.
     _artistSyncFromTracks = 0
     _artistSyncTracks = 0
     _artistSyncFromAlbums = 0
@@ -1276,6 +1351,7 @@ ApplicationWindow {
     _artistSyncEps = 0
     _artistSyncFromVideos = 0
     _artistSyncVideos = 0
+    _artistCaptureExtras()
     artistAlbumsModel.clear()
     artistEpModel.clear()
     artistTracksModel.clear()
@@ -9132,8 +9208,11 @@ ApplicationWindow {
               }
             }
           }
-          // Full bio appears below the header only when expanded
+          // Full bio appears below the header only when expanded; the plan
+          // reads its laid-out height so a restored expanded bio shifts the
+          // sections below it (see _artistPlanSync).
           Text {
+            id: artistFullBio
             visible: (root.artistData.bio || "") !== "" && root.bioExpanded
             text: root.artistData.bio || ""
             textFormat: Text.PlainText  // never interpret remote bio as rich text (no auto <img> fetch)
