@@ -1174,7 +1174,13 @@ ApplicationWindow {
   // hidden, and the layout only sizes it after this), so an error builds a
   // row more inline, never one fewer.
   function _artistPlanSync(p, atY) {
-    var top = atY > 0 ? atY : 0
+    var top = atY > 0 ? atY : 0;
+    // A restore spot comes from the page that was left; a shorter page
+    // cannot scroll there, and an unclamped top would put every window past
+    // its section. Clamp against the height on screen at plan time (the
+    // outgoing page is the only scale there is while the new one lays out).
+    if (artistView.contentHeight > 0 && artistView.height > 0)
+      top = Math.min(top, Math.max(0, artistView.contentHeight - artistView.height))
     var bottom = top + root.height + 64
     var y = 8 + 150 + 12
     var tracks = (p.tracks || []).length
@@ -1923,8 +1929,8 @@ ApplicationWindow {
     searchBuildGuard.stop()
   }
   // A library that never answers must not pin the veil. The guard is the
-  // ceiling on the wait, not a budget for the build (no row ticks re-arm
-  // it any more).
+  // ceiling on the wait, not a budget for the build: the wait covers the
+  // library and nothing else, so nothing else re-arms it.
   Timer {
     id: searchBuildGuard
     interval: 800
