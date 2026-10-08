@@ -1218,7 +1218,17 @@ ApplicationWindow {
     _artistCaptureSection(artistEpModel, artistEpsRep, extras, _artistAlbumH)
     _artistExtras = extras
   }
-  function _artistPlanSync(p, atY) {
+  // A resize changes the video grid's columns, its pitch, the screenful the
+  // plan measures and a wrapped biography's height: re-plan around the
+  // current spot without dropping the rows already built (fresh false: the
+  // frontier only grows).
+  function _artistReplanOnResize() {
+    if (!artistOpen || !artistData || !(artistData.id))
+      return
+    _artistPlanSync(artistData, artistView.contentY, false)
+  }
+  function _artistPlanSync(p, atY, fresh) {
+    var isFresh = fresh === undefined || fresh === true
     var y = 8 + 150 + 12
     // An expanded bio sits below the photo row, above every section.
     if (bioExpanded && artistFullBio.height > 0)
@@ -1325,10 +1335,10 @@ ApplicationWindow {
     _artistSyncEps = to.eps
     _artistSyncFromVideos = from.videos
     _artistSyncVideos = to.videos
-    _artistReachFrom("tracks", _artistSyncTracks, true)
-    _artistReachFrom("albums", _artistSyncAlbums, true)
-    _artistReachFrom("eps", _artistSyncEps, true)
-    _artistReachFrom("videos", _artistSyncVideos, true)
+    _artistReachFrom("tracks", _artistSyncTracks, isFresh)
+    _artistReachFrom("albums", _artistSyncAlbums, isFresh)
+    _artistReachFrom("eps", _artistSyncEps, isFresh)
+    _artistReachFrom("videos", _artistSyncVideos, isFresh)
   }
   // The one place that fills the four artist-page models. A fresh page
   // clears the old rows, THEN plans its inline rows and appends: each row's
@@ -9091,6 +9101,8 @@ ApplicationWindow {
           artistRestoreGiveUp.restart()
         // Real height, not the padded contentHeight: see BrowseScroll.
         onRealContentHChanged: applyRestore(true)
+        onWidthChanged: root._artistReplanOnResize()
+        onHeightChanged: root._artistReplanOnResize()
         Timer {
           id: artistRestoreGiveUp
           interval: 800

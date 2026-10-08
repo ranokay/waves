@@ -108,6 +108,7 @@ Column {
   property alias albumRepeater: albumsRep
   property alias tracksRepeater: tracksRep
   property alias playlistRepeater: playlistsRep
+  property alias videosRepeater: videosRep
   property alias videoGridItem: videoGrid
   property alias artistsFlowItem: artistFlow
 
@@ -284,6 +285,32 @@ Column {
       // a live collapsed row clears any stale height
     }
   }
+  // After a reconcile the loaded-delegate count IS the landed count; a
+  // stale total (rows the reconcile removed) would declare a frontier
+  // complete early.
+  function recountLanded(names) {
+    var reps = {
+      albums: resultsView.albumRepeater,
+      tracks: resultsView.tracksRepeater,
+      videos: resultsView.videosRepeater
+    }
+    var next = {}
+    for (var k in resultsView.landed)
+      next[k] = resultsView.landed[k]
+    for (var i = 0; i < names.length; ++i) {
+      var name = names[i]
+      var rep = reps[name]
+      if (!rep)
+        continue
+      var reach = resultsView.reachFor(name)
+      var n = 0
+      for (var j = 0; j < reach && j < resultsView.countFor(name); ++j)
+        if (rep.itemAt(j) && rep.itemAt(j).item !== null)
+          n += 1
+      next[name] = n
+    }
+    resultsView.landed = next
+  }
   function captureExtras() {
     var next = {}
     for (var k in resultsView._extras)
@@ -440,9 +467,10 @@ Column {
         }
         if (a < 0 || b <= a) {
           // The section sits entirely above or below the window: no inline
-          // rows here (its reach still covers the first batch).
-          from[name] = resultsView.countFor(name)
-          to[name] = resultsView.countFor(name)
+          // rows, and the reach keeps only its first batch (0 + batch), so
+          // a pref-expanded section below the fold still fills top-first.
+          from[name] = 0
+          to[name] = 0
         } else {
           from[name] = rows[a].i
           to[name] = rows[b - 1].i + 1
@@ -498,6 +526,10 @@ Column {
       host.reconcileById(videosModel, host.searchOrdered(resultsView.videosRaw, false), true)
       host.reconcileById(playlistsModel, resultsView.sections.playlists || [], false)
       host.reconcileById(mixesModel, resultsView.sections.mixes || [], false)
+      // The reconcile destroyed some loaded delegates: recount the landed
+      // rows over what stands, or their stale completions would release the
+      // frontiers early.
+      resultsView.recountLanded(["albums", "tracks", "videos"])
       // Rows the refresh added inside the kept windows build inline; the
       // re-plan keeps the windows true to the new counts.
       resultsView.planSync(resultsPane.contentY)
@@ -852,6 +884,7 @@ Column {
     // ALL then filled. Six at three columns, six at two, eight at four.
     readonly property int cap: cols * Math.ceil(5 / cols)
     Repeater {
+      id: videosRep
       model: videosModel
       delegate: Loader {
         readonly property bool shown: index >= 0 && resultsView.rowVisibleCapped("videos", index, videoGrid.cap)
