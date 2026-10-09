@@ -4429,11 +4429,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # _save_settings restores the transient ffmpeg values in place for the
         # length of one write and puts the live ones back after. Saves come
         # from the GUI thread, from download workers and from the keep-warm
-        # daemon, so the borrow is serialised, and so is every other writer of
-        # those values: the explicit restores (applySettings,
-        # _adopt_managed_ffmpeg, removeFfmpeg), the resolve, and the Download
-        # construction that injects the PATH ffmpeg. Created before the Apple
-        # provider below is configured, since that resolves under it.
+        # daemon, so the borrow is serialised, and so is every write a borrow
+        # could serialise or undo: the explicit restores (applySettings,
+        # _adopt_managed_ffmpeg, removeFfmpeg), applySettings's write of a new
+        # path, the resolve, and the Download construction that injects the
+        # PATH ffmpeg. (applySettings's flag writes need no hold: its locked
+        # restore re-applies them.) Created before the Apple provider below is
+        # configured, since that resolves under it.
         self._settings_save_lock = Lock()
         # Managed Apple runtime (spec §2/§10): the N_m3u8DL-RE binary and
         # wrapper port state live under the same app data dir as FFmpeg,
@@ -20180,12 +20182,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         so a save from here landing between them would be serialised by that
         write.
 
-        The writers of the borrowed values take the lock too. ``_resolve_ffmpeg``
-        resolves under it and returns the path, so a caller never re-reads the
-        field this window empties, and ``_init_download`` / ``_build_download``
+        The writers and readers of the borrowed values take the lock too.
+        ``_resolve_ffmpeg`` resolves under it and returns the path for its
+        caller to use; ``_configure_apple_provider`` resolves and hands the
+        provider its path in one hold; ``_init_download`` / ``_build_download``
         build their ``Download`` in the same hold as their resolve, because its
         constructor writes the PATH ffmpeg and the forced-off flags into the
-        live values when it reads an empty path."""
+        live values when it reads an empty path; and ``applySettings`` writes a
+        newly entered path under it."""
         with self._settings_save_lock:
             data = self.settings.data
             # Exactly the fields the two restores below overwrite, so putting
@@ -21867,27 +21871,25 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         provider = self.providers.get(CTX_APPLE)
         if provider is None:
             return
-        # The path the resolve returns, taken under the save lock: a re-read of
-        # the live field can land inside a save's write and get "", sending
-        # Apple to the PATH ffmpeg and ffprobe until the next configure.
-        ffmpeg_path = None
-        resolve = getattr(self, "_resolve_ffmpeg", None)
-        if resolve is not None:
-            try:
-                ffmpeg_path = resolve()
-            except Exception:
-                logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
         data = getattr(self.settings, "data", None)
+        # Resolved and handed over in one hold of the save lock. A save's write
+        # empties the live field in place, so a later re-read could hand Apple
+        # "" and send it to the PATH ffmpeg and ffprobe; and a removeFfmpeg
+        # landing between a resolve and a later assignment would be overwritten
+        # with the path it just deleted.
+        try:
+            with self._settings_save_lock:
+                provider.ffmpeg_path = self._resolve_ffmpeg_locked()
+        except Exception:
+            # Plain unit-test stubs bind this without the lock or the resolve.
+            logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
+            provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         WavesBridge._invalidate_apple_engine_facts(self)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
             provider.offer_context_probe = lambda: WavesBridge._apple_offer_context(self)
-        if ffmpeg_path is None:
-            # No resolve (plain unit-test stubs) or a failed one: the live field.
-            ffmpeg_path = getattr(data, "path_binary_ffmpeg", "")
-        provider.ffmpeg_path = str(ffmpeg_path or "")
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
             provider.nm3u8dlre_path = str(resolver() or "")
@@ -22775,15 +22777,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 elif key == "cover_file_format":
                     fmt = str(value or "jpg").strip().lower()
                     setattr(data, key, fmt if fmt in ("jpg", "png", "raw") else "jpg")
+                elif key == "path_binary_ffmpeg":
+                    # Under the save lock: a save mid-write puts the path it
+                    # borrowed back in its finally, over the user's new one,
+                    # and the Apple provider configured below would resolve
+                    # that. The explicit-override snapshot moves with it, so
+                    # status and the path box reflect the new choice (never a
+                    # transient in-memory injection), and so the restore below
+                    # sees current ffmpeg.
+                    with self._settings_save_lock:
+                        data.path_binary_ffmpeg = str(value)
+                        self._ffmpeg_user_path = str(value or "").strip()
                 else:
                     setattr(data, key, str(value))
             except Exception:
                 logger.exception("Could not set setting %s", key)
-        # Refresh the explicit-override snapshot if the user edited their path, so
-        # status + the path box reflect the new choice (never a transient
-        # in-memory injection), and so the restore below sees current ffmpeg.
-        if "path_binary_ffmpeg" in values:
-            self._ffmpeg_user_path = str(values.get("path_binary_ffmpeg") or "").strip()
         # An explicit Video-quality choice overrides the bandwidth auto-cap for
         # the rest of the run (and persists like any other setting).
         if "quality_video" in values:
