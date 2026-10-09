@@ -286,36 +286,100 @@ def test_killing_waves_kills_its_guarded_download_tool(tmp_path):
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(os.name == "nt", reason="Windows kills a guard that misses its window without its tool")
-def test_a_guard_that_misses_its_stop_window_is_killed_with_its_tool(tmp_path, monkeypatch):
-    """A guard that cannot act on the stop is killed, and its tool with it."""
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot reach a tool whose guard has died")
+@pytest.mark.parametrize("guard_state", ["frozen", "dead"])
+def test_a_stop_kills_the_tool_whatever_became_of_its_guard(tmp_path, monkeypatch, guard_state):
+    """A guard that cannot act on the stop, or has died, still leaves no tool."""
     import signal
 
     monkeypatch.setattr(child_guard, "GUARD_STOP_SEC", 0.5)
     standin = _standin(tmp_path)
-    abort = Event()
-
-    async def freeze_the_guard_then_stop() -> None:
-        while not standin.ready.exists() or not standin.ready.read_text():
-            await asyncio.sleep(0.02)
-        os.kill(int(standin.ready.read_text()), signal.SIGSTOP)  # the tool's parent: its guard
-        abort.set()
 
     async def fetch() -> None:
-        stopper = asyncio.ensure_future(freeze_the_guard_then_stop())
-        try:
-            await child_guard.run_guarded(
-                [sys.executable, str(standin.script)],
-                guard_launcher=child_guard.launcher(None),
-                abort=abort,
-                silent=True,
+        task = asyncio.ensure_future(
+            child_guard.run_guarded(
+                [sys.executable, str(standin.script)], guard_launcher=child_guard.launcher(None), silent=True
             )
-        finally:
-            stopper.cancel()
+        )
+        while not standin.ready.exists() or not standin.ready.read_text():
+            await asyncio.sleep(0.02)
+        guard = int(standin.ready.read_text())  # the tool's parent
+        os.kill(guard, signal.SIGSTOP if guard_state == "frozen" else signal.SIGKILL)
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
-    with pytest.raises(child_guard.ToolStopped):
-        asyncio.run(asyncio.wait_for(fetch(), 20))
-    assert _wait(lambda: not standin.alive()), "the tool outlived its guard"
+    asyncio.run(asyncio.wait_for(fetch(), 20))
+    assert _wait(lambda: not standin.alive()), "the tool outlived the stop"
+
+
+def _stalled_session(tmp_path, monkeypatch, fetch) -> engine.AppleFetchSession:
+    """A cookies-tier session whose song fetch is ``fetch``; no process runs."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    monkeypatch.setattr(engine, "_require_binary", lambda name, override="": sys.executable)
+    monkeypatch.setattr(engine, "_require_yt_dlp", lambda: None)
+
+    async def cookies_stack(cookies_path):
+        return SimpleNamespace(client=None), SimpleNamespace()
+
+    monkeypatch.setattr(engine, "_create_cookies_stack", cookies_stack)
+    monkeypatch.setattr(engine, "_fetch_song_staged", fetch)
+    return engine.AppleFetchSession(cookies_path=str(cookies))
+
+
+def test_stop_lands_while_a_fetch_waits_on_the_network(tmp_path, monkeypatch):
+    """A request that would run for minutes does not hold the stop."""
+    reached = Event()
+
+    async def stalled(*, interface, song_downloader, song_id):
+        reached.set()
+        await asyncio.sleep(600)
+
+    session = _stalled_session(tmp_path, monkeypatch, stalled)
+    abort = Event()
+    threading.Thread(target=lambda: reached.wait(10) and abort.set()).start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(engine._AppleAborted):
+            session.download_song(song_id="song-1", atmos=False, abort=abort)
+    finally:
+        session.close()
+    assert time.monotonic() - started < 5
+    assert _no_workdir_left()
+
+
+def test_a_stopped_fetch_lets_its_thread_step_finish_before_its_workdir_goes(tmp_path, monkeypatch):
+    """Decrypt and tagging run on a thread a cancellation does not stop."""
+    decrypting, decrypted = Event(), Event()
+
+    def decrypt(workdir: Path) -> None:
+        decrypting.set()
+        time.sleep(0.5)
+        (workdir / "song-1_decrypted.m4a").write_bytes(b"\0")
+        decrypted.set()
+
+    async def fetch(*, interface, song_downloader, song_id):
+        await asyncio.to_thread(decrypt, Path(song_downloader.base.temp_path))
+        raise AssertionError("the stop never landed")
+
+    session = _stalled_session(tmp_path, monkeypatch, fetch)
+    abort = Event()
+    threading.Thread(target=lambda: decrypting.wait(10) and abort.set()).start()
+    try:
+        with pytest.raises(engine._AppleAborted):
+            session.download_song(song_id="song-1", atmos=False, abort=abort)
+        assert decrypted.is_set(), "the workdir went while the decrypt was still writing"
+        assert _no_workdir_left()
+        # The session still serves thread steps after a drain.
+        abort.clear()
+        decrypting.clear()
+        with pytest.raises(engine.AppleDownloadError):
+            session.download_song(song_id="song-2", atmos=False, abort=abort)
+    finally:
+        session.close()
 
 
 def _run_guard(*command: str) -> subprocess.CompletedProcess:

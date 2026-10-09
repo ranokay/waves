@@ -16,6 +16,7 @@ placement, ownership and the queue stay Waves' own work above this module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -411,23 +413,42 @@ def _verify_fetched(
     return probe, str(probe.get("codec") or picked or ""), True
 
 
+# How often a running fetch reads its job's abort.
+ABORT_POLL_SEC = 0.2
+
+
+async def _until_aborted(awaitable, abort: Event | None):
+    """Await one fetch, cancelling it once the job's abort is set.
+
+    The cancellation reaches whatever the fetch awaits: a request, or the
+    download tool, which ``run_guarded`` kills before the cancellation
+    leaves. A cancelled fetch raises _AppleAborted.
+    """
+    task = asyncio.ensure_future(awaitable)
+    while abort is not None and not task.done():
+        if abort.is_set():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise _AppleAborted()
+        await asyncio.wait({task}, timeout=ABORT_POLL_SEC)
+    return await task
+
+
 @cache
 def _guarded_base_downloader() -> Callable[..., AppleMusicBaseDownloader]:
     """gamdl's base downloader, with N_m3u8DL-RE started by ``run_guarded``.
 
-    gamdl's own launch leaves the tool running when its job stops or Waves
-    dies. The argv is gamdl 3.8's ``_download_nm3u8dlre``; the tool runs
-    under ``guard_launcher`` and stops when ``job_abort`` is set. Stopping
-    the tool, not the fetch, lets a step gamdl runs on a worker thread
-    (decrypt, tagging) finish before the fetch unwinds and its workdir goes.
+    gamdl's own launch leaves the tool running when its fetch is cancelled or
+    Waves dies. The argv is gamdl 3.8's ``_download_nm3u8dlre``; the tool runs
+    under ``guard_launcher``.
     """
     from gamdl.downloader.base import AppleMusicBaseDownloader
 
     class GuardedBaseDownloader(AppleMusicBaseDownloader):
-        def __init__(self, *args, guard_launcher: Sequence[str] = (), job_abort: Event | None = None, **kwargs) -> None:
+        def __init__(self, *args, guard_launcher: Sequence[str] = (), **kwargs) -> None:
             super().__init__(*args, **kwargs)
             self.guard_launcher = tuple(guard_launcher)
-            self.job_abort = job_abort
 
         async def _download_nm3u8dlre(self, stream_url: str, download_path: str) -> None:
             target = Path(download_path)
@@ -450,7 +471,6 @@ def _guarded_base_downloader() -> Callable[..., AppleMusicBaseDownloader]:
                     target.parent,
                 ),
                 guard_launcher=self.guard_launcher,
-                abort=self.job_abort,
                 silent=self.silent,
             )
 
@@ -469,8 +489,9 @@ class AppleFetchSession:
     releases every client and the loop; a credential failure should close
     the session so the retry rebuilds it from the fresh export or guest.
     ``guard_launcher`` (``child_guard.launcher``) starts the download tool
-    under its guard; without one the tool still stops with its job, but not
-    with Waves.
+    under its guard; without one the tool still dies with its job, but not
+    with Waves. The loop runs gamdl's thread steps (decrypt, tagging) on the
+    session's own pool, which a stopped fetch drains before its workdir goes.
     """
 
     def __init__(
@@ -492,6 +513,7 @@ class AppleFetchSession:
         self.decrypt_port = int(decrypt_port or 10020)
         self.guard_launcher = tuple(guard_launcher)
         self._loop = asyncio.new_event_loop()
+        self._threads = self._new_thread_pool()
         self._cookies: tuple | None = None
         self._wrapper: tuple | None = None
         self._closed = False
@@ -536,6 +558,20 @@ class AppleFetchSession:
             )
         return self._wrapper
 
+    def _new_thread_pool(self) -> ThreadPoolExecutor:
+        threads = ThreadPoolExecutor(thread_name_prefix="waves-apple-fetch")
+        self._loop.set_default_executor(threads)
+        return threads
+
+    def _drain_threads(self) -> None:
+        """Wait out the thread steps a cancelled fetch left running.
+
+        Cancelling a fetch does not stop a gamdl step running on a thread
+        (decrypt, tagging), which goes on writing into the workdir.
+        """
+        self._threads.shutdown(wait=True)
+        self._threads = self._new_thread_pool()
+
     def _require_tools(self) -> tuple[str, str]:
         """The resolved N_m3u8DL-RE and ffmpeg paths, or AppleDownloadError."""
         nm3u8dlre = _require_binary("N_m3u8DL-RE", self.nm3u8dlre_path)
@@ -550,15 +586,16 @@ class AppleFetchSession:
 
         An integrity failure keeps the workdir for the caller (retry, date
         read, quarantine); every other failure removes it before re-raising,
-        with ``failure`` naming the fetch in the generic message. A fetch
-        that fails once ``abort`` is set (the download tool stopped with the
-        job, under whatever words gamdl wrapped it in) removes its workdir
-        and raises _AppleAborted.
+        with ``failure`` naming the fetch in the generic message. ``abort``
+        set mid-fetch cancels it; a fetch that ends in any failure once
+        ``abort`` is set removes its workdir, after its thread steps, and
+        raises _AppleAborted.
         """
         try:
-            return self._loop.run_until_complete(make_awaitable())
+            return self._loop.run_until_complete(_until_aborted(make_awaitable(), abort))
         except Exception as exc:
             if abort is not None and abort.is_set():
+                self._drain_threads()
                 shutil.rmtree(workdir, ignore_errors=True)
                 raise _AppleAborted() from exc
             if isinstance(exc, AppleIntegrityError):
@@ -574,7 +611,7 @@ class AppleFetchSession:
         Validation and the workdir are per fetch; the gamdl stack and the
         event loop persist for the session. An integrity failure keeps the
         workdir for the caller (retry, date read, quarantine). The job's
-        ``abort`` stops the fetch's download tool and the fetch with it.
+        ``abort`` cancels the fetch and kills its download tool.
         """
         _require_cookies(self.cookies_path)
         nm3u8dlre, ffmpeg = self._require_tools()
@@ -588,14 +625,13 @@ class AppleFetchSession:
                 workdir=str(workdir),
                 nm3u8dlre_path=nm3u8dlre,
                 ffmpeg_path=ffmpeg,
-                abort=abort,
             ),
             "Apple download failed",
             abort,
         )
 
     async def _download_song_async(
-        self, *, song_id: str, atmos: bool, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str, abort: Event | None
+        self, *, song_id: str, atmos: bool, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str
     ) -> AppleDelivery:
         from gamdl.downloader.downloader import DownloadMode
         from gamdl.downloader.song import AppleMusicSongDownloader
@@ -624,7 +660,6 @@ class AppleFetchSession:
             download_mode=DownloadMode.NM3U8DLRE,
             silent=True,
             guard_launcher=self.guard_launcher,
-            job_abort=abort,
         )
         song_downloader = AppleMusicSongDownloader(base=base_downloader)
         staged, picked = await _fetch_song_staged(interface=interface, song_downloader=song_downloader, song_id=song_id)
@@ -648,8 +683,8 @@ class AppleFetchSession:
         credentials and succeeds while the guest is still signed in. A
         logged-out guest raises AppleCredentialsError with the wizard's
         login step as the fix; every other fetch problem raises
-        AppleDownloadError. The job's ``abort`` stops the fetch's download
-        tool and the fetch with it.
+        AppleDownloadError. The job's ``abort`` cancels the fetch and kills
+        its download tool.
         """
         if not self.wrapper_url:
             raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
@@ -667,21 +702,13 @@ class AppleFetchSession:
                 max_tier=str(max_tier or ""),
                 nm3u8dlre_path=nm3u8dlre,
                 ffmpeg_path=ffmpeg,
-                abort=abort,
             ),
             "Apple ALAC download failed",
             abort,
         )
 
     async def _fetch_alac_async(
-        self,
-        *,
-        song_id: str,
-        workdir: str,
-        max_tier: str,
-        nm3u8dlre_path: str,
-        ffmpeg_path: str,
-        abort: Event | None,
+        self, *, song_id: str, workdir: str, max_tier: str, nm3u8dlre_path: str, ffmpeg_path: str
     ) -> AppleDelivery:
         from gamdl.downloader.downloader import DownloadMode
         from gamdl.downloader.song import AppleMusicSongDownloader
@@ -724,7 +751,6 @@ class AppleFetchSession:
             download_mode=DownloadMode.NM3U8DLRE,
             silent=True,
             guard_launcher=self.guard_launcher,
-            job_abort=abort,
         )
         song_downloader = AppleMusicSongDownloader(base=base_downloader)
         try:

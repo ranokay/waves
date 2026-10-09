@@ -3,10 +3,9 @@
 gamdl starts N_m3u8DL-RE with ``asyncio.create_subprocess_exec`` and nothing
 else: cancelling the awaiting task leaves the tool running, and so does Waves
 dying, since nothing ties the tool to the app. ``run_guarded`` starts the tool
-instead and stops it when its job's abort is set or the awaiting task is
-cancelled.
+instead and kills it when the awaiting task is cancelled.
 
-Stopping the tool when Waves dies needs a process that outlives Waves, so the
+Killing the tool when Waves dies needs a process that outlives Waves, so the
 tool runs under a guard: this module in its guard role (``main``), started
 with its stdin on a pipe Waves holds and never writes. The pipe closes when
 Waves closes it or exits, however it exits (a crash and SIGKILL included), and
@@ -19,10 +18,10 @@ its own binary with ``GUARD_FLAG`` (``waves.py`` dispatches it before any Qt
 import). A guard whose stdin is not that pipe kills its tool at once.
 
 Platforms: on macOS and Linux the guard leads a process group that the tool
-and anything the tool starts join, and every kill reaches the whole group. On
-Windows the guard kills the tool process alone, so a process the tool started
-itself survives it, and a guard that does not leave within ``GUARD_STOP_SEC``
-of a stop is killed without its tool.
+and anything the tool starts join, and a stop kills whatever of that group is
+left, even after the guard itself has died. On Windows the guard kills only
+the tool process, and when a stop has to kill the guard, Waves kills the
+guard's process tree; a tool whose guard died before the stop keeps running.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Sequence
-from threading import Event
+from typing import TypedDict
 
 GUARD_FLAG = "--apple-child-guard"
 
@@ -43,25 +42,25 @@ GUARD_FLAG = "--apple-child-guard"
 # the guard's process group itself.
 GUARD_STOP_SEC = 5.0
 
-# How often a running tool reads its job's abort.
-ABORT_POLL_SEC = 0.2
+
+class _SpawnOptions(TypedDict, total=False):
+    creationflags: int
+    start_new_session: bool
+
 
 # How Waves starts the guard, or the tool when it has no guard. POSIX: a
 # session of its own keeps terminal signals off it and makes it the leader of
-# the group every kill reaches. Windows: no console window flashes up for a
-# console process started from the windowless app.
-_SPAWN: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+# the group a stop kills. Windows: no console window flashes up for a console
+# process started from the windowless app.
+_SPAWN: _SpawnOptions = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+)
+# How the guard starts its tool: in the guard's own group off Windows.
+_TOOL_SPAWN: _SpawnOptions = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
 class ToolFailed(RuntimeError):
     """The tool exited nonzero; the words match gamdl's own failure message."""
-
-
-class ToolStopped(RuntimeError):
-    """The job's abort stopped the tool before it finished."""
-
-    def __init__(self) -> None:
-        super().__init__("The download tool stopped with its job")
 
 
 def launcher(app_binary: str | None) -> tuple[str, ...]:
@@ -76,22 +75,15 @@ def launcher(app_binary: str | None) -> tuple[str, ...]:
 
 
 async def run_guarded(
-    args: Sequence[str | os.PathLike],
-    *,
-    guard_launcher: Sequence[str] = (),
-    abort: Event | None = None,
-    silent: bool = False,
+    args: Sequence[str | os.PathLike], *, guard_launcher: Sequence[str] = (), silent: bool = False
 ) -> None:
-    """Run one tool to completion unless its job stops first.
+    """Run one tool to completion, killing it if the awaiting task is cancelled.
 
     ``guard_launcher`` is the ``launcher`` prefix; without one the tool still
-    stops with its job, but not with Waves. ``abort`` set, read every
-    ABORT_POLL_SEC, stops the tool and raises ToolStopped; a cancelled
-    awaiting task stops it too. ``silent`` captures the tool's output for the
-    failure message, as gamdl's runner does. A nonzero exit raises ToolFailed.
+    dies with a cancelled fetch, but not with Waves. ``silent`` captures the
+    tool's output for the failure message, as gamdl's runner does. A nonzero
+    exit raises ToolFailed.
     """
-    if abort is not None and abort.is_set():
-        raise ToolStopped()
     guarded = bool(guard_launcher)
     command = [*guard_launcher, "--", *args] if guarded else list(args)
     pipe = asyncio.subprocess.PIPE if silent else None
@@ -102,34 +94,24 @@ async def run_guarded(
         stderr=pipe,
         **_SPAWN,
     )
-    finished = asyncio.ensure_future(_finish(process, silent=silent))
     try:
-        stdout, stderr = await _unless_stopped(finished, abort)
+        stdout, stderr = await _finish(process, silent=silent)
     except BaseException:
-        finished.cancel()
         await _stop(process, guarded=guarded)
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await finished
         raise
     finally:
         if process.stdin is not None:
             process.stdin.close()
     if process.returncode != 0:
+        # A guard that died leaves its tool behind; a failed tool may leave
+        # what it started.
+        await _kill_group(process)
         message = f"Exited with code {process.returncode}: {' '.join(str(arg) for arg in args)}"
         if stdout:
             message += f"\nstdout:\n{stdout.decode(errors='replace')}"
         if stderr:
             message += f"\nstderr:\n{stderr.decode(errors='replace')}"
         raise ToolFailed(message)
-
-
-async def _unless_stopped(finished: asyncio.Future, abort: Event | None) -> tuple[bytes, bytes]:
-    """``finished``'s output, or ToolStopped once ``abort`` is set first."""
-    while not finished.done():
-        if abort is not None and abort.is_set():
-            raise ToolStopped()
-        await asyncio.wait({finished}, timeout=ABORT_POLL_SEC)
-    return finished.result()
 
 
 async def _finish(process: asyncio.subprocess.Process, *, silent: bool) -> tuple[bytes, bytes]:
@@ -146,24 +128,48 @@ async def _read(stream: asyncio.StreamReader | None) -> bytes:
 
 
 async def _stop(process: asyncio.subprocess.Process, *, guarded: bool) -> None:
-    """End a tool whose job stopped, and wait for it.
+    """End a tool whose fetch was cancelled, and wait for it.
 
-    A guard is asked through its pipe; only one that does not leave in time
-    is killed, together with its process group off Windows.
+    A live guard is asked through its pipe first. Then whatever is left of
+    the group dies: a guard that missed GUARD_STOP_SEC, or a tool whose guard
+    had already died.
     """
-    if process.returncode is not None:
-        return
-    if guarded and process.stdin is not None:
+    if guarded and process.returncode is None and process.stdin is not None:
         process.stdin.close()
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(process.wait(), GUARD_STOP_SEC)
-            return
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        if os.name == "nt":
-            process.kill()
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
+    await _kill_group(process)
     await process.wait()
+
+
+async def _kill_group(process: asyncio.subprocess.Process) -> None:
+    """Kill what is left of the process group Waves started with ``_SPAWN``.
+
+    Off Windows the group's id stays reserved while any member lives, and an
+    empty group answers ESRCH. On Windows only a live guard's tree is
+    reachable.
+    """
+    if os.name != "nt":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+        return
+    if process.returncode is not None:
+        return
+    taskkill = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe")
+    with contextlib.suppress(OSError):
+        killer = await asyncio.create_subprocess_exec(
+            taskkill,
+            "/F",
+            "/T",
+            "/PID",
+            str(process.pid),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            **_SPAWN,
+        )
+        await killer.wait()
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        process.kill()
 
 
 def main(argv: Sequence[str]) -> int:
@@ -183,11 +189,7 @@ def main(argv: Sequence[str]) -> int:
         with contextlib.suppress(OSError):
             os.setpgid(0, 0)
     try:
-        tool = subprocess.Popen(  # noqa: S603 (Waves' own tool argv)
-            command,
-            stdin=subprocess.DEVNULL,
-            **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}),
-        )
+        tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **_TOOL_SPAWN)  # noqa: S603 (Waves' own tool argv)
     except OSError as exc:
         print(f"Apple child guard could not start {command[0]}: {exc}", file=sys.stderr)
         return 127
