@@ -6,7 +6,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-import yaml
+from ruamel.yaml import YAML, YAMLError
 
 
 def main() -> int:
@@ -17,8 +17,8 @@ def main() -> int:
             if path.suffix == ".toml":
                 tomllib.loads(path.read_text(encoding="utf-8"))
             else:
-                yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (ValueError, yaml.YAMLError) as exc:
+                YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+        except (ValueError, YAMLError) as exc:
             print(f"{name}: {exc}", file=sys.stderr)
             failed = True
     return int(failed)

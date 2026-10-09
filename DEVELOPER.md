@@ -166,9 +166,9 @@ GUI surface without them. `integration` tests (nested runners, process
 boundaries) have no quick group of their own; run them through strict.
 `mise run test-fast`, `mise run test-qml`, `mise run test-default`,
 `mise run test-strict` and `mise run test-ffmpeg` wrap the first five groups;
-the live account group has its own wrapper (`mise run test-account`) and never runs in CI. Every test and
-check task runs the command through `uv run --locked --all-extras`, so the
-lockfile is the environment and drift fails the run.
+the live account group has its own wrapper (`mise run test-account`) and never runs in CI. Test tasks and Python checks run through `uv run --locked --all-extras`.
+The lockfile defines their environment, and lock drift fails the comprehensive
+gate. Mise supplies the pinned hk, Node and Prettier executables.
 
 `mise run check` (also `mise run lint`) runs the comprehensive read-only hk
 gate, including lock validation, Ruff lint/format, Prettier, QML lint/format,
@@ -192,7 +192,7 @@ files. Python tools come from `uv.lock`; hk and Prettier are pinned in
   formatter's stdout with source under the same settings.
 - `mise run install` syncs the locked environment and installs local hooks
   through mise. Recognised generated hooks are saved as `*.before-hk`.
-  Foreign/symlinked hooks and configured `core.hooksPath` require coordination;
+  Foreign hooks, symlinked hooks or hook directories, and configured `core.hooksPath` require coordination;
   installation does not alter them or global settings. `mise run doctor`
   verifies both commit and push hooks, including linked worktrees.
 

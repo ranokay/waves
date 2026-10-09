@@ -16,7 +16,9 @@ def git(*args: str) -> str:
 
 
 def hooks_dir() -> Path:
-    return Path(git("rev-parse", "--path-format=absolute", "--git-path", "hooks"))
+    # --git-path hooks resolves symlinks and hides whether this directory is
+    # shared. Inspect the lexical hooks path within the common Git directory.
+    return Path(git("rev-parse", "--path-format=absolute", "--git-common-dir")) / "hooks"
 
 
 def is_hk_hook(path: Path) -> bool:
@@ -26,17 +28,29 @@ def is_hk_hook(path: Path) -> bool:
     return 'test "${HK:-1}" = "0"' in content and "hk run" in content
 
 
+def enabled(key: str) -> bool:
+    result = subprocess.run(["git", "config", "--type=bool", "--get", key], capture_output=True, text=True, check=False)
+    # Git's default is enabled when unset; malformed values must fail verification.
+    return result.returncode == 1 or (result.returncode == 0 and result.stdout.strip() == "true")
+
+
+def shared_hooks_directory() -> bool:
+    return hooks_dir().is_symlink()
+
+
 def verify() -> int:
     if git("config", "--get", "core.hooksPath"):
         print("FAIL: core.hooksPath is configured; repository hooks require coordination", file=sys.stderr)
         return 1
+    if shared_hooks_directory():
+        print("FAIL: hooks directory is symlinked; coordinate its owner first", file=sys.stderr)
+        return 1
     for event in EVENTS:
         command = git("config", "--local", "--get", f"hook.hk-{event}.command")
-        enabled = git("config", "--get", f"hook.hk-{event}.enabled")
         events = git("config", "--get-all", f"hook.hk-{event}.event").splitlines()
         hook = hooks_dir() / event
         expected = f'test "${{HK:-1}}" = "0" || mise x -- hk run {event} --from-hook'
-        configured = command == expected and event in events and enabled != "false"
+        configured = command == expected and event in events and enabled(f"hook.hk-{event}.enabled")
         shim = is_hk_hook(hook) and os.access(hook, os.X_OK) and "mise x -- hk" in hook.read_text()
         if not (configured or shim):
             print(f"FAIL: hk {event} hook missing or stale; run mise run install", file=sys.stderr)
@@ -51,6 +65,9 @@ def install() -> int:
         return 1
     if not git("rev-parse", "--git-dir"):
         print("Not a Git checkout", file=sys.stderr)
+        return 1
+    if shared_hooks_directory():
+        print("Refusing to change a symlinked hooks directory; coordinate its owner first", file=sys.stderr)
         return 1
     validated = subprocess.run(["hk", "validate"], check=False)
     if validated.returncode:

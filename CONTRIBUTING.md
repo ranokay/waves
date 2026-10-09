@@ -74,7 +74,7 @@ through mise. Install mise from <https://mise.jdx.dev>, then run `mise install`
 and `mise run install`.
 
 Installation saves recognised generated hooks as `*.before-hk`. It refuses
-foreign hooks, symlinked hooks and a configured `core.hooksPath`; coordinate
+foreign hooks, symlinked hooks or hook directories, and a configured `core.hooksPath`; coordinate
 with their owner before changing them. It never changes global hook settings.
 
 4. Create a branch for local development:

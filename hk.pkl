@@ -24,14 +24,14 @@ local linters = new Mapping<String, Step> {
     types = List("text")
     // Generated charts are copied byte for byte from upstream.
     exclude = List("LICENSE", "assets/star-history/**")
-    check = "hk util end-of-file-fixer -- {{files}}"
-    fix = "hk util end-of-file-fixer --fix -- {{files}}"
+    check = python + "python tools/check_whitespace.py eof -- {{files}}"
+    fix = python + "python tools/check_whitespace.py eof --fix -- {{files}}"
   }
   ["trailing-whitespace"] {
     types = List("text")
     exclude = "assets/star-history/**"
-    check = "hk util trailing-whitespace -- {{files}}"
-    fix = "hk util trailing-whitespace --fix -- {{files}}"
+    check = python + "python tools/check_whitespace.py trailing -- {{files}}"
+    fix = python + "python tools/check_whitespace.py trailing --fix -- {{files}}"
   }
   ["ruff"] {
     types = List("python", "pyi")
