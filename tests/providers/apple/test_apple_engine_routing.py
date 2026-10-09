@@ -1,7 +1,7 @@
 """Apple engines preserve operation constraints, pins, cancellation and failure scope."""
 
 from dataclasses import replace
-from threading import Event
+from threading import Event, Lock
 
 import pytest
 from support.bridge_stub import BridgeStub
@@ -418,6 +418,7 @@ def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_c
     bridge = BridgeStub(
         providers={"apple": AppleProvider()},
         settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="new-export")),
+        _settings_save_lock=Lock(),
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": False},
         _apple_wrapper_auth_cache={"result": {"reachable": False}},
         _apple_fetch_binary_ready=lambda: True,

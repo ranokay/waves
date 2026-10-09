@@ -15055,14 +15055,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         token = provider_contexts(self).capture(CTX_APPLE)
         data = intent.settings_data() if intent else None
         if data is not None:
-            for key in (
-                "path_binary_ffmpeg",
-                "apple_cookies_path",
-                "path_binary_nm3u8dlre",
-                "apple_wrapper_port",
-                "apple_wrapper_idle_sec",
-            ):
-                setattr(data, key, getattr(self.settings.data, key))
+            # Under the save lock: a save's write empties the live ffmpeg path
+            # in place, and the job would keep that "" for its whole run.
+            with self._settings_save_lock:
+                for key in (
+                    "path_binary_ffmpeg",
+                    "apple_cookies_path",
+                    "path_binary_nm3u8dlre",
+                    "apple_wrapper_port",
+                    "apple_wrapper_idle_sec",
+                ):
+                    setattr(data, key, getattr(self.settings.data, key))
 
         def gate_reachability(retry, media_id="") -> bool:
             ready = self._request_reachability(intent, retry, media_id)
@@ -21877,13 +21880,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # "" and send it to the PATH ffmpeg and ffprobe; and a removeFfmpeg
         # landing between a resolve and a later assignment would be overwritten
         # with the path it just deleted.
-        try:
-            with self._settings_save_lock:
-                provider.ffmpeg_path = self._resolve_ffmpeg_locked()
-        except Exception:
-            # Plain unit-test stubs bind this without the lock or the resolve.
-            logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
-            provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
+        with self._settings_save_lock:
+            try:
+                ffmpeg_path = self._resolve_ffmpeg_locked()
+            except Exception:
+                # A failed resolve hands over the live field, still under the hold.
+                logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
+                ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
+            provider.ffmpeg_path = ffmpeg_path
         WavesBridge._invalidate_apple_engine_facts(self)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")

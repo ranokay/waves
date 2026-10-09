@@ -273,6 +273,7 @@ def _stub(base: Path, provider, **overrides):
         _ownership=SimpleNamespace(ownership_of=lambda tid: None),
         _redownload_overrides=set(),
         _queue_index={1: {"askQuality": "HIGH", "quality": "HIGH"}},
+        _settings_save_lock=Lock(),
         downloadState=_Signal(),
         downloadProgress=_Signal(),
     )
@@ -1105,6 +1106,7 @@ def test_configure_apple_provider_reads_settings(tmp_path):
     stub = BridgeStub(
         providers={CTX_APPLE: provider},
         settings=_settings(tmp_path, apple_cookies_path=str(cookies)),
+        _settings_save_lock=Lock(),
     )
     stub._configure_apple_provider = lambda: WavesBridge._configure_apple_provider(stub)
     stub._apple_cookies_ready = lambda: WavesBridge._apple_cookies_ready(stub)

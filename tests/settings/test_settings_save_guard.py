@@ -57,13 +57,10 @@ def _bind(stub, name):
     return getattr(WavesBridge, name).__get__(stub, type(stub))
 
 
-def _bridge(save_hook=None):
+def _bridge():
     """A stub carrying the real save/restore methods over a real dataclass, in
     the exact state that triggers it: ffmpeg missing (flags forced off in memory,
-    user's real preference remembered) and a managed path injected.
-
-    ``save_hook`` runs inside every write, with the lock held and the user's
-    values standing in the live settings."""
+    user's real preference remembered) and a managed path injected."""
     stub = _Stub()
 
     class _Cfg:
@@ -83,8 +80,6 @@ def _bridge(save_hook=None):
         def write_serialized(self, data_json):
             # The async path: capture what the SNAPSHOT would put on disk,
             # which is exactly what _submit_settings_write serialized.
-            if save_hook is not None:
-                save_hook()
             payload = json.loads(data_json)
             self.saved.append({k: payload[k] for k in ("extract_flac", "video_convert_mp4", "path_binary_ffmpeg")})
 
@@ -213,10 +208,10 @@ def test_two_saves_at_once_cannot_strand_a_copy():
     assert all(w["path_binary_ffmpeg"] == "" for w in stub.settings.saved)
 
 
-def _resolving_bridge(save_hook=None):
+def _resolving_bridge():
     """``_bridge`` with the managed ffmpeg installed and the real resolve
     bound: the managed path injected, both flags at the user's preference."""
-    stub = _bridge(save_hook)
+    stub = _bridge()
     stub.settings.data.extract_flac = True
     stub.settings.data.video_convert_mp4 = True
     stub._ffmpeg = SimpleNamespace(is_installed=lambda: True, binary_path=_MANAGED)
@@ -225,11 +220,11 @@ def _resolving_bridge(save_hook=None):
     return stub
 
 
-def _park_the_next_save(stub):
-    """Make the stub's next save park inside its write, after its restore and
-    before it serializes: the lock held, the user's values standing in the
-    live settings. Returns the save's thread (not started), the event set once
-    it parks, and the event that lets it finish."""
+def _park_saves_after_their_restore(stub):
+    """Make the stub's saves park inside their write, after the restore and
+    before serializing (the lock held, the user's values standing in the live
+    settings), until released. Returns a save's thread (not started), the
+    event set once a save parks, and the event that lets them finish."""
     parked, release = threading.Event(), threading.Event()
     restore = stub._restore_ffmpeg_path
 
@@ -242,25 +237,33 @@ def _park_the_next_save(stub):
     return threading.Thread(target=stub._save_settings), parked, release
 
 
-def _start_the_save_after_each_resolve(stub, saver, parked):
-    """Start ``saver`` once a resolve returns, and give it the time an
-    unlocked caller would leave it to reach its write. Both resolve names
-    carry the seam, so it sits after whichever one the caller uses, and the
-    save starts once. A caller still holding the lock keeps the save out, so
-    the wait runs out."""
+def _after_each_resolve(stub, then):
+    """Run ``then`` each time a resolve returns. Both resolve names carry it,
+    so it follows whichever one the caller uses."""
 
     def seam(resolve):
-        def resolve_then_a_save_starts():
+        def resolve_then():
             path = resolve()
-            if saver.ident is None:
-                saver.start()
-            parked.wait(0.3)
+            then()
             return path
 
-        return resolve_then_a_save_starts
+        return resolve_then
 
     stub._resolve_ffmpeg = seam(stub._resolve_ffmpeg)
     stub._resolve_ffmpeg_locked = seam(stub._resolve_ffmpeg_locked)
+
+
+def _a_save_starts(saver, parked):
+    """Start ``saver`` once, then give it the time an unlocked caller would
+    leave it to reach its write. A caller still holding the lock keeps the
+    save out, and the wait runs out."""
+
+    def start():
+        if saver.ident is None:
+            saver.start()
+        parked.wait(0.3)
+
+    return start
 
 
 def test_a_resolve_during_a_save_keeps_the_managed_path_off_disk():
@@ -269,7 +272,7 @@ def test_a_resolve_during_a_save_keeps_the_managed_path_off_disk():
     Unlocked, it wrote the path into the values that save then serialized: an
     absolute path carrying the account name, into settings.json."""
     stub = _resolving_bridge()
-    saver, parked, release = _park_the_next_save(stub)
+    saver, parked, release = _park_saves_after_their_restore(stub)
     resolved: list[str] = []
     resolver = threading.Thread(target=lambda: resolved.append(stub._resolve_ffmpeg()))
     saver.start()
@@ -304,8 +307,8 @@ def test_a_reader_keeps_the_resolved_path_through_a_save(reader, monkeypatch):
     configure, and a preview with no ffmpeg on PATH failed outright."""
     monkeypatch.setattr(shutil, "which", lambda name: None)
     stub = _resolving_bridge()
-    saver, parked, release = _park_the_next_save(stub)
-    _start_the_save_after_each_resolve(stub, saver, parked)
+    saver, parked, release = _park_saves_after_their_restore(stub)
+    _after_each_resolve(stub, _a_save_starts(saver, parked))
     try:
         path = reader(stub)
     finally:
@@ -338,21 +341,15 @@ def test_a_removal_during_a_configure_leaves_apple_off_the_deleted_binary():
     removal = threading.Thread(target=_bind(stub, "removeFfmpeg"))
     worker = threading.current_thread()
 
-    def seam(resolve):
+    def a_removal_runs():
         # Only the worker's configure waits; the removal's own configure
         # resolves straight through.
-        def resolve_then_a_removal_runs():
-            path = resolve()
-            if threading.current_thread() is worker:
-                if removal.ident is None:
-                    removal.start()
-                removal.join(0.3)
-            return path
+        if threading.current_thread() is worker:
+            if removal.ident is None:
+                removal.start()
+            removal.join(0.3)
 
-        return resolve_then_a_removal_runs
-
-    stub._resolve_ffmpeg = seam(stub._resolve_ffmpeg)
-    stub._resolve_ffmpeg_locked = seam(stub._resolve_ffmpeg_locked)
+    _after_each_resolve(stub, a_removal_runs)
     stub._configure_apple_provider()
     removal.join(5)
 
@@ -416,8 +413,8 @@ def test_a_download_built_as_a_save_starts_sees_the_managed_path(build, on_path,
     stub._target_quality_rank = lambda quality: 0
     stub._ffmpeg_missing_warned = False
     stub._warn_if_ffmpeg_missing = _bind(stub, "_warn_if_ffmpeg_missing")
-    saver, parked, release = _park_the_next_save(stub)
-    _start_the_save_after_each_resolve(stub, saver, parked)
+    saver, parked, release = _park_saves_after_their_restore(stub)
+    _after_each_resolve(stub, _a_save_starts(saver, parked))
     try:
         dl = build(stub)
     finally:
@@ -433,6 +430,28 @@ def test_a_download_built_as_a_save_starts_sees_the_managed_path(build, on_path,
     )
     assert data.path_binary_ffmpeg == _MANAGED
     assert data.extract_flac is True and data.video_convert_mp4 is True
+
+
+def test_an_apple_job_queued_during_a_save_keeps_the_managed_path():
+    """An Apple job copies the live ffmpeg path into its own settings when it
+    is built. Copied inside a save's write, it took the user's "" and the job
+    ran its FLAC conversion and decode check on the PATH ffmpeg, or on none."""
+    stub = _resolving_bridge()
+    stub.providers = {CTX_APPLE: object()}
+    intent = capture_intent(stub.settings.data, CTX_APPLE, "track", "apple:1", tier="HIGH", audio_type=None, toggles={})
+    saver, parked, release = _park_saves_after_their_restore(stub)
+    hooks = []
+    build = threading.Thread(target=lambda: hooks.append(WavesBridge._apple_job_hooks(stub, intent)))
+    saver.start()
+    assert parked.wait(5), "the save never reached its write"
+    build.start()
+    build.join(0.3)  # the time an unlocked copy has to read the save's restored value
+    release.set()
+    for t in (saver, build):
+        t.join(5)
+        assert not t.is_alive()
+
+    assert hooks[0].settings().data.path_binary_ffmpeg == _MANAGED
 
 
 def test_no_bare_settings_save_outside_the_guarded_helper():
@@ -642,32 +661,28 @@ def test_a_worker_write_back_cannot_reach_the_apply_settings_write():
 
 def test_a_path_entered_during_a_save_reaches_the_apple_provider():
     """A save mid-write puts the path it borrowed back in its finally.
-    applySettings wrote a newly entered path without the save lock, so that
-    put-back could land over it, and the Apple provider, configured right
-    after the edit, kept the old binary until its next configure."""
-    import threading
-
-    parked, release = threading.Event(), threading.Event()
-
-    def _park():
-        # Only the worker's write parks; applySettings's own write follows.
-        if not parked.is_set():
-            parked.set()
-            release.wait(5)
-
-    stub = _apply_bridge(save_hook=_park)
+    applySettings wrote a newly entered path without the save lock, so the
+    put-back could land over it before the Apple provider, configured right
+    after the edit, read it: Apple kept the old binary until its next
+    configure."""
+    stub = _apply_bridge()
     data = stub.settings.data
+    saver, parked, release = _park_saves_after_their_restore(stub)
     handed: list[str] = []
-    stub._configure_apple_provider = lambda: handed.append(data.path_binary_ffmpeg)
-    entered = "/opt/ffmpeg/bin/ffmpeg"
 
-    saver = threading.Thread(target=stub._save_settings)
+    def configure():
+        # The worker's save finishes first, as it would on its own thread.
+        release.set()
+        saver.join(5)
+        handed.append(data.path_binary_ffmpeg)
+
+    stub._configure_apple_provider = configure
+    entered = "/opt/ffmpeg/bin/ffmpeg"
     saver.start()
     assert parked.wait(5), "the worker save never reached its write"
     apply = threading.Thread(target=lambda: stub.applySettings({"path_binary_ffmpeg": entered}))
     apply.start()
-    apply.join(0.3)
-    assert data.path_binary_ffmpeg == "", "the new path landed inside the save's write, under its put-back"
+    apply.join(0.3)  # the time an unlocked edit has to land inside the save's write
     release.set()
     for t in (saver, apply):
         t.join(5)
