@@ -7,7 +7,7 @@
 # `[unqualified]` notes are warnings, counted and summarized on success so they
 # cannot bury a failure; on failure the full output is printed (syntax problems
 # arrive as `Warning: ... [syntax]`, which the error filter alone would hide).
-# Pass file paths to lint just those (the pre-commit hook does); with no
+# Pass file paths to lint just those (the hk hook does); with no
 # arguments the whole tree is linted.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1

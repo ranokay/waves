@@ -20,7 +20,7 @@ runs:
         } >> "$GITHUB_ENV"
       shell: bash
 
-    - name: Install the toolchain (mise, Python, uv)
+    - name: Install the toolchain (mise, Python, uv, hk, Node, Prettier)
       uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       with:
         cache: true
@@ -32,6 +32,12 @@ runs:
         key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
         restore-keys: |
           uv-${{ runner.os }}-
+
+    - name: Cache the pinned hk configuration package
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.pkl/cache
+        key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
 
     # Retried, because a single dropped connection here costs a whole release.
     # The PySide6 wheels are ~165MB each and PyPI does occasionally cut a

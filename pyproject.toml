@@ -61,9 +61,8 @@ gui = ["pyside6==6.11.1"]
 dev = [
   "pytest>=9.1.1,<10",
   "deptry>=0.25.1,<0.26",
-  "pre-commit>=4.6.2,<5",
-  # Pinned so the pre-commit hooks (which run this environment's ruff) and CI
-  # lint with one version; Dependabot may bump it like any other dev tool.
+  "pyyaml==6.0.3",
+  # Hooks and CI lint with this one version. Dependabot may bump it.
   "ruff==0.16.10",
   "pyupgrade>=3.21.2,<4",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
@@ -149,6 +148,10 @@ invalid-assignment = "warn"
 invalid-return-type = "warn"
 invalid-raise = "warn"
 
+# The TOML/YAML validator uses this developer-only parser.
+[tool.deptry.per_rule_ignores]
+DEP004 = ["yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "--strict-config"]
@@ -165,7 +168,7 @@ markers = [
 [tool.ruff]
 target-version = "py312"
 line-length = 120
-fix = true
+fix = false
 # Overview: https://docs.astral.sh/ruff/rules/
 
 [tool.ruff.lint]
@@ -225,6 +228,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Tooling invokes pinned executables with fixed argv, never a shell or user command.
+"tools/check_pyupgrade.py" = ["S603"]
+"tools/check_qml_format.py" = ["S603", "S607"]
+"tools/install_hooks.py" = ["S603", "S607", "C901"]
+# Disposable Git fixtures exercise real commands with an argument list.
+"tests/packaging/test_verification_preserves_work.py" = ["S603", "S607"]
+
 # Tests use asserts (S101), terse error messages (TRY003) and throwaway temp
 # paths like "/tmp/x" as never-touched dummy dirs (S108).
 "tests/*" = ["S101", "TRY003", "S108"]

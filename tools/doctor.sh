@@ -46,12 +46,18 @@ else
   bad "uv.lock drift" "uv sync --all-extras (or mise run install)"
 fi
 
-# Pre-commit hooks (git-dir aware: .git is a file in worktrees).
-hook="$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)"
-if [ -n "${hook:-}" ] && [ -x "$hook" ]; then
-  ok "pre-commit hook installed"
+# Verify the effective repository hook configuration, including linked worktrees.
+if [ "$have_uv" -eq 0 ]; then
+  :
+elif uv run --locked --all-extras python tools/install_hooks.py --check; then
+  ok "hk hooks verified"
 else
-  bad "pre-commit hook missing" "mise run install"
+  bad "hk hooks missing or stale" "mise run install"
+fi
+if command -v hk >/dev/null; then
+  say "  hk $(hk --version 2>/dev/null)"
+else
+  bad "hk not on PATH" "mise install"
 fi
 
 # QML smoke without Qt: the entry file exists and the package imports.
