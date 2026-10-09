@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import FrozenInstanceError, replace
-from threading import Event
+from threading import Event, Lock
 
 import pytest
 from providers.apple.test_apple_engine_routing import FakeEngine, audio
@@ -262,7 +262,8 @@ def test_dispatch_builds_engine_from_snapshot_and_keeps_credentials_live(monkeyp
     monkeypatch.setattr(backend, "_TrackedDownload", build)
     bridge = BridgeStub(
         settings=SimpleNamespace(data=data),
-        _resolve_ffmpeg=lambda: None,
+        _settings_save_lock=Lock(),
+        _resolve_ffmpeg_locked=lambda: "",
         _event_abort=Event(),
         _event_run=Event(),
         tidal=SimpleNamespace(),
@@ -288,7 +289,8 @@ def _dispatch_settings(monkeypatch, bridge, qid):
     calls = {}
     monkeypatch.setattr(backend, "_TrackedDownload", lambda **kwargs: calls.update(kwargs) or SimpleNamespace())
     bridge.tidal = SimpleNamespace()
-    bridge._resolve_ffmpeg = lambda: None
+    bridge._settings_save_lock = Lock()
+    bridge._resolve_ffmpeg_locked = lambda: ""
     bridge._event_abort = Event()
     bridge._event_run = Event()
     bridge._ownership = SimpleNamespace(ownership_of=None, stamp_ceiling=None)

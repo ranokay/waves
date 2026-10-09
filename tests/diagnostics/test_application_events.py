@@ -260,6 +260,7 @@ def runtime_event_bridge(event_loop):
         _apple_runtime_inflight=False,
         _ffmpeg_install_inflight=False,
         _ffmpeg_abort=threading.Event(),
+        _settings_save_lock=threading.Lock(),
         _logged_in=False,
         _apple_runtime=SimpleNamespace(
             install=lambda **kwargs: {"version": "test"}, ensure_image=lambda **kwargs: None

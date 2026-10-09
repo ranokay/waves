@@ -90,7 +90,8 @@ def test_build_download_hands_the_relay_item_name_to_the_engine(monkeypatch):
             _ownership=SimpleNamespace(ownership_of=lambda *a: None, stamp_ceiling=0),
             _target_quality_rank=lambda q: 0,
             ffmpegStatusChanged=_Signal(),
-            _resolve_ffmpeg=lambda: None,
+            _settings_save_lock=threading.Lock(),
+            _resolve_ffmpeg_locked=lambda: "",
         )
         s._waves_pref_bool = _bind(s, "_waves_pref_bool")
         s._warn_if_ffmpeg_missing = _bind(s, "_warn_if_ffmpeg_missing")
@@ -392,6 +393,7 @@ def test_removeFfmpeg_removes_restores_path_and_notifies():
         _ffmpeg=SimpleNamespace(remove=lambda: calls.append("remove")),
         _restore_ffmpeg_path=lambda: calls.append("restore"),
         _configure_apple_provider=lambda: calls.append("apple"),
+        _settings_save_lock=threading.Lock(),
         _logged_in=False,
         ffmpegStatusChanged=_Signal(),
     )
@@ -399,6 +401,41 @@ def test_removeFfmpeg_removes_restores_path_and_notifies():
     s.removeFfmpeg()
     assert calls == ["remove", "restore", "apple"], "the dangling managed path must not survive the removal"
     assert len(s.ffmpegStatusChanged.emits) == 1
+
+
+def test_a_save_in_flight_cannot_bring_back_the_removed_path(tmp_path):
+    """A save on another thread borrowed the managed path and puts it back in
+    its finally, under the save lock. The removal's restore waits for that
+    lock, so the put-back cannot land after it and leave downloads and the
+    Apple provider pointing at the binary that was just deleted."""
+    managed = str(tmp_path / "bin" / "ffmpeg")
+    data = SimpleNamespace(path_binary_ffmpeg=managed)
+    handed: list[str] = []
+    s = _stub(
+        _ffmpeg=SimpleNamespace(remove=lambda: None),
+        _ffmpeg_user_path="",
+        _settings_save_lock=threading.Lock(),
+        _logged_in=False,
+        settings=SimpleNamespace(data=data),
+        _configure_apple_provider=lambda: handed.append(data.path_binary_ffmpeg),
+        ffmpegStatusChanged=_Signal(),
+    )
+    for name in ("removeFfmpeg", "_restore_ffmpeg_path"):
+        setattr(s, name, _bind(s, name))
+    remove = threading.Thread(target=s.removeFfmpeg)
+    s._settings_save_lock.acquire()  # the save is mid-write
+    try:
+        remove.start()
+        remove.join(0.5)
+        assert remove.is_alive(), "the removal restored the path without waiting for the save lock"
+        data.path_binary_ffmpeg = managed  # the save's put-back
+    finally:
+        s._settings_save_lock.release()
+    remove.join(5)
+
+    assert not remove.is_alive()
+    assert data.path_binary_ffmpeg == ""
+    assert handed == [""]
 
 
 def _install_stub(tmp_path, *, user_path="", install=None, installed=True):
@@ -433,6 +470,7 @@ def _install_stub(tmp_path, *, user_path="", install=None, installed=True):
         "_restore_ffmpeg_flags",
         "_restore_ffmpeg_path",
         "_resolve_ffmpeg",
+        "_resolve_ffmpeg_locked",
         "_ffmpeg_source_label",
         "_user_ffmpeg_path",
     ):

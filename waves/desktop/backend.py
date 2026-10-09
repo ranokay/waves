@@ -4426,6 +4426,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # the on-disk value up front is what keeps them from being misread as a
         # user choice. Updated on save in applySettings.
         self._ffmpeg_user_path = (self.settings.data.path_binary_ffmpeg or "").strip()
+        # _save_settings restores the transient ffmpeg values in place for the
+        # length of one write and puts the live ones back after. Saves come
+        # from the GUI thread, from download workers and from the keep-warm
+        # daemon, so the borrow is serialised, and so is every write a borrow
+        # could serialise or undo: the explicit restores (applySettings,
+        # _adopt_managed_ffmpeg, removeFfmpeg), applySettings's write of a new
+        # path, the resolve, and the Download construction that injects the
+        # PATH ffmpeg. (applySettings's flag writes need no hold: its locked
+        # restore re-applies them.) Created before the Apple provider below is
+        # configured, since that resolves under it.
+        self._settings_save_lock = Lock()
         # Managed Apple runtime (spec §2/§10): the N_m3u8DL-RE binary and
         # wrapper port state live under the same app data dir as FFmpeg,
         # provisioned by the setup wizard. Imported lazily so plain unit-test
@@ -4485,12 +4496,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.threadpool.start(Worker(self._refresh_apple_wrapper_auth))
         except Exception:
             logger.debug("Apple wrapper auth warm-up probe failed", exc_info=True)
-        # _save_settings swaps a sanitised copy of settings.data in for the
-        # length of one write. Saves come from the GUI thread, from download
-        # workers and from the keep-warm daemon, so the swap is serialised,
-        # and so is every explicit restore of the transient ffmpeg values
-        # (applySettings, _adopt_managed_ffmpeg).
-        self._settings_save_lock = Lock()
         # One-shot guard so the "running without ffmpeg" warning is surfaced once
         # per session (re-armed by _warn_if_ffmpeg_missing when ffmpeg reappears).
         self._ffmpeg_missing_warned = False
@@ -5456,19 +5461,33 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         )
         publish_event(self, event)
 
-    def _resolve_ffmpeg(self) -> None:
+    def _resolve_ffmpeg(self) -> str:
+        """Resolve under ``_settings_save_lock`` and return the path it left.
+
+        Callers use the returned path rather than re-reading the live field:
+        a save on another thread restores the user's value in place for the
+        length of its write, so a read after the lock is released can see ""
+        and fall back to the PATH ffmpeg and ffprobe."""
+        with self._settings_save_lock:
+            return self._resolve_ffmpeg_locked()
+
+    def _resolve_ffmpeg_locked(self) -> str:
         """Point ``path_binary_ffmpeg`` at the managed binary when the user has
         no explicit override, so ``Download`` finds ffmpeg without the user
         installing one. In-memory only (never persisted): the precedence is
         explicit override → managed copy → PATH (download.py's own shutil.which).
+
+        The caller holds ``_settings_save_lock``. Unlocked, this write can land
+        between a save's restore and its serialization and reach settings.json.
         """
         # Keep the persisted diagnostic in step with reality on every resolve
         # (login, each download build, after an ffmpeg install/remove).
         self.settings.data.ffmpeg_source = self._ffmpeg_source_label()
         if self.settings.data.path_binary_ffmpeg:
-            return  # power-user override wins
+            return str(self.settings.data.path_binary_ffmpeg)  # power-user override wins
         if self._ffmpeg.is_installed():
             self.settings.data.path_binary_ffmpeg = str(self._ffmpeg.binary_path)
+        return str(self.settings.data.path_binary_ffmpeg or "")
 
     def _ffmpeg_source_label(self) -> str:
         """Category of the ffmpeg binary a download would actually use, for the
@@ -5534,20 +5553,28 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # them here would strand any in-flight worker parked on the old event.
         # Re-init happens on every applySettings save and after installFfmpeg, so
         # the events MUST outlive it. Downloads run while _event_run is set.
-        self._resolve_ffmpeg()
-        self._dl = Download(
-            tidal_obj=self.tidal,
-            path_base=self.settings.data.download_base_path,
-            fn_logger=logger,
-            skip_existing=self.settings.data.skip_existing,
-            progress=Progress(),
-            event_abort=self._event_abort,
-            event_run=self._event_run,
-            # The bridge's own provider instance: the engine registers its
-            # stream resolver on THE provider every dispatch reads, never a
-            # private second one (spec §4.1 composition).
-            provider=self.providers[CTX_TIDAL],
-        )
+        #
+        # Download.__init__ writes the shared settings when the path is empty
+        # (the PATH ffmpeg, or the gated flags forced off), so it is built in
+        # the same hold as the resolve: a save in between would show it the
+        # restored "" and the save could write its PATH value or the forced-off
+        # flags to settings.json. The missing-ffmpeg warning emits a signal, so
+        # it runs after the lock is released.
+        with self._settings_save_lock:
+            self._resolve_ffmpeg_locked()
+            self._dl = Download(
+                tidal_obj=self.tidal,
+                path_base=self.settings.data.download_base_path,
+                fn_logger=logger,
+                skip_existing=self.settings.data.skip_existing,
+                progress=Progress(),
+                event_abort=self._event_abort,
+                event_run=self._event_run,
+                # The bridge's own provider instance: the engine registers its
+                # stream resolver on THE provider every dispatch reads, never a
+                # private second one (spec §4.1 composition).
+                provider=self.providers[CTX_TIDAL],
+            )
         self._warn_if_ffmpeg_missing(self._dl)
 
     def _try_token_login(self) -> None:
@@ -13437,50 +13464,55 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         chooser_toggles: dict | None = None,
         request_intent: DownloadIntent | None = None,
     ) -> Download:
-        self._resolve_ffmpeg()
         data = request_intent.settings_data() if request_intent else self.settings.data
-        if request_intent:
-            data.path_binary_ffmpeg = self.settings.data.path_binary_ffmpeg
-
         progress_gui = ProgressBars(
             item=signals.item,
             item_name=signals.item_name,
             list_item=signals.list_item,
             list_name=signals.list_name,
         )
-        dl = _TrackedDownload(
-            tidal_obj=self.tidal,
-            path_base=data.download_base_path,
-            fn_logger=logger,
-            skip_existing=data.skip_existing,
-            progress=Progress(),
-            progress_gui=progress_gui,
-            event_abort=event_abort or self._event_abort,
-            event_run=self._event_run,
-            # The engine resolves streams, facts and refusals through the
-            # provider (spec §4.1 composition); the registration of this job's
-            # stream resolver happens in Download.__init__.
-            provider=self.providers["tidal"],
-            # GUI-only metadata policy is captured with engine preferences;
-            # a change applies to new jobs, never this job's later tracks.
-            album_artist_tag_clean=(lambda: request_intent.clean_album_artist)
-            if request_intent
-            else lambda: self._waves_pref_bool("clean_album_artist"),
-            track_signals=signals,
-            ownership_of=self._ownership.ownership_of,
-            ownership_stamp=self._ownership.stamp_ceiling,
-            # Both the skip/upgrade decision and the fetch follow the job's
-            # own quality, so a job queued at LOSSLESS keeps treating a
-            # LOSSLESS copy as current even if the setting has since moved.
-            target_rank=self._target_quality_rank(pinned_quality),
-            pinned_quality=pinned_quality,
-            library_claim=library_claim,
-            force_redownload=force_redownload,
-            audio_type=audio_type,
-            base_template=base_template,
-            chooser_toggles=chooser_toggles,
-            **({"settings_data": data} if request_intent else {}),
-        )
+        # One hold for the resolve, the read and the construction, as in
+        # _init_download: a save in between would show this job the restored
+        # "", so it would run on the PATH ffmpeg or with FLAC extraction forced
+        # off, and a job without a snapshot would write either into the shared
+        # settings that save then serializes.
+        with self._settings_save_lock:
+            self._resolve_ffmpeg_locked()
+            if request_intent:
+                data.path_binary_ffmpeg = self.settings.data.path_binary_ffmpeg
+            dl = _TrackedDownload(
+                tidal_obj=self.tidal,
+                path_base=data.download_base_path,
+                fn_logger=logger,
+                skip_existing=data.skip_existing,
+                progress=Progress(),
+                progress_gui=progress_gui,
+                event_abort=event_abort or self._event_abort,
+                event_run=self._event_run,
+                # The engine resolves streams, facts and refusals through the
+                # provider (spec §4.1 composition); the registration of this job's
+                # stream resolver happens in Download.__init__.
+                provider=self.providers["tidal"],
+                # GUI-only metadata policy is captured with engine preferences;
+                # a change applies to new jobs, never this job's later tracks.
+                album_artist_tag_clean=(lambda: request_intent.clean_album_artist)
+                if request_intent
+                else lambda: self._waves_pref_bool("clean_album_artist"),
+                track_signals=signals,
+                ownership_of=self._ownership.ownership_of,
+                ownership_stamp=self._ownership.stamp_ceiling,
+                # Both the skip/upgrade decision and the fetch follow the job's
+                # own quality, so a job queued at LOSSLESS keeps treating a
+                # LOSSLESS copy as current even if the setting has since moved.
+                target_rank=self._target_quality_rank(pinned_quality),
+                pinned_quality=pinned_quality,
+                library_claim=library_claim,
+                force_redownload=force_redownload,
+                audio_type=audio_type,
+                base_template=base_template,
+                chooser_toggles=chooser_toggles,
+                **({"settings_data": data} if request_intent else {}),
+            )
         self._warn_if_ffmpeg_missing(dl)
         return dl
 
@@ -15023,14 +15055,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         token = provider_contexts(self).capture(CTX_APPLE)
         data = intent.settings_data() if intent else None
         if data is not None:
-            for key in (
-                "path_binary_ffmpeg",
-                "apple_cookies_path",
-                "path_binary_nm3u8dlre",
-                "apple_wrapper_port",
-                "apple_wrapper_idle_sec",
-            ):
-                setattr(data, key, getattr(self.settings.data, key))
+            # Under the save lock: a save's write empties the live ffmpeg path
+            # in place, and the job would keep that "" for its whole run.
+            with self._settings_save_lock:
+                for key in (
+                    "path_binary_ffmpeg",
+                    "apple_cookies_path",
+                    "path_binary_nm3u8dlre",
+                    "apple_wrapper_port",
+                    "apple_wrapper_idle_sec",
+                ):
+                    setattr(data, key, getattr(self.settings.data, key))
 
         def gate_reachability(retry, media_id="") -> bool:
             ready = self._request_reachability(intent, retry, media_id)
@@ -16730,8 +16765,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     def _preview_ffmpeg_bin(self) -> str | None:
         """Path to an ffmpeg binary for the preview remux (managed → PATH)."""
-        self._resolve_ffmpeg()  # points settings at the managed copy if present
-        return self.settings.data.path_binary_ffmpeg or shutil.which("ffmpeg")
+        # The resolved path, not a re-read: a save can restore "" in between.
+        return self._resolve_ffmpeg() or shutil.which("ffmpeg")
 
     def _localise_hls(self, hls: str, whole: bool, work_dir: str) -> str | None:
         """Fetch an HLS preview's segments in parallel into ``work_dir`` and
@@ -20141,14 +20176,23 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         them.
 
         Every save must go through here. Callers that need a specific ordering
-        around the restores (``applySettings``, and ``_adopt_managed_ffmpeg``,
-        which restores without saving) do them explicitly instead,
-        under ``_settings_save_lock`` all the same, and follow with
+        around the restores (``applySettings``, and ``_adopt_managed_ffmpeg``
+        and ``removeFfmpeg``, which restore without saving) do them explicitly
+        instead, under ``_settings_save_lock`` all the same, and follow with
         ``_init_download`` so the managed path is re-injected. Holding the lock
         is not optional there: the restore and the write are separate
         statements, and this method's ``finally`` puts the managed path back,
         so a save from here landing between them would be serialised by that
-        write."""
+        write.
+
+        The writers and readers of the borrowed values take the lock too.
+        ``_resolve_ffmpeg`` resolves under it and returns the path for its
+        caller to use; ``_configure_apple_provider`` resolves and hands the
+        provider its path in one hold; ``_init_download`` / ``_build_download``
+        build their ``Download`` in the same hold as their resolve, because its
+        constructor writes the PATH ffmpeg and the forced-off flags into the
+        live values when it reads an empty path; and ``applySettings`` writes a
+        newly entered path under it."""
         with self._settings_save_lock:
             data = self.settings.data
             # Exactly the fields the two restores below overwrite, so putting
@@ -20326,7 +20370,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Undo any in-memory feature disabling now that ffmpeg exists.
             self._restore_ffmpeg_flags()
             self._restore_ffmpeg_path()
-            self._resolve_ffmpeg()
+            self._resolve_ffmpeg_locked()
         if self._logged_in:
             self._init_download()
         self._configure_apple_provider()
@@ -20358,7 +20402,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # real override (empty when none), so downloads/previews don't keep
         # spawning a deleted executable, then rebuild Download without it (which
         # also re-gates the ffmpeg-dependent flags via its own construction).
-        self._restore_ffmpeg_path()
+        # Under the save lock: a save's put-back landing after this restore
+        # would bring the deleted path back.
+        with self._settings_save_lock:
+            self._restore_ffmpeg_path()
         if self._logged_in:
             self._init_download()
         self._configure_apple_provider()
@@ -21827,20 +21874,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         provider = self.providers.get(CTX_APPLE)
         if provider is None:
             return
-        resolve = getattr(self, "_resolve_ffmpeg", None)
-        if resolve is not None:
-            try:
-                resolve()
-            except Exception:
-                logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
         data = getattr(self.settings, "data", None)
+        # Resolved and handed over in one hold of the save lock. A save's write
+        # empties the live field in place, so a later re-read could hand Apple
+        # "" and send it to the PATH ffmpeg and ffprobe; and a removeFfmpeg
+        # landing between a resolve and a later assignment would be overwritten
+        # with the path it just deleted.
+        with self._settings_save_lock:
+            try:
+                ffmpeg_path = self._resolve_ffmpeg_locked()
+            except Exception:
+                # A failed resolve hands over the live field, still under the hold.
+                logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
+                ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
+            provider.ffmpeg_path = ffmpeg_path
         WavesBridge._invalidate_apple_engine_facts(self)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
             provider.offer_context_probe = lambda: WavesBridge._apple_offer_context(self)
-        provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
             provider.nm3u8dlre_path = str(resolver() or "")
@@ -22728,15 +22781,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 elif key == "cover_file_format":
                     fmt = str(value or "jpg").strip().lower()
                     setattr(data, key, fmt if fmt in ("jpg", "png", "raw") else "jpg")
+                elif key == "path_binary_ffmpeg":
+                    # Under the save lock: a save mid-write puts the path it
+                    # borrowed back in its finally, over the user's new one,
+                    # and the Apple provider configured below would resolve
+                    # that. The explicit-override snapshot moves with it, so
+                    # status and the path box reflect the new choice (never a
+                    # transient in-memory injection), and so the restore below
+                    # sees current ffmpeg.
+                    with self._settings_save_lock:
+                        data.path_binary_ffmpeg = str(value)
+                        self._ffmpeg_user_path = str(value or "").strip()
                 else:
                     setattr(data, key, str(value))
             except Exception:
                 logger.exception("Could not set setting %s", key)
-        # Refresh the explicit-override snapshot if the user edited their path, so
-        # status + the path box reflect the new choice (never a transient
-        # in-memory injection), and so the restore below sees current ffmpeg.
-        if "path_binary_ffmpeg" in values:
-            self._ffmpeg_user_path = str(values.get("path_binary_ffmpeg") or "").strip()
         # An explicit Video-quality choice overrides the bandwidth auto-cap for
         # the rest of the run (and persists like any other setting).
         if "quality_video" in values:
