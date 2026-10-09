@@ -22,6 +22,7 @@ from waves.providers.apple.engines import (
     EngineRouter,
     EngineRouteUnavailable,
 )
+from waves.providers.apple.gamdl_logs import quiet_gamdl_logs
 from waves.providers.base import (
     AudioType,
     Capability,
@@ -39,14 +40,6 @@ if TYPE_CHECKING:
     # The engine is imported lazily at runtime (its gamdl imports are heavy);
     # the names are still the real types of the objects kept on this provider.
     from waves.providers.apple.engine import AppleDelivery, AppleFetchSession
-
-
-class _QuietCatalogLog:
-    def bind(self, **_values):
-        return self
-
-    def debug(self, *_args, **_values) -> None:
-        return None
 
 
 class _CatalogThreadState(local):
@@ -587,12 +580,9 @@ class AppleProvider(Provider):
 
     @staticmethod
     async def _create_catalog():
+        quiet_gamdl_logs()
         from gamdl.api import apple_music
 
-        # gamdl's default structlog logger prints the complete catalog reply at
-        # debug level. The provider reports failures through Waves' own logger;
-        # dumping hundreds of result dictionaries adds no useful diagnosis.
-        apple_music.logger = _QuietCatalogLog()
         return await apple_music.AppleMusicApi.create()
 
     def search(self, needle: str) -> dict:
