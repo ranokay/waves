@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import socket
 import tarfile
@@ -1828,7 +1829,7 @@ def test_a_stale_managed_runtime_step_asks_for_an_update():
 
 def test_fresh_machine_steps_walk_in_order():
     steps = _steps(enabled=True)
-    assert list(steps) == ["enable", "cookies", "runtime", "container", "image", "login", "port"]
+    assert list(steps) == ["enable", "cookies", "runtime", "codec_check", "container", "image", "login", "port"]
     assert steps["enable"]["state"] == "done"
     assert steps["cookies"]["state"] == "todo"
     assert steps["cookies"]["action"] == "apple_import_cookies"
@@ -1915,11 +1916,68 @@ def test_login_step_reports_the_last_probe_failure():
 def test_setup_state_carries_steps_wrapper_auth_and_login_hint(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     state = stub.appleSetupState()
-    assert [s["key"] for s in state["steps"]] == ["enable", "cookies", "runtime", "container", "image", "login", "port"]
+    assert [s["key"] for s in state["steps"]] == [
+        "enable",
+        "cookies",
+        "runtime",
+        "codec_check",
+        "container",
+        "image",
+        "login",
+        "port",
+    ]
     assert "apk" not in state
     assert state["wrapper"]["image_pulled"] is False
     assert state["wrapper"]["auth"] == {}
     assert "2FA" in state["wrapper"]["login_hint"]
+
+
+def test_the_codec_check_step_says_when_downloads_skip_it():
+    """Without an ffprobe the runner trusts the delivered codec family; the
+    step is where that shows, as attention rather than a silent skip."""
+    missing = _steps()["codec_check"]
+    assert missing["state"] == "attention"
+    assert "skip the format check" in missing["detail"]
+    assert "Processing (FFmpeg)" in missing["detail"]
+    assert missing["action"] == ""
+
+    ready = _steps(ffprobe_ready=True)["codec_check"]
+    assert ready["state"] == "done"
+    assert "E-AC-3" in ready["detail"]
+
+
+def _tool(folder: Path, name: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    tool = folder / (name + (".exe" if os.name == "nt" else ""))
+    tool.write_bytes(b"#!/bin/sh\n")
+    tool.chmod(0o755)
+    return tool
+
+
+def test_setup_state_finds_ffprobe_where_the_codec_check_looks(tmp_path):
+    """The step reads the same place the runner's codec check does: beside
+    the Apple provider's resolved ffmpeg (PATH holds nothing here, see
+    _isolated_path_binaries), so a managed FFmpeg pair reads done and a
+    managed ffmpeg alone reads attention."""
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    ffmpeg = _tool(tmp_path / "bin", "ffmpeg")
+    stub.providers["apple"] = SimpleNamespace(cookies_path="", ffmpeg_path=str(ffmpeg))
+
+    steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert steps["codec_check"]["state"] == "attention"
+
+    _tool(tmp_path / "bin", "ffprobe")
+    steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert steps["codec_check"]["state"] == "done"
+
+
+def test_setup_state_accepts_an_ffprobe_on_path(tmp_path, monkeypatch):
+    tool = _tool(tmp_path / "on-path", "ffprobe")
+    monkeypatch.setattr(shutil, "which", lambda name: str(tool) if name == "ffprobe" else None)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+
+    steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert steps["codec_check"]["state"] == "done"
 
 
 def test_container_state_caches_for_gui_callers(tmp_path, monkeypatch):

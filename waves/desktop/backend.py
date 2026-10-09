@@ -597,18 +597,20 @@ _FACTORY_WIPE_SUBDIRS = (
         ("applied.json", "update.log", "apply_update.bat", "armed.json", "install.lock"),
         (re.compile(r"apply_update_\d+\.bat\Z"),),
     ),
-    # The two ffmpeg installer strays: the binary is staged through
-    # mkstemp(prefix="ffmpeg.", suffix=".new") and the manifest through
-    # mkstemp(prefix="ffmpeg.json.", suffix=".tmp"), so a crashed install
-    # leaves a name with a random middle that no exact list can hold, and the
-    # bin folder then never fell. (The download's tmp zip has no Waves-written
-    # prefix to anchor on and deliberately stays behind, as before.)
+    # The managed ffmpeg/ffprobe pair, its manifest and the installer's
+    # strays. Each binary is staged through mkstemp(prefix="<exe>.",
+    # suffix=".new"), the manifest through mkstemp(prefix="ffmpeg.json.",
+    # suffix=".tmp"), and on Windows a replaced or removed .exe is renamed
+    # to "<exe>.old-<pid>", so the patterns cover names with a part no exact
+    # list can hold. The download's tmp zip has no Waves-written prefix to
+    # anchor on, so it stays and keeps its directory.
     (
         "bin",
-        ("ffmpeg", "ffmpeg.exe", "ffmpeg.new", "ffmpeg.exe.new", "ffmpeg.json"),
+        ("ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe", "ffmpeg.new", "ffmpeg.exe.new", "ffmpeg.json"),
         (
-            re.compile(r"ffmpeg(\.exe)?\.[0-9A-Za-z_-]+\.new\Z"),
+            re.compile(r"(?:ffmpeg|ffprobe)(\.exe)?\.[0-9A-Za-z_-]+\.new\Z"),
             re.compile(r"ffmpeg\.json\.[0-9A-Za-z_-]+\.tmp\Z"),
+            re.compile(r"(?:ffmpeg|ffprobe)\.exe\.old-\d+\Z"),
         ),
     ),
     # The motion background's local copy (motionVideoUrl): the cached loop is
@@ -4485,7 +4487,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             logger.debug("Apple wrapper auth warm-up probe failed", exc_info=True)
         # _save_settings swaps a sanitised copy of settings.data in for the
         # length of one write. Saves come from the GUI thread, from download
-        # workers and from the keep-warm daemon, so the swap is serialised.
+        # workers and from the keep-warm daemon, so the swap is serialised,
+        # and so is every explicit restore of the transient ffmpeg values
+        # (applySettings, _adopt_managed_ffmpeg).
         self._settings_save_lock = Lock()
         # One-shot guard so the "running without ffmpeg" warning is surfaced once
         # per session (re-armed by _warn_if_ffmpeg_missing when ffmpeg reappears).
@@ -15560,8 +15564,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         return runner.embed_cover_bytes(self._apple_job_hooks(), cover)
 
     def _apple_probe(self) -> str:
-        """An ffprobe binary for Apple verification, or "" (runner policy)."""
-        return runner.probe_binary(self._apple_job_hooks())
+        """The ffprobe the Apple codec check would use, or "" (runner policy):
+        the setup wizard's codec-check step reads it."""
+        return runner.provider_ffprobe((getattr(self, "providers", None) or {}).get(CTX_APPLE))
 
     def _apple_wants_flac(self) -> bool:
         """Whether lossless Apple stereo should land as FLAC (runner policy)."""
@@ -20136,7 +20141,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         them.
 
         Every save must go through here. Callers that need a specific ordering
-        around the restores (``applySettings``) do them explicitly instead,
+        around the restores (``applySettings``, and ``_adopt_managed_ffmpeg``,
+        which restores without saving) do them explicitly instead,
         under ``_settings_save_lock`` all the same, and follow with
         ``_init_download`` so the managed path is re-injected. Holding the lock
         is not optional there: the restore and the write are separate
@@ -20279,13 +20285,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         key="ffmpeg-install",
                         scope=_install_failure_scope(exc),
                     )
+                    # A late failure can still have landed binaries (ffprobe
+                    # goes in first, the manifest write comes last): adopt
+                    # whatever pair is in place, then let readers of the bin
+                    # folder re-read it. is_installed never raises, so the
+                    # emit below always runs.
+                    if self._ffmpeg.is_installed():
+                        self._adopt_managed_ffmpeg()
+                    self.ffmpegStatusChanged.emit()
                     return
-                # ffmpeg is available, undo any in-memory feature disabling
-                # and rebuild the Download so the new binary is used immediately.
-                self._restore_ffmpeg_flags()
-                if self._logged_in:
-                    self._init_download()
-                self._configure_apple_provider()
+                self._adopt_managed_ffmpeg()
                 operation_state(
                     self,
                     EventDomain.DEPENDENCY,
@@ -20301,6 +20310,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._ffmpeg_install_inflight = False
 
         self.threadpool.start(Worker(work))
+
+    def _adopt_managed_ffmpeg(self) -> None:
+        """Point the live settings, the Download and the Apple provider at a
+        freshly installed managed pair, so the new binaries are used at once.
+
+        The in-memory path is dropped first: Download's PATH injection (or an
+        older managed path) would otherwise outlive the install, and the
+        re-resolve must land on the managed pair, ffprobe included, unless
+        the user linked their own. The restores and the re-resolve hold
+        ``_settings_save_lock``: a save on another thread puts its borrowed
+        path back in its ``finally``, which would undo them.
+        """
+        with self._settings_save_lock:
+            # Undo any in-memory feature disabling now that ffmpeg exists.
+            self._restore_ffmpeg_flags()
+            self._restore_ffmpeg_path()
+            self._resolve_ffmpeg()
+        if self._logged_in:
+            self._init_download()
+        self._configure_apple_provider()
 
     @Slot()
     def cancelFfmpeg(self) -> None:
@@ -20914,6 +20943,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # ensure_port persists it (when free) the next time the step runs.
         port = preferred_port if 1024 <= preferred_port <= 65535 else persisted_port
         port_dirty = bool(port) and port != persisted_port
+        # The codec check's own lookup, a file-existence read. Called
+        # unbound: plain test stand-ins bind appleSetupState alone.
+        ffprobe_ready = bool(WavesBridge._apple_probe(self))
         steps = self._apple_wizard_steps(
             enabled=bool(flags.get("enabled", False)),
             cookies_path=cookies_path,
@@ -20926,6 +20958,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             port=port,
             port_dirty=port_dirty,
             runtime_stale=bool(runtime.get("runtime_stale", False)),
+            ffprobe_ready=ffprobe_ready,
         )
         return {
             "light": described,
@@ -20967,6 +21000,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         port: int,
         port_dirty: bool = False,
         runtime_stale: bool = False,
+        ffprobe_ready: bool = False,
     ) -> list:
         """The wizard's steps for the QML in-place flow, in walking order.
 
@@ -21040,6 +21074,28 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "detail": runtime_step[1],
                 "action": runtime_step[2],
                 "action_label": _APPLE_STEP_ACTION_LABELS.get(runtime_step[2], ""),
+            }
+        )
+        # Not a tier step: both tiers deliver through the same check, and a
+        # missing ffprobe skips it without failing anything, so the step is
+        # the one place the skip shows (attention, not todo).
+        steps.append(
+            {
+                "key": "codec_check",
+                "label": "Codec check (ffprobe)",
+                "state": "done" if ffprobe_ready else "attention",
+                "detail": (
+                    "Each Apple download is checked for the format it asked for: AAC or ALAC for stereo, "
+                    "E-AC-3 for Dolby Atmos."
+                    if ffprobe_ready
+                    else "No ffprobe beside FFmpeg or on PATH, so Apple downloads skip the format check "
+                    "(AAC or ALAC for stereo, E-AC-3 for Dolby Atmos); the decode check still runs. "
+                    "The managed FFmpeg under Processing (FFmpeg) comes with ffprobe: install it, or "
+                    "check for updates on an existing install. With an FFmpeg of your own, put ffprobe "
+                    "beside it or on PATH."
+                ),
+                "action": "",
+                "action_label": "",
             }
         )
         if container.get("running"):

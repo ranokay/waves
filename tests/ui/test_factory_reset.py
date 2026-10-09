@@ -307,8 +307,10 @@ def test_factory_reset_takes_everything_a_self_update_left_behind(tmp_path, monk
     binf = base / "bin"
     binf.mkdir()
     (binf / "ffmpeg").write_text("x")
+    (binf / "ffprobe").write_text("x")
     (binf / "ffmpeg.json").write_text("{}")
     (binf / "ffmpeg.Qm7x2d.new").write_text("half a binary")
+    (binf / "ffprobe.Zp4r8k.new").write_text("half a binary")
     (binf / "ffmpeg.json.a1b2c3.tmp").write_text("{}")
 
     _run_factory_reset(base, monkeypatch)

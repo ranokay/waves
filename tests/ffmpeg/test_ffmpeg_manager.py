@@ -60,6 +60,9 @@ def test_mr_parse_prefers_newest_release_over_snapshot():
     assert rel.label == "8.1.1"
     assert rel.url == "https://ffmpeg.martin-riedl.de/download/macos/arm64/1778761665_8.1.1/ffmpeg.zip"
     assert rel.sha256_url == rel.url + ".sha256"
+    # martin-riedl publishes ffprobe as its own archive in the same build folder.
+    assert rel.ffprobe_url == "https://ffmpeg.martin-riedl.de/download/macos/arm64/1778761665_8.1.1/ffprobe.zip"
+    assert rel.ffprobe_sha256_url == rel.ffprobe_url + ".sha256"
 
 
 def test_mr_parse_snapshot_fallback_when_no_release():
@@ -91,6 +94,8 @@ def test_btbn_uses_combined_manifest():
     assert rel.url == "https://x/win64.zip"
     assert rel.sha256_url == "https://x/checksums.sha256"
     assert rel.sha256_name == "ffmpeg-master-latest-win64-lgpl.zip"
+    # BtbN's one archive carries ffprobe.exe too, so there is no second download.
+    assert rel.ffprobe_url is None
 
 
 def test_source_info_per_platform():
@@ -116,7 +121,7 @@ def test_extract_flat_zip(tmp_path):
     zp = tmp_path / "f.zip"
     zp.write_bytes(_zip_bytes({"ffmpeg": b"BINARY", "ffprobe": b"x"}))
     dest = tmp_path / "out"
-    fm._extract_ffmpeg(zp, dest, "macos")
+    fm._extract_binary(zp, dest, "ffmpeg")
     assert dest.read_bytes() == b"BINARY"
 
 
@@ -127,19 +132,22 @@ def test_extract_nested_bin_zip(tmp_path):
             {
                 "ffmpeg-master-latest-win64-lgpl/README.txt": b"hi",
                 "ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe": b"WINBIN",
+                "ffmpeg-master-latest-win64-lgpl/bin/ffprobe.exe": b"WINPROBE",
             }
         )
     )
     dest = tmp_path / "out.exe"
-    fm._extract_ffmpeg(zp, dest, "windows")
+    fm._extract_binary(zp, dest, "ffmpeg.exe")
     assert dest.read_bytes() == b"WINBIN"
+    fm._extract_binary(zp, dest, "ffprobe.exe")
+    assert dest.read_bytes() == b"WINPROBE"
 
 
 def test_extract_missing_member(tmp_path):
     zp = tmp_path / "f.zip"
     zp.write_bytes(_zip_bytes({"notffmpeg": b"x"}))
     with pytest.raises(FileNotFoundError):
-        fm._extract_ffmpeg(zp, tmp_path / "out", "macos")
+        fm._extract_binary(zp, tmp_path / "out", "ffmpeg")
 
 
 # --------------------------------------------------------------------------- #
@@ -183,17 +191,32 @@ class _FakeSession:
         raise AssertionError(f"unexpected URL {url}")
 
 
-def _install_fixture(tmp_path, monkeypatch, exe="ffmpeg"):
-    payload = _zip_bytes({exe: b"FAKEFFMPEG"})
-    digest = hashlib.sha256(payload).hexdigest()
-    url = "https://example.test/ffmpeg.zip"
+def _install_fixture(tmp_path, monkeypatch, *, ffprobe_digest=None):
+    """A martin-riedl-shaped release: ffmpeg and ffprobe in archives of their
+    own, each with its .sha256 sidecar. ``ffprobe_digest`` overrides the
+    published ffprobe hash (a corrupted or swapped upload)."""
+    os_key = fm._safe_target()[0]
+    ffmpeg_zip = _zip_bytes({fm._exe_name(os_key): b"FAKEFFMPEG"})
+    ffprobe_zip = _zip_bytes({fm._exe_name(os_key, "ffprobe"): b"FAKEFFPROBE"})
+    ffprobe_digest = ffprobe_digest or hashlib.sha256(ffprobe_zip).hexdigest()
+    folder = "https://example.test/123_8.1.1"
     session = _FakeSession(
         {
-            "ffmpeg.zip.sha256": _Resp(text=f"{digest}  ffmpeg.zip\n"),
-            "ffmpeg.zip": _Resp(content=payload, headers={"Content-Length": str(len(payload))}),
+            "ffmpeg.zip.sha256": _Resp(text=f"{hashlib.sha256(ffmpeg_zip).hexdigest()}  ffmpeg.zip\n"),
+            "ffprobe.zip.sha256": _Resp(text=f"{ffprobe_digest}  ffprobe.zip\n"),
+            "ffmpeg.zip": _Resp(content=ffmpeg_zip, headers={"Content-Length": str(len(ffmpeg_zip))}),
+            "ffprobe.zip": _Resp(content=ffprobe_zip, headers={"Content-Length": str(len(ffprobe_zip))}),
         }
     )
-    rel = fm.Release(source="martin-riedl", version="123_8.1.1", label="8.1.1", url=url, sha256_url=url + ".sha256")
+    rel = fm.Release(
+        source="martin-riedl",
+        version="123_8.1.1",
+        label="8.1.1",
+        url=f"{folder}/ffmpeg.zip",
+        sha256_url=f"{folder}/ffmpeg.zip.sha256",
+        ffprobe_url=f"{folder}/ffprobe.zip",
+        ffprobe_sha256_url=f"{folder}/ffprobe.zip.sha256",
+    )
     # The dummy binary can't actually run, so fake the smoke test.
     monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
     # The dummy binary is also unsigned, so fake the platform signature:
@@ -210,15 +233,23 @@ def test_install_writes_binary_and_manifest(tmp_path, monkeypatch):
 
     assert mgr.is_installed()
     assert mgr.binary_path.read_bytes() == b"FAKEFFMPEG"
+    assert mgr.ffprobe_path.read_bytes() == b"FAKEFFPROBE"
+    assert mgr.ffprobe_path.parent == mgr.binary_path.parent, "the Apple engine looks beside ffmpeg"
     import os
 
     assert os.access(mgr.binary_path, os.X_OK)
+    assert os.access(mgr.ffprobe_path, os.X_OK)
+    # Two archives share one bar: it climbs through both and ends full.
     assert pcts and pcts[-1] == 100.0
+    assert pcts == sorted(pcts), "the bar went backwards between the two downloads"
+    assert any(p <= 50.0 for p in pcts) and any(p > 50.0 for p in pcts)
     assert status["state"] == "managed"
     assert status["version"] == "n8.1.1"
+    assert status["ffprobe"] == str(mgr.ffprobe_path)
     mani = mgr._read_manifest()
     assert mani["version"] == "123_8.1.1"
     assert mani["ffmpeg_version"] == "n8.1.1"
+    assert mani["ffprobe_version"] == "n8.1.1"
 
 
 def test_install_rejects_bad_checksum(tmp_path, monkeypatch):
@@ -455,6 +486,8 @@ def test_remove(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "_which_ffmpeg", lambda os_key: "")
     st = mgr.remove()
     assert not mgr.is_installed() and st["state"] == "missing"
+    assert not mgr.ffprobe_path.exists(), "remove left the managed ffprobe behind"
+    assert st["ffprobe"] == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -462,24 +495,26 @@ def test_remove(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_install_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
     rel, session = _install_fixture(tmp_path, monkeypatch)
-    staged_names: list[str] = []
-    real_extract = fm._extract_ffmpeg
+    staged_names: dict[str, list[str]] = {}
+    real_extract = fm._extract_binary
 
-    def extract(zip_path, dest, os_key):
-        staged_names.append(dest.name)
-        return real_extract(zip_path, dest, os_key)
+    def extract(zip_path, dest, exe):
+        staged_names.setdefault(exe, []).append(dest.name)
+        return real_extract(zip_path, dest, exe)
 
-    monkeypatch.setattr(fm, "_extract_ffmpeg", extract)
+    monkeypatch.setattr(fm, "_extract_binary", extract)
     mgr = fm.FfmpegManager(tmp_path)
 
     mgr.install(release=rel, session=session)
     mgr.install(release=rel, session=session)
 
-    exe = fm._exe_name(mgr.os_key)
-    assert len(staged_names) == 2 and staged_names[0] != staged_names[1]
-    for name in staged_names:
-        assert name.startswith(exe + ".") and name.endswith(".new")
-        assert name != exe + ".new", "the fixed name is what two instances truncate and unlink under each other"
+    for tool in ("ffmpeg", "ffprobe"):
+        exe = fm._exe_name(mgr.os_key, tool)
+        names = staged_names[exe]
+        assert len(names) == 2 and names[0] != names[1]
+        for name in names:
+            assert name.startswith(exe + ".") and name.endswith(".new")
+            assert name != exe + ".new", "the fixed name is what two instances truncate and unlink under each other"
 
 
 def test_a_finished_install_leaves_another_instances_staging_alone(tmp_path, monkeypatch):
@@ -507,3 +542,156 @@ def test_install_stages_the_manifest_too(tmp_path, monkeypatch):
 
     assert mgr._read_manifest()["version"] == "123_8.1.1"
     assert not list(mgr.install_dir.glob("ffmpeg.json.*.tmp")), "manifest staging must not leave litter"
+
+
+# --------------------------------------------------------------------------- #
+# ffprobe travels with ffmpeg: the Apple codec check looks for it beside ffmpeg
+# --------------------------------------------------------------------------- #
+def test_a_one_archive_source_installs_ffprobe_from_that_archive(tmp_path, monkeypatch):
+    # BtbN's zip carries bin/ffprobe.exe beside bin/ffmpeg.exe: one download.
+    asset = "ffmpeg-master-latest-win64-lgpl.zip"
+    payload = _zip_bytes(
+        {
+            "ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe": b"WINBIN",
+            "ffmpeg-master-latest-win64-lgpl/bin/ffprobe.exe": b"WINPROBE",
+            "ffmpeg-master-latest-win64-lgpl/bin/ffplay.exe": b"WINPLAY",
+        }
+    )
+    session = _FakeSession(
+        {
+            "checksums.sha256": _Resp(text=f"{hashlib.sha256(payload).hexdigest()}  {asset}\n"),
+            "win64.zip": _Resp(content=payload, headers={"Content-Length": str(len(payload))}),
+        }
+    )
+    fetched: list[str] = []
+    real_get = session.get
+    session.get = lambda url, **kw: fetched.append(url) or real_get(url, **kw)
+    rel = fm.Release(
+        source="btbn",
+        version=f"{asset}@2026-10-01",
+        label="win64 (2026-10-01)",
+        url="https://x/win64.zip",
+        sha256_url="https://x/checksums.sha256",
+        sha256_name=asset,
+    )
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "N-1")
+    mgr = fm.FfmpegManager(tmp_path)
+    monkeypatch.setattr(mgr, "os_key", "windows", raising=False)
+
+    status = mgr.install(release=rel, session=session)
+
+    assert mgr.binary_path.read_bytes() == b"WINBIN"
+    assert mgr.ffprobe_path.name == "ffprobe.exe" and mgr.ffprobe_path.read_bytes() == b"WINPROBE"
+    assert status["ffprobe"] == str(mgr.ffprobe_path)
+    assert fetched.count("https://x/win64.zip") == 1, "the archive that carries both was downloaded twice"
+
+
+def test_a_bad_ffprobe_checksum_installs_neither_binary(tmp_path, monkeypatch):
+    rel, session = _install_fixture(tmp_path, monkeypatch)
+    mgr = fm.FfmpegManager(tmp_path)
+    mgr.install(release=rel, session=session)
+    mgr.binary_path.write_bytes(b"WORKING-FFMPEG")
+    mgr.ffprobe_path.write_bytes(b"WORKING-FFPROBE")
+    good_manifest = mgr._read_manifest()
+
+    bad_rel, bad_session = _install_fixture(tmp_path, monkeypatch, ffprobe_digest="deadbeef")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        mgr.install(release=dataclasses.replace(bad_rel, version="999_9.0"), session=bad_session)
+
+    assert mgr.binary_path.read_bytes() == b"WORKING-FFMPEG", "a verified ffmpeg landed beside an unverified ffprobe"
+    assert mgr.ffprobe_path.read_bytes() == b"WORKING-FFPROBE"
+    assert mgr._read_manifest() == good_manifest
+    assert _leftovers(mgr) == []
+
+
+def test_an_archive_without_ffprobe_installs_nothing(tmp_path, monkeypatch):
+    os_key = fm._safe_target()[0]
+    payload = _zip_bytes({fm._exe_name(os_key): b"FFMPEGONLY"})
+    url = "https://example.test/ffmpeg.zip"
+    session = _FakeSession(
+        {
+            "ffmpeg.zip.sha256": _Resp(text=f"{hashlib.sha256(payload).hexdigest()}  ffmpeg.zip\n"),
+            "ffmpeg.zip": _Resp(content=payload, headers={"Content-Length": str(len(payload))}),
+        }
+    )
+    rel = fm.Release(source="btbn", version="1_1.0", label="1.0", url=url, sha256_url=url + ".sha256")
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8")
+    monkeypatch.setattr(fm.FfmpegManager, "_macos_verify", lambda self, path: None)
+    mgr = fm.FfmpegManager(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="ffprobe"):
+        mgr.install(release=rel, session=session)
+
+    assert not mgr.is_installed() and not mgr.has_ffprobe()
+    assert not mgr.manifest_path.exists()
+    assert _leftovers(mgr) == []
+
+
+def test_an_install_without_its_ffprobe_is_offered_its_own_build(tmp_path, monkeypatch):
+    """A managed ffmpeg that has no ffprobe beside it (installed before the
+    pair) reads as out of date even on the newest build, so Update adds one."""
+    rel, session = _install_fixture(tmp_path, monkeypatch)
+    mgr = fm.FfmpegManager(tmp_path)
+    mgr.install(release=rel, session=session)
+    monkeypatch.setattr(fm, "latest", lambda os_key, arch, session=None: rel)
+    assert mgr.update_available() == (False, "123_8.1.1", "123_8.1.1")
+
+    mgr.ffprobe_path.unlink()
+    assert mgr.status()["ffprobe"] == ""
+    assert mgr.update_available() == (True, "123_8.1.1", "123_8.1.1")
+
+    mgr.install(release=rel, session=session)
+    assert mgr.has_ffprobe()
+    assert mgr.update_available()[0] is False
+
+
+def test_status_reports_the_ffprobe_beside_an_unmanaged_ffmpeg(tmp_path, monkeypatch):
+    os_key = fm._safe_target()[0]
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    ffmpeg = tools / fm._exe_name(os_key)
+    ffmpeg.write_bytes(b"x")
+    ffmpeg.chmod(0o755)
+    monkeypatch.setattr(fm, "_which_ffmpeg", lambda os_key: str(ffmpeg))
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n7.1")
+    mgr = fm.FfmpegManager(tmp_path / "app")
+    assert mgr.status()["ffprobe"] == ""
+
+    ffprobe = tools / fm._exe_name(os_key, "ffprobe")
+    ffprobe.write_bytes(b"x")
+    ffprobe.chmod(0o755)
+    st = mgr.status()
+    assert st["state"] == "path" and st["ffprobe"] == str(ffprobe)
+
+
+def test_the_launch_sweep_takes_an_aside_ffprobe_too(tmp_path, monkeypatch):
+    # Windows renames a running ffprobe.exe aside (an Apple codec check in
+    # flight) exactly as it does ffmpeg.exe; both are the manager's own.
+    mgr = fm.FfmpegManager(tmp_path)
+    monkeypatch.setattr(mgr, "os_key", "windows", raising=False)
+    mgr.install_dir.mkdir(parents=True)
+    for name in ("ffmpeg.exe.old-11", "ffprobe.exe.old-12", "ffprobe.exe", "my-ffprobe.exe.old-13"):
+        (mgr.install_dir / name).write_bytes(b"x")
+
+    mgr.sweep_aside()
+
+    assert sorted(p.name for p in mgr.install_dir.iterdir()) == ["ffprobe.exe", "my-ffprobe.exe.old-13"]
+
+
+def test_an_unreadable_bin_folder_reads_as_not_installed(tmp_path, monkeypatch):
+    """A bin folder without search permission makes the stat itself raise;
+    status() runs on the GUI thread and the install's failure path asks too,
+    so the answer is "not installed", never an exception."""
+    real_is_file = fm.Path.is_file
+
+    def is_file(self):
+        if self.parent.name == "bin":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_file(self)
+
+    monkeypatch.setattr(fm.Path, "is_file", is_file)
+    monkeypatch.setattr(fm, "_which_ffmpeg", lambda os_key: "")
+    mgr = fm.FfmpegManager(tmp_path)
+
+    assert mgr.is_installed() is False and mgr.has_ffprobe() is False
+    assert mgr.status()["state"] == "missing"

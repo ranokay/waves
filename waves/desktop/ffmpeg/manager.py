@@ -7,6 +7,11 @@ FFmpeg and point the app at the binary, this module downloads a trusted static
 build on demand into the app's own data folder, verifies it, and can tell when a
 newer build is available.
 
+Every managed install is a pair: ``ffprobe`` lands beside ``ffmpeg``, through
+the same checksum, signature and smoke-test gates. Apple deliveries read their
+codec with it before they land, and the engine finds it beside the managed
+ffmpeg, so an install without one would quietly skip that check.
+
 Nothing here touches Qt, so it is pure and unit-testable; the Qt slots/signals
 that drive the Settings UI live in :mod:`waves.desktop.backend`.
 
@@ -16,13 +21,14 @@ Sources (native build per CPU arch, chosen for trust + automatability):
   Apple-Silicon arm64, not Rosetta); the macOS builds are published signed +
   notarized, and on macOS we *verify* that signature (``codesign --verify``)
   before trusting the download rather than assuming it. Clean URLs
-  ``/download/{os}/{arch}/{version}/ffmpeg.zip`` each with a ``.sha256`` sidecar.
+  ``/download/{os}/{arch}/{version}/ffmpeg.zip`` each with a ``.sha256`` sidecar;
+  ffprobe is a separate ``ffprobe.zip`` in the same folder, with its own sidecar.
   ``{version}`` is ``<epoch>_<label>`` so "is there a newer build?" is an integer
   compare on the epoch. (GPL build, we never redistribute it; the app merely
   invokes a separate program the user downloaded.)
 * **Windows** → ``BtbN/FFmpeg-Builds`` GitHub releases (martin-riedl has no
-  Windows builds). LGPL ``win64``/``winarm64`` zip, verified against the
-  release's ``checksums.sha256``.
+  Windows builds). LGPL ``win64``/``winarm64`` zip carrying both executables,
+  verified against the release's ``checksums.sha256``.
 
 We never ship the binary ourselves, so Waves carries no FFmpeg redistribution or
 licensing obligation.
@@ -84,6 +90,10 @@ class Release:
     sha256_url: str | None = None
     sha256: str | None = None  # inline expected hash, when known up front
     sha256_name: str | None = None  # asset basename to select from a multi-line manifest
+    # ffprobe's own archive and sidecar, for a source that publishes it apart
+    # from ffmpeg (martin-riedl). None: the ffmpeg archive carries it (BtbN).
+    ffprobe_url: str | None = None
+    ffprobe_sha256_url: str | None = None
 
 
 def target() -> tuple[str, str]:
@@ -104,8 +114,8 @@ def target() -> tuple[str, str]:
     raise FfmpegUnsupportedPlatform(f"No FFmpeg source for {system}/{machine}")
 
 
-def _exe_name(os_key: str) -> str:
-    return "ffmpeg.exe" if os_key == "windows" else "ffmpeg"
+def _exe_name(os_key: str, tool: str = "ffmpeg") -> str:
+    return f"{tool}.exe" if os_key == "windows" else tool
 
 
 # --------------------------------------------------------------------------- #
@@ -141,13 +151,15 @@ def _mr_parse(html: str, os_key: str, arch: str) -> Release | None:
     if chosen is None:
         return None
     segment = chosen[1]
-    base = f"{_MR_BASE}/download/{os_key}/{arch}/{segment}/ffmpeg.zip"
+    folder = f"{_MR_BASE}/download/{os_key}/{arch}/{segment}"
     return Release(
         source="martin-riedl",
         version=segment,
         label=segment.partition("_")[2],
-        url=base,
-        sha256_url=base + ".sha256",
+        url=f"{folder}/ffmpeg.zip",
+        sha256_url=f"{folder}/ffmpeg.zip.sha256",
+        ffprobe_url=f"{folder}/ffprobe.zip",
+        ffprobe_sha256_url=f"{folder}/ffprobe.zip.sha256",
     )
 
 
@@ -229,7 +241,7 @@ def source_info(os_key: str) -> dict:
 # Manager
 # --------------------------------------------------------------------------- #
 class FfmpegManager:
-    """Download / inspect / update a managed FFmpeg binary under ``app_dir``."""
+    """Download / inspect / update a managed FFmpeg (ffmpeg plus ffprobe) under ``app_dir``."""
 
     def __init__(self, app_dir: str | os.PathLike) -> None:
         self.app_dir = Path(app_dir)
@@ -248,12 +260,18 @@ class FfmpegManager:
         return self.install_dir / _exe_name(self.os_key)
 
     @property
+    def ffprobe_path(self) -> Path:
+        return self.install_dir / _exe_name(self.os_key, "ffprobe")
+
+    @property
     def manifest_path(self) -> Path:
         return self.install_dir / "ffmpeg.json"
 
     def is_installed(self) -> bool:
-        p = self.binary_path
-        return p.is_file() and os.access(p, os.X_OK)
+        return _runnable(self.binary_path)
+
+    def has_ffprobe(self) -> bool:
+        return _runnable(self.ffprobe_path)
 
     def _read_manifest(self) -> dict:
         try:
@@ -271,7 +289,8 @@ class FfmpegManager:
         ``missing`` (red). ``managed`` is True only for our own copy; ``custom``
         is True when a user-linked override is what's being used.
         ``source``/``source_url``/``source_license`` describe the build source
-        for *this* platform only.
+        for *this* platform only. ``ffprobe`` is the ffprobe in the same folder
+        as the reported binary, ``""`` when none is there.
 
         Precedence is ``managed → custom → PATH → missing``: the managed copy is
         reported first so the transient managed path that the backend injects
@@ -300,6 +319,7 @@ class FfmpegManager:
                 "path": str(self.binary_path),
                 "version": mani.get("ffmpeg_version") or mani.get("label") or "",
                 "build": mani.get("version", ""),
+                "ffprobe": _ffprobe_beside(str(self.binary_path), self.os_key),
             }
         cp = (custom_path or "").strip()
         if cp and os.path.isfile(cp):
@@ -314,6 +334,7 @@ class FfmpegManager:
                     "path": cp,
                     "version": ver,
                     "build": "",
+                    "ffprobe": _ffprobe_beside(cp, self.os_key),
                 }
         on_path = _which_ffmpeg(self.os_key)
         if on_path:
@@ -326,6 +347,7 @@ class FfmpegManager:
                 "path": on_path,
                 "version": _probe_version(on_path),
                 "build": "",
+                "ffprobe": _ffprobe_beside(on_path, self.os_key),
             }
         return {
             **base,
@@ -336,19 +358,23 @@ class FfmpegManager:
             "path": "",
             "version": "",
             "build": "",
+            "ffprobe": "",
         }
 
     def update_available(self, session: requests.Session | None = None) -> tuple[bool, str, str]:
         """Return ``(available, current_build, latest_build)``.
 
         Only meaningful for a *managed* install; PATH/missing report no update.
+        An install without its ffprobe (one made before the pair existed)
+        reports the current build as an update, so Update installs the pair.
         """
         if not self.is_installed():
             return False, "", ""
         current = self._read_manifest().get("version", "")
         rel = latest(self.os_key, self.arch, session)
         latest_build = rel.version if rel else ""
-        return (bool(rel and latest_build and latest_build != current), current, latest_build)
+        outdated = latest_build != current or not self.has_ffprobe()
+        return (bool(rel and latest_build and outdated), current, latest_build)
 
     # ----- install ------------------------------------------------------- #
     def install(
@@ -359,13 +385,14 @@ class FfmpegManager:
         abort: Event | None = None,
         session: requests.Session | None = None,
     ) -> dict:
-        """Download, verify, extract and install the binary; return ``status()``.
+        """Download, verify, extract and install ffmpeg and ffprobe; return ``status()``.
 
-        Atomic: a fresh binary is staged next to the target, checksum-verified,
-        (on macOS) signature-verified, and smoke-tested *before* it is swapped in
-        via :func:`os.replace`. A failed/cancelled install, including a
-        checksum-valid download that won't actually run, therefore never
-        corrupts the existing working copy. ``progress_cb(pct)`` and
+        Atomic: fresh binaries are staged next to their targets,
+        checksum-verified, (on macOS) signature-verified, and smoke-tested
+        *before* either is swapped in via :func:`os.replace`. A failed or
+        cancelled install, including a checksum-valid download that won't
+        actually run, therefore never corrupts the existing working copy, and
+        ffprobe gets every gate ffmpeg gets. ``progress_cb(pct)`` and
         ``log_cb(msg)`` are optional.
         """
 
@@ -378,6 +405,38 @@ class FfmpegManager:
             if abort is not None and abort.is_set():
                 raise FfmpegCancelled()
 
+        def _fetch(
+            url: str,
+            dest: Path,
+            *,
+            sha256: str | None,
+            sha256_url: str | None,
+            sha256_name: str | None,
+            span: tuple[float, float],
+        ) -> None:
+            # span is this archive's (start, width) share of the progress bar.
+            start, width = span
+
+            def report(pct: float) -> None:
+                if progress_cb is not None:
+                    progress_cb(start + pct * width / 100.0)
+
+            self._download(sess, url, dest, report, abort)
+            _check_abort()
+            # Verify the published checksum, mandatory (fail-closed).
+            # A same-channel .sha256 is only a corruption check, not proof of
+            # authenticity, but refusing to install an *unverifiable* download
+            # closes the easiest attack: dropping/404ing the sidecar so the check
+            # is skipped. Both real sources (martin-riedl, BtbN) always publish a
+            # .sha256, so this never blocks a legitimate install.
+            expected = sha256 or self._fetch_sha256(sess, sha256_url, sha256_name)
+            if not expected:
+                raise ValueError("refusing to install FFmpeg: no checksum available to verify the download")
+            _log("verifying checksum")
+            actual = sha256_file(dest)
+            if actual.lower() != expected.lower():
+                raise ValueError(f"checksum mismatch: expected {expected}, got {actual}")
+
         sess = session or _session()
         if release is None:
             _log("resolving latest build")
@@ -388,74 +447,91 @@ class FfmpegManager:
         self.install_dir.mkdir(parents=True, exist_ok=True)
         _check_abort()
 
-        # 1. download the zip (streamed, with progress) to a temp file.
-        _log(f"downloading {release.label or release.version}")
+        # 1. download the archives (streamed, with progress) to temp files.
+        # A source that publishes ffprobe apart ships an archive of about the
+        # same size, so each one fills half of the progress bar.
         with tempfile.NamedTemporaryFile(dir=self.install_dir, suffix=".zip", delete=False) as tmp:
             zip_tmp = Path(tmp.name)
-        # A staged name of this install's OWN: two Waves instances share
+        ffprobe_zip_tmp = zip_tmp
+        if release.ffprobe_url:
+            with tempfile.NamedTemporaryFile(dir=self.install_dir, suffix=".zip", delete=False) as tmp:
+                ffprobe_zip_tmp = Path(tmp.name)
+        # Staged names of this install's OWN: two Waves instances share
         # <config>/bin, and both staging through one fixed "ffmpeg.new" let
         # either truncate, promote, or unlink the other's half-written binary
         # (the in-process inflight flag cannot see a second process). A
         # crashed install's leftover stays behind under the same policy as
         # the tmp zip above; neither carries user data.
-        fd_staged, staged_name = tempfile.mkstemp(
-            dir=self.install_dir, prefix=_exe_name(self.os_key) + ".", suffix=".new"
-        )
-        os.close(fd_staged)
-        staged = Path(staged_name)
+        staged = self._staging_file(self.binary_path.name)
+        staged_ffprobe = self._staging_file(self.ffprobe_path.name)
         try:
-            self._download(sess, release.url, zip_tmp, progress_cb, abort)
-            _check_abort()
-
-            # 2. verify the published checksum, mandatory (fail-closed).
-            # A same-channel .sha256 is only a corruption check, not proof of
-            # authenticity, but refusing to install an *unverifiable* download
-            # closes the easiest attack: dropping/404ing the sidecar so the check
-            # is skipped. Both real sources (martin-riedl, BtbN) always publish a
-            # .sha256, so this never blocks a legitimate install.
-            expected = release.sha256 or self._fetch_sha256(sess, release.sha256_url, release.sha256_name)
-            if not expected:
-                raise ValueError("refusing to install FFmpeg: no checksum available to verify the download")
-            _log("verifying checksum")
-            actual = sha256_file(zip_tmp)
-            if actual.lower() != expected.lower():
-                raise ValueError(f"checksum mismatch: expected {expected}, got {actual}")
-
-            # 3. extract the ffmpeg member to a staged binary next to the target.
-            _log("installing")
-            _extract_ffmpeg(zip_tmp, staged, self.os_key)
-            staged.chmod(
-                staged.stat().st_mode | stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
+            ffmpeg_width = 50.0 if release.ffprobe_url else 100.0
+            _log(f"downloading {release.label or release.version}")
+            _fetch(
+                release.url,
+                zip_tmp,
+                sha256=release.sha256,
+                sha256_url=release.sha256_url,
+                sha256_name=release.sha256_name,
+                span=(0.0, ffmpeg_width),
             )
+            if release.ffprobe_url:
+                _log("downloading ffprobe")
+                _fetch(
+                    release.ffprobe_url,
+                    ffprobe_zip_tmp,
+                    sha256=None,
+                    sha256_url=release.ffprobe_sha256_url,
+                    sha256_name=None,
+                    span=(ffmpeg_width, 100.0 - ffmpeg_width),
+                )
 
-            # 4. macOS: verify the advertised signature / notarization before we
-            # trust the binary. We do NOT strip quarantine or ad-hoc re-sign an
+            # 2. extract each member to a staged binary next to its target.
+            _log("installing")
+            _extract_binary(zip_tmp, staged, self.binary_path.name)
+            _extract_binary(ffprobe_zip_tmp, staged_ffprobe, self.ffprobe_path.name)
+            for path in (staged, staged_ffprobe):
+                path.chmod(
+                    path.stat().st_mode | stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
+                )
+
+            # 3. macOS: verify the advertised signature / notarization before we
+            # trust the binaries. We do NOT strip quarantine or ad-hoc re-sign an
             # unverified download to slip it past Gatekeeper, that would launder
             # a possibly-tampered binary. On a genuine signed+notarized build
             # this is a no-op that leaves the real signature intact.
             if self.os_key == "macos":
                 self._macos_verify(staged)
+                self._macos_verify(staged_ffprobe)
 
-            # 5. smoke-test the STAGED binary BEFORE swapping it in, so a
+            # 4. smoke-test the STAGED binaries BEFORE swapping them in, so a
             # checksum-valid but non-runnable download (wrong arch, missing
             # loader, Gatekeeper block) leaves the existing working copy
-            # untouched. Only a binary that actually runs gets promoted.
+            # untouched. Only binaries that actually run get promoted.
             ver = _probe_version(str(staged))
             if not ver:
                 raise RuntimeError("FFmpeg downloaded but `ffmpeg -version` failed, keeping the existing binary")
+            ffprobe_ver = _probe_version(str(staged_ffprobe))
+            if not ffprobe_ver:
+                raise RuntimeError("FFmpeg downloaded but `ffprobe -version` failed, keeping the existing binaries")
 
-            # 6. atomically swap the validated binary into place.
+            # 5. atomically swap the validated binaries into place, ffprobe
+            # first: should the ffmpeg swap then fail, the working ffmpeg and
+            # its manifest stay as they were, beside the new ffprobe, which
+            # runs on its own.
             self.sweep_aside()
-            self._swap_in(staged)
+            self._swap_in(staged_ffprobe, self.ffprobe_path)
+            self._swap_in(staged, self.binary_path)
         finally:
-            zip_tmp.unlink(missing_ok=True)
-            staged.unlink(missing_ok=True)
+            for path in (zip_tmp, ffprobe_zip_tmp, staged, staged_ffprobe):
+                path.unlink(missing_ok=True)
 
-        # 7. record the manifest only after a successful swap, so status() never
+        # 6. record the manifest only after a successful swap, so status() never
         # reports managed/green off a manifest for an install that didn't land.
         manifest = {
             **asdict(release),
             "ffmpeg_version": ver,
+            "ffprobe_version": ffprobe_ver,
             "installed_at": int(time.time()),
         }
         # Staged and swapped like every other shared-folder JSON: a plain
@@ -474,24 +550,26 @@ class FfmpegManager:
             with contextlib.suppress(OSError):
                 os.remove(manifest_tmp)
             raise
-        _log(f"installed ffmpeg {ver}")
+        _log(f"installed ffmpeg {ver} and ffprobe {ffprobe_ver}")
         return self.status()
 
     def remove(self) -> dict:
-        """Delete the managed binary and its manifest, and report.
+        """Delete the managed binaries and their manifest, and report.
 
-        The status dict gains ``remove_error`` (plain wording) when the binary
+        The status dict gains ``remove_error`` (plain wording) when a binary
         could not be removed: on Windows a running ``ffmpeg.exe`` (a FLAC
-        extraction or a preview remux in flight) cannot be deleted, only
-        renamed, so it is moved aside and swept at the next launch; when even
-        that fails the caller gets a message instead of an exception from a
-        GUI slot.
+        extraction or a preview remux in flight) or ``ffprobe.exe`` (an Apple
+        codec check) cannot be deleted, only renamed, so it is moved aside and
+        swept at the next launch; when even that fails the caller gets a
+        message instead of an exception from a GUI slot. ffprobe goes first,
+        so a failure there leaves the pair whole.
         """
         error = ""
         try:
-            if self.os_key == "windows" and self.binary_path.exists():
-                self._move_aside(self.binary_path)
-            self.binary_path.unlink(missing_ok=True)
+            for path in (self.ffprobe_path, self.binary_path):
+                if self.os_key == "windows" and path.exists():
+                    self._move_aside(path)
+                path.unlink(missing_ok=True)
         except OSError:
             logger.warning("ffmpeg: could not remove the managed binary", exc_info=True)
             error = "FFmpeg is in use right now; try again once downloads and previews have finished."
@@ -505,7 +583,7 @@ class FfmpegManager:
             status["remove_error"] = error
         return status
 
-    #: Suffix of a managed ``ffmpeg.exe`` that was renamed out of the way while
+    #: Suffix of a managed ``.exe`` that was renamed out of the way while
     #: it was running (Windows lets a running executable be renamed, never
     #: replaced or deleted). Swept at the next launch, see :meth:`sweep_aside`.
     _ASIDE_SUFFIX = ".old-"
@@ -517,30 +595,37 @@ class FfmpegManager:
         os.replace(path, aside)
         return aside
 
-    def _swap_in(self, staged: Path) -> None:
-        """Promote the validated staged binary to ``binary_path``.
+    def _staging_file(self, exe: str) -> Path:
+        """A fresh, empty ``<exe>.<random>.new`` in the bin folder."""
+        fd, name = tempfile.mkstemp(dir=self.install_dir, prefix=exe + ".", suffix=".new")
+        os.close(fd)
+        return Path(name)
+
+    def _swap_in(self, staged: Path, target: Path) -> None:
+        """Promote a validated staged binary to ``target``.
 
         On Windows ``os.replace`` over a running ``ffmpeg.exe`` fails with
         access denied (python-ffmpeg spawns the managed binary for every FLAC
-        extraction, and a preview remux can be in flight), so the live file is
-        first renamed aside, which Windows allows, and the aside copy is
-        deleted best-effort at the next launch. Elsewhere the rename over a
-        running binary is fine. If the promote itself then fails, the aside
-        copy is moved back, so a failed update keeps the working binary
-        instead of leaving it for the next sweep to delete.
+        extraction, and a preview remux can be in flight; an Apple codec check
+        runs ``ffprobe.exe``), so the live file is first renamed aside, which
+        Windows allows, and the aside copy is deleted best-effort at the next
+        launch. Elsewhere the rename over a running binary is fine. If the
+        promote itself then fails, the aside copy is moved back, so a failed
+        update keeps the working binary instead of leaving it for the next
+        sweep to delete.
         """
         aside = None
-        if self.os_key == "windows" and self.binary_path.exists():
+        if self.os_key == "windows" and target.exists():
             try:
-                aside = self._move_aside(self.binary_path)
+                aside = self._move_aside(target)
             except OSError:
                 logger.debug("ffmpeg: could not move the running binary aside", exc_info=True)
         try:
-            os.replace(staged, self.binary_path)
+            os.replace(staged, target)
         except OSError:
-            if aside is not None and not self.binary_path.exists():
+            if aside is not None and not target.exists():
                 try:
-                    os.replace(aside, self.binary_path)
+                    os.replace(aside, target)
                 except OSError:
                     logger.debug("ffmpeg: could not move the previous binary back", exc_info=True)
             raise
@@ -553,9 +638,12 @@ class FfmpegManager:
         Only the manager's own ``<exe>.old-<pid>`` files under its ``bin``
         folder are touched, never anything of the user's.
         """
-        pattern = f"{_exe_name(self.os_key)}{self._ASIDE_SUFFIX}*"
         try:
-            leftovers = list(self.install_dir.glob(pattern))
+            leftovers = [
+                path
+                for tool in ("ffmpeg", "ffprobe")
+                for path in self.install_dir.glob(f"{_exe_name(self.os_key, tool)}{self._ASIDE_SUFFIX}*")
+            ]
         except OSError:
             return
         for path in leftovers:
@@ -648,6 +736,28 @@ def _which_ffmpeg(os_key: str) -> str:
     return shutil.which(_exe_name(os_key)) or ""
 
 
+def _ffprobe_beside(ffmpeg_path: str, os_key: str) -> str:
+    """The runnable ffprobe in the same folder as ``ffmpeg_path``, or "".
+
+    The Apple engine looks for ffprobe there first (``ffprobe_for``), so this
+    is where the manager installs it and what its status reports.
+    """
+    if not ffmpeg_path:
+        return ""
+    sibling = Path(ffmpeg_path).with_name(_exe_name(os_key, "ffprobe"))
+    return str(sibling) if _runnable(sibling) else ""
+
+
+def _runnable(path: Path) -> bool:
+    """Whether ``path`` is an executable file. An unreadable folder (a
+    PermissionError from the stat) reads as not runnable, never as an
+    exception: status() runs on the GUI thread."""
+    try:
+        return path.is_file() and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
 # Probing a binary means fork+exec+wait on it, which can block for the whole
 # timeout when the file lives on a hung/stale mount. status() runs on the GUI
 # thread (it's the synchronous ffmpegStatus slot), so keep the timeout short and
@@ -659,7 +769,8 @@ _probe_cache: dict[str, tuple[float, int, str]] = {}
 
 
 def _probe_version(path: str) -> str:
-    """Return the ``ffmpeg version <x>`` token, or "" if the binary won't run.
+    """Return the ``ffmpeg version <x>`` (or ``ffprobe version <x>``) token,
+    or "" if the binary won't run.
 
     Memoized per (path, mtime, size) so a repeated ``status()`` on the GUI
     thread doesn't re-fork a subprocess. A short timeout bounds the worst case
@@ -684,19 +795,19 @@ def _probe_version(path: str) -> str:
         ver = ""
     else:
         first = (out.stdout or "").splitlines()[0] if out.stdout else ""
-        m = re.search(r"ffmpeg version (\S+)", first)
+        m = re.search(r"(?:ffmpeg|ffprobe) version (\S+)", first)
         ver = m.group(1) if m else (first.strip() or "")
     _probe_cache[path] = (key[0], key[1], ver)
     return ver
 
 
-def _extract_ffmpeg(zip_path: Path, dest: Path, os_key: str) -> None:
-    """Extract the ffmpeg executable from ``zip_path`` to ``dest``.
+def _extract_binary(zip_path: Path, dest: Path, exe: str) -> None:
+    """Extract the executable named ``exe`` from ``zip_path`` to ``dest``.
 
-    Handles both flat zips (martin-riedl: ``ffmpeg`` at root) and nested ones
-    (BtbN: ``ffmpeg-…/bin/ffmpeg.exe``) by matching the member basename.
+    Handles both flat zips (martin-riedl: ``ffmpeg`` or ``ffprobe`` at root)
+    and nested ones (BtbN: ``ffmpeg-…/bin/ffprobe.exe``) by matching the
+    member basename.
     """
-    exe = _exe_name(os_key)
     with zipfile.ZipFile(zip_path) as zf:
         members = [n for n in zf.namelist() if not n.endswith("/")]
         cand = [n for n in members if os.path.basename(n) == exe]

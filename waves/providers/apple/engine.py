@@ -149,12 +149,14 @@ def _require_cookies(cookies_path: str) -> str:
 
 
 def ffprobe_for(ffmpeg_path: str = "") -> str:
-    """An ffprobe binary to use: beside the resolved ffmpeg first (the
-    manager installs both; neither is on PATH then), else PATH, else "".
+    """An ffprobe binary to use: beside the resolved ffmpeg first, else
+    PATH, else "".
 
-    Managed-ffmpeg users have no ffprobe on PATH, so PATH-only lookup would
-    silently disable every verification for exactly the users who installed
-    ffmpeg the supported way.
+    The FFmpeg manager installs ffprobe beside its ffmpeg, and neither is on
+    PATH then, so PATH-only lookup would silently disable every verification
+    for exactly the users who installed ffmpeg the supported way. When
+    neither place has one, callers skip the codec check, and the Apple
+    setup wizard's codec-check step says so.
     """
     if ffmpeg_path:
         sibling = Path(ffmpeg_path).parent / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
