@@ -19,11 +19,13 @@ import pytest
 from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
-# Every text the Settings page renders, Loader items included.
+# Every text the Settings page shows, Loader items included. A hidden
+# subtree is skipped: the schema renders control variants per row, and only
+# the visible one is on screen.
 _TEXTS_BODY = """
     var texts = [];
     function collect(o) {
-        if (!o) return;
+        if (!o || o.visible === false) return;
         if (o.text !== undefined && ("" + o.text).length > 0) texts.push("" + o.text);
         if (o.item) collect(o.item);
         var kids = o.children || [];

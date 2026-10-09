@@ -162,7 +162,7 @@ from waves.providers import (
     TidalProvider,
 )
 from waves.providers.apple import runner
-from waves.providers.apple.engine import AppleCredential, ffprobe_for
+from waves.providers.apple.engine import AppleCredential
 from waves.providers.apple.engines import EngineFacts, EnginePolicy
 from waves.providers.apple.files import (
     facts_without_share_url,
@@ -598,18 +598,19 @@ _FACTORY_WIPE_SUBDIRS = (
         (re.compile(r"apply_update_\d+\.bat\Z"),),
     ),
     # The managed ffmpeg/ffprobe pair, its manifest and the installer's
-    # strays: each binary is staged through mkstemp(prefix="<exe>.",
-    # suffix=".new") and the manifest through mkstemp(prefix="ffmpeg.json.",
-    # suffix=".tmp"), so a crashed install leaves a name with a random middle
-    # that no exact list can hold, and the bin folder then never fell. (The
-    # download's tmp zip has no Waves-written prefix to anchor on and
-    # deliberately stays behind, as before.)
+    # strays. Each binary is staged through mkstemp(prefix="<exe>.",
+    # suffix=".new"), the manifest through mkstemp(prefix="ffmpeg.json.",
+    # suffix=".tmp"), and on Windows a replaced or removed .exe is renamed
+    # to "<exe>.old-<pid>", so the patterns cover names with a part no exact
+    # list can hold. The download's tmp zip has no Waves-written prefix to
+    # anchor on, so it stays and keeps its directory.
     (
         "bin",
         ("ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe", "ffmpeg.new", "ffmpeg.exe.new", "ffmpeg.json"),
         (
             re.compile(r"(?:ffmpeg|ffprobe)(\.exe)?\.[0-9A-Za-z_-]+\.new\Z"),
             re.compile(r"ffmpeg\.json\.[0-9A-Za-z_-]+\.tmp\Z"),
+            re.compile(r"(?:ffmpeg|ffprobe)\.exe\.old-\d+\Z"),
         ),
     ),
     # The motion background's local copy (motionVideoUrl): the cached loop is
@@ -20280,10 +20281,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         key="ffmpeg-install",
                         scope=_install_failure_scope(exc),
                     )
+                    # A failed ffmpeg swap can still have landed the new
+                    # ffprobe (it goes in first): readers of the bin folder
+                    # re-read it.
+                    self.ffmpegStatusChanged.emit()
                     return
                 # ffmpeg is available, undo any in-memory feature disabling
                 # and rebuild the Download so the new binary is used immediately.
                 self._restore_ffmpeg_flags()
+                # Drop the in-memory path first: Download's PATH injection
+                # (or an older managed path) would otherwise outlive the
+                # install, and the re-resolve below must land on the managed
+                # pair, ffprobe included, unless the user linked their own.
+                self._restore_ffmpeg_path()
                 if self._logged_in:
                     self._init_download()
                 self._configure_apple_provider()
@@ -20915,13 +20925,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # ensure_port persists it (when free) the next time the step runs.
         port = preferred_port if 1024 <= preferred_port <= 65535 else persisted_port
         port_dirty = bool(port) and port != persisted_port
-        # The runner's own lookup (runner.probe_binary): beside the
-        # provider's resolved ffmpeg, else PATH. A file-existence read.
-        provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
-        try:
-            ffprobe_ready = bool(ffprobe_for(str(getattr(provider, "ffmpeg_path", "") or "")))
-        except Exception:
-            ffprobe_ready = False
+        # The codec check's own lookup, a file-existence read.
+        ffprobe_ready = bool(runner.provider_ffprobe((getattr(self, "providers", None) or {}).get(CTX_APPLE)))
         steps = self._apple_wizard_steps(
             enabled=bool(flags.get("enabled", False)),
             cookies_path=cookies_path,
@@ -21066,7 +21071,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if ffprobe_ready
                     else "No ffprobe beside FFmpeg or on PATH, so Apple downloads skip the format check "
                     "(AAC or ALAC for stereo, E-AC-3 for Dolby Atmos); the decode check still runs. "
-                    "Install or update the managed FFmpeg under Processing (FFmpeg) to add it."
+                    "The managed FFmpeg under Processing (FFmpeg) comes with ffprobe: install it, or "
+                    "check for updates on an existing install. With an FFmpeg of your own, put ffprobe "
+                    "beside it or on PATH."
                 ),
                 "action": "",
                 "action_label": "",

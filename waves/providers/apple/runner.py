@@ -635,9 +635,14 @@ def embed_cover_bytes(hooks: AppleJobHooks, cover: bytes | None) -> bytes | None
 
 
 def probe_binary(hooks: AppleJobHooks) -> str:
-    """An ffprobe binary for Apple verification: beside the resolved ffmpeg
-    first (managed installs), else PATH, else "" (trust)."""
-    provider = hooks.provider()
+    """An ffprobe binary for Apple verification, or "" (trust)."""
+    return provider_ffprobe(hooks.provider())
+
+
+def provider_ffprobe(provider) -> str:
+    """The ffprobe Apple verification uses for this provider: beside its
+    resolved ffmpeg first (managed installs), else PATH, else "". The setup
+    wizard's codec-check step reads the same answer."""
     ffmpeg = str(getattr(provider, "ffmpeg_path", "") or "")
     try:
         return apple_engine.ffprobe_for(ffmpeg)

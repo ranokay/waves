@@ -72,6 +72,16 @@ def test_the_ffmpeg_installer_strays_fall_with_the_bin_folder():
     assert not _wipes("bin", "notffprobe.x.new")
 
 
+def test_the_windows_aside_binaries_fall_with_the_bin_folder():
+    """On Windows the manager renames a replaced or removed .exe to
+    <exe>.old-<pid>; a reset in the same session must not leave bin/ alive."""
+    assert _wipes("bin", "ffmpeg.exe.old-4242")
+    assert _wipes("bin", "ffprobe.exe.old-4242")
+    assert not _wipes("bin", "ffprobe.exe.old-")
+    assert not _wipes("bin", "ffprobe.exe.old-42.bak")
+    assert not _wipes("bin", "my-ffprobe.exe.old-42")
+
+
 def test_the_managed_pair_falls_with_the_bin_folder():
     """The manager installs ffprobe beside ffmpeg; a reset that left it kept
     bin/ alive."""

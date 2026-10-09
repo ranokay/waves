@@ -637,6 +637,14 @@ documented 30-second clip URL directly (no remux).
 | `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (`updates/updater.py`)                                                                                                                                     |
 | `appUpdatePending(version)`                                                                                         | A staged update from an earlier session was re-armed at boot; Main shows the restart pill outright                                                                                    |
 
+`ffmpegStatus()` answers the FFmpeg manager's status: `state` (`managed`,
+`path` or `missing`), `available`, `managed`, `custom`, `path`, `version`,
+`build`, `ffprobe` (the ffprobe in the same folder as `path`, `""` when none
+is there), and the build source's `source`, `source_url`, `source_license`,
+`os` and `arch`. A managed install is ffmpeg and ffprobe together; one that
+lacks its ffprobe reports an update from `checkFfmpegUpdate()` even on the
+newest build.
+
 ## Internal signals (thread hops)
 
 Signals prefixed `_` are Python-only GUI thread hops. Provider tokens and

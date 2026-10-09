@@ -268,12 +268,10 @@ class FfmpegManager:
         return self.install_dir / "ffmpeg.json"
 
     def is_installed(self) -> bool:
-        p = self.binary_path
-        return p.is_file() and os.access(p, os.X_OK)
+        return _runnable(self.binary_path)
 
     def has_ffprobe(self) -> bool:
-        p = self.ffprobe_path
-        return p.is_file() and os.access(p, os.X_OK)
+        return _runnable(self.ffprobe_path)
 
     def _read_manifest(self) -> dict:
         try:
@@ -464,8 +462,8 @@ class FfmpegManager:
         # (the in-process inflight flag cannot see a second process). A
         # crashed install's leftover stays behind under the same policy as
         # the tmp zip above; neither carries user data.
-        staged = self._staging_file(_exe_name(self.os_key))
-        staged_ffprobe = self._staging_file(_exe_name(self.os_key, "ffprobe"))
+        staged = self._staging_file(self.binary_path.name)
+        staged_ffprobe = self._staging_file(self.ffprobe_path.name)
         try:
             ffmpeg_width = 50.0 if release.ffprobe_url else 100.0
             _log(f"downloading {release.label or release.version}")
@@ -490,8 +488,8 @@ class FfmpegManager:
 
             # 2. extract each member to a staged binary next to its target.
             _log("installing")
-            _extract_binary(zip_tmp, staged, _exe_name(self.os_key))
-            _extract_binary(ffprobe_zip_tmp, staged_ffprobe, _exe_name(self.os_key, "ffprobe"))
+            _extract_binary(zip_tmp, staged, self.binary_path.name)
+            _extract_binary(ffprobe_zip_tmp, staged_ffprobe, self.ffprobe_path.name)
             for path in (staged, staged_ffprobe):
                 path.chmod(
                     path.stat().st_mode | stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
@@ -519,7 +517,8 @@ class FfmpegManager:
 
             # 5. atomically swap the validated binaries into place, ffprobe
             # first: should the ffmpeg swap then fail, the working ffmpeg and
-            # the manifest describing it are still the pair they were.
+            # its manifest stay as they were, beside the new ffprobe, which
+            # runs on its own.
             self.sweep_aside()
             self._swap_in(staged_ffprobe, self.ffprobe_path)
             self._swap_in(staged, self.binary_path)
@@ -746,7 +745,11 @@ def _ffprobe_beside(ffmpeg_path: str, os_key: str) -> str:
     if not ffmpeg_path:
         return ""
     sibling = Path(ffmpeg_path).with_name(_exe_name(os_key, "ffprobe"))
-    return str(sibling) if sibling.is_file() and os.access(sibling, os.X_OK) else ""
+    return str(sibling) if _runnable(sibling) else ""
+
+
+def _runnable(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
 
 
 # Probing a binary means fork+exec+wait on it, which can block for the whole
