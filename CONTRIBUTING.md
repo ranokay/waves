@@ -68,12 +68,14 @@ Then install the environment with:
 mise run install
 ```
 
-`mise` reads `mise.toml`, which pins the Python and `uv` versions, and the
-task creates the uv-managed virtual environment (`.venv`) with every runtime
-and dev dependency, then installs the pre-commit hooks. (`mise` itself can be
-installed from <https://mise.jdx.dev>; `uv` comes with it.) If you prefer not
-to use mise, `uv sync --all-extras && uv run pre-commit install` does the same
-with a `uv` you installed yourself.
+`mise` reads `mise.toml`, which pins Python, uv, hk, Node and Prettier. The
+task creates the locked uv environment and installs repository-local hk hooks
+through mise. Install mise from <https://mise.jdx.dev>, then run `mise install`
+and `mise run install`.
+
+Installation saves recognised generated hooks as `*.before-hk`. It refuses
+foreign hooks, symlinked hooks or hook directories, and a configured `core.hooksPath`; coordinate
+with their owner before changing them. It never changes global hook settings.
 
 4. Create a branch for local development:
 

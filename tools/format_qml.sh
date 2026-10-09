@@ -5,7 +5,7 @@
 # -s: qmlformat otherwise looks the settings up per source-file directory, so a
 # path outside the tree would silently take Qt's ambient defaults. With no
 # arguments the whole tree is formatted; pass file paths to format just those
-# (the tools/lint_qml.sh shape, which is also what the pre-commit hook hands
+# (the tools/lint_qml.sh shape, which is also what the hk hook hands
 # it).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1

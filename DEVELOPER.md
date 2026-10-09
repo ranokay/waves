@@ -166,29 +166,36 @@ GUI surface without them. `integration` tests (nested runners, process
 boundaries) have no quick group of their own; run them through strict.
 `mise run test-fast`, `mise run test-qml`, `mise run test-default`,
 `mise run test-strict` and `mise run test-ffmpeg` wrap the first five groups;
-the live account group has its own wrapper (`mise run test-account`) and never runs in CI. Every test and
-check task runs the command through `uv run --locked --all-extras`, so the
-lockfile is the environment and drift fails the run.
+the live account group has its own wrapper (`mise run test-account`) and never runs in CI. Test tasks and Python checks run through `uv run --locked --all-extras`.
+The lockfile defines their environment, and lock drift fails the comprehensive
+gate. Mise supplies the pinned hk, Node and Prettier executables.
 
-`mise run check` (also `mise run lint`) carries the static gates. It runs the format hooks
-(ruff format, prettier, qmlformat), so it rewrites unformatted files instead
-of only failing: run `mise run format` first on a dirty tree, or re-run check
-until it is clean. The commit hook `no-commit-to-branch` refuses commits on
-`develop` and `main`: work lands there through PRs.
+`mise run check` (also `mise run lint`) runs the comprehensive read-only hk
+gate, including lock validation, Ruff lint/format, Prettier, QML lint/format,
+pyupgrade, TOML/YAML validation, case/merge-conflict and whitespace checks,
+ty and deptry. A formatting problem fails without applying fixes or staging
+files. Python tools come from `uv.lock`; hk and Prettier are pinned in
+`mise.toml`, and `hk.pkl` pins hk's matching configuration package.
 
-- `mise run format` (also `fmt`) — format Python, QML and the remaining
-  text with ruff, qmlformat and prettier. `lint` is an alias for the comprehensive
-  `check` gate and can also rewrite files through the format hooks.
-- `mise run lint-qml` — qmllint over `waves/desktop/qml` for direct use, also wired as a
-  pre-commit hook for changed QML. `mise run check` reaches that same hook through its
-  `pre-commit run -a` (once, over the whole tree), so there is no separate lint pass.
-  Errors fail; the thousands of existing
-  `[unqualified]` warnings are counted, not printed (they would bury errors).
-- `mise run format-qml` — qmlformat over `waves/desktop/qml`, styled by the
-  root `.qmlformat.ini` (the style is pinned there, not taken from Qt's
-  defaults). Also a pre-commit hook for changed QML: a commit that reformats
-  fails the hook, so re-stage the files and commit again. Pass file paths to
-  format just those.
+- `mise run format` (also `fmt`) explicitly applies fixes without staging.
+  Review the resulting diff before staging it. Generated star-history charts
+  keep their whitespace/Prettier exclusions, and the end-of-file check excludes
+  LICENSE.
+- Commit hooks check the staged version with unstaged edits temporarily saved
+  by hk. They apply no fixes and stage nothing. The `main`/`develop` branch
+  guard runs only at commit time. The pre-push hook runs static checks too.
+- `mise run lint-qml` runs qmllint over `waves/desktop/qml`; hk calls the same
+  script for selected QML and JavaScript. Errors fail; existing warnings are
+  counted instead of burying errors.
+- `mise run format-qml` runs qmlformat with the root `.qmlformat.ini`. Pass
+  file paths to format just those. hk checks formatting by comparing the
+  formatter's stdout with source under the same settings.
+- `mise run install` syncs the locked environment and installs local hooks
+  through mise. Recognised generated hooks are saved as `*.before-hk`.
+  Foreign hooks, symlinked hooks or hook directories, and configured `core.hooksPath` require coordination;
+  installation does not alter them or global settings. `mise run doctor`
+  verifies both commit and push hooks, including linked worktrees.
+
 - `mise run typecheck` — ty (Astral's type checker, pinned while in beta) over
   the shipped package (`waves/`); tests and tools are outside the gate. The
   dynamic-seam categories (attribute access, argument types, mixin Signal

@@ -1,0 +1,110 @@
+amends "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Config.pkl"
+
+// One locked Python environment serves the hook, the whole-tree gate and CI.
+local python = "uv run --locked --all-extras "
+local linters = new Mapping<String, Step> {
+  ["check-case-conflict"] {
+    allow_binary = true
+    allow_symlinks = true
+    check = "hk util check-case-conflict -- {{files}}"
+  }
+  ["check-merge-conflict"] {
+    types = List("text")
+    check = "hk util check-merge-conflict -- {{files}}"
+  }
+  ["check-toml"] {
+    glob = "**/*.toml"
+    check = python + "python tools/check_data.py {{files}}"
+  }
+  ["check-yaml"] {
+    glob = List("**/*.yaml", "**/*.yml")
+    check = python + "python tools/check_data.py {{files}}"
+  }
+  ["end-of-file-fixer"] {
+    types = List("text")
+    // Generated charts are copied byte for byte from upstream.
+    exclude = List("LICENSE", "assets/star-history/**")
+    check = python + "python tools/check_whitespace.py eof -- {{files}}"
+    fix = python + "python tools/check_whitespace.py eof --fix -- {{files}}"
+  }
+  ["trailing-whitespace"] {
+    types = List("text")
+    exclude = "assets/star-history/**"
+    check = python + "python tools/check_whitespace.py trailing -- {{files}}"
+    fix = python + "python tools/check_whitespace.py trailing --fix -- {{files}}"
+  }
+  ["ruff"] {
+    types = List("python", "pyi")
+    check = python + "ruff check --no-fix --force-exclude -- {{files}}"
+    fix = python + "ruff check --fix --force-exclude -- {{files}}"
+  }
+  ["ruff-format"] {
+    types = List("python", "pyi")
+    check = python + "ruff format --check --force-exclude -- {{files}}"
+    fix = python + "ruff format --force-exclude -- {{files}}"
+  }
+  ["prettier"] {
+    types = List("text")
+    exclude = List("waves/desktop/qml/**/*.js", "assets/star-history/**")
+    check = "prettier --check --ignore-unknown -- {{files}}"
+    fix = "prettier --write --ignore-unknown -- {{files}}"
+    batch = true
+  }
+  ["qmlformat"] {
+    glob = "waves/desktop/qml/**/*.qml"
+    check = python + "python tools/check_qml_format.py {{files}}"
+    fix = "bash tools/format_qml.sh {{files}}"
+    batch = true
+  }
+  ["qmllint"] {
+    glob = "waves/desktop/qml/**/*.{qml,js}"
+    check = "bash tools/lint_qml.sh {{files}}"
+  }
+  ["pyupgrade"] {
+    types = List("python")
+    // Ruff UP does not cover all of pyupgrade's Python 3.12 rewrites.
+    check = python + "python tools/check_pyupgrade.py -- {{files}}"
+    fix = python + "python tools/check_pyupgrade.py --fix -- {{files}}"
+  }
+}
+
+hooks {
+  ["check"] {
+    fix = false
+    stage = false
+    stash = "none"
+    steps = (linters) {
+      ["lock"] { check = "uv lock --check" }
+      ["ty"] { check = "bash tools/typecheck.sh" }
+      ["deptry"] { check = python + "deptry ." }
+    }
+  }
+  ["fix"] {
+    fix = true
+    stage = false
+    stash = "none"
+    // Writers sharing a file must converge in one run; checks remain parallel.
+    steps = (linters) {
+      ["end-of-file-fixer"] { depends = "trailing-whitespace" }
+      ["pyupgrade"] { depends = "end-of-file-fixer" }
+      ["ruff"] { depends = "pyupgrade" }
+      ["ruff-format"] { depends = "ruff" }
+    }
+  }
+  ["pre-commit"] {
+    fix = false
+    stage = false
+    stash = "git"
+    steps = (linters) {
+      ["no-commit-to-branch"] {
+        check = "hk util no-commit-to-branch --branch main --branch develop"
+      }
+    }
+  }
+  ["pre-push"] {
+    fix = false
+    stage = false
+    stash = "none"
+    steps = linters
+  }
+}

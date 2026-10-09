@@ -8,16 +8,18 @@
 [tools]
 python = "3.13"
 uv = "0.12.16"
+hk = "2.5.0"
+node = "22.23.3"
+"npm:prettier" = "3.1.0"
 
 [tasks.install]
-description = "Create/sync the dev environment and install the pre-commit hooks"
-run = "uv sync --locked --all-extras && uv run --locked --all-extras pre-commit install"
+description = "Create/sync the dev environment and install repository-local hk hooks"
+run = "uv sync --locked --all-extras && uv run --locked --all-extras python tools/install_hooks.py"
 
 [tasks.check]
 alias = "lint"
-description = "Lock drift, static analysis, pre-commit hooks and unused dependencies (the format hooks rewrite files; run fmt first)"
-depends = ["typecheck"]
-run = 'uv lock --check && SKIP="${SKIP:+$SKIP,}no-commit-to-branch" uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry .'
+description = "Read-only whole-tree lock, static analysis, formatting and dependency gate"
+run = "hk check --all --check --no-stage --stash none"
 
 [tasks.clean]
 description = "Remove regenerable build and test caches (never .venv, never git clean; idempotent)"
@@ -33,8 +35,8 @@ run = "bash tools/format_qml.sh"
 
 [tasks.fmt]
 alias = "format"
-description = "Format the tree: ruff format (Python), qmlformat (QML), prettier (the rest)"
-run = "uv run --locked --all-extras ruff format --force-exclude && bash tools/format_qml.sh && uv run --locked --all-extras pre-commit run prettier --all-files"
+description = "Explicitly apply Ruff, Prettier, QML and whitespace fixes without staging"
+run = "hk fix --all --no-stage --stash none"
 
 [tasks.typecheck]
 description = "ty over the shipped package (waves/); errors fail and print, the baseline warnings are counted"

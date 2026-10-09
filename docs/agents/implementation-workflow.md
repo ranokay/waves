@@ -10,11 +10,15 @@ This repo is a fork: `upstream` is the parent project, `origin` is the fork.
 - **`develop` is this fork's integration branch.** Every PR lands here, and only here. PRs base on `develop`, never `main`.
 - **One branch per issue**, cut from up-to-date `develop`, named `<type>/issue-<n>-<slug>` (e.g. `feat/issue-23-generic-tag-family`; the type is the work's own — `feat`, `fix`, `spec`).
 
+The branch guard is commit-only. A conflicted upstream synchronization merge
+concludes with `HK_SKIP_STEPS=no-commit-to-branch git commit`; use hk's step
+skip variable for that authorised exception.
+
 ## The loop
 
 1. **Pre-flight**: run `/sync-upstream` and settle every reconcile verdict before starting — upstream changes are judged against our implementations and our open/closed issues and PRs before any new work begins.
 2. **Implement** with the focused tests for what you touch. The strict group is the final gate, not a per-edit ritual: it runs once, on the frozen SHA, after the reviews (see Test scope).
-3. **`mise run fmt`, then `mise run check`**, so the reviewers read the text that ships. `check` and the commit hooks also format, and a hook that rewrites a file fails that run or commit.
+3. **`mise run fmt`, then `mise run check`**, so the reviewers read the text that ships. `check` and commit hooks are read-only; formatting failures require an explicit `fmt` and review of its diff.
 4. **`/code-review`** against `develop`, with the issue as the spec. Its three axes are the review gate: standards ([coding standards](../../CODING_STANDARDS.md), which bind the per-path house rules), spec, and correctness (the defect classes in the standards' Correctness section). Every finding fixed or explicitly refuted, dispositions recorded in the commit/PR. A non-trivial fix delta gets its own `/code-review`, and each correction commit runs `mise run test-fast` first: the fast group carries the cheap guards (Qt markers, BRIDGE rows, doc pins) that must not cost a reviewer round. No strict run happens between review rounds.
 5. **Local gate on the frozen SHA**: `mise run check` plus `mise run test-strict`, the merge gate in `DEVELOPER.md`'s test-group table (it excludes the live account tests, which never run in CI, and it runs alone). A fix commit after this run invalidates the tested SHA, so this is the last write before the PR.
 6. **PR → `develop`**, body linking the issue (`Closes #<n>`, which closes it on merge: `develop` is the default branch). Checks are read, not awaited: no workflow of ours gates a PR, and CodeQL and SonarCloud run on every PR. A failed check is a finding like any review finding, fixed or refuted in the PR body before the merge. No bot review is requested or awaited; findings a bot posts anyway get the same disposition. The merge stands on the local gate (`mise run check`: lock drift, qmllint, ty, ruff lint + format, prettier and deptry; the strict test group; the review above), and the PR body says so, with the tested SHA. A finding that arrives after merge becomes a separate corrective PR that never rewrites the merged history and goes through the same gate.
