@@ -58,12 +58,22 @@ def test_the_per_pid_swap_helper_falls_too():
 
 
 def test_the_ffmpeg_installer_strays_fall_with_the_bin_folder():
-    """Both mkstemp shapes ffmpeg_manager stages through, so a crashed install
+    """Every mkstemp shape ffmpeg_manager stages through, so a crashed install
     cannot keep bin/ alive forever."""
     assert _wipes("bin", "ffmpeg.QmX7d2.new")
     assert _wipes("bin", "ffmpeg.exe.QmX7d2.new")
+    assert _wipes("bin", "ffprobe.QmX7d2.new")
+    assert _wipes("bin", "ffprobe.exe.QmX7d2.new")
     assert _wipes("bin", "ffmpeg.json.a1b2c3.tmp")
     # The download temp has no Waves-written prefix to anchor on: it stays, on
     # purpose, and keeps its directory alive rather than widening the match.
     assert not _wipes("bin", "tmpq8s7d1.zip")
     assert not _wipes("bin", "notffmpeg.x.new")
+    assert not _wipes("bin", "notffprobe.x.new")
+
+
+def test_the_managed_pair_falls_with_the_bin_folder():
+    """The manager installs ffprobe beside ffmpeg; a reset that left it kept
+    bin/ alive."""
+    for name in ("ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe", "ffmpeg.json"):
+        assert _wipes("bin", name), name

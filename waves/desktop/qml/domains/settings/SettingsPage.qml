@@ -279,6 +279,11 @@ Item {
       page.appleWrapperLive = waves.appleWrapperAuth()
       page.appleSetupLive = waves.appleSetupState()
     }
+    // The codec-check step reads the ffprobe beside FFmpeg: an install,
+    // update or remove moves it.
+    function onFfmpegStatusChanged() {
+      page.appleSetupLive = waves.appleSetupState()
+    }
   }
 
   // In-app updater state

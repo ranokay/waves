@@ -46,6 +46,7 @@ issue. A test enforces it.
 
 - 🎚️ The HIGH quality badge now wears a cyan rim like the HI-RES and LOSSLESS badges wear theirs, instead of a faint grey one that only lit up under the pointer.
 - 🐧 The Linux zip and AppImage bundle Qt's X11 helper libraries, so the app starts on desktops that lack them, such as a fresh Ubuntu 22.04, instead of quitting with "could not load the Qt platform plugin xcb".
+- 🔎 Installing FFmpeg from Settings now installs ffprobe beside it, so Apple Music downloads keep the check that stereo arrives as AAC or ALAC and Dolby Atmos as E-AC-3. A managed FFmpeg without ffprobe offers an update that adds it, and the Apple Music setup wizard says when downloads skip the check ([issue #659](https://github.com/ranokay/waves/issues/659)).
 
 ## 🗂️ v0.1.32 (2026-09-28)
 

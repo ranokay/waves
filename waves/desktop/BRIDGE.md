@@ -631,11 +631,11 @@ documented 30-second clip URL directly (no remux).
 
 ## FFmpeg manager and self-updater
 
-| Signal                                                                                                              | Fires when                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `ffmpegStatusChanged` / `ffmpegProgress(pct)` / `ffmpegStateChanged(state, msg)` / `ffmpegUpdateChecked(...)`       | The managed-FFmpeg install/update lifecycle (`ffmpeg/manager.py`)                                  |
-| `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (`updates/updater.py`)                                                  |
-| `appUpdatePending(version)`                                                                                         | A staged update from an earlier session was re-armed at boot; Main shows the restart pill outright |
+| Signal                                                                                                              | Fires when                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ffmpegStatusChanged` / `ffmpegProgress(pct)` / `ffmpegStateChanged(state, msg)` / `ffmpegUpdateChecked(...)`       | The managed-FFmpeg install/update lifecycle (`ffmpeg/manager.py`); Settings re-reads `ffmpegStatus()` and `appleSetupState()`, whose codec-check step reads the ffprobe beside FFmpeg |
+| `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (`updates/updater.py`)                                                                                                                                     |
+| `appUpdatePending(version)`                                                                                         | A staged update from an earlier session was re-armed at boot; Main shows the restart pill outright                                                                                    |
 
 ## Internal signals (thread hops)
 

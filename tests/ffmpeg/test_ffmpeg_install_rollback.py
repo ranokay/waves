@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -63,7 +64,12 @@ def _zip_bytes(members: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def _session_for(payload: bytes, url: str = "https://example.test/ffmpeg.zip") -> tuple[fm.Release, _FakeSession]:
+def _session_for(
+    ffmpeg: bytes, ffprobe: bytes = b"FFPROBE", url: str = "https://example.test/ffmpeg.zip"
+) -> tuple[fm.Release, _FakeSession]:
+    """One archive carrying both binaries (the BtbN shape), under the
+    non-Windows names: every test here pins ``os_key`` to linux or macos."""
+    payload = _zip_bytes({"ffmpeg": ffmpeg, "ffprobe": ffprobe})
     digest = hashlib.sha256(payload).hexdigest()
     session = _FakeSession(
         {
@@ -81,7 +87,7 @@ def _session_for(payload: bytes, url: str = "https://example.test/ffmpeg.zip") -
 # --------------------------------------------------------------------------- #
 def test_failed_smoketest_leaves_existing_binary_untouched(tmp_path, monkeypatch):
     # First install a working managed copy.
-    rel, session = _session_for(_zip_bytes({"ffmpeg": b"GOODBINARY"}))
+    rel, session = _session_for(b"GOODBINARY")
     monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)  # avoid macOS codesign path
@@ -91,7 +97,7 @@ def test_failed_smoketest_leaves_existing_binary_untouched(tmp_path, monkeypatch
 
     # Now a *new* release downloads fine and passes checksum, but the staged
     # binary won't run (probe returns "").
-    rel2, session2 = _session_for(_zip_bytes({"ffmpeg": b"BADARCHBINARY"}))
+    rel2, session2 = _session_for(b"BADARCHBINARY")
     rel2 = fm.Release(
         source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
     )
@@ -110,7 +116,7 @@ def test_failed_smoketest_leaves_existing_binary_untouched(tmp_path, monkeypatch
 def test_failed_smoketest_writes_no_manifest_when_nothing_installed(tmp_path, monkeypatch):
     # Fresh install (no prior binary) whose download won't run: nothing lands,
     # and status() must not report managed/green off a stale manifest.
-    rel, session = _session_for(_zip_bytes({"ffmpeg": b"BADBINARY"}))
+    rel, session = _session_for(b"BADBINARY")
     monkeypatch.setattr(fm, "_probe_version", lambda p: "")
     monkeypatch.setattr(fm, "_which_ffmpeg", lambda os_key: "")
     mgr = fm.FfmpegManager(tmp_path)
@@ -127,7 +133,7 @@ def test_failed_smoketest_writes_no_manifest_when_nothing_installed(tmp_path, mo
 
 def test_successful_install_still_promotes_and_writes_manifest(tmp_path, monkeypatch):
     # The reordering must not break the happy path.
-    rel, session = _session_for(_zip_bytes({"ffmpeg": b"OKBINARY"}))
+    rel, session = _session_for(b"OKBINARY")
     monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
@@ -137,6 +143,30 @@ def test_successful_install_still_promotes_and_writes_manifest(tmp_path, monkeyp
     assert st["state"] == "managed" and st["version"] == "n8.1.1"
     assert mgr._read_manifest()["version"] == "123_8.1.1"
     assert not (mgr.install_dir / "ffmpeg.new").exists()
+
+
+def test_an_ffprobe_that_will_not_run_keeps_the_existing_pair(tmp_path, monkeypatch):
+    # ffprobe gets ffmpeg's smoke test: a staged ffprobe that will not run
+    # promotes neither binary, so the working pair stays a pair.
+    rel, session = _session_for(b"GOODBINARY", b"GOODPROBE")
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    mgr = fm.FfmpegManager(tmp_path)
+    monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
+    mgr.install(release=rel, session=session)
+    good_manifest = mgr._read_manifest()
+
+    rel2, session2 = _session_for(b"NEWBINARY", b"BADARCHPROBE")
+    rel2 = fm.Release(
+        source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
+    )
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "" if Path(p).name.startswith("ffprobe.") else "n9.9")
+
+    with pytest.raises(RuntimeError, match="ffprobe -version"):
+        mgr.install(release=rel2, session=session2)
+
+    assert mgr.binary_path.read_bytes() == b"GOODBINARY"
+    assert mgr.ffprobe_path.read_bytes() == b"GOODPROBE"
+    assert mgr._read_manifest() == good_manifest
 
 
 # --------------------------------------------------------------------------- #
@@ -206,7 +236,7 @@ def test_macos_verify_failure_refuses_promotion_and_does_not_resign(tmp_path, mo
 
 def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch):
     # First install a working managed copy (linux path avoids codesign).
-    rel, session = _session_for(_zip_bytes({"ffmpeg": b"GOODBINARY"}))
+    rel, session = _session_for(b"GOODBINARY")
     monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
@@ -216,7 +246,7 @@ def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch
 
     # A new macOS release whose signature does not verify must not promote,
     # even though the staged binary would pass the smoke test.
-    rel2, session2 = _session_for(_zip_bytes({"ffmpeg": b"UNSIGNEDBINARY"}))
+    rel2, session2 = _session_for(b"UNSIGNEDBINARY")
     rel2 = fm.Release(
         source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
     )
@@ -242,7 +272,7 @@ def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch
 
 def test_verified_signature_install_promotes_through_the_real_gate(tmp_path, monkeypatch):
     # The good path must exercise _macos_verify, not stub it: codesign passes.
-    rel, session = _session_for(_zip_bytes({"ffmpeg": b"SIGNEDBINARY"}))
+    rel, session = _session_for(b"SIGNEDBINARY")
     monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
@@ -261,6 +291,34 @@ def test_verified_signature_install_promotes_through_the_real_gate(tmp_path, mon
 
     assert mgr.binary_path.read_bytes() == b"SIGNEDBINARY"
     assert st["state"] == "managed" and st["version"] == "n9.9"
+
+
+def test_an_unsigned_ffprobe_is_refused_like_an_unsigned_ffmpeg(tmp_path, monkeypatch):
+    rel, session = _session_for(b"SIGNEDBINARY", b"UNSIGNEDPROBE")
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
+    mgr = fm.FfmpegManager(tmp_path)
+    monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
+    verified: list[str] = []
+
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "codesign":
+            verified.append(Path(argv[-1]).name)
+
+        class _R:
+            returncode = 1 if argv[0] == "codesign" and Path(argv[-1]).name.startswith("ffprobe.") else 0
+            stdout = ""
+            stderr = "not signed"
+
+        return _R()
+
+    monkeypatch.setattr(fm.subprocess, "run", fake_run)
+
+    with pytest.raises(ValueError, match="signature"):
+        mgr.install(release=rel, session=session)
+
+    assert any(name.startswith("ffprobe.") for name in verified), "ffprobe skipped the signature gate"
+    assert not mgr.is_installed() and not mgr.has_ffprobe()
+    assert not mgr.manifest_path.exists()
 
 
 # --------------------------------------------------------------------------- #

@@ -162,7 +162,7 @@ from waves.providers import (
     TidalProvider,
 )
 from waves.providers.apple import runner
-from waves.providers.apple.engine import AppleCredential
+from waves.providers.apple.engine import AppleCredential, ffprobe_for
 from waves.providers.apple.engines import EngineFacts, EnginePolicy
 from waves.providers.apple.files import (
     facts_without_share_url,
@@ -597,17 +597,18 @@ _FACTORY_WIPE_SUBDIRS = (
         ("applied.json", "update.log", "apply_update.bat", "armed.json", "install.lock"),
         (re.compile(r"apply_update_\d+\.bat\Z"),),
     ),
-    # The two ffmpeg installer strays: the binary is staged through
-    # mkstemp(prefix="ffmpeg.", suffix=".new") and the manifest through
-    # mkstemp(prefix="ffmpeg.json.", suffix=".tmp"), so a crashed install
-    # leaves a name with a random middle that no exact list can hold, and the
-    # bin folder then never fell. (The download's tmp zip has no Waves-written
-    # prefix to anchor on and deliberately stays behind, as before.)
+    # The managed ffmpeg/ffprobe pair, its manifest and the installer's
+    # strays: each binary is staged through mkstemp(prefix="<exe>.",
+    # suffix=".new") and the manifest through mkstemp(prefix="ffmpeg.json.",
+    # suffix=".tmp"), so a crashed install leaves a name with a random middle
+    # that no exact list can hold, and the bin folder then never fell. (The
+    # download's tmp zip has no Waves-written prefix to anchor on and
+    # deliberately stays behind, as before.)
     (
         "bin",
-        ("ffmpeg", "ffmpeg.exe", "ffmpeg.new", "ffmpeg.exe.new", "ffmpeg.json"),
+        ("ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe", "ffmpeg.new", "ffmpeg.exe.new", "ffmpeg.json"),
         (
-            re.compile(r"ffmpeg(\.exe)?\.[0-9A-Za-z_-]+\.new\Z"),
+            re.compile(r"(?:ffmpeg|ffprobe)(\.exe)?\.[0-9A-Za-z_-]+\.new\Z"),
             re.compile(r"ffmpeg\.json\.[0-9A-Za-z_-]+\.tmp\Z"),
         ),
     ),
@@ -20914,6 +20915,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # ensure_port persists it (when free) the next time the step runs.
         port = preferred_port if 1024 <= preferred_port <= 65535 else persisted_port
         port_dirty = bool(port) and port != persisted_port
+        # The runner's own lookup (runner.probe_binary): beside the
+        # provider's resolved ffmpeg, else PATH. A file-existence read.
+        provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
+        try:
+            ffprobe_ready = bool(ffprobe_for(str(getattr(provider, "ffmpeg_path", "") or "")))
+        except Exception:
+            ffprobe_ready = False
         steps = self._apple_wizard_steps(
             enabled=bool(flags.get("enabled", False)),
             cookies_path=cookies_path,
@@ -20926,6 +20934,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             port=port,
             port_dirty=port_dirty,
             runtime_stale=bool(runtime.get("runtime_stale", False)),
+            ffprobe_ready=ffprobe_ready,
         )
         return {
             "light": described,
@@ -20967,6 +20976,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         port: int,
         port_dirty: bool = False,
         runtime_stale: bool = False,
+        ffprobe_ready: bool = False,
     ) -> list:
         """The wizard's steps for the QML in-place flow, in walking order.
 
@@ -21040,6 +21050,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "detail": runtime_step[1],
                 "action": runtime_step[2],
                 "action_label": _APPLE_STEP_ACTION_LABELS.get(runtime_step[2], ""),
+            }
+        )
+        # Not a tier step: both tiers deliver through the same check, and a
+        # missing ffprobe skips it without failing anything, so the step is
+        # the one place the skip shows (attention, not todo).
+        steps.append(
+            {
+                "key": "codec_check",
+                "label": "Codec check (ffprobe)",
+                "state": "done" if ffprobe_ready else "attention",
+                "detail": (
+                    "Each Apple download is checked for the format it asked for: AAC or ALAC for stereo, "
+                    "E-AC-3 for Dolby Atmos."
+                    if ffprobe_ready
+                    else "No ffprobe beside FFmpeg or on PATH, so Apple downloads skip the format check "
+                    "(AAC or ALAC for stereo, E-AC-3 for Dolby Atmos); the decode check still runs. "
+                    "Install or update the managed FFmpeg under Processing (FFmpeg) to add it."
+                ),
+                "action": "",
+                "action_label": "",
             }
         )
         if container.get("running"):
