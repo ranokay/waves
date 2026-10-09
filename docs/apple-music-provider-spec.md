@@ -80,19 +80,23 @@ silently re-provision. Existing Apple pacing starts at 30 seconds every 25 songs
 reactive 429 handling honors Retry-After or bounded backoff. Values remain tunable
 and move under provider-owned Advanced settings (§9.2).
 
-A fetch's downloader process (N_m3u8DL-RE) ends with the fetch. Stopping the
-job, signing out or disabling Apple cancels the fetch, which kills the
-downloader and removes the fetch's temp folder. The downloader runs under a
-guard process that reads a pipe from Waves and kills the downloader when the
-pipe closes, so the downloader also ends when Waves quits, crashes or is
-killed. On macOS and Linux the guard kills the downloader's whole process
-group. On Windows it kills the downloader process alone, not processes the
-downloader started itself.
+A fetch's download tool (N_m3u8DL-RE) stops with the fetch's job. Stopping
+the job, signing out or disabling Apple stops the tool within a fifth of a
+second, fails the fetch and removes its temp folder. The tool runs under a
+guard process that reads a pipe from Waves and kills the tool when the pipe
+closes, so the tool also stops when Waves quits, crashes or is killed. A
+guard that has not left five seconds after a stop is killed by Waves. On
+macOS and Linux every kill reaches the tool's whole process group, including
+anything the tool started. On Windows only the tool process is killed, and a
+guard Waves has to kill leaves its tool running.
 
 Each Waves process keeps its Apple temp folders in one `waves-apple-run-*`
 folder under the system temp directory and holds an OS lock on that folder's
 `.lease` file while it runs. After launch, Waves removes the run folders whose
-lock no process holds, and the flat `waves-apple-*` folders older builds left.
+lock no process holds. A run folder without a lease file, and the flat
+`waves-apple-*` workdirs of builds without run folders, go once nothing in
+them has changed for an hour. On a temp file system that refuses locks, run
+folders stay.
 
 The planned multi-engine lifecycle follows
 [ADR 0010](adr/0010-provider-engine-runtime-boundary.md): distinguish account expiry,

@@ -61,7 +61,7 @@ along as data files so ``app.py`` finds them next to itself at runtime.
 # nuitka-project: --include-qt-plugins=qml,multimedia
 # The library scanner process re-executes this binary with --library-worker.
 # nuitka-project: --include-module=waves.library.worker
-# The Apple downloader's guard re-executes it with --apple-child-guard.
+# The Apple download tool's guard re-executes it with --apple-child-guard.
 # nuitka-project: --include-module=waves.providers.apple.child_guard
 # Qt 6.11 added a Qt.labs.assetdownloader QML module that ships ONLY as a
 # static library, which Nuitka cannot process. It arrives through the qml
@@ -154,9 +154,9 @@ def main() -> int:
     ``--library-worker`` runs the library scanner instead (the app starts
     its own binary this way, see waves.library.worker): decided before any
     Qt import, since the scanner must never load Qt. A leading
-    ``--apple-child-guard`` runs the Apple downloader's guard the same way
+    ``--apple-child-guard`` runs the Apple download tool's guard the same way
     (waves.providers.apple.child_guard); it is read first because the
-    downloader's own argv follows it."""
+    tool's own argv follows it."""
     if sys.argv[1:2] == ["--apple-child-guard"]:
         from waves.providers.apple.child_guard import main as guard_main
 

@@ -54,7 +54,7 @@ from threading import Event, Thread
 
 import requests
 
-from waves import redaction
+from waves import file_locks, redaction
 from waves.desktop.runtime_paths import executable_path as _current_exe
 from waves.desktop.runtime_paths import is_frozen
 from waves.file_integrity import sha256_file
@@ -564,20 +564,10 @@ class _StagingLock:
     def try_acquire(self) -> bool:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
         except OSError:
             return False
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
+        fd = file_locks.try_lock(self._path)
+        if fd is None:
             return False
         self._fd = fd
         return True
@@ -588,12 +578,8 @@ class _StagingLock:
 
     def release(self) -> None:
         fd, self._fd = self._fd, None
-        if fd is None:
-            return
-        try:
-            os.close(fd)  # closing drops the lock on both platforms
-        except OSError:
-            logger.debug("could not release the staging lock", exc_info=True)
+        if fd is not None:
+            file_locks.release(fd)
 
 
 # --------------------------------------------------------------------------- #

@@ -21897,9 +21897,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
             provider.offer_context_probe = lambda: WavesBridge._apple_offer_context(self)
-            # The downloader runs under a guard so it dies with Waves; a
+            # The download tool runs under a guard so it dies with Waves; a
             # packaged app re-executes its own binary for the guard.
-            provider.child_guard = child_guard.launcher(
+            provider.guard_launcher = child_guard.launcher(
                 str(runtime_paths.executable_path()) if runtime_paths.is_frozen() else None
             )
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)

@@ -79,7 +79,7 @@ def test_the_guarded_downloader_runs_gamdls_own_nm3u8dlre_argv(tmp_path, monkeyp
     async def gamdl_launch(*args, silent=False):
         launches.append(([str(arg) for arg in args], silent))
 
-    async def waves_launch(args, *, guard=(), silent=False):
+    async def waves_launch(args, *, guard_launcher=(), abort=None, silent=False):
         launches.append(([str(arg) for arg in args], silent))
 
     monkeypatch.setattr(gamdl_base, "async_subprocess", gamdl_launch)
@@ -87,7 +87,7 @@ def test_the_guarded_downloader_runs_gamdls_own_nm3u8dlre_argv(tmp_path, monkeyp
     paths = {"nm3u8dlre_path": sys.executable, "ffmpeg_path": sys.executable}
     target = str(tmp_path / "work" / "song-1_staged.m4a")
 
-    for downloader in (gamdl_base.AppleMusicBaseDownloader, engine._guarded_base_downloader(())):
+    for downloader in (gamdl_base.AppleMusicBaseDownloader, engine._guarded_base_downloader()):
         asyncio.run(downloader(interface=None, silent=True, **paths)._download_nm3u8dlre("https://a/b.m3u8", target))
 
     assert len(launches) == 2 and launches[0] == launches[1]

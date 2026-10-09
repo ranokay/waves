@@ -304,10 +304,10 @@ class AppleProvider(Provider):
         self.cookies_path: str = ""
         self.nm3u8dlre_path: str = ""
         self.ffmpeg_path: str = ""
-        # How to start the downloader's child guard (child_guard.launcher),
+        # How to start the download tool's guard (child_guard.launcher),
         # written by the bridge, which knows whether Waves runs packaged.
-        # Empty starts the downloader unguarded: it still ends with its job.
-        self.child_guard: tuple[str, ...] = ()
+        # Empty starts the tool unguarded: it still stops with its job.
+        self.guard_launcher: tuple[str, ...] = ()
         # Managed wrapper configuration for the ALAC path: the
         # wrapper HTTP API URL (a persisted free high port, never port 80).
         # Written by the bridge from the runtime manager; empty means the
@@ -476,7 +476,7 @@ class AppleProvider(Provider):
                 ffmpeg_path=self.ffmpeg_path,
                 decrypt_host=self.wrapper_decrypt_host,
                 decrypt_port=self.wrapper_decrypt_port,
-                child_guard=self.child_guard,
+                guard_launcher=self.guard_launcher,
             )
         return self._fetch_stack
 
@@ -524,7 +524,7 @@ class AppleProvider(Provider):
                 cookies_path=self.cookies_path,
                 nm3u8dlre_path=self.nm3u8dlre_path,
                 ffmpeg_path=self.ffmpeg_path,
-                child_guard=self.child_guard,
+                guard_launcher=self.guard_launcher,
                 abort=abort,
             ),
             scoped=lambda session: session.download_song(song_id=song_id, atmos=atmos, abort=abort),
@@ -547,7 +547,7 @@ class AppleProvider(Provider):
                 decrypt_host=self.wrapper_decrypt_host,
                 decrypt_port=self.wrapper_decrypt_port,
                 max_tier=max_tier,
-                child_guard=self.child_guard,
+                guard_launcher=self.guard_launcher,
                 abort=abort,
             ),
             scoped=lambda session: session.download_alac(song_id=song_id, max_tier=max_tier, abort=abort),
