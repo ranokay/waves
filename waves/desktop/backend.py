@@ -15563,7 +15563,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     def _apple_probe(self) -> str:
         """An ffprobe binary for Apple verification, or "" (runner policy)."""
-        return runner.probe_binary(self._apple_job_hooks())
+        return runner.provider_ffprobe((getattr(self, "providers", None) or {}).get(CTX_APPLE))
 
     def _apple_wants_flac(self) -> bool:
         """Whether lossless Apple stereo should land as FLAC (runner policy)."""
@@ -20281,22 +20281,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         key="ffmpeg-install",
                         scope=_install_failure_scope(exc),
                     )
-                    # A failed ffmpeg swap can still have landed the new
-                    # ffprobe (it goes in first): readers of the bin folder
-                    # re-read it.
+                    # A late failure can still have landed binaries (ffprobe
+                    # goes in first, the manifest write comes last): adopt
+                    # whatever pair is in place, then let readers of the bin
+                    # folder re-read it.
+                    if self._ffmpeg.is_installed():
+                        self._adopt_managed_ffmpeg()
                     self.ffmpegStatusChanged.emit()
                     return
-                # ffmpeg is available, undo any in-memory feature disabling
-                # and rebuild the Download so the new binary is used immediately.
-                self._restore_ffmpeg_flags()
-                # Drop the in-memory path first: Download's PATH injection
-                # (or an older managed path) would otherwise outlive the
-                # install, and the re-resolve below must land on the managed
-                # pair, ffprobe included, unless the user linked their own.
-                self._restore_ffmpeg_path()
-                if self._logged_in:
-                    self._init_download()
-                self._configure_apple_provider()
+                self._adopt_managed_ffmpeg()
                 operation_state(
                     self,
                     EventDomain.DEPENDENCY,
@@ -20312,6 +20305,26 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._ffmpeg_install_inflight = False
 
         self.threadpool.start(Worker(work))
+
+    def _adopt_managed_ffmpeg(self) -> None:
+        """Point the live settings, the Download and the Apple provider at a
+        freshly installed managed pair, so the new binaries are used at once.
+
+        The in-memory path is dropped first: Download's PATH injection (or an
+        older managed path) would otherwise outlive the install, and the
+        re-resolve must land on the managed pair, ffprobe included, unless
+        the user linked their own. The restores and the re-resolve hold
+        ``_settings_save_lock``: a save on another thread puts its borrowed
+        path back in its ``finally``, which would undo them.
+        """
+        with self._settings_save_lock:
+            # Undo any in-memory feature disabling now that ffmpeg exists.
+            self._restore_ffmpeg_flags()
+            self._restore_ffmpeg_path()
+            self._resolve_ffmpeg()
+        if self._logged_in:
+            self._init_download()
+        self._configure_apple_provider()
 
     @Slot()
     def cancelFfmpeg(self) -> None:
@@ -20925,8 +20938,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # ensure_port persists it (when free) the next time the step runs.
         port = preferred_port if 1024 <= preferred_port <= 65535 else persisted_port
         port_dirty = bool(port) and port != persisted_port
-        # The codec check's own lookup, a file-existence read.
-        ffprobe_ready = bool(runner.provider_ffprobe((getattr(self, "providers", None) or {}).get(CTX_APPLE)))
+        # The codec check's own lookup, a file-existence read. Called
+        # unbound: plain test stand-ins bind appleSetupState alone.
+        ffprobe_ready = bool(WavesBridge._apple_probe(self))
         steps = self._apple_wizard_steps(
             enabled=bool(flags.get("enabled", False)),
             cookies_path=cookies_path,
