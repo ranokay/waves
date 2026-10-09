@@ -304,6 +304,10 @@ class AppleProvider(Provider):
         self.cookies_path: str = ""
         self.nm3u8dlre_path: str = ""
         self.ffmpeg_path: str = ""
+        # How to start the downloader's child guard (child_guard.launcher),
+        # written by the bridge, which knows whether Waves runs packaged.
+        # Empty starts the downloader unguarded: it still ends with its job.
+        self.child_guard: tuple[str, ...] = ()
         # Managed wrapper configuration for the ALAC path: the
         # wrapper HTTP API URL (a persisted free high port, never port 80).
         # Written by the bridge from the runtime manager; empty means the
@@ -472,6 +476,7 @@ class AppleProvider(Provider):
                 ffmpeg_path=self.ffmpeg_path,
                 decrypt_host=self.wrapper_decrypt_host,
                 decrypt_port=self.wrapper_decrypt_port,
+                child_guard=self.child_guard,
             )
         return self._fetch_stack
 
@@ -505,9 +510,13 @@ class AppleProvider(Provider):
             raise
 
     def _fetch_cookies(self, *, song_id: str, atmos: bool):
-        """One cookies-tier delivery through the job's stack when scoped."""
+        """One cookies-tier delivery through the job's stack when scoped.
+
+        The job's abort, when this worker runs one, ends the fetch early.
+        """
         from waves.providers.apple.engine import download_song_file
 
+        abort = self._engine_thread.abort
         return self._fetch_with_stack(
             one_shot=lambda: download_song_file(
                 song_id=song_id,
@@ -515,14 +524,20 @@ class AppleProvider(Provider):
                 cookies_path=self.cookies_path,
                 nm3u8dlre_path=self.nm3u8dlre_path,
                 ffmpeg_path=self.ffmpeg_path,
+                child_guard=self.child_guard,
+                abort=abort,
             ),
-            scoped=lambda session: session.download_song(song_id=song_id, atmos=atmos),
+            scoped=lambda session: session.download_song(song_id=song_id, atmos=atmos, abort=abort),
         )
 
     def _fetch_alac(self, *, song_id: str, max_tier: str):
-        """One wrapper-tier delivery through the job's stack when scoped."""
+        """One wrapper-tier delivery through the job's stack when scoped.
+
+        The job's abort, when this worker runs one, ends the fetch early.
+        """
         from waves.providers.apple.engine import download_song_alac_file
 
+        abort = self._engine_thread.abort
         return self._fetch_with_stack(
             one_shot=lambda: download_song_alac_file(
                 song_id=song_id,
@@ -532,8 +547,10 @@ class AppleProvider(Provider):
                 decrypt_host=self.wrapper_decrypt_host,
                 decrypt_port=self.wrapper_decrypt_port,
                 max_tier=max_tier,
+                child_guard=self.child_guard,
+                abort=abort,
             ),
-            scoped=lambda session: session.download_alac(song_id=song_id, max_tier=max_tier),
+            scoped=lambda session: session.download_alac(song_id=song_id, max_tier=max_tier, abort=abort),
         )
 
     @staticmethod

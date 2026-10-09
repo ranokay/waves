@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -1148,7 +1149,9 @@ def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
 
     from waves.providers.apple import engine as apple_engine
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    # The holds live in the run folder under the temp dir; TMPDIR alone is
+    # read once per process, so the dir itself is pointed here.
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1175,7 +1178,8 @@ def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
 
     assert summary == ""
     assert len(provider.fetched) == 2
-    leftovers = [p for p in (tmp_path / "tmp").iterdir() if p.name.startswith("waves-apple-quarantine-")]
+    assert list((tmp_path / "tmp").glob("waves-apple-run-*")), "the hold was never made under this temp dir"
+    leftovers = list((tmp_path / "tmp").glob("waves-apple-run-*/quarantine-*"))
     assert leftovers == []
 
 
@@ -1459,7 +1463,9 @@ def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
 
     from waves.providers.apple import engine as apple_engine
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    # The holds live in the run folder under the temp dir; TMPDIR alone is
+    # read once per process, so the dir itself is pointed here.
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1498,7 +1504,8 @@ def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
     # earlier integrity hold was dropped instead of leaking into temp.
     assert len(calls) == 2
     assert store.is_quarantined("apple:song-1", "stereo") is None
-    leftovers = [p for p in (tmp_path / "tmp").iterdir() if p.name.startswith("waves-apple-quarantine-")]
+    assert list((tmp_path / "tmp").glob("waves-apple-run-*")), "the hold was never made under this temp dir"
+    leftovers = list((tmp_path / "tmp").glob("waves-apple-run-*/quarantine-*"))
     assert leftovers == []
 
 

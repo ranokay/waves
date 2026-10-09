@@ -20,7 +20,6 @@ import logging
 import os
 import pathlib
 import shutil
-import tempfile
 import time
 from collections.abc import Callable, MutableMapping
 from contextlib import AbstractContextManager
@@ -111,6 +110,7 @@ from waves.providers.apple.supervision import (
 from waves.providers.apple.supervision import (
     throttle_delay as supervision_throttle_delay,
 )
+from waves.providers.apple.workdirs import make_workdir
 from waves.providers.base import AudioType, RefusalKind
 
 logger = logging.getLogger("waves.providers.apple.runner")
@@ -783,7 +783,7 @@ def extract_flac(hooks: AppleJobHooks, staged: pathlib.Path) -> tuple[pathlib.Pa
     ffmpeg = flac_ffmpeg(hooks)
     if not ffmpeg:
         raise AppleDownloadError("Apple FLAC extraction needs FFmpeg")
-    tmpdir = tempfile.mkdtemp(prefix="waves-apple-flac-")
+    tmpdir = str(make_workdir("flac"))
     out = pathlib.Path(tmpdir) / (staged.stem + ".flac")
     try:
         from ffmpeg import FFmpeg
@@ -2164,7 +2164,7 @@ def deliver_track(
             hold_path: pathlib.Path | None = None
             if failed_staged is not None:
                 try:
-                    hold = pathlib.Path(tempfile.mkdtemp(prefix="waves-apple-quarantine-")) / "failed.m4a"
+                    hold = make_workdir("quarantine") / "failed.m4a"
                     shutil.copyfile(failed_staged, hold)
                     hold_path = hold
                 except Exception:

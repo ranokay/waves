@@ -68,7 +68,7 @@ from waves.constants import (
     tier_from_word,
     wants_atmos_delivery,
 )
-from waves.desktop import proc
+from waves.desktop import proc, runtime_paths
 from waves.desktop.diagnostics.events import (
     ApplicationEvents,
     catalog_succeeded,
@@ -161,7 +161,7 @@ from waves.providers import (
     RefusalKind,
     TidalProvider,
 )
-from waves.providers.apple import runner
+from waves.providers.apple import child_guard, runner, workdirs
 from waves.providers.apple.engine import AppleCredential
 from waves.providers.apple.engines import EngineFacts, EnginePolicy
 from waves.providers.apple.files import (
@@ -12680,6 +12680,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # (json.load holds the interpreter for the whole file), so they have
         # their own file, read now.
         self.threadpool.start(Worker(self._load_search_cache))
+        # Apple temp folders a killed or crashed Waves left behind (the
+        # fragments of a fetch it never finished); live owners' stay.
+        self.threadpool.start(Worker(workdirs.sweep_stale))
 
     @Slot(result=str)
     def motionVideoUrl(self) -> str:
@@ -21894,6 +21897,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
             provider.offer_context_probe = lambda: WavesBridge._apple_offer_context(self)
+            # The downloader runs under a guard so it dies with Waves; a
+            # packaged app re-executes its own binary for the guard.
+            provider.child_guard = child_guard.launcher(
+                str(runtime_paths.executable_path()) if runtime_paths.is_frozen() else None
+            )
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
             provider.nm3u8dlre_path = str(resolver() or "")

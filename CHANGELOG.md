@@ -48,6 +48,7 @@ issue. A test enforces it.
 - 🐧 The Linux zip and AppImage bundle Qt's X11 helper libraries, so the app starts on desktops that lack them, such as a fresh Ubuntu 22.04, instead of quitting with "could not load the Qt platform plugin xcb".
 - 🔎 Installing FFmpeg from Settings now installs ffprobe beside it, so Apple Music downloads keep the check that stereo arrives as AAC or ALAC and Dolby Atmos as E-AC-3. A managed FFmpeg without ffprobe offers an update that adds it, and the Apple Music setup wizard says when downloads skip the check ([issue #659](https://github.com/ranokay/waves/issues/659)).
 - 💾 Starting downloads while Waves saves your settings can no longer switch FLAC extraction and video conversion off in the saved settings or store an FFmpeg location from your computer in them, and Apple Music downloads keep the FFmpeg and ffprobe Waves installed instead of falling back to the ones on your system ([issue #667](https://github.com/ranokay/waves/issues/667)).
+- 🧹 Stopping an Apple Music download, signing out or turning Apple Music off now ends its downloader at once, and so does Waves quitting, crashing or being force-quit; the next launch removes the partial files a crashed Waves left in the temporary folder ([issue #660](https://github.com/ranokay/waves/issues/660)).
 
 ## 🗂️ v0.1.32 (2026-09-28)
 

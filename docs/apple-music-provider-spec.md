@@ -80,6 +80,20 @@ silently re-provision. Existing Apple pacing starts at 30 seconds every 25 songs
 reactive 429 handling honors Retry-After or bounded backoff. Values remain tunable
 and move under provider-owned Advanced settings (§9.2).
 
+A fetch's downloader process (N_m3u8DL-RE) ends with the fetch. Stopping the
+job, signing out or disabling Apple cancels the fetch, which kills the
+downloader and removes the fetch's temp folder. The downloader runs under a
+guard process that reads a pipe from Waves and kills the downloader when the
+pipe closes, so the downloader also ends when Waves quits, crashes or is
+killed. On macOS and Linux the guard kills the downloader's whole process
+group. On Windows it kills the downloader process alone, not processes the
+downloader started itself.
+
+Each Waves process keeps its Apple temp folders in one `waves-apple-run-*`
+folder under the system temp directory and holds an OS lock on that folder's
+`.lease` file while it runs. After launch, Waves removes the run folders whose
+lock no process holds, and the flat `waves-apple-*` folders older builds left.
+
 The planned multi-engine lifecycle follows
 [ADR 0010](adr/0010-provider-engine-runtime-boundary.md): distinguish account expiry,
 engine/runtime-local failure, provider refusal, rate-limit scope and incompatible

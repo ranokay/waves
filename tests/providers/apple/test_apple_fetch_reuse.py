@@ -174,7 +174,7 @@ def test_provider_scope_reuses_one_stack_and_carries_the_probe(tmp_path, monkeyp
             self.closed = 0
             instances.append(self)
 
-        def download_song(self, *, song_id, atmos):
+        def download_song(self, *, song_id, atmos, abort=None):
             self.downloads.append(song_id)
             return SimpleNamespace(
                 staged_path=Path("/nonexistent") / f"{song_id}.m4a",
@@ -185,7 +185,7 @@ def test_provider_scope_reuses_one_stack_and_carries_the_probe(tmp_path, monkeyp
                 verified=True,
             )
 
-        def download_alac(self, *, song_id, max_tier=""):
+        def download_alac(self, *, song_id, max_tier="", abort=None):
             raise AssertionError("wrapper path not used for an AAC ask")
 
         def close(self):
@@ -225,7 +225,7 @@ def test_provider_rebuilds_the_stack_after_a_credential_failure(tmp_path, monkey
             self.calls = 0
             instances.append(self)
 
-        def download_song(self, *, song_id, atmos):
+        def download_song(self, *, song_id, atmos, abort=None):
             self.calls += 1
             if len(instances) == 1:
                 raise engine.AppleCredentialsError("The cookies export is not signed in")
@@ -238,7 +238,7 @@ def test_provider_rebuilds_the_stack_after_a_credential_failure(tmp_path, monkey
                 verified=False,
             )
 
-        def download_alac(self, *, song_id, max_tier=""):
+        def download_alac(self, *, song_id, max_tier="", abort=None):
             raise AssertionError("wrapper path not used")
 
         def close(self):
@@ -269,10 +269,10 @@ def test_provider_rebuilds_the_stack_after_a_wrapper_outage(tmp_path, monkeypatc
             self.closed = 0
             instances.append(self)
 
-        def download_song(self, *, song_id, atmos):
+        def download_song(self, *, song_id, atmos, abort=None):
             raise AssertionError("cookies path not used")
 
-        def download_alac(self, *, song_id, max_tier=""):
+        def download_alac(self, *, song_id, max_tier="", abort=None):
             if len(instances) == 1:
                 raise engine.AppleWrapperDown("Apple wrapper is unreachable at http://127.0.0.1:51234")
             return SimpleNamespace(

@@ -16,19 +16,28 @@ placement, ownership and the queue stay Waves' own work above this module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
-import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import cache
 from pathlib import Path
+from threading import Event
+from typing import TYPE_CHECKING
 
 from waves.constants import quality_rank
+from waves.providers.apple.child_guard import run_guarded
 from waves.providers.apple.gamdl_logs import quiet_gamdl_logs
+from waves.providers.apple.workdirs import make_workdir
+
+if TYPE_CHECKING:
+    from gamdl.downloader.base import AppleMusicBaseDownloader
 
 logger = logging.getLogger("waves.providers.apple.engine")
 
@@ -403,6 +412,67 @@ def _verify_fetched(
     return probe, str(probe.get("codec") or picked or ""), True
 
 
+# How often a running fetch looks at its job's abort.
+_ABORT_POLL_SEC = 0.2
+
+
+async def _until_aborted(awaitable, abort: Event | None):
+    """Await one fetch, cancelling it once the job's abort is set.
+
+    The cancellation reaches the fetch's downloader, which ``run_guarded``
+    ends before the cancellation leaves, so a stopped job stops fetching
+    within one poll rather than after the song. A cancelled fetch raises
+    _AppleAborted.
+    """
+    task = asyncio.ensure_future(awaitable)
+    while abort is not None and not task.done():
+        if abort.is_set():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise _AppleAborted()
+        await asyncio.wait({task}, timeout=_ABORT_POLL_SEC)
+    return await task
+
+
+@cache
+def _guarded_base_downloader(child_guard: tuple[str, ...]) -> type[AppleMusicBaseDownloader]:
+    """gamdl's base downloader, with N_m3u8DL-RE started by ``run_guarded``.
+
+    gamdl's own launch leaves the tool running when its fetch is cancelled or
+    Waves dies. The argv is gamdl 3.8's ``_download_nm3u8dlre``; only the
+    launch differs, under ``child_guard`` (one class per launcher).
+    """
+    from gamdl.downloader.base import AppleMusicBaseDownloader
+
+    class GuardedBaseDownloader(AppleMusicBaseDownloader):
+        async def _download_nm3u8dlre(self, stream_url: str, download_path: str) -> None:
+            target = Path(download_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            await run_guarded(
+                (
+                    str(self.full_nm3u8dlre_path),
+                    stream_url,
+                    "--binary-merge",
+                    "--no-log",
+                    "--log-level",
+                    "off",
+                    "--ffmpeg-binary-path",
+                    str(self.full_ffmpeg_path),
+                    "--save-name",
+                    target.stem,
+                    "--save-dir",
+                    target.parent,
+                    "--tmp-dir",
+                    target.parent,
+                ),
+                guard=child_guard,
+                silent=self.silent,
+            )
+
+    return GuardedBaseDownloader
+
+
 class AppleFetchSession:
     """One job's reused gamdl stack: one event loop, one API per tier.
 
@@ -414,6 +484,9 @@ class AppleFetchSession:
     base, and the session's event loop serves the whole job. ``close``
     releases every client and the loop; a credential failure should close
     the session so the retry rebuilds it from the fresh export or guest.
+    ``child_guard`` is the downloader's guard launcher
+    (``child_guard.launcher``); without one the downloader still ends with
+    its job, but not with Waves.
     """
 
     def __init__(
@@ -425,6 +498,7 @@ class AppleFetchSession:
         ffmpeg_path: str = "",
         decrypt_host: str = "127.0.0.1",
         decrypt_port: int = 10020,
+        child_guard: Sequence[str] = (),
     ) -> None:
         self.cookies_path = str(cookies_path or "")
         self.wrapper_url = str(wrapper_url or "").strip().rstrip("/")
@@ -432,6 +506,7 @@ class AppleFetchSession:
         self.ffmpeg_path = str(ffmpeg_path or "")
         self.decrypt_host = str(decrypt_host or "127.0.0.1")
         self.decrypt_port = int(decrypt_port or 10020)
+        self.child_guard = tuple(child_guard)
         self._loop = asyncio.new_event_loop()
         self._cookies: tuple | None = None
         self._wrapper: tuple | None = None
@@ -484,34 +559,38 @@ class AppleFetchSession:
         _require_yt_dlp()
         return nm3u8dlre, ffmpeg
 
-    def _run_staged(self, song_id: str, workdir: Path, make_awaitable, failure: str) -> AppleDelivery:
+    def _run_staged(
+        self, song_id: str, workdir: Path, make_awaitable, failure: str, abort: Event | None
+    ) -> AppleDelivery:
         """Run one fetch on the session loop; clean the workdir unless held.
 
         An integrity failure keeps the workdir for the caller (retry, date
         read, quarantine); every other failure removes it before re-raising,
-        with ``failure`` naming the fetch in the generic message.
+        with ``failure`` naming the fetch in the generic message. ``abort``
+        set mid-fetch cancels it and raises _AppleAborted.
         """
         try:
-            return self._loop.run_until_complete(make_awaitable())
+            return self._loop.run_until_complete(_until_aborted(make_awaitable(), abort))
         except AppleIntegrityError:
             raise
-        except (AppleCredentialsError, AppleDownloadError):
+        except (AppleCredentialsError, AppleDownloadError, _AppleAborted):
             shutil.rmtree(workdir, ignore_errors=True)
             raise
         except Exception as exc:
             shutil.rmtree(workdir, ignore_errors=True)
             raise AppleDownloadError(f"{failure} for song {song_id}: {exc}") from exc  # noqa: TRY003
 
-    def download_song(self, *, song_id: str, atmos: bool) -> AppleDelivery:
+    def download_song(self, *, song_id: str, atmos: bool, abort: Event | None = None) -> AppleDelivery:
         """Fetch and locally decrypt one song on the shared cookies stack.
 
         Validation and the workdir are per fetch; the gamdl stack and the
         event loop persist for the session. An integrity failure keeps the
-        workdir for the caller (retry, date read, quarantine).
+        workdir for the caller (retry, date read, quarantine). The job's
+        ``abort`` ends the fetch and its downloader early.
         """
         _require_cookies(self.cookies_path)
         nm3u8dlre, ffmpeg = self._require_tools()
-        workdir = Path(tempfile.mkdtemp(prefix="waves-apple-"))
+        workdir = make_workdir("song")
         return self._run_staged(
             str(song_id),
             workdir,
@@ -523,12 +602,12 @@ class AppleFetchSession:
                 ffmpeg_path=ffmpeg,
             ),
             "Apple download failed",
+            abort,
         )
 
     async def _download_song_async(
         self, *, song_id: str, atmos: bool, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str
     ) -> AppleDelivery:
-        from gamdl.downloader.base import AppleMusicBaseDownloader
         from gamdl.downloader.downloader import DownloadMode
         from gamdl.downloader.song import AppleMusicSongDownloader
         from gamdl.interface.enums import SongCodec
@@ -547,7 +626,7 @@ class AppleFetchSession:
             music_video=AppleMusicMusicVideoInterface(base=base_interface),
             uploaded_video=AppleMusicUploadedVideoInterface(base=base_interface),
         )
-        base_downloader = AppleMusicBaseDownloader(
+        base_downloader = _guarded_base_downloader(self.child_guard)(
             interface=interface,
             output_path=workdir,
             temp_path=workdir,
@@ -570,7 +649,7 @@ class AppleFetchSession:
             staged_path=staged, workdir=Path(workdir), is_atmos=atmos, codec=codec, probe=probe, verified=verified
         )
 
-    def download_alac(self, *, song_id: str, max_tier: str = "") -> AppleDelivery:
+    def download_alac(self, *, song_id: str, max_tier: str = "", abort: Event | None = None) -> AppleDelivery:
         """Fetch one ALAC song through the shared wrapper stack.
 
         The wrapper holds the Apple ID session itself: its tokens persist
@@ -578,7 +657,8 @@ class AppleFetchSession:
         credentials and succeeds while the guest is still signed in. A
         logged-out guest raises AppleCredentialsError with the wizard's
         login step as the fix; every other fetch problem raises
-        AppleDownloadError.
+        AppleDownloadError. The job's ``abort`` ends the fetch and its
+        downloader early.
         """
         if not self.wrapper_url:
             raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
@@ -586,7 +666,7 @@ class AppleFetchSession:
                 credential=AppleCredential.WRAPPER,
             )
         nm3u8dlre, ffmpeg = self._require_tools()
-        workdir = Path(tempfile.mkdtemp(prefix="waves-apple-alac-"))
+        workdir = make_workdir("alac")
         return self._run_staged(
             str(song_id),
             workdir,
@@ -598,12 +678,12 @@ class AppleFetchSession:
                 ffmpeg_path=ffmpeg,
             ),
             "Apple ALAC download failed",
+            abort,
         )
 
     async def _fetch_alac_async(
         self, *, song_id: str, workdir: str, max_tier: str, nm3u8dlre_path: str, ffmpeg_path: str
     ) -> AppleDelivery:
-        from gamdl.downloader.base import AppleMusicBaseDownloader
         from gamdl.downloader.downloader import DownloadMode
         from gamdl.downloader.song import AppleMusicSongDownloader
         from gamdl.interface.enums import SongCodec
@@ -636,7 +716,7 @@ class AppleFetchSession:
             music_video=AppleMusicMusicVideoInterface(base=base_interface),
             uploaded_video=AppleMusicUploadedVideoInterface(base=base_interface),
         )
-        base_downloader = AppleMusicBaseDownloader(
+        base_downloader = _guarded_base_downloader(self.child_guard)(
             interface=interface,
             output_path=workdir,
             temp_path=workdir,
@@ -741,6 +821,8 @@ def download_song_alac_file(
     decrypt_host: str = "127.0.0.1",
     decrypt_port: int = 10020,
     max_tier: str = "",
+    child_guard: Sequence[str] = (),
+    abort: Event | None = None,
 ) -> AppleDelivery:
     """Fetch one ALAC song through the managed wrapper into a fresh workdir.
 
@@ -759,8 +841,9 @@ def download_song_alac_file(
         ffmpeg_path=ffmpeg_path,
         decrypt_host=decrypt_host,
         decrypt_port=decrypt_port,
+        child_guard=child_guard,
     ) as session:
-        return session.download_alac(song_id=str(song_id), max_tier=str(max_tier or ""))
+        return session.download_alac(song_id=str(song_id), max_tier=str(max_tier or ""), abort=abort)
 
 
 def download_song_file(
@@ -770,6 +853,8 @@ def download_song_file(
     cookies_path: str,
     nm3u8dlre_path: str = "",
     ffmpeg_path: str = "",
+    child_guard: Sequence[str] = (),
+    abort: Event | None = None,
 ) -> AppleDelivery:
     """Fetch and locally decrypt one Apple song into a fresh workdir.
 
@@ -780,9 +865,9 @@ def download_song_file(
     AppleFetchSession.
     """
     with AppleFetchSession(
-        cookies_path=cookies_path, nm3u8dlre_path=nm3u8dlre_path, ffmpeg_path=ffmpeg_path
+        cookies_path=cookies_path, nm3u8dlre_path=nm3u8dlre_path, ffmpeg_path=ffmpeg_path, child_guard=child_guard
     ) as session:
-        return session.download_song(song_id=str(song_id), atmos=bool(atmos))
+        return session.download_song(song_id=str(song_id), atmos=bool(atmos), abort=abort)
 
 
 def cleanup_delivery(delivery: AppleDelivery) -> None:
