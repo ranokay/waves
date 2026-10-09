@@ -437,7 +437,7 @@ def _install_stub(tmp_path, *, user_path="", install=None, installed=True):
         "_user_ffmpeg_path",
     ):
         setattr(s, name, _bind(s, name))
-    return s, data, managed, handed
+    return s, handed
 
 
 # Slots: installFfmpeg. Signals: ffmpegStatusChanged.
@@ -445,41 +445,46 @@ def test_installFfmpeg_hands_the_apple_provider_the_managed_pair(tmp_path):
     """Download had already written the PATH ffmpeg into the live settings;
     the install re-resolves past it, so the Apple provider (and its codec
     check) uses the managed pair at once."""
-    s, data, managed, handed = _install_stub(tmp_path)
+    s, handed = _install_stub(tmp_path)
+    managed = str(s._ffmpeg.binary_path)
 
     s.installFfmpeg()
 
-    assert handed == [str(managed)]
-    assert data.path_binary_ffmpeg == str(managed)
+    assert handed == [managed]
+    assert s.settings.data.path_binary_ffmpeg == managed
     assert len(s.ffmpegStatusChanged.emits) == 1
 
 
 def test_installFfmpeg_keeps_a_user_override(tmp_path):
-    s, data, _managed, handed = _install_stub(tmp_path, user_path="/opt/mine/ffmpeg")
+    s, handed = _install_stub(tmp_path, user_path="/opt/mine/ffmpeg")
 
     s.installFfmpeg()
 
     assert handed == ["/opt/mine/ffmpeg"]
-    assert data.path_binary_ffmpeg == "/opt/mine/ffmpeg"
+    assert s.settings.data.path_binary_ffmpeg == "/opt/mine/ffmpeg"
 
 
-def test_a_save_in_flight_cannot_undo_the_install(tmp_path):
+def test_a_save_in_flight_cannot_undo_the_install_re_resolve(tmp_path):
     """A save on another thread borrows the live path and puts it back in its
-    finally, under the save lock. The install's re-resolve waits for that
-    lock, so the put-back cannot land after it and restore the PATH ffmpeg."""
-    s, data, managed, handed = _install_stub(tmp_path)
-    s._settings_save_lock.acquire()  # the save is mid-write
+    finally, under the save lock. The install's restore and re-resolve wait
+    for that lock, so the put-back cannot land after them and bring back the
+    PATH ffmpeg."""
+    s, handed = _install_stub(tmp_path)
+    data, managed = s.settings.data, str(s._ffmpeg.binary_path)
     install = threading.Thread(target=s.installFfmpeg)
-    install.start()
-    install.join(0.5)  # an install that ignores the lock is done by now
-
-    data.path_binary_ffmpeg = "/usr/local/bin/ffmpeg"  # the save's put-back
-    s._settings_save_lock.release()
+    s._settings_save_lock.acquire()  # the save is mid-write
+    try:
+        install.start()
+        install.join(0.5)
+        assert install.is_alive(), "the install re-resolved without waiting for the save lock"
+        data.path_binary_ffmpeg = "/usr/local/bin/ffmpeg"  # the save's put-back
+    finally:
+        s._settings_save_lock.release()
     install.join(5)
 
     assert not install.is_alive()
-    assert data.path_binary_ffmpeg == str(managed)
-    assert handed == [str(managed)]
+    assert data.path_binary_ffmpeg == managed
+    assert handed == [managed]
 
 
 def test_installFfmpeg_failure_still_refreshes_the_status(tmp_path):
@@ -490,12 +495,12 @@ def test_installFfmpeg_failure_still_refreshes_the_status(tmp_path):
     def boom(**kw):
         raise OSError("no network")
 
-    s, data, _managed, handed = _install_stub(tmp_path, install=boom, installed=False)
+    s, handed = _install_stub(tmp_path, install=boom, installed=False)
     s.installFfmpeg()
 
     assert len(s.ffmpegStatusChanged.emits) == 1
     assert s.ffmpegStateChanged.emits[-1][0] == "failed"
-    assert handed == [] and data.path_binary_ffmpeg == "/usr/local/bin/ffmpeg"
+    assert handed == [] and s.settings.data.path_binary_ffmpeg == "/usr/local/bin/ffmpeg"
     assert s._ffmpeg_install_inflight is False
 
 
@@ -507,10 +512,10 @@ def test_a_late_install_failure_adopts_the_binaries_that_landed(tmp_path):
     def manifest_fails(**kw):
         raise OSError("No space left on device")
 
-    s, _data, managed, handed = _install_stub(tmp_path, install=manifest_fails)
+    s, handed = _install_stub(tmp_path, install=manifest_fails)
     s.installFfmpeg()
 
-    assert handed == [str(managed)]
+    assert handed == [str(s._ffmpeg.binary_path)]
     assert s.ffmpegStateChanged.emits[-1][0] == "failed"
     assert len(s.ffmpegStatusChanged.emits) == 1
 

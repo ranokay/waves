@@ -749,7 +749,13 @@ def _ffprobe_beside(ffmpeg_path: str, os_key: str) -> str:
 
 
 def _runnable(path: Path) -> bool:
-    return path.is_file() and os.access(path, os.X_OK)
+    """Whether ``path`` is an executable file. An unreadable folder (a
+    PermissionError from the stat) reads as not runnable, never as an
+    exception: status() runs on the GUI thread."""
+    try:
+        return path.is_file() and os.access(path, os.X_OK)
+    except OSError:
+        return False
 
 
 # Probing a binary means fork+exec+wait on it, which can block for the whole

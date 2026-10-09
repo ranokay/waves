@@ -4487,7 +4487,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             logger.debug("Apple wrapper auth warm-up probe failed", exc_info=True)
         # _save_settings swaps a sanitised copy of settings.data in for the
         # length of one write. Saves come from the GUI thread, from download
-        # workers and from the keep-warm daemon, so the swap is serialised.
+        # workers and from the keep-warm daemon, so the swap is serialised,
+        # and so is every explicit restore of the transient ffmpeg values
+        # (applySettings, _adopt_managed_ffmpeg).
         self._settings_save_lock = Lock()
         # One-shot guard so the "running without ffmpeg" warning is surfaced once
         # per session (re-armed by _warn_if_ffmpeg_missing when ffmpeg reappears).
@@ -15562,7 +15564,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         return runner.embed_cover_bytes(self._apple_job_hooks(), cover)
 
     def _apple_probe(self) -> str:
-        """An ffprobe binary for Apple verification, or "" (runner policy)."""
+        """The ffprobe the Apple codec check would use, or "" (runner policy):
+        the setup wizard's codec-check step reads it."""
         return runner.provider_ffprobe((getattr(self, "providers", None) or {}).get(CTX_APPLE))
 
     def _apple_wants_flac(self) -> bool:
@@ -20138,7 +20141,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         them.
 
         Every save must go through here. Callers that need a specific ordering
-        around the restores (``applySettings``) do them explicitly instead,
+        around the restores (``applySettings``, and ``_adopt_managed_ffmpeg``,
+        which restores without saving) do them explicitly instead,
         under ``_settings_save_lock`` all the same, and follow with
         ``_init_download`` so the managed path is re-injected. Holding the lock
         is not optional there: the restore and the write are separate
@@ -20284,7 +20288,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # A late failure can still have landed binaries (ffprobe
                     # goes in first, the manifest write comes last): adopt
                     # whatever pair is in place, then let readers of the bin
-                    # folder re-read it.
+                    # folder re-read it. is_installed never raises, so the
+                    # emit below always runs.
                     if self._ffmpeg.is_installed():
                         self._adopt_managed_ffmpeg()
                     self.ffmpegStatusChanged.emit()

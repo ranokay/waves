@@ -676,3 +676,22 @@ def test_the_launch_sweep_takes_an_aside_ffprobe_too(tmp_path, monkeypatch):
     mgr.sweep_aside()
 
     assert sorted(p.name for p in mgr.install_dir.iterdir()) == ["ffprobe.exe", "my-ffprobe.exe.old-13"]
+
+
+def test_an_unreadable_bin_folder_reads_as_not_installed(tmp_path, monkeypatch):
+    """A bin folder without search permission makes the stat itself raise;
+    status() runs on the GUI thread and the install's failure path asks too,
+    so the answer is "not installed", never an exception."""
+    real_is_file = fm.Path.is_file
+
+    def is_file(self):
+        if self.parent.name == "bin":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_file(self)
+
+    monkeypatch.setattr(fm.Path, "is_file", is_file)
+    monkeypatch.setattr(fm, "_which_ffmpeg", lambda os_key: "")
+    mgr = fm.FfmpegManager(tmp_path)
+
+    assert mgr.is_installed() is False and mgr.has_ffprobe() is False
+    assert mgr.status()["state"] == "missing"
