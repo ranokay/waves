@@ -44,8 +44,10 @@ def main() -> int:
     parser.add_argument("files", nargs="*")
     args = parser.parse_args()
     if args.fix and args.files:
+        # pyupgrade treats a literal '-' as stdin even after its option delimiter.
+        files = [str(Path(name).absolute()) for name in args.files]
         result = subprocess.run(
-            [sys.executable, "-m", "pyupgrade", "--py312-plus", "--", *args.files], capture_output=True, check=False
+            [sys.executable, "-m", "pyupgrade", "--py312-plus", "--", *files], capture_output=True, check=False
         )
         if result.returncode == 0:
             return 0

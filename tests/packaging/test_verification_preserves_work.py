@@ -395,3 +395,14 @@ def test_full_format_converges_once_without_staging(checkout, jobs):
     assert result.returncode == 0, result.stdout + result.stderr
     assert snapshot(checkout) == before
     assert succeeds(checkout, "git", "write-tree").stdout == index
+
+
+def test_pyupgrade_fix_treats_a_dash_named_script_as_a_file(checkout):
+    script = checkout / "-"
+    script.write_bytes(b'#!/usr/bin/env python\nx = 1\nvalue = "{x}".format(**locals())\n')
+    succeeds(checkout, "git", "add", "--", "-")
+    index = succeeds(checkout, "git", "write-tree").stdout
+    succeeds(checkout, "hk", "fix", "--step", "pyupgrade", "--no-stage", "--", "-")
+    assert script.read_bytes() == b'#!/usr/bin/env python\nx = 1\nvalue = f"{x}"\n'
+    succeeds(checkout, "hk", "check", "--step", "pyupgrade", "--", "-")
+    assert succeeds(checkout, "git", "write-tree").stdout == index
