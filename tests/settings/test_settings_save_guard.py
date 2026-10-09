@@ -26,12 +26,18 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import shutil
+import threading
 from threading import Lock
+from types import SimpleNamespace
 from typing import ClassVar
 
+import pytest
 from conftest import _InlineWriter
 from support.bridge_stub import BridgeStub
 
+from waves.config import Settings as SettingsSingleton
+from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import Settings as CfgSettings
 
@@ -39,6 +45,7 @@ from waves.model.cfg import Settings as CfgSettings
 # the path is identity-bearing. That is the whole reason it must never reach the
 # settings file, which the bug template asks users to paste in public.
 _MANAGED = "/Users/testuser/Library/Application Support/Waves/bin/ffmpeg"
+_PATH_FFMPEG = "/usr/local/bin/ffmpeg"
 
 
 class _Stub(BridgeStub):
@@ -49,10 +56,13 @@ def _bind(stub, name):
     return getattr(WavesBridge, name).__get__(stub, type(stub))
 
 
-def _bridge():
+def _bridge(save_hook=None):
     """A stub carrying the real save/restore methods over a real dataclass, in
     the exact state that triggers it: ffmpeg missing (flags forced off in memory,
-    user's real preference remembered) and a managed path injected."""
+    user's real preference remembered) and a managed path injected.
+
+    ``save_hook`` runs inside every write, with the lock held and the user's
+    values standing in the live settings."""
     stub = _Stub()
 
     class _Cfg:
@@ -72,6 +82,8 @@ def _bridge():
         def write_serialized(self, data_json):
             # The async path: capture what the SNAPSHOT would put on disk,
             # which is exactly what _submit_settings_write serialized.
+            if save_hook is not None:
+                save_hook()
             payload = json.loads(data_json)
             self.saved.append({k: payload[k] for k in ("extract_flac", "video_convert_mp4", "path_binary_ffmpeg")})
 
@@ -198,6 +210,177 @@ def test_two_saves_at_once_cannot_strand_a_copy():
     assert live.path_binary_ffmpeg == _MANAGED
     assert len(stub.settings.saved) == 4
     assert all(w["path_binary_ffmpeg"] == "" for w in stub.settings.saved)
+
+
+def _resolving_bridge(save_hook=None):
+    """``_bridge`` with the managed ffmpeg installed and the real resolve
+    bound: the managed path injected, both flags at the user's preference."""
+    stub = _bridge(save_hook)
+    stub.settings.data.extract_flac = True
+    stub.settings.data.video_convert_mp4 = True
+    stub._ffmpeg = SimpleNamespace(is_installed=lambda: True, binary_path=_MANAGED)
+    for name in ("_resolve_ffmpeg", "_resolve_ffmpeg_locked", "_ffmpeg_source_label", "_user_ffmpeg_path"):
+        setattr(stub, name, _bind(stub, name))
+    return stub
+
+
+def test_a_resolve_waits_for_a_save_in_its_write():
+    """Inside a save's write the user's "" stands in the live path, and the
+    resolve injects the managed path whenever it finds that field empty.
+    Unlocked, it wrote the path into the values that save then serialized: an
+    absolute path carrying the account name, into settings.json."""
+    stub = _resolving_bridge()
+    data = stub.settings.data
+    resolve = threading.Thread(target=stub._resolve_ffmpeg)
+    stub._settings_save_lock.acquire()  # a save is mid-write
+    try:
+        data.path_binary_ffmpeg = ""  # with the user's value restored in place
+        resolve.start()
+        resolve.join(0.3)
+        assert resolve.is_alive(), "the resolve ran inside the save's write"
+        assert data.path_binary_ffmpeg == "", "the managed path reached the values the save serializes"
+        data.path_binary_ffmpeg = _MANAGED  # the save's put-back
+    finally:
+        stub._settings_save_lock.release()
+    resolve.join(5)
+
+    assert not resolve.is_alive()
+    assert data.path_binary_ffmpeg == _MANAGED
+
+
+def _apple_provider_path(stub) -> str:
+    provider = SimpleNamespace()
+    stub.providers = {CTX_APPLE: provider}
+    WavesBridge._configure_apple_provider(stub)
+    return provider.ffmpeg_path
+
+
+def _preview_path(stub) -> str | None:
+    return WavesBridge._preview_ffmpeg_bin(stub)
+
+
+@pytest.mark.parametrize("reader", [_apple_provider_path, _preview_path], ids=["apple-provider", "preview"])
+def test_a_reader_keeps_the_resolved_path_through_a_save(reader, monkeypatch):
+    """A save on another thread can start the moment a reader's resolve
+    returns. A reader that re-read the live field then got the user's "": the
+    Apple provider fell back to the PATH ffmpeg and ffprobe until its next
+    configure, and a preview with no ffmpeg on PATH failed outright."""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    parked, release = threading.Event(), threading.Event()
+
+    def park():
+        parked.set()
+        release.wait(5)
+
+    stub = _resolving_bridge(save_hook=park)
+    saver = threading.Thread(target=stub._save_settings)
+    resolve = stub._resolve_ffmpeg
+
+    def resolve_then_a_save_starts():
+        path = resolve()
+        saver.start()
+        assert parked.wait(5), "the save never reached its write"
+        return path
+
+    stub._resolve_ffmpeg = resolve_then_a_save_starts
+    try:
+        path = reader(stub)
+    finally:
+        release.set()
+        saver.join(5)
+
+    assert path == _MANAGED, "the reader took the user's value a save had restored for its write"
+    assert _last_save(stub)["path_binary_ffmpeg"] == ""
+    assert stub.settings.data.path_binary_ffmpeg == _MANAGED
+
+
+def _build_init_download(stub):
+    WavesBridge._init_download(stub)
+    return stub._dl
+
+
+def _build_job_download(stub):
+    signals = SimpleNamespace(item=None, item_name=None, list_item=None, list_name=None)
+    return WavesBridge._build_download(stub, signals)
+
+
+@pytest.mark.parametrize("on_path", [_PATH_FFMPEG, None], ids=["ffmpeg-on-path", "no-ffmpeg-on-path"])
+@pytest.mark.parametrize("build", [_build_init_download, _build_job_download], ids=["init-download", "job-download"])
+def test_a_download_built_as_a_save_starts_sees_the_managed_path(build, on_path, monkeypatch):
+    """Download.__init__ reads the shared settings and, finding the path
+    empty, writes the PATH ffmpeg into them, or forces FLAC extraction and
+    video conversion off. A save landing between the builder's resolve and
+    that read showed it the user's "" and serialized what it wrote: the PATH
+    location, or a null path and both features off, over the user's real
+    preferences. The Download is built under the save lock, so the save waits
+    for it."""
+    monkeypatch.setattr(shutil, "which", lambda name: on_path)
+    singleton = SettingsSingleton()
+    data = CfgSettings()
+    data.path_binary_ffmpeg = _MANAGED
+    data.extract_flac = True
+    data.video_convert_mp4 = True
+    saved: list[dict] = []
+
+    def write_serialized(data_json):
+        payload = json.loads(data_json)
+        saved.append({k: payload[k] for k in ("extract_flac", "video_convert_mp4", "path_binary_ffmpeg")})
+
+    monkeypatch.setattr(singleton, "data", data)
+    monkeypatch.setattr(singleton, "write_serialized", write_serialized)
+
+    stub = _resolving_bridge()
+    # Download.__init__ reads the singleton, so the bridge must hold the same one.
+    stub.settings = singleton
+    stub.tidal = SimpleNamespace(session=None)
+    stub.providers = {CTX_TIDAL: object()}
+    stub._event_abort = threading.Event()
+    stub._event_run = threading.Event()
+    stub._ownership = SimpleNamespace(ownership_of=None, stamp_ceiling=None)
+    stub._target_quality_rank = lambda quality: 0
+    stub._ffmpeg_missing_warned = False
+    stub._warn_if_ffmpeg_missing = _bind(stub, "_warn_if_ffmpeg_missing")
+
+    restored, release = threading.Event(), threading.Event()
+    restore_path = stub._restore_ffmpeg_path
+
+    def restore_then_park():
+        restore_path()
+        restored.set()
+        release.wait(5)
+
+    stub._restore_ffmpeg_path = restore_then_park
+    saver = threading.Thread(target=stub._save_settings)
+
+    def after_the_resolve(resolve):
+        # Both resolve names carry the seam, so it sits after whichever one
+        # the builder calls; the save starts once.
+        def resolve_then_a_save_starts():
+            path = resolve()
+            if saver.ident is None:
+                saver.start()
+            # Held by the builder, the lock keeps the save out: it never
+            # reaches its restore, and this wait runs out.
+            restored.wait(0.3)
+            return path
+
+        return resolve_then_a_save_starts
+
+    stub._resolve_ffmpeg = after_the_resolve(stub._resolve_ffmpeg)
+    stub._resolve_ffmpeg_locked = after_the_resolve(stub._resolve_ffmpeg_locked)
+    try:
+        dl = build(stub)
+    finally:
+        release.set()
+        saver.join(5)
+
+    assert not saver.is_alive()
+    assert dl.ffmpeg_missing is False, "the Download read the user's value a save had restored for its write"
+    assert saved == [{"extract_flac": True, "video_convert_mp4": True, "path_binary_ffmpeg": ""}], (
+        "the save serialized what the Download wrote over the user's preferences"
+    )
+    assert data.path_binary_ffmpeg == _MANAGED
+    assert data.extract_flac is True and data.video_convert_mp4 is True
 
 
 def test_no_bare_settings_save_outside_the_guarded_helper():
