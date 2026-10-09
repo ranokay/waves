@@ -316,3 +316,82 @@ def test_whitespace_fix_preserves_the_original_byte_contract(checkout, step, sou
     succeeds(checkout, "hk", "fix", "--step", step, "--no-stage", "sample.txt")
     assert (checkout / "sample.txt").read_bytes() == expected
     assert succeeds(checkout, "git", "write-tree").stdout == index
+
+
+@pytest.mark.parametrize("scope", ["--local", "--global"])
+@pytest.mark.parametrize("task", ["install", "doctor"])
+def test_empty_hooks_path_is_configured_and_preserved(checkout, scope, task):
+    succeeds(checkout, "hk", "install", "--mise", "--force-local", "--legacy")
+    succeeds(checkout, "git", "config", scope, "core.hooksPath", "")
+    hooks = {event: (checkout / ".git/hooks" / event).read_bytes() for event in ("pre-commit", "pre-push")}
+    config = (checkout / ".git/config").read_bytes()
+    global_config = checkout.parent / (checkout.name + ".global.gitconfig")
+    global_before = global_config.read_bytes() if global_config.exists() else None
+    result = run(checkout, "mise", "run", task)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert b"core.hooksPath" in result.stdout + result.stderr
+    assert (checkout / ".git/config").read_bytes() == config
+    assert (global_config.read_bytes() if global_config.exists() else None) == global_before
+    assert {event: (checkout / ".git/hooks" / event).read_bytes() for event in hooks} == hooks
+
+
+@pytest.mark.parametrize("event", ["pre-commit", "pre-push"])
+@pytest.mark.parametrize("native_also_installed", [False, True])
+def test_doctor_rejects_a_script_for_the_wrong_event(checkout, event, native_also_installed):
+    succeeds(checkout, "hk", "install", "--mise", "--force-local", "--legacy")
+    other = "pre-push" if event == "pre-commit" else "pre-commit"
+    hook = checkout / ".git/hooks" / event
+    wrong_script = (hook.parent / other).read_bytes()
+    if native_also_installed:
+        succeeds(checkout, "hk", "install", "--mise", "--force-local")
+        if run(checkout, "git", "config", "--get", f"hook.hk-{event}.command").returncode:
+            pytest.skip("Git before 2.54 uses only script hooks")
+    succeeds(checkout, "mise", "run", "doctor")
+    hook.write_bytes(wrong_script)
+    hook.chmod(0o755)
+    result = run(checkout, "mise", "run", "doctor")
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert ("hk " + event + " hook missing or stale").encode() in result.stdout + result.stderr
+
+
+def test_pyupgrade_failure_names_the_original_non_utf8_file(checkout):
+    name = "legacy ü.py"
+    (checkout / name).write_bytes(b"# coding: latin-1\nvalue = '\xe9'\n")
+    before = snapshot(checkout)
+    result = run(checkout, "hk", "check", "--step", "pyupgrade", "--", name)
+    assert result.returncode != 0
+    diagnostics = result.stdout + result.stderr
+    assert b"non-utf-8" in diagnostics
+    assert name.encode() in diagnostics
+    assert b"waves-pyupgrade-" not in diagnostics
+    assert snapshot(checkout) == before
+
+
+def test_qml_filename_cannot_enable_formatter_write_options(checkout):
+    name = "--write-defaults"
+    (checkout / name).write_text("import QtQuick\nItem{}\n")
+    before = snapshot(checkout)
+    result = run(checkout, "uv", "run", "--locked", "--all-extras", "python", "tools/check_qml_format.py", name)
+    assert result.returncode != 0
+    assert name.encode() in result.stdout + result.stderr
+    assert snapshot(checkout) == before
+
+
+@pytest.mark.parametrize("jobs", ["1", "2"])
+def test_full_format_converges_once_without_staging(checkout, jobs):
+    sample = checkout / "sample.py"
+    sample.write_bytes(b'x=1\nvalue="{x}".format(**locals())  \n  ')
+    text = checkout / "sample.txt"
+    text.write_bytes(b"value\n  ")
+    succeeds(checkout, "git", "add", "sample.py", "sample.txt")
+    index = succeeds(checkout, "git", "write-tree").stdout
+    result = run(checkout, "mise", "run", "fmt", extra_env={"HK_JOBS": jobs})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sample.read_bytes() == b'x = 1\nvalue = f"{x}"\n'
+    assert text.read_bytes() == b"value\n"
+    succeeds(checkout, "mise", "run", "check")
+    before = snapshot(checkout)
+    result = run(checkout, "mise", "run", "fmt", extra_env={"HK_JOBS": jobs})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert snapshot(checkout) == before
+    assert succeeds(checkout, "git", "write-tree").stdout == index

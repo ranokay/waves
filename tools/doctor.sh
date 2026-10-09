@@ -49,7 +49,7 @@ fi
 # Verify the effective repository hook configuration, including linked worktrees.
 if [ "$have_uv" -eq 0 ]; then
   :
-elif uv run --locked --all-extras python tools/install_hooks.py --check; then
+elif uv run --locked --all-extras --no-sync python tools/install_hooks.py --check; then
   ok "hk hooks verified"
 else
   bad "hk hooks missing or stale" "mise run install"

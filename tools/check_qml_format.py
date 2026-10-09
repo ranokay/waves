@@ -10,7 +10,9 @@ from pathlib import Path
 def main() -> int:
     failed = False
     for name in sys.argv[1:]:
-        result = subprocess.run(["pyside6-qmlformat", "-s", ".qmlformat.ini", name], capture_output=True, check=False)
+        result = subprocess.run(
+            ["pyside6-qmlformat", "-s", ".qmlformat.ini", "--", name], capture_output=True, check=False
+        )
         if result.returncode:
             sys.stderr.buffer.write(result.stderr)
             failed = True

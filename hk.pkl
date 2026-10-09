@@ -63,8 +63,8 @@ local linters = new Mapping<String, Step> {
   ["pyupgrade"] {
     types = List("python")
     // Ruff UP does not cover all of pyupgrade's Python 3.12 rewrites.
-    check = python + "python tools/check_pyupgrade.py {{files}}"
-    fix = python + "pyupgrade --py312-plus -- {{files}}"
+    check = python + "python tools/check_pyupgrade.py -- {{files}}"
+    fix = python + "python tools/check_pyupgrade.py --fix -- {{files}}"
   }
 }
 
@@ -83,7 +83,13 @@ hooks {
     fix = true
     stage = false
     stash = "none"
-    steps = linters
+    // Writers sharing a file must converge in one run; checks remain parallel.
+    steps = (linters) {
+      ["end-of-file-fixer"] { depends = "trailing-whitespace" }
+      ["pyupgrade"] { depends = "end-of-file-fixer" }
+      ["ruff"] { depends = "pyupgrade" }
+      ["ruff-format"] { depends = "ruff" }
+    }
   }
   ["pre-commit"] {
     fix = false
