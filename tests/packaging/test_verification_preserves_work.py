@@ -238,14 +238,15 @@ def test_merge_conflicts_fail_during_a_merge_without_rewriting(checkout):
     assert snapshot(checkout) == before
 
 
-def test_binary_case_conflicts_are_checked_against_other_tracked_paths(checkout):
-    (checkout / "photo.PNG").write_bytes(b"\x00binary")
-    succeeds(checkout, "git", "add", "photo.PNG")
+@pytest.mark.parametrize(("name", "other"), [("photo.PNG", "PHOTO.png"), (".photo.PNG", ".PHOTO.png")])
+def test_binary_case_conflicts_are_checked_against_other_tracked_paths(checkout, name, other):
+    (checkout / name).write_bytes(b"\x00binary")
+    succeeds(checkout, "git", "add", name)
     # The spelling conflict is represented in the index even on a case-insensitive host.
-    blob = succeeds(checkout, "git", "hash-object", "photo.PNG").stdout.decode().strip()
-    succeeds(checkout, "git", "update-index", "--add", "--cacheinfo", f"100644,{blob},PHOTO.png")
+    blob = succeeds(checkout, "git", "hash-object", name).stdout.decode().strip()
+    succeeds(checkout, "git", "update-index", "--add", "--cacheinfo", f"100644,{blob},{other}")
     before = snapshot(checkout)
-    result = run(checkout, "hk", "check", "--step", "check-case-conflict", "photo.PNG")
+    result = run(checkout, "hk", "check", "--step", "check-case-conflict", name)
     assert result.returncode != 0
     assert snapshot(checkout) == before
 
@@ -406,3 +407,34 @@ def test_pyupgrade_fix_treats_a_dash_named_script_as_a_file(checkout):
     assert script.read_bytes() == b'#!/usr/bin/env python\nx = 1\nvalue = f"{x}"\n'
     succeeds(checkout, "hk", "check", "--step", "pyupgrade", "--", "-")
     assert succeeds(checkout, "git", "write-tree").stdout == index
+
+
+@pytest.mark.parametrize("branch", ["fixture", "main", "develop"])
+def test_empty_commits_run_only_the_commit_branch_guard(checkout, branch):
+    succeeds(checkout, "mise", "run", "install")
+    if branch != "fixture":
+        succeeds(checkout, "git", "switch", "-c", branch)
+    before = snapshot(checkout)
+    head = succeeds(checkout, "git", "rev-parse", "HEAD").stdout
+    result = run(checkout, "git", "commit", "--allow-empty", "-qm", "Empty fixture")
+    assert (result.returncode == 0) == (branch == "fixture"), result.stdout + result.stderr
+    if branch == "fixture":
+        assert succeeds(checkout, "git", "rev-parse", "HEAD^").stdout == head
+    else:
+        assert b"no-commit-to-branch" in result.stdout + result.stderr
+        assert succeeds(checkout, "git", "rev-parse", "HEAD").stdout == head
+    assert snapshot(checkout) == before
+
+
+def test_deleting_a_remote_branch_skips_file_checks(checkout):
+    remote = checkout.parent / "fixture-remote.git"
+    succeeds(checkout, "git", "init", "--bare", "-q", "--initial-branch=main", str(remote))
+    succeeds(checkout, "git", "remote", "add", "origin", str(remote))
+    # Seed the remote's baseline before hooks, then exercise the actual deletion.
+    succeeds(checkout, "git", "push", "origin", "HEAD:refs/heads/main", "HEAD:refs/heads/fixture")
+    succeeds(checkout, "git", "remote", "set-head", "origin", "main")
+    succeeds(checkout, "mise", "run", "install")
+    before = snapshot(checkout)
+    succeeds(checkout, "git", "push", "origin", "--delete", "fixture")
+    assert succeeds(checkout, "git", "ls-remote", "--heads", "origin", "refs/heads/fixture").stdout == b""
+    assert snapshot(checkout) == before

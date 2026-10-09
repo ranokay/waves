@@ -4,6 +4,7 @@ amends "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Config.pk
 local python = "uv run --locked --all-extras "
 local linters = new Mapping<String, Step> {
   ["check-case-conflict"] {
+    glob = "**"
     allow_binary = true
     allow_symlinks = true
     check = "hk util check-case-conflict -- {{files}}"
