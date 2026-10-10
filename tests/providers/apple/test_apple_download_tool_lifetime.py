@@ -157,7 +157,8 @@ def test_stopping_a_job_stops_its_download_tool_and_removes_its_workdir(tmp_path
     finally:
         session.close()
 
-    assert len(raised) == 1 and isinstance(raised[0], engine._AppleAborted)
+    assert len(raised) == 1
+    assert isinstance(raised[0], engine._AppleAborted)
     assert _wait(lambda: not standin.alive()), "the tool outlived its job"
     assert _no_workdir_left()
 
@@ -456,10 +457,9 @@ def test_the_guard_refuses_to_run_without_a_command(capsys):
 @pytest.mark.parametrize("guarded", [True, False], ids=["guarded", "unguarded"])
 def test_a_failing_tool_raises_with_its_exit_code_and_output(guarded):
     failing = [sys.executable, "-c", "import sys; sys.stderr.write('segment 3 failed'); sys.exit(3)"]
+    run = child_guard.run_guarded(failing, guard_launcher=child_guard.launcher(None) if guarded else (), silent=True)
     with pytest.raises(child_guard.ToolFailed) as excinfo:
-        asyncio.run(
-            child_guard.run_guarded(failing, guard_launcher=child_guard.launcher(None) if guarded else (), silent=True)
-        )
+        asyncio.run(run)
     assert str(excinfo.value).startswith("Exited with code 3: ")
     assert "segment 3 failed" in str(excinfo.value)
 

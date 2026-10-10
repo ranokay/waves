@@ -197,13 +197,13 @@ def main(argv: Sequence[str]) -> int:
 
 
 def _kill_when_waves_leaves(parent: int, tool: subprocess.Popen) -> None:
-    # Waves never writes: a read that ends, or fails, means it is gone or has
-    # stopped the job. A raw read, not sys.stdin's buffered one: the
-    # interpreter's exit flushes that reader and would wait forever on the
-    # lock this blocked thread holds.
+    # A raw read, not sys.stdin's buffered one: the interpreter's exit flushes
+    # that reader and would wait forever on the lock this blocked thread holds.
     with contextlib.suppress(OSError):
         while os.read(parent, 65536):
-            pass
+            # Waves never writes: a read that ends, or fails, means it is gone
+            # or has stopped the job.
+            continue
     if tool.poll() is not None:
         return
     with contextlib.suppress(ProcessLookupError, PermissionError):

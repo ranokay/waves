@@ -97,12 +97,13 @@ keeps running. gamdl's yt-dlp route for a direct stream URL, which Waves'
 catalog fetches do not take, dies with its job but not with Waves.
 
 Each Waves process keeps its Apple temp folders in one `waves-apple-run-*`
-folder under the system temp directory and holds an OS lock on that folder's
-`.lease` file while it runs. After launch, Waves removes the run folders whose
-lock no process holds. A run folder without a lease file, and the flat
-`waves-apple-*` workdirs of builds without run folders, go once nothing in
-them has changed for an hour. On a temp file system that refuses locks, run
-folders stay.
+folder under the system temp directory and holds an OS lock on the `.lease`
+file beside it while it runs, locked before the folder exists. After launch,
+Waves removes the run folders whose lock no process holds, with their lease
+files. A run folder without a lease file (on a temp file system that refuses
+locks, every run folder), the flat `waves-apple-*` workdirs of builds without
+run folders, and a lease file whose folder is gone go once nothing in them has
+changed for an hour.
 
 The planned multi-engine lifecycle follows
 [ADR 0010](adr/0010-provider-engine-runtime-boundary.md): distinguish account expiry,

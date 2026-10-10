@@ -1,11 +1,11 @@
 """Waves removes the Apple temp folders no live Waves owns.
 
-Each process keeps its Apple temp folders in one run folder it holds a lease
-on. The sweep after launch removes every run folder whose lease is free, and
-the folders without a lease to read (a run folder that lost its lease file,
-the flat workdirs of builds without run folders) once nothing in them has
-changed for an hour. A folder a live Waves owns, and anything else that
-merely shares the prefix, stays.
+Each process keeps its Apple temp folders in one run folder whose lease,
+beside it, it holds. The sweep after launch removes every run folder whose
+lease is free, and what has no lease to read (a run folder without its lease
+file, the flat workdirs of builds without run folders, a lease whose folder is
+gone) once nothing in it has changed for an hour. A folder a live Waves owns,
+and anything else that merely shares the prefix, stays.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 from support.bridge_stub import BridgeStub
 
+from waves import file_locks
 from waves.providers.apple import workdirs
 
 
@@ -42,7 +43,7 @@ def _folder(path: Path, *, lease: bool = False) -> Path:
     workdir.mkdir(parents=True)
     (workdir / "song_00001.m4s").write_bytes(b"\0" * 4096)
     if lease:
-        (path / workdirs.LEASE_NAME).touch()
+        workdirs.lease_of(path).touch()
     return path
 
 
@@ -52,10 +53,15 @@ def test_the_sweep_removes_what_no_live_waves_owns(tmp_path, monkeypatch):
     in_use = workdirs.make_workdir("alac")  # this process's fetch in flight
     # A Waves that died mid-fetch a moment ago: its lease is free.
     stale = _folder(tmp_path / "waves-apple-run-dead0001", lease=True)
-    # A run folder whose lease file is not written yet, and one that lost it
-    # an hour ago.
-    being_made = _folder(tmp_path / "waves-apple-run-made0001")
+    # Run folders without a lease file: one still written, one idle an hour.
+    written = _folder(tmp_path / "waves-apple-run-busy0001")
     lost_lease = _idle_for(_folder(tmp_path / "waves-apple-run-lost0001"), hour + 60)
+    # Lease files whose folder is gone: one idle an hour, one just made.
+    stray_lease = tmp_path / "waves-apple-run-gone0001.lease"
+    stray_lease.touch()
+    _idle_for(stray_lease, hour + 60)
+    fresh_lease = tmp_path / "waves-apple-run-new00001.lease"
+    fresh_lease.touch()
     # Flat workdirs of a build without run folders: idle for an hour, and
     # one that build may still be writing.
     flat_idle = [
@@ -78,10 +84,37 @@ def test_the_sweep_removes_what_no_live_waves_owns(tmp_path, monkeypatch):
 
     removed = workdirs.sweep_stale()
 
-    assert sorted(removed) == sorted([stale, lost_lease, *flat_idle])
-    assert in_use.is_dir() and (in_use.parent / workdirs.LEASE_NAME).is_file()
-    assert being_made.is_dir() and flat_busy.is_dir()
-    assert all(folder.is_dir() for folder in lookalikes) and plain_file.is_file()
+    assert sorted(removed) == sorted([stale, lost_lease, stray_lease, *flat_idle])
+    assert not workdirs.lease_of(stale).exists()
+    assert in_use.is_dir()
+    assert workdirs.lease_of(in_use.parent).is_file()
+    assert written.is_dir()
+    assert flat_busy.is_dir()
+    assert fresh_lease.is_file()
+    assert all(folder.is_dir() for folder in lookalikes)
+    assert plain_file.is_file()
+
+
+def test_a_run_folder_appears_only_once_its_lease_is_held(tmp_path, monkeypatch):
+    """A sweep can never see a live Waves' run folder with its lease still free."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    mkdir = os.mkdir
+    checked: list[Path] = []
+
+    def mkdir_after_the_lease(path, *args, **kwargs):
+        folder = Path(path)
+        if folder.name.startswith("waves-apple-run-"):
+            lease = workdirs.lease_of(folder)
+            assert lease.is_file(), "the folder appeared before its lease"
+            assert file_locks.try_lock(lease, create=False) is None, "the lease is still free"
+            checked.append(folder)
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", mkdir_after_the_lease)
+
+    workdir = workdirs.make_workdir("alac")
+
+    assert checked == [workdir.parent]
 
 
 _OWNER = """\
@@ -111,6 +144,7 @@ def test_a_folder_stays_while_its_waves_lives_and_goes_once_it_is_killed(tmp_pat
 
     assert workdirs.sweep_stale() == [workdir.parent]
     assert not workdir.parent.exists()
+    assert not workdirs.lease_of(workdir.parent).exists()
 
 
 def test_a_workdir_still_lands_after_its_run_folder_was_removed(tmp_path, monkeypatch):
@@ -120,8 +154,9 @@ def test_a_workdir_still_lands_after_its_run_folder_was_removed(tmp_path, monkey
 
     second = workdirs.make_workdir("song")
 
-    assert second.is_dir() and second.parent != first.parent
-    assert (second.parent / workdirs.LEASE_NAME).is_file()
+    assert second.is_dir()
+    assert second.parent != first.parent
+    assert workdirs.lease_of(second.parent).is_file()
     assert workdirs.sweep_stale() == []
 
 

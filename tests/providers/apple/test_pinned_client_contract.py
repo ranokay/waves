@@ -90,4 +90,5 @@ def test_the_guarded_downloader_runs_gamdls_own_nm3u8dlre_argv(tmp_path, monkeyp
     for downloader in (gamdl_base.AppleMusicBaseDownloader, engine._guarded_base_downloader()):
         asyncio.run(downloader(interface=None, silent=True, **paths)._download_nm3u8dlre("https://a/b.m3u8", target))
 
-    assert len(launches) == 2 and launches[0] == launches[1]
+    assert len(launches) == 2
+    assert launches[0] == launches[1]
