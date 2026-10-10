@@ -25,6 +25,7 @@ pytest.importorskip("PySide6")
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import WavesBridge
+from waves.model.cfg import Settings as SettingsData
 
 
 class _Stub(BridgeStub):
@@ -441,12 +442,8 @@ class _DrainingWriter:
 class _SettingsStub:
     """The slice of waves.config.Settings a write submission touches."""
 
-    class data:
-        @staticmethod
-        def to_json():
-            return "{}"
-
     def __init__(self, path):
+        self.data = SettingsData()
         self._path = path
 
     def write_serialized(self, data_json):
@@ -469,6 +466,8 @@ def test_a_settings_write_submitted_before_the_reset_cannot_survive_the_wipe(tmp
     stub = _reset_stub()
     stub._config_writer = _DrainingWriter()
     stub.settings = _SettingsStub(settings_path)
+    stub._ffmpeg_user_path = ""
+    stub._ffmpeg_flag_prefs = {}
     _bind(stub, "_submit_settings_write")()  # queued, nothing on disk yet
 
     _run_factory_reset(base, monkeypatch, stub=stub)
