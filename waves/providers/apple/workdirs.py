@@ -3,20 +3,21 @@
 Every temporary folder the Apple engine and runner make (a fetch's workdir,
 a FLAC conversion's, an integrity hold) lives in this process's run folder,
 ``waves-apple-run-*`` under the system temp dir. The process holds a lease on
-it: an OS lock on the ``.lease`` file beside it, which the OS drops when the
-process ends, however it ends. The lease is locked before the folder exists,
-so no sweep ever sees a run folder whose live owner has not locked it yet.
-``sweep_stale`` removes every run folder whose lease is free, with whatever a
-killed fetch left inside, and its lease file with it.
+it: an OS lock on its ``waves-apple-run-*.lease`` file beside it, which the
+OS drops when the process ends, however it ends. The lease is locked before
+the folder exists, so no sweep ever sees a run folder whose live owner has
+not locked it yet. ``sweep_stale`` removes every run folder whose lease is
+free, with whatever a killed fetch left inside, and its lease file with it.
 
-Some folders carry no lease to read: a run folder whose lease file is missing
-(a temp cleaner took it, or the temp file system refuses locks) and the flat
-``waves-apple-*`` workdirs of builds without run folders, which may still be
-running beside this one. The sweep removes those once nothing in them has
-changed for ``UNOWNED_IDLE_SEC``: a fetch writes into its folder every few
-seconds, so an hour without a write means no fetch owns it. A lease file
-whose folder is gone goes after the same hour, once nothing holds it. Any
-other name that merely starts with the prefix stays.
+A run folder without a lease file stays: nothing proves its owner is gone. It
+appears where the temp file system refuses locks, or where a temp cleaner
+took the lease file. The flat ``waves-apple-*`` workdirs of builds without run
+folders carry no lease either, and such a build may still be running beside
+this one: the sweep removes those once nothing in them has changed for
+``UNOWNED_IDLE_SEC``, because a fetch writes into its folder every few seconds
+and a build without run folders never reuses an old one. A lease file whose
+folder is gone goes after the same hour, once nothing holds it. Any other name
+that merely starts with the prefix stays.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ UNOWNED_IDLE_SEC = 3600.0
 _RUN_PREFIX = "waves-apple-run-"
 # The prefix, then eight characters of tempfile.mkdtemp's alphabet.
 _RUN_NAME = re.compile(r"waves-apple-run-[a-z0-9_]{8}")
-_LEASE_FILE_NAME = re.compile(r"waves-apple-run-[a-z0-9_]{8}\.lease")
+_LEASE_FILE_NAME = re.compile(_RUN_NAME.pattern + re.escape(LEASE_SUFFIX))
 _FLAT_NAME = re.compile(r"waves-apple-(?:(?:alac|flac|quarantine)-)?[a-z0-9_]{8}")
 _NEW_RUN_ATTEMPTS = 16
 
@@ -47,7 +48,7 @@ _NEW_RUN_ATTEMPTS = 16
 class _RunFolder(NamedTuple):
     path: Path
     # The descriptor holding the lease, or None where the file system refuses
-    # the lock (the folder then has no lease file and ages out like any other).
+    # the lock (the folder then has no lease file, and every sweep keeps it).
     lease: int | None
 
 
@@ -108,6 +109,10 @@ def sweep_stale() -> list[Path]:
 
 
 def _run_folder() -> Path:
+    """This process's run folder, made now if it has none in the temp dir.
+
+    Raises OSError when the temp dir refuses the lease or the folder.
+    """
     global _run
     base = Path(tempfile.gettempdir())
     if _run is not None and _run.path.parent == base:
@@ -115,25 +120,26 @@ def _run_folder() -> Path:
     _forget_run()
     for _ in range(_NEW_RUN_ATTEMPTS):
         folder = base / f"{_RUN_PREFIX}{secrets.token_hex(4)}"
-        lease_path = lease_of(folder)
-        if folder.exists() or lease_path.exists():
+        if folder.exists():
             continue
-        lease = file_locks.try_lock(lease_path)
+        try:
+            lease = file_locks.lock_new(lease_of(folder))
+        except FileExistsError:
+            continue
         if lease is None:
-            # The file is this process's own, just made: the file system
-            # refuses locks.
-            with contextlib.suppress(OSError):
-                lease_path.unlink()
             break
         try:
-            folder.mkdir()
+            folder.mkdir(mode=0o700)
         except FileExistsError:
-            file_locks.release(lease)
-            with contextlib.suppress(OSError):
-                lease_path.unlink()
+            _drop_lease(lease, folder)
             continue
+        except BaseException:
+            _drop_lease(lease, folder)
+            raise
         _run = _RunFolder(folder, lease)
         return folder
+    # The file system refuses locks (or every name was taken): an unleased
+    # folder, which every sweep keeps.
     folder = Path(tempfile.mkdtemp(prefix=_RUN_PREFIX, dir=base))
     _run = _RunFolder(folder, None)
     return folder
@@ -146,22 +152,27 @@ def _forget_run() -> None:
     _run = None
 
 
+def _drop_lease(lease: int, folder: Path) -> None:
+    """Release a run folder's lease and remove its file.
+
+    Released before the unlink: Windows cannot delete a file held open.
+    """
+    file_locks.release(lease)
+    with contextlib.suppress(OSError):
+        lease_of(folder).unlink()
+
+
 def _remove_unowned_run(folder: Path) -> bool:
-    """Remove a run folder no live Waves owns, with its lease file."""
-    lease_path = lease_of(folder)
-    if not lease_path.exists():
-        return _idle(folder) and _remove(folder)
-    lease = file_locks.try_lock(lease_path, create=False)
+    """Remove a run folder whose lease no live Waves holds, with the lease."""
+    lease = file_locks.try_lock(lease_of(folder), create=False)
     if lease is None:
+        # Held, or no lease file at all: either way not provably unowned.
         return False
-    try:
-        gone = _remove(folder)
-    finally:
-        # Released before the unlink: Windows cannot delete a file held open.
-        file_locks.release(lease)
+    gone = _remove(folder)
     if gone:
-        with contextlib.suppress(OSError):
-            lease_path.unlink()
+        _drop_lease(lease, folder)
+    else:
+        file_locks.release(lease)
     return gone
 
 
@@ -173,9 +184,7 @@ def _remove_stray_lease(lease_path: Path) -> bool:
     lease = file_locks.try_lock(lease_path, create=False)
     if lease is None:
         return False
-    file_locks.release(lease)
-    with contextlib.suppress(OSError):
-        lease_path.unlink()
+    _drop_lease(lease, folder)
     return not lease_path.exists()
 
 

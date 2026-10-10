@@ -203,7 +203,7 @@ def _kill_when_waves_leaves(parent: int, tool: subprocess.Popen) -> None:
         while os.read(parent, 65536):
             # Waves never writes: a read that ends, or fails, means it is gone
             # or has stopped the job.
-            continue
+            pass
     if tool.poll() is not None:
         return
     with contextlib.suppress(ProcessLookupError, PermissionError):
