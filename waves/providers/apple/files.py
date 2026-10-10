@@ -33,6 +33,7 @@ from waves.paths import (
     sanitize_name_component,
 )
 from waves.playlists import populate_playlists
+from waves.providers.apple import child_guard
 
 logger = logging.getLogger("waves.providers.apple.files")
 
@@ -186,6 +187,7 @@ def convert_image(image: bytes, target_format: str, ffmpeg_path: str = "") -> by
             input=bytes(image),
             capture_output=True,
             timeout=30,
+            **child_guard.NO_WINDOW,
         )
     except Exception:
         logger.debug("Cover conversion failed", exc_info=True)

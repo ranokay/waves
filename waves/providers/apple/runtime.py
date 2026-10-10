@@ -45,6 +45,7 @@ from threading import Event
 import requests
 
 from waves.file_integrity import sha256_file
+from waves.providers.apple import child_guard
 
 logger = logging.getLogger("waves.providers.apple.runtime")
 
@@ -206,7 +207,7 @@ def detect_container_runtime(runner=None, timeout: int = 10) -> dict:
     degraded: dict | None = None
     for name, probe in (("docker", ["docker", "info"]), ("podman", ["podman", "info"])):
         try:
-            proc = run(probe, capture_output=True, text=True, timeout=timeout)
+            proc = run(probe, capture_output=True, text=True, timeout=timeout, **child_guard.NO_WINDOW)
         except FileNotFoundError:
             continue
         except Exception:
@@ -896,7 +897,9 @@ class AppleRuntimeManager:
         if log_cb:
             log_cb(f"pulling {WRAPPER_V2_IMAGE}")
         logger.info("apple-runtime: pulling %s", WRAPPER_V2_IMAGE)
-        proc = run([binary, "pull", WRAPPER_V2_IMAGE], capture_output=True, text=True, timeout=600)
+        proc = run(
+            [binary, "pull", WRAPPER_V2_IMAGE], capture_output=True, text=True, timeout=600, **child_guard.NO_WINDOW
+        )
         if proc.returncode != 0:
             raise RuntimeError(describe_image_pull_error((proc.stderr or proc.stdout or "").strip(), WRAPPER_V2_IMAGE))
         digest = self._local_image_digest(run, binary)
@@ -940,6 +943,7 @@ class AppleRuntimeManager:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                **child_guard.NO_WINDOW,
             )
         except Exception:
             return ""
@@ -1060,7 +1064,7 @@ def _extract_binary_zip(arc_path: Path, dest: Path, exe_name: str) -> None:
 def _probe_version(path: str) -> str:
     """Return the binary's ``--version`` first line, or "" when it won't run."""
     try:
-        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10)
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10, **child_guard.NO_WINDOW)
     except Exception:
         return ""
     if out.returncode != 0:

@@ -290,6 +290,8 @@ def _ffprobe_creation_date(path: Path, ffprobe_path: str) -> datetime.date | Non
     import shutil
     import subprocess
 
+    from waves.providers.apple import child_guard
+
     ffprobe = str(ffprobe_path or "").strip() or (shutil.which("ffprobe") or "")
     if not ffprobe:
         # Nothing to probe with means unknown, not an error.
@@ -310,6 +312,7 @@ def _ffprobe_creation_date(path: Path, ffprobe_path: str) -> datetime.date | Non
             capture_output=True,
             text=True,
             timeout=30,
+            **child_guard.NO_WINDOW,
         )
     except Exception:
         return None

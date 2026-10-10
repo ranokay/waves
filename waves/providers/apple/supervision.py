@@ -680,8 +680,10 @@ class SidecarSupervisor:
     def _run(self, args: list[str], timeout: int = 60):
         import subprocess
 
+        from waves.providers.apple import child_guard
+
         run = self._runner or (lambda *a, **k: subprocess.run(*a, **k))
-        return run(args, capture_output=True, text=True, timeout=timeout)
+        return run(args, capture_output=True, text=True, timeout=timeout, **child_guard.NO_WINDOW)
 
     def _resolve_image(self, image: str) -> str:
         """The sidecar image to run: explicit, else the pinned managed one."""
