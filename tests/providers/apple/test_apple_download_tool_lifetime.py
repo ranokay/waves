@@ -358,7 +358,7 @@ def test_stop_lands_while_a_fetch_waits_on_the_network(tmp_path, monkeypatch):
     assert _no_workdir_left()
 
 
-def test_stop_never_removes_a_workdir_the_decrypt_is_still_writing(tmp_path, monkeypatch):
+def test_stop_waits_for_a_decrypt_still_writing_before_removing_its_workdir(tmp_path, monkeypatch):
     """The decrypt writes on a thread that cancelling the fetch does not stop."""
     decrypting, decrypted = Event(), Event()
 
@@ -393,8 +393,10 @@ def test_stop_never_removes_a_workdir_the_decrypt_is_still_writing(tmp_path, mon
 def test_a_stuck_thread_step_holds_a_stop_only_for_its_wait(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "THREAD_STEP_WAIT_SEC", 0.3)
     stuck, release = Event(), Event()
+    stuck_at: list[float] = []
 
     def lookup() -> None:
+        stuck_at.append(time.monotonic())
         stuck.set()
         release.wait(10)
 
@@ -404,11 +406,13 @@ def test_a_stuck_thread_step_holds_a_stop_only_for_its_wait(tmp_path, monkeypatc
     session = _cookies_session(tmp_path, monkeypatch, fetch)
     abort = Event()
     threading.Thread(target=lambda: stuck.wait(10) and abort.set()).start()
-    started = time.monotonic()
     try:
         with pytest.raises(engine._AppleAborted):
             session.download_song(song_id="song-1", atmos=False, abort=abort)
-        assert time.monotonic() - started < 3
+        stopped = time.monotonic()
+        assert stopped - stuck_at[0] >= engine.THREAD_STEP_WAIT_SEC, "the stop did not wait for the step"
+        assert stopped - stuck_at[0] < 3
+        assert _no_workdir_left()
     finally:
         release.set()
         session.close()

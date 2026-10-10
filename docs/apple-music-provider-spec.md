@@ -82,7 +82,7 @@ and move under provider-owned Advanced settings (§9.2).
 
 A fetch's download tool (N_m3u8DL-RE) dies with the fetch's job. Stopping the
 job, signing out or disabling Apple cancels the fetch within a fifth of a
-second while it waits on the network or the tool, and kills the tool. A
+second while it waits on a request or the tool, and kills the tool. A
 verification step already running finishes first, and a step running on a
 thread (a decrypt, tagging, a name lookup) gets up to ten seconds before
 Waves removes the fetch's temp folder.

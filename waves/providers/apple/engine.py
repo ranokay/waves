@@ -440,7 +440,7 @@ THREAD_STEP_WAIT_SEC = 10.0
 
 
 class _FetchThreads(ThreadPoolExecutor):
-    """A session loop's default executor, which knows the work still running.
+    """A session loop's default executor, which knows its unfinished work.
 
     gamdl runs decrypt and tagging here, and the loop its name lookups; a
     cancelled fetch leaves them running, and ``settle`` waits them out.
@@ -448,25 +448,26 @@ class _FetchThreads(ThreadPoolExecutor):
 
     def __init__(self) -> None:
         super().__init__(thread_name_prefix="waves-apple-fetch")
-        self._running: set[Future] = set()
-        self._running_lock = Lock()
+        # Submitted and not yet finished, queued work included.
+        self._unfinished: set[Future] = set()
+        self._unfinished_lock = Lock()
 
     def submit(self, fn, /, *args, **kwargs) -> Future:
         future = super().submit(fn, *args, **kwargs)
-        with self._running_lock:
-            self._running.add(future)
+        with self._unfinished_lock:
+            self._unfinished.add(future)
         future.add_done_callback(self._forget)
         return future
 
     def _forget(self, future: Future) -> None:
-        with self._running_lock:
-            self._running.discard(future)
+        with self._unfinished_lock:
+            self._unfinished.discard(future)
 
     def settle(self, timeout: float) -> None:
-        """Wait up to ``timeout`` for the work running now to finish."""
-        with self._running_lock:
-            running = set(self._running)
-        wait(running, timeout=timeout)
+        """Wait up to ``timeout`` for the work submitted so far to finish."""
+        with self._unfinished_lock:
+            unfinished = set(self._unfinished)
+        wait(unfinished, timeout=timeout)
 
 
 @cache
