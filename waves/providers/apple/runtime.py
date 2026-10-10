@@ -262,7 +262,7 @@ def attempt_gentle_start(runner=None, name: str = "docker") -> bool:
         return False
     run = runner or (lambda *a, **k: subprocess.run(*a, **k))
     try:
-        proc = run(cmd, capture_output=True, timeout=30)
+        proc = run(cmd, capture_output=True, timeout=30, **child_guard.NO_WINDOW)
     except Exception:
         logger.debug("Gentle container start failed", exc_info=True)
         return False
