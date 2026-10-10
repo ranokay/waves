@@ -33,6 +33,7 @@ from threading import Event, Lock
 from typing import TYPE_CHECKING
 
 from waves.constants import quality_rank
+from waves.providers.apple import child_guard
 from waves.providers.apple.child_guard import run_guarded
 from waves.providers.apple.gamdl_logs import quiet_gamdl_logs
 from waves.providers.apple.workdirs import make_workdir
@@ -197,6 +198,7 @@ def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
             capture_output=True,
             text=True,
             timeout=300,
+            **child_guard.NO_WINDOW,
         )
     except Exception as exc:
         raise AppleDownloadError(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
@@ -957,6 +959,7 @@ def probe_audio_file(path: str | Path, ffprobe_path: str = "") -> dict:
             capture_output=True,
             text=True,
             timeout=60,
+            **child_guard.NO_WINDOW,
         )
     except Exception as exc:
         raise AppleDownloadError(f"Could not probe the Apple download: {exc}") from exc  # noqa: TRY003

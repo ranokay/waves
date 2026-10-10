@@ -49,12 +49,13 @@ class _SpawnOptions(TypedDict, total=False):
 
 
 # Windows: no console window flashes up for a console process started from
-# the windowless app.
-_NO_WINDOW: _SpawnOptions = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+# the windowless app. Every Apple provider spawn passes these; they live in
+# this module because the guard role may import only the standard library.
+NO_WINDOW: _SpawnOptions = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 # How Waves starts the guard, or the tool when it has no guard: off Windows,
 # in a session of its own, which keeps terminal signals off it and makes it
 # the leader of the group a stop kills.
-_SPAWN: _SpawnOptions = _NO_WINDOW if os.name == "nt" else {"start_new_session": True}
+_SPAWN: _SpawnOptions = NO_WINDOW if os.name == "nt" else {"start_new_session": True}
 
 
 class ToolFailed(RuntimeError):
@@ -188,7 +189,7 @@ def main(argv: Sequence[str]) -> int:
             os.setpgid(0, 0)
     try:
         # The tool joins the guard's own group off Windows.
-        tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **_NO_WINDOW)  # noqa: S603 (Waves' own tool argv)
+        tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **NO_WINDOW)  # noqa: S603 (Waves' own tool argv)
     except OSError as exc:
         print(f"Apple child guard could not start {command[0]}: {exc}", file=sys.stderr)
         return 127
