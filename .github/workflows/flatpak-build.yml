@@ -104,7 +104,7 @@ jobs:
           python -c "import hashlib,sys; p=sys.argv[1]; open(p+'.sha256','w').write(hashlib.sha256(open(p,'rb').read()).hexdigest()+'  '+p+chr(10))" "$ASSET"
           cat "$ASSET.sha256"
       - name: Upload the bundle artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: waves_${{ matrix.OS_ARCH }}.flatpak
           path: |
