@@ -10,17 +10,23 @@ listed below.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
+from pathlib import Path
 
 import yaml
 from support.paths import REPO_ROOT
 
 GITHUB_DIR = REPO_ROOT / ".github"
-WORKFLOWS = {path: yaml.safe_load(path.read_text()) for path in sorted((GITHUB_DIR / "workflows").glob("*.yml"))}
-COMPOSITE_ACTIONS = {
-    path: yaml.safe_load(path.read_text()) for path in sorted((GITHUB_DIR / "actions").glob("*/action.yml"))
-}
 PINNED_REF = re.compile(r"[^@\s]+@[0-9a-f]{40}")
+
+
+def _parsed(paths: Iterable[Path]) -> dict[Path, dict]:
+    return {path: yaml.safe_load(path.read_text()) for path in sorted(paths)}
+
+
+# GitHub accepts both YAML extensions, and a local action may sit at any depth.
+WORKFLOWS = _parsed([*(GITHUB_DIR / "workflows").glob("*.yml"), *(GITHUB_DIR / "workflows").glob("*.yaml")])
+COMPOSITE_ACTIONS = _parsed([*GITHUB_DIR.rglob("action.yml"), *GITHUB_DIR.rglob("action.yaml")])
 
 
 def _write_scopes(permissions: str | dict[str, str] | None) -> set[str]:
@@ -42,7 +48,8 @@ def _uses_sites(document: dict) -> Iterator[dict]:
 
 
 def test_every_action_is_pinned_to_a_commit_sha():
-    assert WORKFLOWS and COMPOSITE_ACTIONS, "the globs must find the workflows and the setup-env action"
+    assert WORKFLOWS, "the glob must find the workflows"
+    assert COMPOSITE_ACTIONS, "the glob must find the setup-env action"
     unpinned = [
         f"{path.relative_to(REPO_ROOT)}: {site['uses']}"
         for path, document in {**WORKFLOWS, **COMPOSITE_ACTIONS}.items()
