@@ -127,8 +127,56 @@ def test_a_run_folder_appears_only_once_its_lease_is_held(tmp_path, monkeypatch)
     assert checked == [workdir.parent]
 
 
+def test_a_taken_name_moves_on_to_a_fresh_one(tmp_path, monkeypatch):
+    """Another Waves' lease, folder or racing folder never becomes ours."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    names = iter(["taken001", "taken002", "racing01", "fresh001"])
+    monkeypatch.setattr(workdirs.secrets, "token_hex", lambda nbytes: next(names))
+    others_lease = _touched(tmp_path / "waves-apple-run-taken001.lease")
+    others_folder = tmp_path / "waves-apple-run-taken002"
+    others_folder.mkdir()
+    mkdir = os.mkdir
+
+    def racing(path, *args, **kwargs):
+        if Path(path).name == "waves-apple-run-racing01":
+            raise FileExistsError(path)
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", racing)
+
+    workdir = workdirs.make_workdir("alac")
+
+    assert workdir.parent.name == "waves-apple-run-fresh001"
+    assert others_lease.is_file()
+    assert others_folder.is_dir()
+    assert not (tmp_path / "waves-apple-run-racing01.lease").exists()
+    if os.name != "nt":
+        assert workdir.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_lock_new_tells_a_taken_name_from_a_refused_lock(tmp_path, monkeypatch):
+    lease = tmp_path / "waves-apple-run-abcd1234.lease"
+    fd = file_locks.lock_new(lease)
+    assert fd is not None
+    try:
+        assert file_locks.try_lock(lease, create=False) is None
+        with pytest.raises(FileExistsError):
+            file_locks.lock_new(lease)
+    finally:
+        file_locks.release(fd)
+
+    monkeypatch.setattr(file_locks, "_lock", lambda fd: False)
+    refused = tmp_path / "waves-apple-run-efgh5678.lease"
+    assert file_locks.lock_new(refused) is None
+    assert not refused.exists()
+
+
 def test_a_run_folder_that_cannot_be_made_leaves_no_lease_behind(tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    taken, released = [], []
+    lock_new, release = file_locks.lock_new, file_locks.release
+    monkeypatch.setattr(file_locks, "lock_new", lambda path: taken.append(lock_new(path)) or taken[-1])
+    monkeypatch.setattr(file_locks, "release", lambda fd: released.append(fd) or release(fd))
     mkdir = os.mkdir
 
     def no_space(path, *args, **kwargs):
@@ -140,6 +188,8 @@ def test_a_run_folder_that_cannot_be_made_leaves_no_lease_behind(tmp_path, monke
     with pytest.raises(OSError, match="No space"):
         workdirs.make_workdir("alac")
     assert list(tmp_path.iterdir()) == []
+    assert taken, "no lease was taken"
+    assert all(fd in released for fd in taken), "the lease was left locked"
 
     monkeypatch.setattr(os, "mkdir", mkdir)
     workdir = workdirs.make_workdir("alac")

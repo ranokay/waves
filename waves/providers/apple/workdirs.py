@@ -48,7 +48,8 @@ _NEW_RUN_ATTEMPTS = 16
 class _RunFolder(NamedTuple):
     path: Path
     # The descriptor holding the lease, or None where the file system refuses
-    # the lock (the folder then has no lease file, and every sweep keeps it).
+    # the lock or every name was taken (the folder then has no lease file, and
+    # every sweep keeps it).
     lease: int | None
 
 
@@ -111,7 +112,7 @@ def sweep_stale() -> list[Path]:
 def _run_folder() -> Path:
     """This process's run folder, made now if it has none in the temp dir.
 
-    Raises OSError when the temp dir refuses the lease or the folder.
+    Raises OSError when the temp dir cannot hold the lease file or the folder.
     """
     global _run
     base = Path(tempfile.gettempdir())
