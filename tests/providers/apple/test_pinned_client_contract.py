@@ -79,7 +79,7 @@ def test_the_guarded_downloader_runs_gamdls_own_nm3u8dlre_argv(tmp_path, monkeyp
     async def gamdl_launch(*args, silent=False):
         launches.append(([str(arg) for arg in args], silent))
 
-    async def waves_launch(args, *, guard_launcher=(), abort=None, silent=False):
+    async def waves_launch(args, *, guard_launcher=(), silent=False):
         launches.append(([str(arg) for arg in args], silent))
 
     monkeypatch.setattr(gamdl_base, "async_subprocess", gamdl_launch)

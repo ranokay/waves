@@ -82,16 +82,19 @@ and move under provider-owned Advanced settings (§9.2).
 
 A fetch's download tool (N_m3u8DL-RE) dies with the fetch's job. Stopping the
 job, signing out or disabling Apple cancels the fetch within a fifth of a
-second, whatever it is waiting on, and kills the tool. A decrypt or tagging
-step already running finishes first; then Waves removes the fetch's temp
-folder. The tool runs under a guard process that reads a pipe from Waves and
+second while it waits on the network or the tool, and kills the tool. A
+verification step already running finishes first, and a step running on a
+thread (a decrypt, tagging, a name lookup) gets up to ten seconds before
+Waves removes the fetch's temp folder.
+The tool runs under a guard process that reads a pipe from Waves and
 kills the tool when the pipe closes, so the tool also dies when Waves quits,
 crashes or is killed. When a guard has not left five seconds after a stop,
 Waves kills it. On macOS and Linux each of these kills reaches the tool's
 whole process group, including anything the tool started, even after the
 guard has died. On Windows the guard kills only the tool process, Waves kills
 a stuck guard's process tree, and a tool whose guard died before the stop
-keeps running.
+keeps running. gamdl's yt-dlp route for a direct stream URL, which Waves'
+catalog fetches do not take, dies with its job but not with Waves.
 
 Each Waves process keeps its Apple temp folders in one `waves-apple-run-*`
 folder under the system temp directory and holds an OS lock on that folder's

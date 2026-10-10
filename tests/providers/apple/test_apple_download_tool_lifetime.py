@@ -9,6 +9,7 @@ process dies, however it dies, so a lock that frees is a tool that is gone.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess
 import sys
@@ -75,11 +76,10 @@ def _no_workdir_left() -> bool:
     return run is not None and not [path for path in run.iterdir() if path.is_dir()]
 
 
-def _engine_through_the_standin(monkeypatch, standin: _Standin) -> None:
-    """Fake the Apple stacks, and fetch by running the stand-in as N_m3u8DL-RE.
+def _engine_fetching(monkeypatch, fetch) -> None:
+    """Fake the Apple stacks and binaries; every song fetch runs ``fetch``.
 
-    The interpreter stands in for N_m3u8DL-RE: gamdl's argv puts the stream
-    URL first, so the "URL" is the stand-in script.
+    The interpreter stands in for N_m3u8DL-RE and ffmpeg.
     """
     monkeypatch.setattr(engine, "_require_binary", lambda name, override="": sys.executable)
     monkeypatch.setattr(engine, "_require_yt_dlp", lambda: None)
@@ -90,14 +90,21 @@ def _engine_through_the_standin(monkeypatch, standin: _Standin) -> None:
     async def wrapper_stack(*, base_url, decrypt_host, decrypt_port):
         return SimpleNamespace(client=None), SimpleNamespace(client=None), SimpleNamespace()
 
+    monkeypatch.setattr(engine, "_create_cookies_stack", cookies_stack)
+    monkeypatch.setattr(engine, "_create_wrapper_stack", wrapper_stack)
+    monkeypatch.setattr(engine, "_fetch_song_staged", fetch)
+
+
+def _engine_through_the_standin(monkeypatch, standin: _Standin) -> None:
+    """Fetch by running the stand-in as N_m3u8DL-RE: gamdl's argv puts the
+    stream URL first, so the "URL" is the stand-in script."""
+
     async def fetch_through_the_tool(*, interface, song_downloader, song_id):
         base = song_downloader.base
         await base._download_nm3u8dlre(str(standin.script), str(Path(base.temp_path) / "song.m4a"))
         raise AssertionError("the stand-in never finishes on its own")
 
-    monkeypatch.setattr(engine, "_create_cookies_stack", cookies_stack)
-    monkeypatch.setattr(engine, "_create_wrapper_stack", wrapper_stack)
-    monkeypatch.setattr(engine, "_fetch_song_staged", fetch_through_the_tool)
+    _engine_fetching(monkeypatch, fetch_through_the_tool)
 
 
 def _stop_once_running(standin: _Standin, abort: Event, work) -> list[BaseException]:
@@ -294,6 +301,7 @@ def test_a_stop_kills_the_tool_whatever_became_of_its_guard(tmp_path, monkeypatc
 
     monkeypatch.setattr(child_guard, "GUARD_STOP_SEC", 0.5)
     standin = _standin(tmp_path)
+    guards: list[int] = []
 
     async def fetch() -> None:
         task = asyncio.ensure_future(
@@ -303,30 +311,29 @@ def test_a_stop_kills_the_tool_whatever_became_of_its_guard(tmp_path, monkeypatc
         )
         while not standin.ready.exists() or not standin.ready.read_text():
             await asyncio.sleep(0.02)
-        guard = int(standin.ready.read_text())  # the tool's parent
-        os.kill(guard, signal.SIGSTOP if guard_state == "frozen" else signal.SIGKILL)
+        guards.append(int(standin.ready.read_text()))  # the tool's parent
+        os.kill(guards[0], signal.SIGSTOP if guard_state == "frozen" else signal.SIGKILL)
         await asyncio.sleep(0.2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    asyncio.run(asyncio.wait_for(fetch(), 20))
-    assert _wait(lambda: not standin.alive()), "the tool outlived the stop"
+    try:
+        asyncio.run(asyncio.wait_for(fetch(), 20))
+        assert _wait(lambda: not standin.alive()), "the tool outlived the stop"
+    finally:
+        # A regression must not leave a stopped guard and its tool behind.
+        for guard in guards:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(guard, signal.SIGKILL)
 
 
-def _stalled_session(tmp_path, monkeypatch, fetch) -> engine.AppleFetchSession:
+def _cookies_session(tmp_path, monkeypatch, fetch) -> engine.AppleFetchSession:
     """A cookies-tier session whose song fetch is ``fetch``; no process runs."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape\n")
-    monkeypatch.setattr(engine, "_require_binary", lambda name, override="": sys.executable)
-    monkeypatch.setattr(engine, "_require_yt_dlp", lambda: None)
-
-    async def cookies_stack(cookies_path):
-        return SimpleNamespace(client=None), SimpleNamespace()
-
-    monkeypatch.setattr(engine, "_create_cookies_stack", cookies_stack)
-    monkeypatch.setattr(engine, "_fetch_song_staged", fetch)
+    _engine_fetching(monkeypatch, fetch)
     return engine.AppleFetchSession(cookies_path=str(cookies))
 
 
@@ -338,7 +345,7 @@ def test_stop_lands_while_a_fetch_waits_on_the_network(tmp_path, monkeypatch):
         reached.set()
         await asyncio.sleep(600)
 
-    session = _stalled_session(tmp_path, monkeypatch, stalled)
+    session = _cookies_session(tmp_path, monkeypatch, stalled)
     abort = Event()
     threading.Thread(target=lambda: reached.wait(10) and abort.set()).start()
     started = time.monotonic()
@@ -351,8 +358,8 @@ def test_stop_lands_while_a_fetch_waits_on_the_network(tmp_path, monkeypatch):
     assert _no_workdir_left()
 
 
-def test_a_stopped_fetch_lets_its_thread_step_finish_before_its_workdir_goes(tmp_path, monkeypatch):
-    """Decrypt and tagging run on a thread a cancellation does not stop."""
+def test_stop_never_removes_a_workdir_the_decrypt_is_still_writing(tmp_path, monkeypatch):
+    """The decrypt writes on a thread that cancelling the fetch does not stop."""
     decrypting, decrypted = Event(), Event()
 
     def decrypt(workdir: Path) -> None:
@@ -363,9 +370,9 @@ def test_a_stopped_fetch_lets_its_thread_step_finish_before_its_workdir_goes(tmp
 
     async def fetch(*, interface, song_downloader, song_id):
         await asyncio.to_thread(decrypt, Path(song_downloader.base.temp_path))
-        raise AssertionError("the stop never landed")
+        raise AssertionError("the decrypt finished and the stop never landed")
 
-    session = _stalled_session(tmp_path, monkeypatch, fetch)
+    session = _cookies_session(tmp_path, monkeypatch, fetch)
     abort = Event()
     threading.Thread(target=lambda: decrypting.wait(10) and abort.set()).start()
     try:
@@ -373,12 +380,37 @@ def test_a_stopped_fetch_lets_its_thread_step_finish_before_its_workdir_goes(tmp
             session.download_song(song_id="song-1", atmos=False, abort=abort)
         assert decrypted.is_set(), "the workdir went while the decrypt was still writing"
         assert _no_workdir_left()
-        # The session still serves thread steps after a drain.
+        # The session's next song decrypts as before.
         abort.clear()
-        decrypting.clear()
-        with pytest.raises(engine.AppleDownloadError):
+        decrypted.clear()
+        with pytest.raises(engine.AppleDownloadError, match="the stop never landed"):
             session.download_song(song_id="song-2", atmos=False, abort=abort)
+        assert decrypted.is_set()
     finally:
+        session.close()
+
+
+def test_a_stuck_thread_step_holds_a_stop_only_for_its_wait(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "THREAD_STEP_WAIT_SEC", 0.3)
+    stuck, release = Event(), Event()
+
+    def lookup() -> None:
+        stuck.set()
+        release.wait(10)
+
+    async def fetch(*, interface, song_downloader, song_id):
+        await asyncio.to_thread(lookup)
+
+    session = _cookies_session(tmp_path, monkeypatch, fetch)
+    abort = Event()
+    threading.Thread(target=lambda: stuck.wait(10) and abort.set()).start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(engine._AppleAborted):
+            session.download_song(song_id="song-1", atmos=False, abort=abort)
+        assert time.monotonic() - started < 3
+    finally:
+        release.set()
         session.close()
 
 

@@ -23,13 +23,13 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from typing import TYPE_CHECKING
 
 from waves.constants import quality_rank
@@ -417,7 +417,7 @@ def _verify_fetched(
 ABORT_POLL_SEC = 0.2
 
 
-async def _until_aborted(awaitable, abort: Event | None):
+async def _until_aborted[T](awaitable: Awaitable[T], abort: Event | None) -> T:
     """Await one fetch, cancelling it once the job's abort is set.
 
     The cancellation reaches whatever the fetch awaits: a request, or the
@@ -433,6 +433,40 @@ async def _until_aborted(awaitable, abort: Event | None):
             raise _AppleAborted()
         await asyncio.wait({task}, timeout=ABORT_POLL_SEC)
     return await task
+
+
+# How long a stopped fetch waits for its thread steps before its workdir goes.
+THREAD_STEP_WAIT_SEC = 10.0
+
+
+class _FetchThreads(ThreadPoolExecutor):
+    """A session loop's default executor, which knows the work still running.
+
+    gamdl runs decrypt and tagging here, and the loop its name lookups; a
+    cancelled fetch leaves them running, and ``settle`` waits them out.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(thread_name_prefix="waves-apple-fetch")
+        self._running: set[Future] = set()
+        self._running_lock = Lock()
+
+    def submit(self, fn, /, *args, **kwargs) -> Future:
+        future = super().submit(fn, *args, **kwargs)
+        with self._running_lock:
+            self._running.add(future)
+        future.add_done_callback(self._forget)
+        return future
+
+    def _forget(self, future: Future) -> None:
+        with self._running_lock:
+            self._running.discard(future)
+
+    def settle(self, timeout: float) -> None:
+        """Wait up to ``timeout`` for the work running now to finish."""
+        with self._running_lock:
+            running = set(self._running)
+        wait(running, timeout=timeout)
 
 
 @cache
@@ -491,7 +525,8 @@ class AppleFetchSession:
     ``guard_launcher`` (``child_guard.launcher``) starts the download tool
     under its guard; without one the tool still dies with its job, but not
     with Waves. The loop runs gamdl's thread steps (decrypt, tagging) on the
-    session's own pool, which a stopped fetch drains before its workdir goes.
+    session's own pool, which a stopped fetch waits on, for up to
+    THREAD_STEP_WAIT_SEC, before its workdir goes.
     """
 
     def __init__(
@@ -513,7 +548,8 @@ class AppleFetchSession:
         self.decrypt_port = int(decrypt_port or 10020)
         self.guard_launcher = tuple(guard_launcher)
         self._loop = asyncio.new_event_loop()
-        self._threads = self._new_thread_pool()
+        self._threads = _FetchThreads()
+        self._loop.set_default_executor(self._threads)
         self._cookies: tuple | None = None
         self._wrapper: tuple | None = None
         self._closed = False
@@ -558,20 +594,6 @@ class AppleFetchSession:
             )
         return self._wrapper
 
-    def _new_thread_pool(self) -> ThreadPoolExecutor:
-        threads = ThreadPoolExecutor(thread_name_prefix="waves-apple-fetch")
-        self._loop.set_default_executor(threads)
-        return threads
-
-    def _drain_threads(self) -> None:
-        """Wait out the thread steps a cancelled fetch left running.
-
-        Cancelling a fetch does not stop a gamdl step running on a thread
-        (decrypt, tagging), which goes on writing into the workdir.
-        """
-        self._threads.shutdown(wait=True)
-        self._threads = self._new_thread_pool()
-
     def _require_tools(self) -> tuple[str, str]:
         """The resolved N_m3u8DL-RE and ffmpeg paths, or AppleDownloadError."""
         nm3u8dlre = _require_binary("N_m3u8DL-RE", self.nm3u8dlre_path)
@@ -588,14 +610,16 @@ class AppleFetchSession:
         read, quarantine); every other failure removes it before re-raising,
         with ``failure`` naming the fetch in the generic message. ``abort``
         set mid-fetch cancels it; a fetch that ends in any failure once
-        ``abort`` is set removes its workdir, after its thread steps, and
-        raises _AppleAborted.
+        ``abort`` is set removes its workdir, after its thread steps settle,
+        and raises _AppleAborted.
         """
         try:
             return self._loop.run_until_complete(_until_aborted(make_awaitable(), abort))
         except Exception as exc:
             if abort is not None and abort.is_set():
-                self._drain_threads()
+                # A cancelled fetch leaves its thread steps (decrypt, tagging)
+                # writing into the workdir.
+                self._threads.settle(THREAD_STEP_WAIT_SEC)
                 shutil.rmtree(workdir, ignore_errors=True)
                 raise _AppleAborted() from exc
             if isinstance(exc, AppleIntegrityError):

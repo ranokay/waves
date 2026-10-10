@@ -48,15 +48,13 @@ class _SpawnOptions(TypedDict, total=False):
     start_new_session: bool
 
 
-# How Waves starts the guard, or the tool when it has no guard. POSIX: a
-# session of its own keeps terminal signals off it and makes it the leader of
-# the group a stop kills. Windows: no console window flashes up for a console
-# process started from the windowless app.
-_SPAWN: _SpawnOptions = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
-)
-# How the guard starts its tool: in the guard's own group off Windows.
-_TOOL_SPAWN: _SpawnOptions = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+# Windows: no console window flashes up for a console process started from
+# the windowless app.
+_NO_WINDOW: _SpawnOptions = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+# How Waves starts the guard, or the tool when it has no guard: off Windows,
+# in a session of its own, which keeps terminal signals off it and makes it
+# the leader of the group a stop kills.
+_SPAWN: _SpawnOptions = _NO_WINDOW if os.name == "nt" else {"start_new_session": True}
 
 
 class ToolFailed(RuntimeError):
@@ -105,7 +103,7 @@ async def run_guarded(
     if process.returncode != 0:
         # A guard that died leaves its tool behind; a failed tool may leave
         # what it started.
-        await _kill_group(process)
+        await _kill_remains(process)
         message = f"Exited with code {process.returncode}: {' '.join(str(arg) for arg in args)}"
         if stdout:
             message += f"\nstdout:\n{stdout.decode(errors='replace')}"
@@ -138,16 +136,16 @@ async def _stop(process: asyncio.subprocess.Process, *, guarded: bool) -> None:
         process.stdin.close()
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(process.wait(), GUARD_STOP_SEC)
-    await _kill_group(process)
+    await _kill_remains(process)
     await process.wait()
 
 
-async def _kill_group(process: asyncio.subprocess.Process) -> None:
-    """Kill what is left of the process group Waves started with ``_SPAWN``.
+async def _kill_remains(process: asyncio.subprocess.Process) -> None:
+    """Kill what is left of a process Waves started with ``_SPAWN``: its
+    process group off Windows, a live guard's process tree on Windows.
 
     Off Windows the group's id stays reserved while any member lives, and an
-    empty group answers ESRCH. On Windows only a live guard's tree is
-    reachable.
+    empty group answers ESRCH.
     """
     if os.name != "nt":
         with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -189,7 +187,8 @@ def main(argv: Sequence[str]) -> int:
         with contextlib.suppress(OSError):
             os.setpgid(0, 0)
     try:
-        tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **_TOOL_SPAWN)  # noqa: S603 (Waves' own tool argv)
+        # The tool joins the guard's own group off Windows.
+        tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **_NO_WINDOW)  # noqa: S603 (Waves' own tool argv)
     except OSError as exc:
         print(f"Apple child guard could not start {command[0]}: {exc}", file=sys.stderr)
         return 127
