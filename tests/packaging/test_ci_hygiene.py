@@ -1,7 +1,7 @@
-"""The update hygiene stays wired: Dependabot targets develop, the release
-build carries Nuitka's build tree between runs, the contributor gate
-record matches the manual test workflow, and the Python classifiers name
-only the versions that workflow tests.
+"""The update hygiene stays wired: Dependabot targets develop and scans the
+composite actions, the release build carries Nuitka's build tree between
+runs, the contributor gate record matches the manual test workflow, and the
+Python classifiers name only the versions that workflow tests.
 
 Dependabot reads the PEP 621 metadata and uv.lock through the "pip" ecosystem;
 the ignored names are the pins that move by hand (docs/dependency-updates.md).
@@ -30,6 +30,7 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-or-test-build.
 MASTER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "master.yml"
 CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+COMPOSITE_ACTIONS = REPO_ROOT / ".github" / "actions"
 
 
 def _inspector_module():
@@ -46,8 +47,14 @@ def _master_workflow() -> dict:
 
 
 def _directories(update: dict) -> list[str]:
-    """The directories an entry scans: `directory` names one, `directories` a list."""
-    return update.get("directories") or [update["directory"]]
+    """The directories an entry scans, resolved from the repo root as Dependabot
+    resolves them: `directory` names one, `directories` a list."""
+    if "directories" in update:
+        directories = update["directories"]
+        assert isinstance(directories, list), "Dependabot takes `directories` as a list"
+    else:
+        directories = [update["directory"]]
+    return [str(PurePosixPath("/", directory)) for directory in directories]
 
 
 def _entry(cfg: dict, ecosystem: str) -> dict:
@@ -72,14 +79,14 @@ def test_dependabot_updates_develop_and_leaves_the_deliberate_pins_alone():
 
     actions = _entry(cfg, "github-actions")
     assert actions["target-branch"] == "develop"
-    # "/" scans .github/workflows and a root action.yml only. Dependabot bumps
-    # a composite action's SHA pins only when an entry names its directory,
-    # literally or by a `*` glob, and `*` never crosses a "/".
+    # A composite action's SHA pins get bumped only when the entry names its
+    # directory, literally or by a `*` glob. As in Dependabot's glob, `*` never
+    # crosses a "/".
     composite_dirs = [
         PurePosixPath("/", path.parent.relative_to(REPO_ROOT).as_posix())
-        for path in (REPO_ROOT / ".github" / "actions").rglob("action.y*ml")
+        for path in COMPOSITE_ACTIONS.rglob("action.y*ml")
     ]
-    assert composite_dirs, "the search must find the setup-env action"
+    assert composite_dirs, "no composite action found under .github/actions"
     unscanned = [
         str(directory)
         for directory in composite_dirs
