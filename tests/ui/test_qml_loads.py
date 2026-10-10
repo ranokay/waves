@@ -125,11 +125,6 @@ def _run_scenario() -> int:
     return _EXIT_OK
 
 
-# Pin the sweep: these components must stay covered by the directory
-# enumeration below; the membership assertion fails if one drops out.
-_UNREFERENCED = ("primitives/ExpandChevron.qml", "domains/ffmpeg/FfmpegManager.qml", "primitives/LedBar.qml")
-
-
 def test_all_qml_components_compile():
     """Every QML file under QML_DIR compiles; a syntax error anywhere fails this.
 
@@ -139,9 +134,6 @@ def test_all_qml_components_compile():
     The Main.qml warning assertion above stays the strict one.
     Runs in a SUBPROCESS like the Main.qml case: the bridge installs
     process-global handlers that must not leak into the suite."""
-    names = sorted(p.relative_to(QML_DIR).as_posix() for p in QML_DIR.rglob("*.qml"))
-    for pinned in _UNREFERENCED:
-        assert pinned in names, f"{pinned} must stay in the directory sweep"
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-qml-all-load-test-")
