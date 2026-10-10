@@ -55,7 +55,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 # Publishes must never overlap: two pushes of one tag is a race.
 concurrency:
@@ -65,6 +64,10 @@ concurrency:
 jobs:
   build:
     name: build and publish (linux/arm64)
+    # Pushes the image to GHCR.
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     env:
       APK_URL: ${{ secrets.APK_URL }}

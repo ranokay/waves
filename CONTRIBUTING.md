@@ -105,7 +105,9 @@ mise run test-strict
 ```
 
 The merge stands on that local run: there is no per-push test gate —
-`master.yml` is manual-only (`workflow_dispatch`), so record the gate in
+`master.yml` is manual-only (`workflow_dispatch`). The checks a PR does show
+come from automatic scanners (CodeQL, SonarCloud) and review bots. None of them
+runs the tests or gates the merge. Record the gate in
 the PR body with the tested short SHA (the strict result, run alone, plus
 `mise run check` and the `/code-review` run). Record exact commands, the tested SHA, exit statuses, result counts and review
 dispositions, as in [the PR template](.github/pull_request_template.md).
