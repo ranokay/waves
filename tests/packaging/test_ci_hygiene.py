@@ -19,7 +19,7 @@ import re
 import shutil
 import subprocess
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -45,9 +45,14 @@ def _master_workflow() -> dict:
     return yaml.safe_load(MASTER_WORKFLOW.read_text())
 
 
+def _directories(update: dict) -> list[str]:
+    """The directories an entry scans: `directory` names one, `directories` a list."""
+    return update.get("directories") or [update["directory"]]
+
+
 def _entry(cfg: dict, ecosystem: str) -> dict:
     matches = [
-        update for update in cfg["updates"] if update["package-ecosystem"] == ecosystem and update["directory"] == "/"
+        update for update in cfg["updates"] if update["package-ecosystem"] == ecosystem and "/" in _directories(update)
     ]
     assert matches, f"no Dependabot entry for {ecosystem}"
     return matches[0]
@@ -67,6 +72,20 @@ def test_dependabot_updates_develop_and_leaves_the_deliberate_pins_alone():
 
     actions = _entry(cfg, "github-actions")
     assert actions["target-branch"] == "develop"
+    # "/" scans .github/workflows and a root action.yml only. Dependabot bumps
+    # a composite action's SHA pins only when an entry names its directory,
+    # literally or by a `*` glob, and `*` never crosses a "/".
+    composite_dirs = [
+        PurePosixPath("/", path.parent.relative_to(REPO_ROOT).as_posix())
+        for path in (REPO_ROOT / ".github" / "actions").rglob("action.y*ml")
+    ]
+    assert composite_dirs, "the search must find the setup-env action"
+    unscanned = [
+        str(directory)
+        for directory in composite_dirs
+        if not any(directory.match(pattern) for pattern in _directories(actions))
+    ]
+    assert not unscanned, f"Dependabot never bumps the actions in {unscanned}"
 
 
 def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
