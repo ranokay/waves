@@ -12,6 +12,7 @@ from support.qml import (
     checkpoint,
     run_scenario,
     seed_tidal_search,
+    wait_until,
 )
 
 pytestmark = pytest.mark.qml
@@ -59,36 +60,41 @@ def _run_scenario():
     booted = _boot()
     if isinstance(booted, int):
         return booted
-    _root, q, settle, bridge = booted
+    _root, q, _settle, bridge = booted
     q("settingsOpen = true")
-    settle(400)
     q("settingsPage.setSectionOpen('downloads', true)")
-    settle(150)
     combo = "(" + (_FIND % 'o.objectName === "settingsEnum_download_policies.shared.matching"') + ")"
     cancel = "(" + (_FIND % 'o.objectName === "cancelEditsBtn"') + ")"
     save = "(" + (_FIND % 'o.objectName === "saveChangesBtn"') + ")"
     checkpoint("visible policy selector")
-    if not q(combo + " !== null"):
-        return EXIT_REGRESSED
+    wait_until(lambda: q(combo + " !== null"), message="visible policy selector")
     original = bridge.settings.data.download_policies.shared.matching
     q(combo + ".incrementCurrentIndex(); " + combo + ".activated(1)")
     if bridge.settings.data.download_policies.shared.matching != original:
         return EXIT_REGRESSED
     q(cancel + ".triggered()")
-    settle(100)
     checkpoint("cancel restores displayed policy")
-    if bridge.settings.data.download_policies.shared.matching != original or q(combo + ".currentIndex") != 0:
-        return EXIT_REGRESSED
+    wait_until(
+        lambda: (
+            bridge.settings.data.download_policies.shared.matching == original
+            and q(combo + " !== null && " + combo + ".currentIndex === 0")
+        ),
+        message="cancel restores displayed policy without persisting the edit",
+    )
     q(combo + ".incrementCurrentIndex(); " + combo + ".activated(1)")
     q(save + ".triggered()")
-    settle(200)
     checkpoint("save persists displayed policy")
-    if bridge.settings.data.download_policies.shared.matching != "release":
-        return EXIT_REGRESSED
+    wait_until(
+        lambda: bridge.settings.data.download_policies.shared.matching == "release",
+        message="save persists displayed policy",
+    )
     q(combo + ".decrementCurrentIndex(); " + combo + ".activated(0)")
     q(cancel + ".triggered()")
-    settle(100)
-    return EXIT_OK if q(combo + ".currentIndex") == 1 else EXIT_REGRESSED
+    wait_until(
+        lambda: q(combo + " !== null && " + combo + ".currentIndex === 1"),
+        message="cancel restores the saved policy",
+    )
+    return EXIT_OK
 
 
 def _run_chooser():

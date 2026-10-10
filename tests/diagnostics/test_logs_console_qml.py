@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario, scoped_q
+from support.qml import run_scenario, scoped_q, wait_until
 
 # The heaviest QML boot: excluded from the quick QML pass.
 pytestmark = pytest.mark.slow
@@ -211,13 +211,20 @@ def _scenario() -> int:
 
     # Export produces a bundle on disk and the drawer reports it.
     q("waves.exportDiagnostics()")
-    settle(5000)
-    export_path = q("logsDrawer.logsExportPath")
-    export_ok = (
-        not q("logsDrawer.logsExportBusy")
-        and isinstance(export_path, str)
-        and bool(export_path)
-        and Path(export_path).is_file()
+
+    def export_complete():
+        export_path = q("logsDrawer.logsExportPath")
+        return (
+            not q("logsDrawer.logsExportBusy")
+            and isinstance(export_path, str)
+            and bool(export_path)
+            and Path(export_path).is_file()
+        )
+
+    wait_until(
+        export_complete,
+        timeout_ms=5000,
+        message="diagnostics export reports an idle drawer and a bundle on disk",
     )
 
     q("logsDrawer.close()")
@@ -258,7 +265,6 @@ def _scenario() -> int:
         and chips_ok
         and follow_ok
         and copy_ok
-        and export_ok
         and close_ok
         and prefs_ok
         and restart_ok
