@@ -10,10 +10,8 @@ on:
     - cron: "0 6 * * *" # daily; the chart only changes when stars do
   workflow_dispatch:
 
-# The job pushes the regenerated chart (and the README embed) back to the
-# branch it runs on; nothing else needs write access.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: star-history
@@ -21,10 +19,14 @@ concurrency:
 
 jobs:
   star-history:
-    # Public repo only: the private dev mirror meters Actions minutes (and its
-    # budget blocks runs), while the public repo runs free. Skipping here also
-    # keeps the daily schedule from failing noisily on the mirror.
+    # Upstream only: iamprivacy/Waves publishes the chart, and forks take it in
+    # through the upstream sync. This fork also keeps the workflow disabled in
+    # its Actions settings, so the daily schedule queues no skipped runs.
     if: github.repository == 'iamprivacy/Waves'
+    # The job pushes the regenerated chart (and the README embed) back to the
+    # branch it runs on; nothing else needs write access.
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

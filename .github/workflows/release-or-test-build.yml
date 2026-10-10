@@ -8,12 +8,14 @@ name: release-or-test-build
 # iamprivacy/Waves, which holds the signing key (`WAVES_SIGNING_KEY`). This fork
 # is a development line. It holds no signing key, publishes no releases, and
 # every build it produces checks upstream for updates. The fork's supported run
-# is a rehearsal. Dispatch with a blank `release_tag`, or push `test-build`, to
-# build the unsigned artifacts; the `vX.Y.Z` tag and `release_tag` paths belong
-# to upstream. The comments below describe the machinery as it runs there.
+# is a rehearsal: dispatch with a blank `release_tag` to build the unsigned
+# artifacts. Pushes (`test-build`, the `vX.Y.Z` tags) and the `release_tag` path
+# belong to upstream. The comments below describe the machinery as it runs there.
 
+# Read-only by default. Only the jobs that create, fill and publish the release
+# draft (create-release, build, sign-manifest) grant themselves contents: write.
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
@@ -67,9 +69,10 @@ env:
 jobs:
   compute:
     # Workaround to be able to use env vars in the matrix.
-    # A tag or test-build push starts a build on the public repo only: the
-    # private dev mirror meters Actions minutes. A manual run still works
-    # anywhere. Every other job needs this one, so skipping it skips them all.
+    # A tag or test-build push starts a build on upstream only: a fork holds no
+    # signing key to publish with, and rehearses through a manual run instead,
+    # which works anywhere. Every other job needs this one, so skipping it skips
+    # them all.
     if: github.repository == 'iamprivacy/Waves' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     outputs:
@@ -191,6 +194,8 @@ jobs:
     # tag instead of racing to create it.
     needs: ["compute"]
     if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
       - name: Create the Release (empty draft, assets attached by the matrix)
@@ -221,6 +226,10 @@ jobs:
     # the matrix below iterates only selected legs, so an excluded leg never
     # becomes a job at all — no Success-with-skipped-steps conclusions exist.
     if: always() && needs.compute.result == 'success' && needs['create-release'].result != 'failure' && needs['create-release'].result != 'cancelled' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/test-build' || github.event_name == 'workflow_dispatch')
+    # Each leg attaches its own files to the draft (Upload Release Asset), so
+    # the bundles reach the release without a second artifact hop.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       # The matrix iterates selected legs only (see the Select legs step):
@@ -519,6 +528,10 @@ jobs:
     # build past the updater.
     needs: ["compute", "build"]
     if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
+    # Reads the Flatpak sidecars from the draft (drafts need write to see),
+    # uploads the signed manifest and flips the release live.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
       - name: Check out

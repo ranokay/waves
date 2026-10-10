@@ -13,8 +13,10 @@ on:
     tags:
       - "v*.*.*"
 
+# Read-only by default; the build job grants itself the write it needs to
+# attach the bundle to a tagged release.
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
@@ -30,6 +32,9 @@ jobs:
     # Nuitka build + runtime install + bundle + smoke poll; a hung step must
     # not sit on the runner until GitHub's 6-hour default.
     timeout-minutes: 60
+    # The last step attaches the bundle and its sidecar to the tagged release.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:

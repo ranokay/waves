@@ -1,6 +1,10 @@
 # This workflow uses actions that are not certified by GitHub. They are provided
 # by a third-party and are governed by separate terms of service, privacy
 # policy, and support documentation.
+#
+# Disabled in this fork's Actions settings: Scorecard does not support forks.
+# tests/packaging/test_workflow_supply_chain.py carries its action-pin and
+# token-permission checks.
 
 name: Scorecard supply-chain security
 on:
@@ -73,6 +77,6 @@ jobs:
       # Upload the results to GitHub's code scanning dashboard (optional).
       # Commenting out will disable upload of results to your repo's Code Scanning dashboard
       - name: "Upload to code-scanning"
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
         with:
           sarif_file: results.sarif

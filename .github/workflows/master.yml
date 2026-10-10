@@ -1,9 +1,10 @@
 name: master
 
-# Manual only. This workflow lives on the private development repo, where
-# Actions minutes are metered, and the suite already runs on the developer's
-# machine before every commit. Run it from the Actions tab when a second
-# opinion from a Linux runner is wanted; a push never starts it.
+# Manual only: the merge gate is the strict suite run locally on the frozen
+# SHA (docs/agents/implementation-workflow.md), so no push or PR starts this
+# test run. Run it from the Actions tab when a second opinion from hosted
+# runners is wanted. The automatic checks on a PR are security and quality
+# scanners (CodeQL, SonarCloud), not this suite.
 on:
   workflow_dispatch:
 
@@ -51,8 +52,8 @@ jobs:
 
   # The fast group is interpreter-only (no Qt), so these legs need no Qt
   # runtime libraries: the PySide6 wheels are self-contained on macOS and
-  # Windows. One Python (the repo default, 3.13) per family keeps metered
-  # minutes down; the full 3.12/3.13/3.14 x strict matrix stays on Linux.
+  # Windows. One Python (the repo default, 3.13) per family keeps the run
+  # short; the full 3.12/3.13/3.14 x strict matrix stays on Linux.
   # Scope decision on #439: test-fast, manual dispatch (test-qml is a one-line
   # follow-up per job if GUI signal on these families is wanted).
   test-macos:

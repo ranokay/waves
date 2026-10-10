@@ -18,8 +18,9 @@ Gate (frozen SHA `<sha>`, no writes since):
 - `mise run test-strict` — <passed> passed[, <failed> failed (<one-line disposition>)]
 - /code-review (standards, spec, correctness) — <n> fixed, <n> refuted
 - PR checks — <all green | pending at merge | each failed check with its fix or refutation>
+- Bot reviews (advisory) — CodeRabbit, requested: <n fixed, n refuted | no findings | out of quota, skipped, failed or no answer at merge>; each other bot that posted: <same>
 
-Merge stands on the local gate; checks read, not awaited.
+Merge stands on the local gate; checks and bot reviews read, none gating.
 
 ## Merge Danger
 
