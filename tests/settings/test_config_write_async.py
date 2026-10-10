@@ -15,8 +15,8 @@ state the old synchronous ordering produced); ``flush`` (the shutdown hook)
 gets everything pending onto disk, inline if the thread cannot finish in
 time; ``_save_waves_prefs`` snapshots at submit time so later mutations
 cannot leak into an earlier save; and ``_submit_settings_write`` serializes
-before it returns, which is what keeps the transient ffmpeg re-injection
-that follows it out of the file.
+the sanitized settings copy before it returns, so later runtime or preference
+changes cannot reach the submitted file contents.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
 from waves.desktop.settings.persistence import SingleFlightWriter
+from waves.model.cfg import Settings as SettingsData
 
 
 def test_a_submit_burst_runs_first_plus_newest():
@@ -97,28 +98,26 @@ def test_settings_write_serializes_before_returning():
 
     class _Cfg:
         captured: ClassVar[list[str]] = []
-
-        class data:
-            @staticmethod
-            def to_json():
-                return json.dumps({"path_binary_ffmpeg": _Cfg.live_path})
-
-        live_path = ""
+        data = SettingsData(path_binary_ffmpeg="/managed/ffmpeg", download_base_path="/first/folder")
 
         def write_serialized(self, data_json):
             _Cfg.captured.append(data_json)
 
     stub.settings = _Cfg()
     stub._config_writer = SingleFlightWriter()
+    stub._ffmpeg_user_path = ""
+    stub._ffmpeg_flag_prefs = {}
 
     WavesBridge._submit_settings_write(stub)
-    # The re-injection that follows a save in the app: it must not be able to
-    # reach the already-serialized snapshot.
-    _Cfg.live_path = "/managed/ffmpeg"
+    # Later settings edits must not reach the already-serialized snapshot.
+    stub.settings.data.download_base_path = "/second/folder"
     stub._config_writer.flush()
 
     assert len(_Cfg.captured) == 1
-    assert json.loads(_Cfg.captured[0]) == {"path_binary_ffmpeg": ""}
+    written = json.loads(_Cfg.captured[0])
+    assert written["path_binary_ffmpeg"] == ""
+    assert written["download_base_path"] == "/first/folder"
+    assert stub.settings.data.path_binary_ffmpeg == "/managed/ffmpeg"
 
 
 def test_shutdown_flush_lands_a_last_moment_pref(tmp_path):

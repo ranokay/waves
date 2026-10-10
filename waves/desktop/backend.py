@@ -4205,7 +4205,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         elif self._migrate_video_template():
             # Bare save for the same reason as _apply_first_run_defaults:
             # this runs before ffmpeg is resolved, so there are no transient
-            # injections for _save_settings to undo yet. Guarded for the same
+            # injections to sanitize yet. Guarded for the same
             # reason too: an OSError here is a launch with no window, and the
             # migration is already applied in memory.
             try:
@@ -4426,15 +4426,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # the on-disk value up front is what keeps them from being misread as a
         # user choice. Updated on save in applySettings.
         self._ffmpeg_user_path = (self.settings.data.path_binary_ffmpeg or "").strip()
-        # _save_settings restores the transient ffmpeg values in place for the
-        # length of one write and puts the live ones back after. Saves come
-        # from the GUI thread, from download workers and from the keep-warm
-        # daemon, so the borrow is serialised, and so is every write a borrow
-        # could serialise or undo: the explicit restores (applySettings,
-        # _adopt_managed_ffmpeg, removeFfmpeg), applySettings's write of a new
-        # path, the resolve, and the Download construction that injects the
-        # PATH ffmpeg. (applySettings's flag writes need no hold: its locked
-        # restore re-applies them.) Created before the Apple provider below is
+        # Saves snapshot the user's FFmpeg preferences without changing the
+        # live values a running Download reads. The lock serializes snapshots,
+        # preference edits and runtime resolution across GUI/download workers
+        # and the keep-warm daemon. Created before the Apple provider below is
         # configured, since that resolves under it.
         self._settings_save_lock = Lock()
         # Managed Apple runtime (spec §2/§10): the N_m3u8DL-RE binary and
@@ -5462,12 +5457,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         publish_event(self, event)
 
     def _resolve_ffmpeg(self) -> str:
-        """Resolve under ``_settings_save_lock`` and return the path it left.
-
-        Callers use the returned path rather than re-reading the live field:
-        a save on another thread restores the user's value in place for the
-        length of its write, so a read after the lock is released can see ""
-        and fall back to the PATH ffmpeg and ffprobe."""
+        """Resolve under the settings lock and return the selected binary."""
         with self._settings_save_lock:
             return self._resolve_ffmpeg_locked()
 
@@ -5475,19 +5465,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Point ``path_binary_ffmpeg`` at the managed binary when the user has
         no explicit override, so ``Download`` finds ffmpeg without the user
         installing one. In-memory only (never persisted): the precedence is
-        explicit override → managed copy → PATH (download.py's own shutil.which).
-
-        The caller holds ``_settings_save_lock``. Unlocked, this write can land
-        between a save's restore and its serialization and reach settings.json.
+        explicit override → managed copy → PATH. Read the user's snapshot,
+        since the live field may contain a previous runtime's injection.
+        Assign only the final path so running downloads never see a temporary
+        empty path. The caller holds ``_settings_save_lock``.
         """
         # Keep the persisted diagnostic in step with reality on every resolve
         # (login, each download build, after an ffmpeg install/remove).
         self.settings.data.ffmpeg_source = self._ffmpeg_source_label()
-        if self.settings.data.path_binary_ffmpeg:
-            return str(self.settings.data.path_binary_ffmpeg)  # power-user override wins
-        if self._ffmpeg.is_installed():
-            self.settings.data.path_binary_ffmpeg = str(self._ffmpeg.binary_path)
-        return str(self.settings.data.path_binary_ffmpeg or "")
+        path = self._user_ffmpeg_path()
+        if not path:
+            path = str(self._ffmpeg.binary_path) if self._ffmpeg.is_installed() else shutil.which("ffmpeg") or ""
+        self.settings.data.path_binary_ffmpeg = path
+        return path
 
     def _ffmpeg_source_label(self) -> str:
         """Category of the ffmpeg binary a download would actually use, for the
@@ -5554,14 +5544,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Re-init happens on every applySettings save and after installFfmpeg, so
         # the events MUST outlive it. Downloads run while _event_run is set.
         #
-        # Download.__init__ writes the shared settings when the path is empty
-        # (the PATH ffmpeg, or the gated flags forced off), so it is built in
-        # the same hold as the resolve: a save in between would show it the
-        # restored "" and the save could write its PATH value or the forced-off
-        # flags to settings.json. The missing-ffmpeg warning emits a signal, so
-        # it runs after the lock is released.
+        # Resolve the final path and restore only usable feature preferences
+        # before constructing the next Download. Saves keep runtime values
+        # intact; a rebuild must also avoid a temporary empty path or enabled
+        # flags with no executable. Warn after releasing the lock because the
+        # warning emits a signal.
         with self._settings_save_lock:
             self._resolve_ffmpeg_locked()
+            self._restore_ffmpeg_flags()
             self._dl = Download(
                 tidal_obj=self.tidal,
                 path_base=self.settings.data.download_base_path,
@@ -12374,8 +12364,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # live settings would make the next edit rewrite the default.
             setattr(d, key, dict(value) if isinstance(value, dict) else value)
         # Bare save on purpose: this runs from __init__ before ffmpeg is
-        # resolved, so there are no transient injections to undo yet and
-        # _save_settings' restores would read attributes that do not exist.
+        # resolved, so there are no transient injections to sanitize yet and
+        # the user's FFmpeg snapshots have not been initialized.
         # Guarded for the same reason config.py guards its own two write-backs:
         # this is inside the constructor, so an unwritable (or locked) config
         # folder killed the launch with a traceback and no window. The defaults
@@ -13474,11 +13464,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             list_item=signals.list_item,
             list_name=signals.list_name,
         )
-        # One hold for the resolve, the read and the construction, as in
-        # _init_download: a save in between would show this job the restored
-        # "", so it would run on the PATH ffmpeg or with FLAC extraction forced
-        # off, and a job without a snapshot would write either into the shared
-        # settings that save then serializes.
+        # Resolve, copy and construct under one hold so runtime changes cannot
+        # give this job a path from a different resolution.
         with self._settings_save_lock:
             self._resolve_ffmpeg_locked()
             if request_intent:
@@ -15058,8 +15045,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         token = provider_contexts(self).capture(CTX_APPLE)
         data = intent.settings_data() if intent else None
         if data is not None:
-            # Under the save lock: a save's write empties the live ffmpeg path
-            # in place, and the job would keep that "" for its whole run.
+            # Copy runtime settings under the same lock as their resolution.
             with self._settings_save_lock:
                 for key in (
                     "path_binary_ffmpeg",
@@ -16768,7 +16754,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     def _preview_ffmpeg_bin(self) -> str | None:
         """Path to an ffmpeg binary for the preview remux (managed → PATH)."""
-        # The resolved path, not a re-read: a save can restore "" in between.
+        # Keep the path from this resolution when runtime state changes later.
         return self._resolve_ffmpeg() or shutil.which("ffmpeg")
 
     def _localise_hls(self, hls: str, whole: bool, work_dir: str) -> str | None:
@@ -17058,8 +17044,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         Same setting the Settings page writes (quality_video), so it applies
         to every later video and download until changed again. Mirrors
-        applySettings' save dance: the transient ffmpeg injections must be
-        restored BEFORE save() or they'd be serialised (see _restore_ffmpeg_*)."""
+        applySettings' sanitized snapshot keeps transient FFmpeg values off
+        disk while downloads continue reading their live values."""
         try:
             self.settings.data.quality_video = QualityVideo(str(int(height)))
         except Exception:
@@ -20151,100 +20137,53 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._preview_clips.clear()
 
     def _save_settings(self) -> None:
-        """Persist settings with the transient ffmpeg injections undone first.
+        """Persist a snapshot with the user's FFmpeg path and feature flags.
 
-        ``Download`` force-disables ``video_convert_mp4`` / ``extract_flac`` in
-        memory when ffmpeg is missing, and ``_resolve_ffmpeg`` injects the
-        managed binary path into ``path_binary_ffmpeg``. ``Settings`` is a
-        singleton and ``save()`` serialises the whole dataclass, so a bare save
-        from anywhere writes those transient values to disk: the user silently
-        loses FLAC extraction and video conversion, and a machine path
-        (containing the username) lands in settings.json, which the bug
-        template asks users to paste publicly.
-
-        The restores are put back once the write is out: every in-flight
-        ``Download`` holds this singleton and re-reads both values on every
-        track, so leaving the restored values in place de-provisions ffmpeg
-        underneath a running album, from that track on skipping the remux that
-        repairs an m4a's duration and running FLAC extraction with an empty
-        executable. Saves fire from ordinary places (a "Don't ask again" tick,
-        the first album to land on a network share), so the restore must never
-        outlive the write.
-
-        What goes to disk is the user's real preference; what stays in memory is
-        what the running download was built with. Both, not one or the other.
-        Saves are serialised because save sites run on the GUI thread, on
-        download workers and on the keep-warm daemon: two overlapping saves
-        would put each other's borrowed values back and strand the singleton on
-        them.
-
-        Every save must go through here. Callers that need a specific ordering
-        around the restores (``applySettings``, and ``_adopt_managed_ffmpeg``
-        and ``removeFfmpeg``, which restore without saving) do them explicitly
-        instead, under ``_settings_save_lock`` all the same, and follow with
-        ``_init_download`` so the managed path is re-injected. Holding the lock
-        is not optional there: the restore and the write are separate
-        statements, and this method's ``finally`` puts the managed path back,
-        so a save from here landing between them would be serialised by that
-        write.
-
-        The writers and readers of the borrowed values take the lock too.
-        ``_resolve_ffmpeg`` resolves under it and returns the path for its
-        caller to use; ``_configure_apple_provider`` resolves and hands the
-        provider its path in one hold; ``_init_download`` / ``_build_download``
-        build their ``Download`` in the same hold as their resolve, because its
-        constructor writes the PATH ffmpeg and the forced-off flags into the
-        live values when it reads an empty path; and ``applySettings`` writes a
-        newly entered path under it."""
+        Running downloads read settings.data on every track. Serialization
+        must leave that live object intact, including a managed/PATH binary
+        and flags disabled because FFmpeg is missing. The settings lock keeps
+        concurrent snapshots and FFmpeg preference edits in order.
+        """
         with self._settings_save_lock:
-            data = self.settings.data
-            # Exactly the fields the two restores below overwrite, so putting
-            # them back is complete by construction.
-            live_flags = {key: getattr(data, key, None) for key in self._ffmpeg_flag_prefs}
-            live_path = getattr(data, "path_binary_ffmpeg", "")
-            self._restore_ffmpeg_flags()
-            self._restore_ffmpeg_path()
-            try:
-                self._submit_settings_write()
-            finally:
-                for key, value in live_flags.items():
-                    setattr(data, key, value)
-                data.path_binary_ffmpeg = live_path
+            self._submit_settings_write()
         self.settingsPersistedExternally.emit()
 
     def _submit_settings_write(self) -> None:
-        """Serialize settings.data HERE, on the calling thread with the
-        restores in effect (microseconds), and hand only the fsync-bearing
-        disk work to the background writer. Because the JSON is snapshotted
-        before the caller re-injects the transient ffmpeg values, the write
-        that lands later can never leak them to disk, however the timing
-        falls; consecutive saves coalesce to the newest snapshot.
+        """Serialize a sanitized copy under the caller's settings lock.
 
-        The factory-reset latch takes the same early return as the prefs,
-        page-cache and tile-art writers: shutdown's flush runs after the wipe,
-        so a save submitted while the reset is running must never reach disk."""
+        Only the user's override and feature preferences reach disk. The
+        background writer receives JSON, so later runtime changes cannot
+        affect it; consecutive saves coalesce to the newest snapshot.
+        Shutdown's flush runs after a factory reset, so no new save submitted
+        during the reset may reach disk.
+        """
         if getattr(self, "_factory_reset", False):
             return
-        data_json = self.settings.data.to_json()
+        snapshot = dataclasses.replace(
+            self.settings.data,
+            path_binary_ffmpeg=self._ffmpeg_user_path,
+            **self._ffmpeg_flag_prefs,
+        )
+        data_json = snapshot.to_json()
         settings = self.settings
         self._config_writer.submit("settings", lambda: settings.write_serialized(data_json))
 
     def _restore_ffmpeg_flags(self) -> None:
-        """Re-enable video/FLAC features that ``Download`` may have disabled
-        in-memory when ffmpeg was missing, now that it's installed."""
+        """Apply feature preferences gated by the final live FFmpeg path.
+
+        The caller holds the settings lock after resolving that path, so no
+        intermediate enabled flag is exposed when FFmpeg is missing.
+        """
+        available = bool(self.settings.data.path_binary_ffmpeg)
         for key, value in self._ffmpeg_flag_prefs.items():
-            setattr(self.settings.data, key, value)
+            setattr(self.settings.data, key, value and available)
 
     def _restore_ffmpeg_path(self) -> None:
-        """Undo the in-memory ffmpeg path injection before a settings.save().
+        """Drop a removed binary's injection under the settings lock.
 
-        ``_resolve_ffmpeg`` writes the *managed* binary path into
-        ``settings.data.path_binary_ffmpeg`` so ``Download`` can find it, but the
-        contract is that this key is transient, only a genuine user override is
-        ever persisted. ``settings.save()`` serialises the whole data object, so
-        this must run first (mirroring ``_restore_ffmpeg_flags``) to keep the
-        managed path off disk. The user's real value is the startup snapshot,
-        already refreshed from the edit map in applySettings."""
+        Only removal clears the live path before rebuilding runtime state.
+        Saves serialize the user's snapshot without changing this field.
+        """
         self.settings.data.path_binary_ffmpeg = self._ffmpeg_user_path
 
     @Slot(result="QVariant")
@@ -20362,18 +20301,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Point the live settings, the Download and the Apple provider at a
         freshly installed managed pair, so the new binaries are used at once.
 
-        The in-memory path is dropped first: Download's PATH injection (or an
-        older managed path) would otherwise outlive the install, and the
-        re-resolve must land on the managed pair, ffprobe included, unless
-        the user linked their own. The restores and the re-resolve hold
-        ``_settings_save_lock``: a save on another thread puts its borrowed
-        path back in its ``finally``, which would undo them.
+        Resolution reads the user's override snapshot rather than a previous
+        PATH injection, so it selects the managed pair without first emptying
+        the live path. Feature flags follow the resolved binary, under the
+        settings lock.
         """
         with self._settings_save_lock:
-            # Undo any in-memory feature disabling now that ffmpeg exists.
-            self._restore_ffmpeg_flags()
-            self._restore_ffmpeg_path()
             self._resolve_ffmpeg_locked()
+            self._restore_ffmpeg_flags()
         if self._logged_in:
             self._init_download()
         self._configure_apple_provider()
@@ -20405,8 +20340,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # real override (empty when none), so downloads/previews don't keep
         # spawning a deleted executable, then rebuild Download without it (which
         # also re-gates the ffmpeg-dependent flags via its own construction).
-        # Under the save lock: a save's put-back landing after this restore
-        # would bring the deleted path back.
+        # Serialize the removal's path update with runtime resolution.
         with self._settings_save_lock:
             self._restore_ffmpeg_path()
         if self._logged_in:
@@ -21878,11 +21812,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if provider is None:
             return
         data = getattr(self.settings, "data", None)
-        # Resolved and handed over in one hold of the save lock. A save's write
-        # empties the live field in place, so a later re-read could hand Apple
-        # "" and send it to the PATH ffmpeg and ffprobe; and a removeFfmpeg
-        # landing between a resolve and a later assignment would be overwritten
-        # with the path it just deleted.
+        # Resolve and hand over under one lock hold so removal cannot publish
+        # the deleted path after its own provider configuration.
         with self._settings_save_lock:
             try:
                 ffmpeg_path = self._resolve_ffmpeg_locked()
@@ -22781,25 +22712,24 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         self._waves_prefs["illegal_map_offer_done"] = True
                         self._save_waves_prefs()
                 elif key in FLAG_FIELDS:
-                    setattr(data, key, bool(value))
                     # Track the user's real preference for ffmpeg-gated toggles
                     # so a later force-disable can be undone to the right value.
                     if key in self._ffmpeg_flag_prefs:
-                        self._ffmpeg_flag_prefs[key] = bool(value)
+                        with self._settings_save_lock:
+                            self._ffmpeg_flag_prefs[key] = bool(value)
+                            setattr(data, key, bool(value) and bool(data.path_binary_ffmpeg))
+                    else:
+                        setattr(data, key, bool(value))
                 elif key == "cover_file_format":
                     fmt = str(value or "jpg").strip().lower()
                     setattr(data, key, fmt if fmt in ("jpg", "png", "raw") else "jpg")
                 elif key == "path_binary_ffmpeg":
-                    # Under the save lock: a save mid-write puts the path it
-                    # borrowed back in its finally, over the user's new one,
-                    # and the Apple provider configured below would resolve
-                    # that. The explicit-override snapshot moves with it, so
-                    # status and the path box reflect the new choice (never a
-                    # transient in-memory injection), and so the restore below
-                    # sees current ffmpeg.
+                    # Store the user's choice separately and resolve its final
+                    # runtime path without first clearing a running Download's
+                    # managed/PATH binary.
                     with self._settings_save_lock:
-                        data.path_binary_ffmpeg = str(value)
                         self._ffmpeg_user_path = str(value or "").strip()
+                        self._resolve_ffmpeg_locked()
                 else:
                     setattr(data, key, str(value))
             except Exception:
@@ -22880,37 +22810,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if count:
                     stopped_note = f" · stopped {count} Apple download" + ("s" if count != 1 else "")
             self.providerStateChanged.emit(CTX_APPLE)
-        # Under the same lock _save_settings holds, for the same reason. This
-        # region does the restores explicitly instead of going through the
-        # helper, but the values it restores are the ones the helper borrows and
-        # puts back in its finally. A worker save landing between the restore and
-        # the save() below would re-borrow the managed ffmpeg path and this write
-        # would serialise it: an absolute path carrying the account name, into
-        # the settings file a diagnostics bundle ships. The lock also stops the
-        # two writers from colliding on the single ".tmp" sibling every
-        # BaseConfig.save() renames through, which loses whichever save arrives
-        # second. Nothing in here re-enters _save_settings or applySettings, so a
-        # non-reentrant Lock is safe, and the whole region is a fraction of the
-        # write it already serialises.
+        # Persist user preferences from a copy; keep the live FFmpeg values
+        # intact through signals and library work until _init_download resolves
+        # the next Download's final runtime values under the same lock.
         with self._settings_save_lock:
-            # The gated flags (video_convert_mp4 / extract_flac) get force-disabled
-            # in memory by Download when ffmpeg is absent; persist the user's *real*
-            # preference (tracked in _ffmpeg_flag_prefs), not that transient value,
-            # so it survives a relaunch. MUST run before save(), restoring
-            # afterward would write the force-disabled value to disk and lose it.
-            self._restore_ffmpeg_flags()
-            # Same transient-injection trap for the ffmpeg *path*: _resolve_ffmpeg
-            # injects the managed binary path in-memory, and save() would serialise
-            # it. Restore the user's real value (empty or their own override) first;
-            # _init_download() below re-injects the managed path if still needed.
-            self._restore_ffmpeg_path()
-            # Refresh the derived ffmpeg source category so a save right after a
-            # path change persists the right value (a category only, never a path).
             self.settings.data.ffmpeg_source = self._ffmpeg_source_label()
-            # Snapshot-then-background-write: the JSON is serialized here,
-            # before _init_download below re-injects the managed ffmpeg path,
-            # so the injected value can never reach disk (see
-            # _submit_settings_write).
             self._submit_settings_write()
         # The bulk-download confirm is read through a notifying property, and
         # this is the only other way (besides the dialog's own "Don't ask
@@ -23037,8 +22941,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         pref defaults. Only keys that appear in settingsSchema are touched:
         housekeeping state (window frame, section collapse memory, update-check
         timestamps) is not a setting and survives. The reset is routed through
-        applySettings so every save side effect (ffmpeg path restore, pool
-        resize, Download re-init, change signals) stays on the one code path.
+        applySettings so runtime resolution, Download re-init and change
+        signals stay on the one code path.
         The account stays signed in."""
         values = self._factory_default_values()
         logger.info("resetting %d settings to factory defaults", len(values))
