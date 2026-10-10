@@ -33,8 +33,8 @@ dependencies = [
   "yt-dlp>=2025.10.22",
   # Direct import in waves/providers/apple/gamdl_logs.py, which configures the
   # structlog gamdl logs through; floored at gamdl's own requirement.
-  "structlog>=25.5.0",
-  "pycryptodome>=3.23.0,<4",
+  "structlog>=26.1.0",
+  "pycryptodome>=3.24.0,<4",
   "certifi>=2026.7.22",
   "urllib3>=2.8.0,<3",
 ]
@@ -75,11 +75,11 @@ dev = [
   # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
   # Dependabot may bump it like any other dev tool, and a bump re-baselines
   # the rule exceptions below.
-  "ty==0.0.84",
+  "ty==0.0.85",
 ]
 
 [build-system]
-requires = ["uv_build>=0.12.22,<0.13"]
+requires = ["uv_build>=0.12.23,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
