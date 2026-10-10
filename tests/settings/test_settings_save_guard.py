@@ -267,6 +267,56 @@ def test_clearing_a_user_override_keeps_the_managed_binary_before_rebuild():
     assert _last_save(stub)["path_binary_ffmpeg"] == ""
 
 
+@pytest.mark.parametrize("path_first", [False, True, None], ids=["flags-first", "path-first", "path-only"])
+def test_a_signed_out_path_edit_restores_the_preferences_apple_captures(path_first, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    stub = _apply_bridge()
+    stub._ffmpeg = SimpleNamespace(is_installed=lambda: False, binary_path=_MANAGED)
+    stub.settings.data.path_binary_ffmpeg = None
+    stub._configure_apple_provider = lambda: None
+    entered = "/opt/custom/ffmpeg"
+    values = {"extract_flac": True, "video_convert_mp4": True}
+    if path_first is None:
+        values = {}
+    if path_first:
+        values = {"path_binary_ffmpeg": entered, **values}
+    else:
+        values["path_binary_ffmpeg"] = entered
+
+    stub.applySettings(values)
+    intent = capture_intent(stub.settings.data, CTX_APPLE, "track", "apple:1", tier="HIGH", audio_type=None, toggles={})
+    stub.providers = {CTX_APPLE: object()}
+    hooks = WavesBridge._apple_job_hooks(stub, intent)
+
+    assert hooks.settings().data.path_binary_ffmpeg == entered
+    assert hooks.settings().data.extract_flac is True
+    assert hooks.settings().data.video_convert_mp4 is True
+    assert _last_save(stub)["extract_flac"] is True
+
+
+def test_clearing_the_last_binary_disables_features_before_the_apply_save(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    stub = _apply_bridge()
+    stub._ffmpeg = SimpleNamespace(is_installed=lambda: False, binary_path=_MANAGED)
+    stub._ffmpeg_user_path = "/opt/custom/ffmpeg"
+    stub.settings.data.path_binary_ffmpeg = stub._ffmpeg_user_path
+    stub.settings.data.extract_flac = True
+    stub.settings.data.video_convert_mp4 = True
+    dl = _running_download(stub)
+    observed = []
+
+    def configure():
+        data = dl.settings.data
+        observed.append((data.path_binary_ffmpeg, data.extract_flac, data.video_convert_mp4))
+
+    stub._configure_apple_provider = configure
+    stub.applySettings({"path_binary_ffmpeg": ""})
+
+    assert observed == [("", False, False)]
+    assert _last_save(stub)["extract_flac"] is True
+    assert _last_save(stub)["video_convert_mp4"] is True
+
+
 def test_keep_download_folder_does_not_persist_transient_ffmpeg_flags():
     """Answering the folder nudge must not disable FLAC extraction on disk."""
     stub = _bridge()

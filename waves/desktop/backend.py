@@ -5476,7 +5476,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         path = self._user_ffmpeg_path()
         if not path:
             path = str(self._ffmpeg.binary_path) if self._ffmpeg.is_installed() else shutil.which("ffmpeg") or ""
+        # Disable features before dropping the last binary; enable preferences
+        # only after publishing a usable path. Unlocked Download readers must
+        # never see enabled features paired with an empty executable.
+        if not path:
+            self._restore_ffmpeg_flags(available=False)
         self.settings.data.path_binary_ffmpeg = path
+        if path:
+            self._restore_ffmpeg_flags(available=True)
         return path
 
     def _ffmpeg_source_label(self) -> str:
@@ -5551,7 +5558,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # warning emits a signal.
         with self._settings_save_lock:
             self._resolve_ffmpeg_locked()
-            self._restore_ffmpeg_flags()
             self._dl = Download(
                 tidal_obj=self.tidal,
                 path_base=self.settings.data.download_base_path,
@@ -20168,13 +20174,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         settings = self.settings
         self._config_writer.submit("settings", lambda: settings.write_serialized(data_json))
 
-    def _restore_ffmpeg_flags(self) -> None:
-        """Apply feature preferences gated by the final live FFmpeg path.
+    def _restore_ffmpeg_flags(self, *, available: bool) -> None:
+        """Apply feature preferences gated by the selected FFmpeg binary.
 
-        The caller holds the settings lock after resolving that path, so no
-        intermediate enabled flag is exposed when FFmpeg is missing.
+        The resolver holds the settings lock and disables features before
+        dropping a path, or enables them after publishing the selected binary.
         """
-        available = bool(self.settings.data.path_binary_ffmpeg)
         for key, value in self._ffmpeg_flag_prefs.items():
             setattr(self.settings.data, key, value and available)
 
@@ -20308,7 +20313,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """
         with self._settings_save_lock:
             self._resolve_ffmpeg_locked()
-            self._restore_ffmpeg_flags()
         if self._logged_in:
             self._init_download()
         self._configure_apple_provider()
