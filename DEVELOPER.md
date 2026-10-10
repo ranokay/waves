@@ -105,7 +105,7 @@ can build the Linux leg matching its arch, not the macOS/Windows legs.
 
 The release workflow smoke-launches all macOS bundles and the Linux/Windows
 x64 bundles offscreen; Linux/Windows arm64 artifacts are built without a
-launch. `master.yml` runs the strict suite (`mise run test-strict`) on Linux for Python 3.12–3.14
+launch. `master.yml`, dispatched by hand, runs the strict suite (`mise run test-strict`) on Linux for Python 3.12–3.14
 and fast-domain tests on macOS and Windows. These checks do not verify live
 accounts or container behavior on each platform. The wrapper image is
 `linux/arm64`; x86_64 hosts require emulation, whose full-tier behavior needs

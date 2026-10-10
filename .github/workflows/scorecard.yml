@@ -2,9 +2,9 @@
 # by a third-party and are governed by separate terms of service, privacy
 # policy, and support documentation.
 #
-# Disabled in this fork's Actions settings: Scorecard does not support forks.
-# tests/packaging/test_workflow_supply_chain.py carries its action-pin and
-# token-permission checks.
+# Scorecard does not support forks, so this fork keeps the workflow disabled in
+# its Actions settings. tests/packaging/test_workflow_supply_chain.py carries
+# its action-pin and token-permission checks.
 
 name: Scorecard supply-chain security
 on:

@@ -133,9 +133,9 @@ record the results in the owning issue or PR.
 
 ## Reviewing a Dependabot PR
 
-- The test workflow is manual-only, so the PR's checks are the automatic CodeQL
-  and SonarCloud scans, not tests. Run `mise run check` and the full suite
-  locally (or dispatch `master.yml`) before merging.
+- The test workflow is manual-only, so no check on the PR runs the tests; its
+  checks come from scanners and review bots. Run `mise run check` and the full
+  suite locally (or dispatch `master.yml`) before merging.
 - `uv.lock` is what users get. If the grouped PR touches something with
   a platform floor or a live-service surface, review it as an engine bump.
 - The ignored names (gamdl, yt-dlp, Nuitka, PySide6) are deliberate;

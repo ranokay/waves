@@ -1,6 +1,6 @@
 name: master
 
-# Manual only: the merge gate is the strict suite run locally on the frozen
+# Manual only. The merge gate is the strict suite run locally on the frozen
 # SHA (docs/agents/implementation-workflow.md), so no push or PR starts this
 # test run. Run it from the Actions tab when a second opinion from hosted
 # runners is wanted. The automatic checks on a PR are security and quality

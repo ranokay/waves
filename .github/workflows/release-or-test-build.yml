@@ -8,7 +8,7 @@ name: release-or-test-build
 # iamprivacy/Waves, which holds the signing key (`WAVES_SIGNING_KEY`). This fork
 # is a development line. It holds no signing key, publishes no releases, and
 # every build it produces checks upstream for updates. The fork's supported run
-# is a rehearsal: dispatch with a blank `release_tag` to build the unsigned
+# is a rehearsal. Dispatch with a blank `release_tag` to build the unsigned
 # artifacts. Pushes (`test-build`, the `vX.Y.Z` tags) and the `release_tag` path
 # belong to upstream. The comments below describe the machinery as it runs there.
 
@@ -528,8 +528,9 @@ jobs:
     # build past the updater.
     needs: ["compute", "build"]
     if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
-    # Reads the Flatpak sidecars from the draft (drafts need write to see),
-    # uploads the signed manifest and flips the release live.
+    # Reads the Flatpak sidecars from the draft release (only a token with
+    # write access can see a draft), uploads the signed manifest and flips the
+    # release live.
     permissions:
       contents: write
     runs-on: ubuntu-24.04
