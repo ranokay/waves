@@ -62,3 +62,33 @@ def test_every_nm3u8dlre_asset_pin_is_versioned_and_hashed():
         assert url.startswith("https://github.com/nilaoda/N_m3u8DL-RE/releases/download/")
         assert NM3U8DLRE_VERSION in url, f"{key} asset is not from the pinned release"
         assert re.fullmatch(r"[0-9a-f]{64}", NM3U8DLRE_SHA256[key]), f"{key} has no real SHA-256 pin"
+
+
+def test_the_guarded_downloader_runs_gamdls_own_nm3u8dlre_argv(tmp_path, monkeypatch):
+    """The engine starts N_m3u8DL-RE itself so it can end it: a gamdl bump
+    that changes the tool's arguments must fail here, not drift silently."""
+    import asyncio
+    import sys
+
+    from gamdl.downloader import base as gamdl_base
+
+    from waves.providers.apple import engine
+
+    launches = []
+
+    async def gamdl_launch(*args, silent=False):
+        launches.append(([str(arg) for arg in args], silent))
+
+    async def waves_launch(args, *, guard_launcher=(), silent=False):
+        launches.append(([str(arg) for arg in args], silent))
+
+    monkeypatch.setattr(gamdl_base, "async_subprocess", gamdl_launch)
+    monkeypatch.setattr(engine, "run_guarded", waves_launch)
+    paths = {"nm3u8dlre_path": sys.executable, "ffmpeg_path": sys.executable}
+    target = str(tmp_path / "work" / "song-1_staged.m4a")
+
+    for downloader in (gamdl_base.AppleMusicBaseDownloader, engine._guarded_base_downloader()):
+        asyncio.run(downloader(interface=None, silent=True, **paths)._download_nm3u8dlre("https://a/b.m3u8", target))
+
+    assert len(launches) == 2
+    assert launches[0] == launches[1]
