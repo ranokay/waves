@@ -27,7 +27,9 @@ updates:
       - dependency-name: "pyside6"
 
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # "/" scans .github/workflows and a root action.yml only. The glob adds
+    # each composite action's directory, so its SHA pins get bumped too.
+    directories: ["/", "/.github/actions/*"]
     target-branch: "develop"
     schedule:
       interval: "weekly"
