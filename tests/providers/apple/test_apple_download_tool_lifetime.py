@@ -11,11 +11,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock
@@ -69,6 +71,14 @@ def _wait(predicate, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.02)
     return predicate()
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _no_workdir_left() -> bool:
@@ -485,6 +495,262 @@ raise SystemExit(3)
     message = str(excinfo.value)
     assert message.startswith("Exited with code 3: ")
     assert message.split("\nstdout:\n", 1)[1] == "output\r\n" * 32768 + "\nstderr:\n" + "error\n" * 32768
+
+
+@pytest.fixture
+def exited_tool_with_helper(tmp_path):
+    """A tool exits after starting a helper that retains its output handles."""
+    helper = _standin(tmp_path)
+    # Cleanup must kill the owned helper even if closing its terminals does
+    # not end it through the terminal's hangup signal.
+    helper.script.write_text(
+        "import signal\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n" + helper.script.read_text()
+    )
+    tool_lock = tmp_path / "tool.lock"
+    guard_pid = tmp_path / "guard.pid"
+    script = tmp_path / "exiting-tool.py"
+    script.write_text(f"""\
+import os, subprocess, sys, time
+from pathlib import Path
+from waves import file_locks
+assert file_locks.try_lock({str(tool_lock)!r}) is not None
+Path({str(guard_pid)!r}).write_text(str(os.getppid()))
+subprocess.Popen([sys.executable, {str(helper.script)!r}])
+while not Path({str(helper.ready)!r}).exists():
+    time.sleep(0.01)
+os.write(1, b'tool output\\n')
+os.write(2, b'tool error\\n')
+raise SystemExit(int(sys.argv[1]))
+""")
+    try:
+        yield script, helper, _Standin(script, tool_lock, helper.ready), guard_pid
+    finally:
+        # Even a failed assertion must release the guard and its helper.
+        if guard_pid.exists():
+            pid = int(guard_pid.read_text())
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(pid, signal.SIGKILL)
+            assert _wait(lambda: not _process_exists(pid)), "the test left a guard running"
+        assert _wait(lambda: not helper.alive()), "the test left a helper running"
+
+
+def _fill_pipe(descriptor: int) -> None:
+    os.set_blocking(descriptor, False)
+    try:
+        while True:
+            os.write(descriptor, b"x" * 4096)
+    except BlockingIOError:
+        pass
+
+
+@contextlib.contextmanager
+def _guard_with_redirected_stream(command: str, destination: str, write_fd: int) -> Generator[subprocess.Popen]:
+    guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
+        [*child_guard.launcher(None), "--", sys.executable, "-c", command],
+        stdin=subprocess.PIPE,
+        stdout=write_fd if destination == "stdout" else subprocess.PIPE,
+        stderr=write_fd if destination == "stderr" else subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        yield guard
+    finally:
+        guard.stdin.close()
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(guard.pid, signal.SIGKILL)
+        guard.wait(10)
+        if guard.stdout is not None:
+            guard.stdout.close()
+        if guard.stderr is not None:
+            guard.stderr.close()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize("tool_exit", [0, 7])
+def test_tool_completion_cleans_helpers_holding_output_handles(exited_tool_with_helper, tool_exit):
+    script, helper, _, _ = exited_tool_with_helper
+
+    async def fetch():
+        run = child_guard.run_guarded(
+            [sys.executable, str(script), str(tool_exit)], guard_launcher=child_guard.launcher(None), silent=True
+        )
+        if tool_exit:
+            with pytest.raises(child_guard.ToolFailed, match="Exited with code 7: ") as raised:
+                await asyncio.wait_for(run, 10)
+            assert "\nstdout:\ntool output\n\nstderr:\ntool error\n" in str(raised.value)
+        else:
+            await asyncio.wait_for(run, 10)
+
+    asyncio.run(fetch())
+    assert _wait(lambda: not helper.alive()), "the helper outlived tool completion"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_cancellation_cleans_helpers_after_the_tool_has_exited(exited_tool_with_helper):
+    script, helper, tool, _ = exited_tool_with_helper
+
+    async def fetch():
+        task = asyncio.create_task(
+            child_guard.run_guarded(
+                [sys.executable, str(script), "7"], guard_launcher=child_guard.launcher(None), silent=True
+            )
+        )
+        try:
+            async with asyncio.timeout(10):
+                while not helper.ready.exists() or tool.alive():
+                    await asyncio.sleep(0.02)
+            assert helper.alive()
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+
+    asyncio.run(fetch())
+    assert _wait(lambda: not helper.alive()), "the helper outlived cancellation"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_parent_death_cleans_helpers_after_the_tool_has_exited(exited_tool_with_helper):
+    script, helper, tool, guard_pid = exited_tool_with_helper
+    waves = _parent_for_exiting_tool(script)
+    try:
+        assert _wait(lambda: helper.ready.exists() and not tool.alive()), "the tool did not exit"
+        assert helper.alive()
+        waves.kill()
+        waves.wait(10)
+        assert _wait(lambda: not helper.alive(), 2), "the helper outlived Waves"
+        assert _wait(lambda: not _process_exists(int(guard_pid.read_text())), 2), "the guard outlived Waves"
+    finally:
+        if waves.poll() is None:
+            waves.kill()
+        waves.wait(10)
+
+
+def _parent_for_exiting_tool(script: Path) -> subprocess.Popen:
+    parent = """\
+import asyncio, sys
+from waves.providers.apple import child_guard
+asyncio.run(child_guard.run_guarded(
+    [sys.executable, sys.argv[1], '7'], guard_launcher=child_guard.launcher(None), silent=True
+))
+"""
+    return subprocess.Popen(  # noqa: S603 (fixed interpreter and parent, isolated stand-in)
+        [sys.executable, "-c", parent, str(script)]
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_tool_completion_cleans_helpers_while_waves_is_not_scheduled(exited_tool_with_helper):
+    script, helper, tool, _ = exited_tool_with_helper
+    waves = _parent_for_exiting_tool(script)
+    try:
+        assert _wait(lambda: helper.ready.exists() and not tool.alive()), "the tool did not exit"
+        os.kill(waves.pid, signal.SIGSTOP)
+        assert _wait(lambda: not helper.alive(), 10), "cleanup depended on Waves being scheduled"
+    finally:
+        waves.kill()
+        waves.wait(10)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize("tool_exit", [0, 7])
+@pytest.mark.parametrize("destination", ["stdout", "stderr"])
+@pytest.mark.parametrize("blocking", [True, False], ids=["blocking", "nonblocking"])
+def test_a_stalled_output_consumer_reports_failure_without_hanging(tmp_path, tool_exit, destination, blocking):
+    """The tool exits with bytes still waiting for a paused pipe consumer."""
+    exited = tmp_path / "tool-exited"
+    descriptor = 1 if destination == "stdout" else 2
+    command = f"""\
+import os, sys
+from pathlib import Path
+os.write({descriptor}, b'tool output')
+Path({str(exited)!r}).touch()
+raise SystemExit({tool_exit})
+"""
+    # Fill an isolated pipe before handing it to the guard. The tool can
+    # exit after writing to its PTY while its relay waits on that full pipe.
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(write_fd, "wb", buffering=0):
+        _fill_pipe(write_fd)
+        os.set_blocking(write_fd, blocking)
+        with _guard_with_redirected_stream(command, destination, write_fd) as guard:
+            assert _wait(exited.exists), "the tool could not finish writing"
+            assert guard.wait(10) == (tool_exit or 1)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize("destination", ["stdout", "stderr"])
+@pytest.mark.parametrize("consumer", ["closed", "full-nonblocking"])
+def test_failed_output_consumer_does_not_block_a_tool_that_keeps_writing(tmp_path, destination, consumer):
+    exited = tmp_path / "tool-exited"
+    descriptor = 1 if destination == "stdout" else 2
+    command = f"""\
+import os, signal
+from pathlib import Path
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+try:
+    for _ in range(256):
+        os.write({descriptor}, b'x' * 4096)
+except OSError:
+    pass
+Path({str(exited)!r}).touch()
+raise SystemExit(7)
+"""
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0):
+        if consumer == "closed":
+            reader.close()
+        else:
+            _fill_pipe(write_fd)
+        with _guard_with_redirected_stream(command, destination, write_fd) as guard:
+            assert _wait(exited.exists, 3), "the tool blocked writing after its output consumer failed"
+            assert guard.wait(10) == 7
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize(
+    ("pending_output", "drain", "delay", "expected"),
+    [(False, 0.1, 1, 0), (True, 0.1, 1, 1), (True, 2, 0.1, 0)],
+    ids=["eof", "queued-bytes-at-deadline", "queued-bytes-drained"],
+)
+def test_a_delayed_terminal_reader_distinguishes_eof_from_pending_output(pending_output, drain, delay, expected):
+    guard_code = """\
+import sys, time
+from waves.providers.apple import child_guard
+child_guard.GUARD_STOP_SEC = float(sys.argv[2])
+relay = child_guard._relay_terminal
+def delayed_reader(*args):
+    time.sleep(float(sys.argv[3]))
+    relay(*args)
+child_guard._relay_terminal = delayed_reader
+raise SystemExit(child_guard.main(['--', sys.executable, '-c', sys.argv[1]]))
+"""
+    command = "import os; os.write(1, b'output')" if pending_output else "pass"
+    guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard with a delayed stand-in reader)
+        [sys.executable, "-c", guard_code, command, str(drain), str(delay)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert guard.wait(10) == expected
+        if pending_output and expected == 0:
+            assert guard.stdout.read() == b"output"
+    finally:
+        guard.stdin.close()
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(guard.pid, signal.SIGKILL)
+        guard.wait(10)
+        guard.stdout.close()
+        guard.stderr.close()
 
 
 @pytest.mark.integration
