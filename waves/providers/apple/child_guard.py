@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 from collections.abc import Generator, Sequence
+from dataclasses import dataclass
 from typing import BinaryIO, TypedDict
 
 GUARD_FLAG = "--apple-child-guard"
@@ -54,6 +55,13 @@ class _SpawnOptions(TypedDict, total=False):
 class _ToolOutput(TypedDict, total=False):
     stdout: int
     stderr: int
+
+
+@dataclass
+class _TerminalRelay:
+    source: BinaryIO
+    reader: threading.Thread
+    writing: threading.Event
 
 
 # Windows: no console window flashes up for a console process started from
@@ -200,6 +208,8 @@ def main(argv: Sequence[str]) -> int:
             os.setpgid(0, 0)
     result = None
     try:
+        if sys.platform == "darwin":
+            _watch_guard_exit()
         with _tool_output() as output:
             # The tool joins the guard's own group off Windows. Its stdin is
             # separate from the pipe that tells the guard Waves has left.
@@ -211,12 +221,37 @@ def main(argv: Sequence[str]) -> int:
         action = "start" if result is None else "relay output from"
         # A closed stderr must not replace the tool's exit code, including
         # through an interpreter-shutdown flush of a buffered diagnostic.
-        with contextlib.suppress(OSError):
-            os.write(
-                sys.stderr.fileno(),
-                f"Apple child guard could not {action} {command[0]}: {exc}\n".encode(errors="replace"),
-            )
+        reporter = threading.Thread(
+            target=_write_guard_error,
+            args=(f"Apple child guard could not {action} {command[0]}: {exc}\n".encode(errors="replace"),),
+            daemon=True,
+        )
+        reporter.start()
+        reporter.join(0.2)
         return 127 if result is None else result or 1
+
+
+def _write_guard_error(message: bytes) -> None:
+    # A full destination pipe must not hold up the failure result either.
+    with contextlib.suppress(OSError):
+        os.write(sys.stderr.fileno(), message)
+
+
+def _watch_guard_exit() -> None:
+    """Keep group cleanup owned even if Waves cannot run after guard exit."""
+    guard = os.getpid()
+    if os.getpgrp() != guard:
+        raise OSError(errno.EPERM, "Apple child guard does not own its process group")
+    # Fork before the guard starts any threads. This child does no buffered
+    # I/O and never runs interpreter shutdown. Keeping the inherited output
+    # pipes open also keeps captured completion behind group cleanup.
+    if os.fork():
+        return
+    while os.getppid() == guard:
+        time.sleep(0.02)
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(guard, signal.SIGKILL)
+    os._exit(0)
 
 
 @contextlib.contextmanager
@@ -234,7 +269,7 @@ def _tool_output() -> Generator[_ToolOutput]:
     # diagnostics byte-for-byte; the guard's control pipe stays untouched.
     with contextlib.ExitStack() as resources:
         slaves: list[BinaryIO] = []
-        readers: list[threading.Thread] = []
+        relays: list[_TerminalRelay] = []
         failures: list[OSError] = []
         stop_reading = threading.Event()
         try:
@@ -248,11 +283,14 @@ def _tool_output() -> Generator[_ToolOutput]:
                 slaves.append(sink)
                 tty.setraw(slave)
                 termios.tcsetwinsize(slave, (40, 120))
+                writing = threading.Event()
                 reader = threading.Thread(
-                    target=_relay_terminal, args=(source, destination.fileno(), failures, stop_reading), daemon=True
+                    target=_relay_terminal,
+                    args=(source, destination.fileno(), failures, stop_reading, writing),
+                    daemon=True,
                 )
                 reader.start()
-                readers.append(reader)
+                relays.append(_TerminalRelay(source, reader, writing))
             yield {"stdout": slaves[0].fileno(), "stderr": slaves[1].fileno()}
         finally:
             # Helpers can retain the slave descriptors after tool exit. Give
@@ -261,24 +299,38 @@ def _tool_output() -> Generator[_ToolOutput]:
             for sink in slaves:
                 sink.close()
             deadline = time.monotonic() + GUARD_STOP_SEC
-            for reader in readers:
-                reader.join(max(0.0, deadline - time.monotonic()))
+            for relay in relays:
+                relay.reader.join(max(0.0, deadline - time.monotonic()))
+            # An idle helper holding its terminal open is safe to stop. Bytes
+            # queued at either end of a relay must not be discarded as success.
+            if any(
+                relay.reader.is_alive() and (relay.writing.is_set() or select.select((relay.source,), (), (), 0)[0])
+                for relay in relays
+            ):
+                failures.append(OSError(errno.ETIMEDOUT, "Apple child guard output drain timed out"))
             stop_reading.set()
-            for reader in readers:
-                reader.join(0.2)
+            for relay in relays:
+                relay.reader.join(0.2)
         if failures:
             raise failures[0]
 
 
-def _relay_terminal(source: BinaryIO, destination: int, failures: list[OSError], stop_reading: threading.Event) -> None:
+def _relay_terminal(
+    source: BinaryIO,
+    destination: int,
+    failures: list[OSError],
+    stop_reading: threading.Event,
+    writing: threading.Event,
+) -> None:
     try:
-        with source:
-            descriptor = source.fileno()
-            while not stop_reading.is_set():
-                if not select.select((descriptor,), (), (), 0.1)[0]:
-                    continue
-                if stop_reading.is_set():
-                    return
+        descriptor = source.fileno()
+        while not stop_reading.is_set():
+            if not select.select((descriptor,), (), (), 0.1)[0]:
+                continue
+            if stop_reading.is_set():
+                return
+            writing.set()
+            try:
                 try:
                     data = os.read(descriptor, 65536)
                 except BlockingIOError:
@@ -291,6 +343,8 @@ def _relay_terminal(source: BinaryIO, destination: int, failures: list[OSError],
                     return
                 while data:
                     data = data[os.write(destination, data) :]
+            finally:
+                writing.clear()
     except OSError as exc:
         failures.append(exc)
 

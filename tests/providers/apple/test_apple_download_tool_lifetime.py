@@ -607,6 +607,77 @@ asyncio.run(child_guard.run_guarded(
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_tool_completion_cleans_helpers_while_waves_is_not_scheduled(exited_tool_with_helper):
+    script, helper, tool, _ = exited_tool_with_helper
+    parent = """\
+import asyncio, sys
+from waves.providers.apple import child_guard
+asyncio.run(child_guard.run_guarded(
+    [sys.executable, sys.argv[1], '7'], guard_launcher=child_guard.launcher(None), silent=True
+))
+"""
+    waves = subprocess.Popen(  # noqa: S603 (fixed interpreter and parent, isolated stand-in)
+        [sys.executable, "-c", parent, str(script)]
+    )
+    try:
+        assert _wait(lambda: helper.ready.exists() and not tool.alive()), "the tool did not exit"
+        os.kill(waves.pid, signal.SIGSTOP)
+        assert _wait(lambda: not helper.alive(), 10), "cleanup depended on Waves being scheduled"
+    finally:
+        waves.kill()
+        waves.wait(10)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize("tool_exit", [0, 7])
+@pytest.mark.parametrize("destination", ["stdout", "stderr"])
+@pytest.mark.parametrize("blocking", [True, False], ids=["blocking", "nonblocking"])
+def test_a_stalled_output_consumer_reports_failure_without_hanging(tmp_path, tool_exit, destination, blocking):
+    """The tool exits with bytes still waiting for a paused pipe consumer."""
+    exited = tmp_path / "tool-exited"
+    descriptor = 1 if destination == "stdout" else 2
+    command = f"""\
+import os, sys
+from pathlib import Path
+os.write({descriptor}, b'tool output')
+Path({str(exited)!r}).touch()
+raise SystemExit({tool_exit})
+"""
+    # Fill an isolated pipe before handing it to the guard. The tool can
+    # exit after writing to its PTY while its relay waits on that full pipe.
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(write_fd, "wb", buffering=0):
+        os.set_blocking(write_fd, False)
+        try:
+            while True:
+                os.write(write_fd, b"x" * 4096)
+        except BlockingIOError:
+            pass
+        os.set_blocking(write_fd, blocking)
+        guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
+            [*child_guard.launcher(None), "--", sys.executable, "-c", command],
+            stdin=subprocess.PIPE,
+            stdout=write_fd if destination == "stdout" else subprocess.PIPE,
+            stderr=write_fd if destination == "stderr" else subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            assert _wait(exited.exists), "the tool could not finish writing"
+            assert guard.wait(10) == (tool_exit or 1)
+        finally:
+            guard.stdin.close()
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(guard.pid, signal.SIGKILL)
+            guard.wait(10)
+            if guard.stdout is not None:
+                guard.stdout.close()
+            if guard.stderr is not None:
+                guard.stderr.close()
+
+
+@pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS downloader console workaround")
 @pytest.mark.parametrize("tool_exit", [0, 3])
 @pytest.mark.parametrize(("destination", "descriptor"), [("stdout", 1), ("stderr", 2)])
