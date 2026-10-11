@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock
@@ -542,6 +543,28 @@ def _fill_pipe(descriptor: int) -> None:
         pass
 
 
+@contextlib.contextmanager
+def _guard_with_redirected_stream(command: str, destination: str, write_fd: int) -> Generator[subprocess.Popen]:
+    guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
+        [*child_guard.launcher(None), "--", sys.executable, "-c", command],
+        stdin=subprocess.PIPE,
+        stdout=write_fd if destination == "stdout" else subprocess.PIPE,
+        stderr=write_fd if destination == "stderr" else subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        yield guard
+    finally:
+        guard.stdin.close()
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(guard.pid, signal.SIGKILL)
+        guard.wait(10)
+        if guard.stdout is not None:
+            guard.stdout.close()
+        if guard.stderr is not None:
+            guard.stderr.close()
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
 @pytest.mark.parametrize("tool_exit", [0, 7])
@@ -655,25 +678,9 @@ raise SystemExit({tool_exit})
     with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(write_fd, "wb", buffering=0):
         _fill_pipe(write_fd)
         os.set_blocking(write_fd, blocking)
-        guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
-            [*child_guard.launcher(None), "--", sys.executable, "-c", command],
-            stdin=subprocess.PIPE,
-            stdout=write_fd if destination == "stdout" else subprocess.PIPE,
-            stderr=write_fd if destination == "stderr" else subprocess.PIPE,
-            start_new_session=True,
-        )
-        try:
+        with _guard_with_redirected_stream(command, destination, write_fd) as guard:
             assert _wait(exited.exists), "the tool could not finish writing"
             assert guard.wait(10) == (tool_exit or 1)
-        finally:
-            guard.stdin.close()
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(guard.pid, signal.SIGKILL)
-            guard.wait(10)
-            if guard.stdout is not None:
-                guard.stdout.close()
-            if guard.stderr is not None:
-                guard.stderr.close()
 
 
 @pytest.mark.integration
@@ -701,25 +708,9 @@ raise SystemExit(7)
             reader.close()
         else:
             _fill_pipe(write_fd)
-        guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
-            [*child_guard.launcher(None), "--", sys.executable, "-c", command],
-            stdin=subprocess.PIPE,
-            stdout=write_fd if destination == "stdout" else subprocess.PIPE,
-            stderr=write_fd if destination == "stderr" else subprocess.PIPE,
-            start_new_session=True,
-        )
-        try:
+        with _guard_with_redirected_stream(command, destination, write_fd) as guard:
             assert _wait(exited.exists, 3), "the tool blocked writing after its output consumer failed"
             assert guard.wait(10) == 7
-        finally:
-            guard.stdin.close()
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(guard.pid, signal.SIGKILL)
-            guard.wait(10)
-            if guard.stdout is not None:
-                guard.stdout.close()
-            if guard.stderr is not None:
-                guard.stderr.close()
 
 
 @pytest.mark.integration
