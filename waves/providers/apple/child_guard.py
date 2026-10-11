@@ -30,10 +30,12 @@ import asyncio
 import contextlib
 import errno
 import os
+import select
 import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Generator, Sequence
 from typing import BinaryIO, TypedDict
 
@@ -107,10 +109,12 @@ async def run_guarded(
     finally:
         if process.stdin is not None:
             process.stdin.close()
-    if process.returncode != 0:
-        # A guard that died leaves its tool behind; a failed tool may leave
-        # what it started.
+    if guarded or process.returncode != 0:
+        # Tool completion, including success, may leave helpers behind. The
+        # guard must exit before Waves can kill its group without losing the
+        # original tool result.
         await _kill_remains(process)
+    if process.returncode != 0:
         message = f"Exited with code {process.returncode}: {' '.join(str(arg) for arg in args)}"
         if stdout:
             message += f"\nstdout:\n{stdout.decode(errors='replace')}"
@@ -232,37 +236,53 @@ def _tool_output() -> Generator[_ToolOutput]:
         slaves: list[BinaryIO] = []
         readers: list[threading.Thread] = []
         failures: list[OSError] = []
+        stop_reading = threading.Event()
         try:
             for destination in (sys.stdout, sys.stderr):
                 master, slave = os.openpty()
                 source = resources.enter_context(os.fdopen(master, "rb", buffering=0))
                 sink = resources.enter_context(os.fdopen(slave, "wb", buffering=0))
+                # Closing a PTY master can wait for its blocking read. The
+                # drain deadline must also bound descriptor cleanup.
+                os.set_blocking(master, False)
                 slaves.append(sink)
                 tty.setraw(slave)
                 termios.tcsetwinsize(slave, (40, 120))
                 reader = threading.Thread(
-                    target=_relay_terminal, args=(source, destination.fileno(), failures), daemon=True
+                    target=_relay_terminal, args=(source, destination.fileno(), failures, stop_reading), daemon=True
                 )
                 reader.start()
                 readers.append(reader)
             yield {"stdout": slaves[0].fileno(), "stderr": slaves[1].fileno()}
         finally:
-            # Release the guard's copies first, so tool exit delivers EOF/EIO
-            # to both readers; drain their output before the guard exits.
+            # Helpers can retain the slave descriptors after tool exit. Give
+            # both readers one bounded drain period, then let Waves receive
+            # the tool result and kill what remains of the group.
             for sink in slaves:
                 sink.close()
+            deadline = time.monotonic() + GUARD_STOP_SEC
             for reader in readers:
-                reader.join()
+                reader.join(max(0.0, deadline - time.monotonic()))
+            stop_reading.set()
+            for reader in readers:
+                reader.join(0.2)
         if failures:
             raise failures[0]
 
 
-def _relay_terminal(source: BinaryIO, destination: int, failures: list[OSError]) -> None:
+def _relay_terminal(source: BinaryIO, destination: int, failures: list[OSError], stop_reading: threading.Event) -> None:
     try:
         with source:
-            while True:
+            descriptor = source.fileno()
+            while not stop_reading.is_set():
+                if not select.select((descriptor,), (), (), 0.1)[0]:
+                    continue
+                if stop_reading.is_set():
+                    return
                 try:
-                    data = source.read(65536)
+                    data = os.read(descriptor, 65536)
+                except BlockingIOError:
+                    continue
                 except OSError as exc:
                     if exc.errno == errno.EIO:  # PTY slave closed after tool exit.
                         return
@@ -283,14 +303,12 @@ def _kill_when_waves_leaves(parent: int, tool: subprocess.Popen) -> None:
             # Waves never writes: a read that ends, or fails, means it is gone
             # or has stopped the job.
             pass
-    if tool.poll() is not None:
-        return
     with contextlib.suppress(ProcessLookupError, PermissionError):
         if os.name != "nt" and os.getpgrp() == os.getpid():
             # The guard's own group: the tool, whatever it started, and the
             # guard itself, which has nothing left to do.
             os.killpg(os.getpid(), signal.SIGKILL)
-        else:
+        elif tool.poll() is None:
             tool.kill()
 
 

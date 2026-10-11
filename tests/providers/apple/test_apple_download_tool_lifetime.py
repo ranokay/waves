@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,14 @@ def _wait(predicate, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.02)
     return predicate()
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _no_workdir_left() -> bool:
@@ -485,6 +494,116 @@ raise SystemExit(3)
     message = str(excinfo.value)
     assert message.startswith("Exited with code 3: ")
     assert message.split("\nstdout:\n", 1)[1] == "output\r\n" * 32768 + "\nstderr:\n" + "error\n" * 32768
+
+
+@pytest.fixture
+def exited_tool_with_helper(tmp_path):
+    """A tool exits after starting a helper that retains its output handles."""
+    helper = _standin(tmp_path)
+    # Cleanup must kill the owned helper even if closing its terminals does
+    # not end it through the terminal's hangup signal.
+    helper.script.write_text(
+        "import signal\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n" + helper.script.read_text()
+    )
+    tool_lock = tmp_path / "tool.lock"
+    guard_pid = tmp_path / "guard.pid"
+    script = tmp_path / "exiting-tool.py"
+    script.write_text(f"""\
+import os, subprocess, sys, time
+from pathlib import Path
+from waves import file_locks
+assert file_locks.try_lock({str(tool_lock)!r}) is not None
+Path({str(guard_pid)!r}).write_text(str(os.getppid()))
+subprocess.Popen([sys.executable, {str(helper.script)!r}])
+while not Path({str(helper.ready)!r}).exists():
+    time.sleep(0.01)
+os.write(1, b'tool output\\n')
+os.write(2, b'tool error\\n')
+raise SystemExit(int(sys.argv[1]))
+""")
+    try:
+        yield script, helper, _Standin(script, tool_lock, helper.ready), guard_pid
+    finally:
+        # Even a failed assertion must release the guard and its helper.
+        if guard_pid.exists():
+            pid = int(guard_pid.read_text())
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(pid, signal.SIGKILL)
+            assert _wait(lambda: not _process_exists(pid)), "the test left a guard running"
+        assert _wait(lambda: not helper.alive()), "the test left a helper running"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize("tool_exit", [0, 7])
+def test_tool_completion_cleans_helpers_holding_output_handles(exited_tool_with_helper, tool_exit):
+    script, helper, _, _ = exited_tool_with_helper
+
+    async def fetch():
+        run = child_guard.run_guarded(
+            [sys.executable, str(script), str(tool_exit)], guard_launcher=child_guard.launcher(None), silent=True
+        )
+        if tool_exit:
+            with pytest.raises(child_guard.ToolFailed, match="Exited with code 7: ") as raised:
+                await asyncio.wait_for(run, 10)
+            assert "\nstdout:\ntool output\n\nstderr:\ntool error\n" in str(raised.value)
+        else:
+            await asyncio.wait_for(run, 10)
+
+    asyncio.run(fetch())
+    assert _wait(lambda: not helper.alive()), "the helper outlived tool completion"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_cancellation_cleans_helpers_after_the_tool_has_exited(exited_tool_with_helper):
+    script, helper, tool, _ = exited_tool_with_helper
+
+    async def fetch():
+        task = asyncio.create_task(
+            child_guard.run_guarded(
+                [sys.executable, str(script), "7"], guard_launcher=child_guard.launcher(None), silent=True
+            )
+        )
+        try:
+            async with asyncio.timeout(10):
+                while not helper.ready.exists() or tool.alive():
+                    await asyncio.sleep(0.02)
+            assert helper.alive()
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+
+    asyncio.run(fetch())
+    assert _wait(lambda: not helper.alive()), "the helper outlived cancellation"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_parent_death_cleans_helpers_after_the_tool_has_exited(exited_tool_with_helper):
+    script, helper, tool, guard_pid = exited_tool_with_helper
+    parent = """\
+import asyncio, sys
+from waves.providers.apple import child_guard
+asyncio.run(child_guard.run_guarded(
+    [sys.executable, sys.argv[1], '7'], guard_launcher=child_guard.launcher(None), silent=True
+))
+"""
+    waves = subprocess.Popen(  # noqa: S603 (fixed interpreter and parent, isolated stand-in)
+        [sys.executable, "-c", parent, str(script)]
+    )
+    try:
+        assert _wait(lambda: helper.ready.exists() and not tool.alive()), "the tool did not exit"
+        assert helper.alive()
+        waves.kill()
+        waves.wait(10)
+        assert _wait(lambda: not helper.alive(), 2), "the helper outlived Waves"
+        assert _wait(lambda: not _process_exists(int(guard_pid.read_text())), 2), "the guard outlived Waves"
+    finally:
+        if waves.poll() is None:
+            waves.kill()
+        waves.wait(10)
 
 
 @pytest.mark.integration
