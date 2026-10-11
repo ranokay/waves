@@ -28,13 +28,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import os
 import signal
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
-from typing import TypedDict
+from collections.abc import Generator, Sequence
+from typing import BinaryIO, TypedDict
 
 GUARD_FLAG = "--apple-child-guard"
 
@@ -46,6 +47,11 @@ GUARD_STOP_SEC = 5.0
 class _SpawnOptions(TypedDict, total=False):
     creationflags: int
     start_new_session: bool
+
+
+class _ToolOutput(TypedDict, total=False):
+    stdout: int
+    stderr: int
 
 
 # Windows: no console window flashes up for a console process started from
@@ -175,7 +181,8 @@ def main(argv: Sequence[str]) -> int:
     """The guard role: run the command after ``--`` while stdin stays open.
 
     Returns the command's exit code, 127 when it cannot start (the reason
-    goes to stderr), or 2 without a command.
+    goes to stderr), or 2 without a command. A failed output relay keeps a
+    tool's nonzero exit code, or turns its success into exit 1.
     """
     args = list(argv)
     command = args[args.index("--") + 1 :] if "--" in args else []
@@ -187,14 +194,85 @@ def main(argv: Sequence[str]) -> int:
         # the guard as a session leader, which already leads one).
         with contextlib.suppress(OSError):
             os.setpgid(0, 0)
+    result = None
     try:
-        # The tool joins the guard's own group off Windows.
-        tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **NO_WINDOW)  # noqa: S603 (Waves' own tool argv)
+        with _tool_output() as output:
+            # The tool joins the guard's own group off Windows. Its stdin is
+            # separate from the pipe that tells the guard Waves has left.
+            tool = subprocess.Popen(command, stdin=subprocess.DEVNULL, **output, **NO_WINDOW)  # noqa: S603 (Waves' own tool argv)
+            threading.Thread(target=_kill_when_waves_leaves, args=(sys.stdin.fileno(), tool), daemon=True).start()
+            result = tool.wait()
+            return result
     except OSError as exc:
-        print(f"Apple child guard could not start {command[0]}: {exc}", file=sys.stderr)
-        return 127
-    threading.Thread(target=_kill_when_waves_leaves, args=(sys.stdin.fileno(), tool), daemon=True).start()
-    return tool.wait()
+        action = "start" if result is None else "relay output from"
+        # A closed stderr must not replace the tool's exit code, including
+        # through an interpreter-shutdown flush of a buffered diagnostic.
+        with contextlib.suppress(OSError):
+            os.write(
+                sys.stderr.fileno(),
+                f"Apple child guard could not {action} {command[0]}: {exc}\n".encode(errors="replace"),
+            )
+        return 127 if result is None else result or 1
+
+
+@contextlib.contextmanager
+def _tool_output() -> Generator[_ToolOutput]:
+    if sys.platform != "darwin" or (sys.stdout.isatty() and sys.stderr.isatty()):
+        yield {}
+        return
+
+    import termios
+    import tty
+
+    # The pinned N_m3u8DL-RE forces Spectre.Console's live renderer on pipes,
+    # whose missing terminal height can abort a download. Give it sized PTYs
+    # while relaying each stream to its original destination. Raw mode keeps
+    # diagnostics byte-for-byte; the guard's control pipe stays untouched.
+    with contextlib.ExitStack() as resources:
+        slaves: list[BinaryIO] = []
+        readers: list[threading.Thread] = []
+        failures: list[OSError] = []
+        try:
+            for destination in (sys.stdout, sys.stderr):
+                master, slave = os.openpty()
+                source = resources.enter_context(os.fdopen(master, "rb", buffering=0))
+                sink = resources.enter_context(os.fdopen(slave, "wb", buffering=0))
+                slaves.append(sink)
+                tty.setraw(slave)
+                termios.tcsetwinsize(slave, (40, 120))
+                reader = threading.Thread(
+                    target=_relay_terminal, args=(source, destination.fileno(), failures), daemon=True
+                )
+                reader.start()
+                readers.append(reader)
+            yield {"stdout": slaves[0].fileno(), "stderr": slaves[1].fileno()}
+        finally:
+            # Release the guard's copies first, so tool exit delivers EOF/EIO
+            # to both readers; drain their output before the guard exits.
+            for sink in slaves:
+                sink.close()
+            for reader in readers:
+                reader.join()
+        if failures:
+            raise failures[0]
+
+
+def _relay_terminal(source: BinaryIO, destination: int, failures: list[OSError]) -> None:
+    try:
+        with source:
+            while True:
+                try:
+                    data = source.read(65536)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:  # PTY slave closed after tool exit.
+                        return
+                    raise
+                if not data:
+                    return
+                while data:
+                    data = data[os.write(destination, data) :]
+    except OSError as exc:
+        failures.append(exc)
 
 
 def _kill_when_waves_leaves(parent: int, tool: subprocess.Popen) -> None:

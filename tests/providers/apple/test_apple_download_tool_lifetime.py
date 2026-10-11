@@ -316,8 +316,12 @@ def test_a_stop_kills_the_tool_whatever_became_of_its_guard(tmp_path, monkeypatc
         os.kill(guards[0], signal.SIGSTOP if guard_state == "frozen" else signal.SIGKILL)
         await asyncio.sleep(0.2)
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises((asyncio.CancelledError, child_guard.ToolFailed)) as raised:
             await task
+        if isinstance(raised.value, child_guard.ToolFailed):
+            # Losing the PTY's guard can report its death before the stop.
+            assert guard_state == "dead"
+            assert str(raised.value).startswith("Exited with code -9: ")
 
     try:
         asyncio.run(asyncio.wait_for(fetch(), 20))
@@ -439,6 +443,79 @@ def _run_guard(*command: str) -> subprocess.CompletedProcess:
 @pytest.mark.integration
 def test_the_guard_passes_its_tool_s_exit_code_through():
     assert _run_guard(sys.executable, "-c", "raise SystemExit(7)").returncode == 7
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS downloader console workaround")
+def test_redirected_download_gives_the_renderer_sized_terminals(tmp_path):
+    renderer = """\
+import os, sys
+for stream in (sys.stdout, sys.stderr):
+    assert stream.isatty(), 'the download renderer needs a terminal'
+    columns, rows = os.get_terminal_size(stream.fileno())
+    assert columns >= 80 and rows >= 24, 'the download renderer needs valid dimensions'
+"""
+    script = tmp_path / "renderer.py"
+    script.write_text(renderer)
+    downloader = engine._guarded_base_downloader()(
+        interface=None,
+        nm3u8dlre_path=sys.executable,
+        ffmpeg_path=sys.executable,
+        guard_launcher=child_guard.launcher(None),
+        silent=True,
+    )
+    run = downloader._download_nm3u8dlre(str(script), str(tmp_path / "staged.m4a"))
+    asyncio.run(asyncio.wait_for(run, 10))
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS downloader console workaround")
+def test_guard_relays_each_terminal_stream_without_altering_or_truncating_it():
+    failing = """\
+import os
+os.write(1, b'output\\r\\n' * 32768)
+os.write(2, b'error\\n' * 32768)
+raise SystemExit(3)
+"""
+    run = child_guard.run_guarded(
+        [sys.executable, "-c", failing], guard_launcher=child_guard.launcher(None), silent=True
+    )
+    with pytest.raises(child_guard.ToolFailed) as excinfo:
+        asyncio.run(asyncio.wait_for(run, 10))
+    message = str(excinfo.value)
+    assert message.startswith("Exited with code 3: ")
+    assert message.split("\nstdout:\n", 1)[1] == "output\r\n" * 32768 + "\nstderr:\n" + "error\n" * 32768
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS downloader console workaround")
+@pytest.mark.parametrize("tool_exit", [0, 3])
+@pytest.mark.parametrize(("destination", "descriptor"), [("stdout", 1), ("stderr", 2)])
+def test_guard_reports_a_broken_output_destination_as_failure(tool_exit, destination, descriptor):
+    guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in tool)
+        [
+            *child_guard.launcher(None),
+            "--",
+            sys.executable,
+            "-c",
+            f"import os; os.write({descriptor}, b'render'); raise SystemExit({tool_exit})",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    getattr(guard, destination).close()
+    try:
+        assert guard.wait(10) == (tool_exit or 1)
+        if destination == "stdout":
+            assert b"could not relay output" in guard.stderr.read()
+    finally:
+        guard.stdin.close()
+        guard.stdout.close()
+        guard.stderr.close()
+        if guard.poll() is None:
+            guard.kill()
+            guard.wait(10)
 
 
 @pytest.mark.integration
