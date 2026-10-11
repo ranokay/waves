@@ -43,7 +43,7 @@ from typing import BinaryIO, TypedDict
 GUARD_FLAG = "--apple-child-guard"
 
 # How long a stopped tool's guard has to kill it and leave before Waves kills
-# the guard's process group itself.
+# the guard's process group itself, and the drain limit after tool exit.
 GUARD_STOP_SEC = 5.0
 
 
@@ -296,23 +296,52 @@ def _tool_output() -> Generator[_ToolOutput]:
             # Helpers can retain the slave descriptors after tool exit. Give
             # both readers one bounded drain period, then let Waves receive
             # the tool result and kill what remains of the group.
+            deadline = time.monotonic() + GUARD_STOP_SEC
+            # macOS can discard unread bytes when the last slave closes.
+            # Keep our handles until queued tool output drains, or fails.
+            while any(relay.writing.is_set() or _terminal_is_readable(relay.source) for relay in relays):
+                if time.monotonic() >= deadline:
+                    failures.append(OSError(errno.ETIMEDOUT, "Apple child guard output drain timed out"))
+                    break
+                time.sleep(0.01)
             for sink in slaves:
                 sink.close()
-            deadline = time.monotonic() + GUARD_STOP_SEC
             for relay in relays:
                 relay.reader.join(max(0.0, deadline - time.monotonic()))
-            # An idle helper holding its terminal open is safe to stop. Bytes
-            # queued at either end of a relay must not be discarded as success.
-            if any(
-                relay.reader.is_alive() and (relay.writing.is_set() or select.select((relay.source,), (), (), 0)[0])
-                for relay in relays
-            ):
-                failures.append(OSError(errno.ETIMEDOUT, "Apple child guard output drain timed out"))
             stop_reading.set()
             for relay in relays:
                 relay.reader.join(0.2)
+            # An idle helper holding its terminal open is safe to stop. Bytes
+            # queued at either end of a relay must not be discarded as success.
+            if any(relay.writing.is_set() or _terminal_has_output(relay.source) for relay in relays):
+                failures.append(OSError(errno.ETIMEDOUT, "Apple child guard output drain timed out"))
         if failures:
             raise failures[0]
+
+
+def _terminal_is_readable(source: BinaryIO) -> bool:
+    # Called while our slave is open, so readability means queued bytes.
+    try:
+        return bool(select.select((source,), (), (), 0)[0])
+    except ValueError:  # A failed relay closed its master.
+        return False
+    except OSError as exc:
+        if exc.errno == errno.EBADF:
+            return False
+        raise
+
+
+def _terminal_has_output(source: BinaryIO) -> bool:
+    # Readers have been stopped. A nonblocking probe distinguishes queued
+    # bytes from readable EOF; a byte consumed here makes the result fail.
+    try:
+        return bool(os.read(source.fileno(), 1))
+    except (BlockingIOError, ValueError):  # Idle terminal, or a failed relay closed it.
+        return False
+    except OSError as exc:
+        if exc.errno in (errno.EIO, errno.EBADF):  # Slave closed, or relay closed the master.
+            return False
+        raise
 
 
 def _relay_terminal(
@@ -347,6 +376,10 @@ def _relay_terminal(
                 writing.clear()
     except OSError as exc:
         failures.append(exc)
+        # A failed destination leaves nobody draining this terminal. Close
+        # its master now so a still-running tool cannot block filling it.
+        with contextlib.suppress(OSError):
+            source.close()
 
 
 def _kill_when_waves_leaves(parent: int, tool: subprocess.Popen) -> None:

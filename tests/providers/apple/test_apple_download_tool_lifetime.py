@@ -533,6 +533,15 @@ raise SystemExit(int(sys.argv[1]))
         assert _wait(lambda: not helper.alive()), "the test left a helper running"
 
 
+def _fill_pipe(descriptor: int) -> None:
+    os.set_blocking(descriptor, False)
+    try:
+        while True:
+            os.write(descriptor, b"x" * 4096)
+    except BlockingIOError:
+        pass
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
 @pytest.mark.parametrize("tool_exit", [0, 7])
@@ -583,16 +592,7 @@ def test_cancellation_cleans_helpers_after_the_tool_has_exited(exited_tool_with_
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
 def test_parent_death_cleans_helpers_after_the_tool_has_exited(exited_tool_with_helper):
     script, helper, tool, guard_pid = exited_tool_with_helper
-    parent = """\
-import asyncio, sys
-from waves.providers.apple import child_guard
-asyncio.run(child_guard.run_guarded(
-    [sys.executable, sys.argv[1], '7'], guard_launcher=child_guard.launcher(None), silent=True
-))
-"""
-    waves = subprocess.Popen(  # noqa: S603 (fixed interpreter and parent, isolated stand-in)
-        [sys.executable, "-c", parent, str(script)]
-    )
+    waves = _parent_for_exiting_tool(script)
     try:
         assert _wait(lambda: helper.ready.exists() and not tool.alive()), "the tool did not exit"
         assert helper.alive()
@@ -606,10 +606,7 @@ asyncio.run(child_guard.run_guarded(
         waves.wait(10)
 
 
-@pytest.mark.integration
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
-def test_tool_completion_cleans_helpers_while_waves_is_not_scheduled(exited_tool_with_helper):
-    script, helper, tool, _ = exited_tool_with_helper
+def _parent_for_exiting_tool(script: Path) -> subprocess.Popen:
     parent = """\
 import asyncio, sys
 from waves.providers.apple import child_guard
@@ -617,9 +614,16 @@ asyncio.run(child_guard.run_guarded(
     [sys.executable, sys.argv[1], '7'], guard_launcher=child_guard.launcher(None), silent=True
 ))
 """
-    waves = subprocess.Popen(  # noqa: S603 (fixed interpreter and parent, isolated stand-in)
+    return subprocess.Popen(  # noqa: S603 (fixed interpreter and parent, isolated stand-in)
         [sys.executable, "-c", parent, str(script)]
     )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+def test_tool_completion_cleans_helpers_while_waves_is_not_scheduled(exited_tool_with_helper):
+    script, helper, tool, _ = exited_tool_with_helper
+    waves = _parent_for_exiting_tool(script)
     try:
         assert _wait(lambda: helper.ready.exists() and not tool.alive()), "the tool did not exit"
         os.kill(waves.pid, signal.SIGSTOP)
@@ -649,12 +653,7 @@ raise SystemExit({tool_exit})
     # exit after writing to its PTY while its relay waits on that full pipe.
     read_fd, write_fd = os.pipe()
     with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(write_fd, "wb", buffering=0):
-        os.set_blocking(write_fd, False)
-        try:
-            while True:
-                os.write(write_fd, b"x" * 4096)
-        except BlockingIOError:
-            pass
+        _fill_pipe(write_fd)
         os.set_blocking(write_fd, blocking)
         guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
             [*child_guard.launcher(None), "--", sys.executable, "-c", command],
@@ -675,6 +674,92 @@ raise SystemExit({tool_exit})
                 guard.stdout.close()
             if guard.stderr is not None:
                 guard.stderr.close()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize("destination", ["stdout", "stderr"])
+@pytest.mark.parametrize("consumer", ["closed", "full-nonblocking"])
+def test_failed_output_consumer_does_not_block_a_tool_that_keeps_writing(tmp_path, destination, consumer):
+    exited = tmp_path / "tool-exited"
+    descriptor = 1 if destination == "stdout" else 2
+    command = f"""\
+import os, signal
+from pathlib import Path
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+try:
+    for _ in range(256):
+        os.write({descriptor}, b'x' * 4096)
+except OSError:
+    pass
+Path({str(exited)!r}).touch()
+raise SystemExit(7)
+"""
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0):
+        if consumer == "closed":
+            reader.close()
+        else:
+            _fill_pipe(write_fd)
+        guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in)
+            [*child_guard.launcher(None), "--", sys.executable, "-c", command],
+            stdin=subprocess.PIPE,
+            stdout=write_fd if destination == "stdout" else subprocess.PIPE,
+            stderr=write_fd if destination == "stderr" else subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            assert _wait(exited.exists, 3), "the tool blocked writing after its output consumer failed"
+            assert guard.wait(10) == 7
+        finally:
+            guard.stdin.close()
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(guard.pid, signal.SIGKILL)
+            guard.wait(10)
+            if guard.stdout is not None:
+                guard.stdout.close()
+            if guard.stderr is not None:
+                guard.stderr.close()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS redirected output drain")
+@pytest.mark.parametrize(
+    ("pending_output", "drain", "delay", "expected"),
+    [(False, 0.1, 1, 0), (True, 0.1, 1, 1), (True, 2, 0.1, 0)],
+    ids=["eof", "queued-bytes-at-deadline", "queued-bytes-drained"],
+)
+def test_a_delayed_terminal_reader_distinguishes_eof_from_pending_output(pending_output, drain, delay, expected):
+    guard_code = """\
+import sys, time
+from waves.providers.apple import child_guard
+child_guard.GUARD_STOP_SEC = float(sys.argv[2])
+relay = child_guard._relay_terminal
+def delayed_reader(*args):
+    time.sleep(float(sys.argv[3]))
+    relay(*args)
+child_guard._relay_terminal = delayed_reader
+raise SystemExit(child_guard.main(['--', sys.executable, '-c', sys.argv[1]]))
+"""
+    command = "import os; os.write(1, b'output')" if pending_output else "pass"
+    guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard with a delayed stand-in reader)
+        [sys.executable, "-c", guard_code, command, str(drain), str(delay)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert guard.wait(10) == expected
+        if pending_output and expected == 0:
+            assert guard.stdout.read() == b"output"
+    finally:
+        guard.stdin.close()
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(guard.pid, signal.SIGKILL)
+        guard.wait(10)
+        guard.stdout.close()
+        guard.stderr.close()
 
 
 @pytest.mark.integration
