@@ -205,7 +205,13 @@ def main(argv: Sequence[str]) -> int:
             return result
     except OSError as exc:
         action = "start" if result is None else "relay output from"
-        print(f"Apple child guard could not {action} {command[0]}: {exc}", file=sys.stderr)
+        # A closed stderr must not replace the tool's exit code, including
+        # through an interpreter-shutdown flush of a buffered diagnostic.
+        with contextlib.suppress(OSError):
+            os.write(
+                sys.stderr.fileno(),
+                f"Apple child guard could not {action} {command[0]}: {exc}\n".encode(errors="replace"),
+            )
         return 127 if result is None else result or 1
 
 

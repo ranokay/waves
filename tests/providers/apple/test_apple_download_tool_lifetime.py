@@ -490,25 +490,28 @@ raise SystemExit(3)
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS downloader console workaround")
 @pytest.mark.parametrize("tool_exit", [0, 3])
-def test_guard_reports_a_broken_output_destination_as_failure(tool_exit):
+@pytest.mark.parametrize(("destination", "descriptor"), [("stdout", 1), ("stderr", 2)])
+def test_guard_reports_a_broken_output_destination_as_failure(tool_exit, destination, descriptor):
     guard = subprocess.Popen(  # noqa: S603 (fixed interpreter and guard, isolated stand-in tool)
         [
             *child_guard.launcher(None),
             "--",
             sys.executable,
             "-c",
-            f"import os; os.write(1, b'render'); raise SystemExit({tool_exit})",
+            f"import os; os.write({descriptor}, b'render'); raise SystemExit({tool_exit})",
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    guard.stdout.close()
+    getattr(guard, destination).close()
     try:
         assert guard.wait(10) == (tool_exit or 1)
-        assert b"could not relay output" in guard.stderr.read()
+        if destination == "stdout":
+            assert b"could not relay output" in guard.stderr.read()
     finally:
         guard.stdin.close()
+        guard.stdout.close()
         guard.stderr.close()
         if guard.poll() is None:
             guard.kill()
