@@ -44,6 +44,52 @@ new downloader release is assumed to fix a transport/integrity failure without
 exercising that route. Additional codecs/video/rich assets are exposed only as
 implemented and qualified delivery capabilities.
 
+### 1.1. Selected additional client
+
+The selected additional client is a Waves-owned lite protocol client using
+[Temari 0.3.1](https://github.com/WorldObservationLog/Temari/tree/85c67622adb339142a1dc22841a09e0b81373694)
+through its C ABI. ALAC is its initial integration target. The full Go and
+AppleMusicDecrypt clients and a gamdl 3.9.1 upgrade are not selected dependencies.
+The existing gamdl 3.8.5 route remains the maintained route. Client selection
+does not change Auto routing or establish a new Recommended/default engine.
+The compatible source, patch and artifact identities, dependency inventory and
+Mac qualification evidence are recorded in
+[#579](https://github.com/ranokay/waves/issues/579).
+
+The lite adapter initially targets a compatible user-managed runtime. Stock
+upstream lite at `2fd7e0eaef081f93cf687428b965674937832ba4` is insufficient for
+account use. Admission requires a verified runtime identity and security
+corrections covering peer/hostname verification, guest CA provisioning, bounded
+account requests, private login/2FA, diagnostic redaction, truthful failures and
+protected token persistence. Validate the installed native transport, including
+handle creation and cleanup, rather than relying only on host mocks. Tested TLS
+behavior does not clear an obsolete backend's maintenance/security support.
+
+Temari's MIT core does not clear its distributed binaries, the runtime's
+Apple/Android payloads, guest tools, device provisions or other dependencies.
+Waves-managed lite images remain blocked until whole-stack provenance,
+permissions, notices and supported-backend requirements clear. The existing
+wrapper-v2 distribution decision in [ADR 0005](adr/0005-wrapper-image-distribution.md)
+does not extend to lite. A user-managed endpoint still needs client/dependency
+clearance and compatibility validation; it does not waive these gates.
+
+Runtime reachability, authentication, matching account/storefront and verified
+delivery remain separate facts. Matching storefronts alone do not prove account
+equivalence. Obtain user confirmation when identity cannot be verified before
+admitting that session to automatic routing. Never copy account state between
+engines to infer compatibility.
+
+The adapter must bound media memory, requests and cancellation, validate ranges
+and sample layouts, and publish only after codec/quality and whole-file decode
+verification. Recovery must verify every replacement. Additional codecs, video
+and rich assets require their own effective capabilities; a helper response does
+not expose a product capability. Runtime/account support belongs to #584, client
+integration and integrity to #585, recovery to #587, extra media variants to #594
+and rich lyrics/art to #597. Native and packaged behavior on every build,
+including the evaluated Mac architecture, remains gated by #605. Android
+x86_64 guest execution on a Mac arm64 host does not establish native or packaged
+platform parity.
+
 ## 2. One-time setup: managed and user-supplied
 
 Apple remains an explicit optional provider, off by default. Activation opens
