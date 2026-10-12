@@ -21233,7 +21233,144 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "can_confirm": sessions.readiness("apple:wrapper-v2") == "confirmation_required"
             if sessions is not None
             else False,
+            "lite": WavesBridge.appleLiteRuntimeState(self),
         }
+
+    @Slot(result="QVariant")
+    def appleLiteRuntimeState(self) -> dict:
+        """Cached observations for the separate user-managed lite session."""
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        profile = getattr(self, "_apple_lite_profile", None)
+        return {
+            **dict(getattr(self, "_apple_lite_runtime_cache", {}) or {}),
+            "configured": bool(profile is not None and profile.container),
+            "kind": "user_managed",
+            "state": sessions.readiness("apple:lite") if sessions is not None else "unknown",
+            "stopped": sessions.is_stopped("apple:lite") if sessions is not None else False,
+            "checking": bool(getattr(self, "_apple_lite_probe_inflight", False)),
+            "can_confirm": sessions.readiness("apple:lite") == "confirmation_required"
+            if sessions is not None
+            else False,
+            "qualification": "pending",
+        }
+
+    @Slot()
+    def refreshAppleLiteRuntime(self) -> None:
+        """Observe status over private container stdin; never start the service."""
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        profile = getattr(self, "_apple_lite_profile", None)
+        if sessions is None or profile is None or not profile.container or sessions.is_stopped(profile.id):
+            return
+        if getattr(self, "_apple_lite_probe_inflight", False):
+            return
+        from waves.providers.apple.lite_runtime import probe_lite_runtime
+        from waves.providers.apple.runtime_sessions import SessionEvidence
+
+        abort = Event()
+        self._apple_lite_probe_abort = abort
+        self._apple_lite_probe_inflight = True
+        token = provider_contexts(self).capture(CTX_APPLE)
+        revision = sessions.revision(profile.id)
+
+        def work() -> None:
+            try:
+                container = self._apple_container_state()
+                result = probe_lite_runtime(profile, abort, binary=str(container.get("name") or "docker"))
+
+                def publish() -> None:
+                    if (
+                        abort.is_set()
+                        or getattr(self, "_apple_lite_probe_abort", None) is not abort
+                        or sessions.revision(profile.id) != revision
+                    ):
+                        return
+                    sessions.observe(
+                        profile.id,
+                        SessionEvidence(
+                            result.get("reachable"),
+                            result.get("authenticated"),
+                            result.get("protocol_compatible"),
+                            result.get("artifact_verified"),
+                            str(result.get("account_id") or ""),
+                            str(result.get("storefront") or ""),
+                            str(result.get("session_revision") or ""),
+                        ),
+                    )
+                    self._apple_lite_runtime_cache = dict(result)
+                    self.appleRuntimeStatusChanged.emit()
+
+                WavesBridge._publish_apple_runtime(self, token, publish)
+            finally:
+                self._apple_lite_probe_inflight = False
+                self.appleRuntimeStatusChanged.emit()
+
+        self.threadpool.start(Worker(work))
+
+    @Slot()
+    def cancelAppleLiteRuntimeProbe(self) -> None:
+        abort = getattr(self, "_apple_lite_probe_abort", None)
+        if abort is not None:
+            abort.set()
+
+    def _apple_lite_control(self, action: str) -> None:
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        if sessions is None:
+            return
+        WavesBridge.cancelAppleLiteRuntimeProbe(self)
+        if action == "stop":
+            sessions.request_stop("apple:lite")
+        token = provider_contexts(self).capture(CTX_APPLE)
+        control_generation = getattr(self, "_apple_lite_control_gen", 0) + 1
+        self._apple_lite_control_gen = control_generation
+
+        def work() -> None:
+            if control_generation != getattr(self, "_apple_lite_control_gen", 0):
+                return
+            try:
+                if action == "stop":
+                    sessions.stop("apple:lite")
+                else:
+                    sessions.resume("apple:lite")
+                WavesBridge._publish_apple_runtime(self, token, lambda: setattr(self, "_apple_lite_runtime_cache", {}))
+            except Exception as exc:
+                operation_state(
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "failed",
+                    "The lite runtime choice could not be saved.",
+                    exception=exc,
+                    key="apple-lite-control",
+                    references=EventReferences(runtime_id="apple:lite"),
+                    valid=lambda: provider_contexts(self).current(token),
+                )
+            finally:
+                self.appleRuntimeStatusChanged.emit()
+
+        self.threadpool.start(Worker(work))
+
+    @Slot()
+    def stopAppleLiteRuntime(self) -> None:
+        """Disconnect lite use without terminating the user-managed service."""
+        WavesBridge._apple_lite_control(self, "stop")
+
+    @Slot()
+    def resumeAppleLiteRuntime(self) -> None:
+        """Permit a fresh observation, with previous account evidence revoked."""
+        WavesBridge._apple_lite_control(self, "resume")
+
+    @Slot("QString")
+    def confirmAppleRuntimeSession(self, runtime_id: str) -> None:
+        """Confirmation cannot replace authentication or protocol evidence."""
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        if (
+            runtime_id in ("apple:wrapper-v2", "apple:lite")
+            and sessions is not None
+            and sessions.confirm_account(runtime_id)
+        ):
+            self._invalidate_apple_engine_facts()
+            self.appleRuntimeStatusChanged.emit()
+            self.appleStatusChanged.emit()
 
     @Slot()
     def cancelAppleRuntimeSetup(self) -> None:
@@ -21246,19 +21383,27 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         sessions = getattr(self, "_apple_runtime_sessions", None)
         if sessions is None:
             return
+        if action == "stop":
+            sessions.request_stop("apple:wrapper-v2")
         token = provider_contexts(self).capture(CTX_APPLE)
         self._invalidate_apple_engine_facts()
         generation = getattr(self, "_apple_engine_facts_gen", 0)
+        control_generation = getattr(self, "_apple_execution_control_gen", 0) + 1
+        self._apple_execution_control_gen = control_generation
 
         def work() -> None:
-            if not provider_contexts(self).current(token) or generation != getattr(self, "_apple_engine_facts_gen", 0):
+            if control_generation != getattr(self, "_apple_execution_control_gen", 0):
                 return
             try:
                 with self._apple_sidecar_guard():
                     if action == "stop":
                         sessions.stop("apple:wrapper-v2")
                         supervisor = getattr(self, "_apple_supervisor", None)
-                        if supervisor is not None and not supervisor.stop():
+                        if (
+                            supervisor is not None
+                            and generation == getattr(self, "_apple_engine_facts_gen", 0)
+                            and not supervisor.stop()
+                        ):
                             operation_state(
                                 self,
                                 EventDomain.RUNTIME,
@@ -21273,7 +21418,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     elif action == "resume":
                         sessions.resume("apple:wrapper-v2")
                     elif action == "rollback_image":
-                        self._apple_runtime.rollback_image()
+                        container = self._apple_container_state()
+                        self._apple_runtime.rollback_image(binary=str(container.get("name") or "docker"))
                     else:
                         self._apple_runtime.rollback()
                 WavesBridge._publish_apple_runtime(self, token, self._configure_apple_provider)
@@ -22022,7 +22168,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if provider is not None and tier is not None:
             provider.apply_quality(tier, AudioType.STEREO)
 
-    def _configure_apple_provider(self) -> None:
+    def _configure_apple_provider(self, *, refresh_records: bool = True) -> None:
         """Point the Apple provider at the cookies-tier configuration.
 
         The provider itself never reads Settings (it owns no prefs); the
@@ -22052,7 +22198,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
             provider.ffmpeg_path = ffmpeg_path
         WavesBridge._invalidate_apple_engine_facts(self)
-        provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
+        cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
+        if cookies_path != getattr(provider, "cookies_path", ""):
+            sessions = getattr(self, "_apple_runtime_sessions", None)
+            if sessions is not None:
+                sessions.invalidate_account()
+        provider.cookies_path = cookies_path
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
@@ -22086,10 +22237,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if isinstance(manager, AppleRuntimeManager):
             sessions = getattr(self, "_apple_runtime_sessions", None)
             if sessions is None:
-                sessions = AppleRuntimeSessions(manager.runtime_dir)
+                sessions = AppleRuntimeSessions(manager.runtime_dir, load_choices=False)
                 self._apple_runtime_sessions = sessions
             user_managed = getattr(data, "apple_runtime_mode", "managed") == "user_managed"
-            image_receipt = manager.image_status()
+            image_receipt = getattr(self, "_apple_runtime_image_cache", {})
             profile = RuntimeProfile(
                 "apple:wrapper-v2",
                 RuntimeKind.USER_MANAGED if user_managed else RuntimeKind.MANAGED,
@@ -22109,8 +22260,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._apple_runtime_abort.set()
             sessions.configure(profile)
             self._apple_runtime_profile = profile
+            WavesBridge._configure_apple_lite_profile(self, data, sessions)
             provider.runtime_context_revision = sessions.revision
-            provider.runtime_stopped = sessions.is_stopped
+            provider.runtime_stopped = lambda runtime_id: (
+                runtime_id in ("apple:wrapper-v2", "apple:lite") and sessions.is_stopped(runtime_id)
+            )
             supervisor = getattr(self, "_apple_supervisor", None)
             if supervisor is not None:
                 supervisor.configure_runtime(profile, sessions)
@@ -22142,6 +22296,55 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             logger.warning("Apple quarantine dirs could not be registered for scan exclusion")
         # Refreshes begun during configuration must not publish a mixed view.
         WavesBridge._invalidate_apple_engine_facts(self)
+        if refresh_records:
+            WavesBridge._schedule_apple_runtime_records(self)
+
+    def _configure_apple_lite_profile(self, data, sessions) -> None:
+        from waves.providers.apple.runtime_sessions import RuntimeKind, RuntimeProfile
+
+        profile = RuntimeProfile(
+            "apple:lite",
+            RuntimeKind.USER_MANAGED,
+            "lite-status-v1",
+            str(getattr(data, "apple_lite_endpoint", "") or ""),
+            str(getattr(data, "apple_lite_image_digest", "") or ""),
+            "user-supplied",
+            str(getattr(data, "apple_lite_container", "") or ""),
+        )
+        if profile != getattr(self, "_apple_lite_profile", None):
+            WavesBridge.cancelAppleLiteRuntimeProbe(self)
+            self._apple_lite_runtime_cache = {}
+        sessions.configure(profile)
+        self._apple_lite_profile = profile
+
+    def _schedule_apple_runtime_records(self) -> None:
+        """Restore stop choices and image receipts off the settings slot path."""
+        manager = getattr(self, "_apple_runtime", None)
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        pool = getattr(self, "threadpool", None)
+        if manager is None or sessions is None or pool is None:
+            return
+        token = provider_contexts(self).capture(CTX_APPLE)
+        generation = getattr(self, "_apple_engine_facts_gen", 0)
+
+        def work() -> None:
+            try:
+                sessions.restore_choices()
+                receipt = manager.image_status()
+
+                def publish() -> None:
+                    if generation != getattr(self, "_apple_engine_facts_gen", 0):
+                        return
+                    self._apple_runtime_image_cache = receipt
+                    WavesBridge._configure_apple_provider(self, refresh_records=False)
+                    self.appleRuntimeStatusChanged.emit()
+                    self.appleStatusChanged.emit()
+
+                WavesBridge._publish_apple_runtime(self, token, publish)
+            finally:
+                self.appleRuntimeStatusChanged.emit()
+
+        pool.start(Worker(work))
 
     def _invalidate_apple_engine_facts(self) -> None:
         contexts = provider_contexts(self)
@@ -22391,6 +22594,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 str(payload.get("state") or ""),
                 bool(payload.get("logged_in")),
                 str(payload.get("account") or ""),
+                str(payload.get("account_id") or ""),
+                str(payload.get("storefront") or ""),
                 str(payload.get("error") or ""),
             )
 
@@ -22408,6 +22613,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return result
 
         def publish() -> None:
+            if gen != getattr(self, "_apple_session_gen", 0):
+                return
             previous = getattr(self, "_apple_wrapper_auth_cache", None)
             previous_snapshot = None
             if isinstance(previous, dict) and isinstance(previous.get("result"), dict):
@@ -22428,6 +22635,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if callable(clear):
                     clear(AppleCredential.WRAPPER)
             if snapshot(result) != previous_snapshot:
+                sessions = getattr(self, "_apple_runtime_sessions", None)
+                if sessions is not None:
+                    sessions.invalidate("apple:wrapper-v2")
+                WavesBridge._invalidate_apple_engine_facts(self)
                 with contextlib.suppress(Exception):
                     self.appleWrapperAuthChanged.emit()
                 # The status light reads the same probe, so a signed-in flip
@@ -22922,6 +23133,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             str(auth.get("state")),
             str(auth.get("reachable")),
             str(auth.get("account")),
+            str(auth.get("account_id")),
+            str(auth.get("storefront")),
             str(getattr(self.settings.data, "apple_enabled", False)),
         )
 
@@ -23034,6 +23247,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # unchanged, and resubmitting is not a flip.
         apple_enabled_before = bool(getattr(data, "apple_enabled", False))
         cookies_before = str(getattr(data, "apple_cookies_path", "") or "")
+        if _apple_cookies_resave_changed(values, cookies_before):
+            sessions = getattr(self, "_apple_runtime_sessions", None)
+            if sessions is not None:
+                sessions.invalidate_account()
         # Rows a provider disable stopped during this save, reported on the
         # save's own status line instead of a message the save overwrites.
         stopped_note = ""
@@ -23141,6 +23358,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "apple_wrapper_container",
                     "apple_wrapper_image_digest",
                     "apple_wrapper_decrypt_port",
+                    "apple_lite_container",
+                    "apple_lite_image_digest",
+                    "apple_lite_endpoint",
                 )
             )
         ):

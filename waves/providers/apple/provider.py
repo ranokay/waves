@@ -266,6 +266,9 @@ class AppleProvider(Provider):
                 "apple_wrapper_container",
                 "apple_wrapper_image_digest",
                 "apple_wrapper_decrypt_port",
+                "apple_lite_container",
+                "apple_lite_image_digest",
+                "apple_lite_endpoint",
                 "apple_runtime_auto_install",
                 "apple_quarantine_dir",
                 "apple_quarantine_keep",
@@ -1479,22 +1482,36 @@ class AppleProvider(Provider):
         order = dict(self._engine_thread.operation_priority).get(request.operation)
         if order:
             policy = EnginePolicy(order, policy.pin, policy.allow_fallback)
+        # Admission must precede setup reads: they can race with account changes
+        # or Stop even when the engine returns a ready snapshot.
+        revisions = {
+            requirement.runtime: self.runtime_context_revision(requirement.runtime)
+            for candidate in self._engines.engines.values()
+            for requirement in candidate.descriptor.requirements
+        }
         facts = self.engine_facts_probe() if self.engine_facts_probe is not None else None
         engine = self._engines.select(request, policy, facts)
         runtime_id = engine.readiness(request, facts or EngineFacts()).runtime
-        revision = self.runtime_context_revision(runtime_id)
-        with self.runtime_usage() if request.operation == EngineOperation.AUDIO else nullcontext():
-            result = engine.execute(request)
-        if request.abort.is_set() or revision != self.runtime_context_revision(runtime_id):
-            if isinstance(result.value, StreamInfo) and result.value.local_file:
+        revision = revisions.get(runtime_id)
+
+        def ensure_current(result: EngineResult | None = None) -> None:
+            stopped = self.runtime_stopped(runtime_id)
+            if not request.abort.is_set() and not stopped and revision == self.runtime_context_revision(runtime_id):
+                return
+            if result is not None and isinstance(result.value, StreamInfo) and result.value.local_file:
                 self.discard_delivery(result.value.local_file)
             from waves.providers.apple.engine import _AppleAborted
 
-            if not request.abort.is_set() and self.runtime_stopped(runtime_id):
+            if not request.abort.is_set() and stopped:
                 from waves.providers.apple.engine import AppleWrapperDown
 
                 raise AppleWrapperDown()
             raise _AppleAborted()
+
+        with self.runtime_usage() if request.operation == EngineOperation.AUDIO else nullcontext():
+            ensure_current()
+            result = engine.execute(request)
+        ensure_current(result)
         return engine, result
 
     def _resolve_gamdl_stream(

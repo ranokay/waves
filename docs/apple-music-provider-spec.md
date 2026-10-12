@@ -79,6 +79,13 @@ equivalence. Obtain user confirmation when identity cannot be verified before
 admitting that session to automatic routing. Never copy account state between
 engines to infer compatibility.
 
+Settings can configure a separate user-managed lite runtime's immutable image
+identity and guest loopback status endpoint. Its status-only probe checks the
+private container transport and reports regions; the current status contract
+does not report authentication or account identity. Disconnect/reconnect choices
+are independent of wrapper-v2. Lite account admission and qualification remain
+unknown until approved observations and native evidence establish them.
+
 The adapter must bound media memory, requests and cancellation, validate ranges
 and sample layouts, and publish only after codec/quality and whole-file decode
 verification. Recovery must verify every replacement. Additional codecs, video

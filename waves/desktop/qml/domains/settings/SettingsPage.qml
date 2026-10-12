@@ -3970,6 +3970,7 @@ Item {
                           // now" to defer.
                           readonly property bool skippable: !(page.appleSetupLive && page.appleSetupLive.light && page.appleSetupLive.light.downloads_ready === true)
                           readonly property var execution: page.appleSetupLive && page.appleSetupLive.execution ? page.appleSetupLive.execution : ({})
+                          readonly property var liteExecution: execution.lite || ({})
                           Component.onCompleted: {
                             if (modelData.type === "apple_setup")
                               page.appleSetupLive = waves.appleSetupState()
@@ -4282,6 +4283,50 @@ Item {
                               visible: setupCol.execution.mode !== "user_managed" && setupCol.execution.updates && setupCol.execution.updates.image && setupCol.execution.updates.image.rollback_available === true
                               label: "Restore previous image"
                               onClicked: waves.rollbackAppleImage()
+                            }
+                          }
+                          Text {
+                            visible: setupCol.liteExecution.configured === true
+                            width: parent.width
+                            text: "Lite runtime: " + String(setupCol.liteExecution.state || "unknown") + ". Account access and qualification have not been verified."
+                            color: page.textLo
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          Flow {
+                            visible: setupCol.liteExecution.configured === true
+                            width: parent.width
+                            spacing: 8
+                            ActionButton {
+                              objectName: "appleCheckLiteRuntime"
+                              visible: setupCol.liteExecution.stopped !== true && setupCol.liteExecution.checking !== true
+                              label: "Check lite status"
+                              onClicked: waves.refreshAppleLiteRuntime()
+                            }
+                            ActionButton {
+                              objectName: "appleCancelLiteRuntimeProbe"
+                              visible: setupCol.liteExecution.checking === true
+                              label: "Cancel lite check"
+                              onClicked: waves.cancelAppleLiteRuntimeProbe()
+                            }
+                            ActionButton {
+                              objectName: "appleConfirmLiteRuntimeAccount"
+                              visible: setupCol.liteExecution.can_confirm === true
+                              label: "Confirm lite account"
+                              onClicked: waves.confirmAppleRuntimeSession("apple:lite")
+                            }
+                            ActionButton {
+                              objectName: "appleStopLiteRuntime"
+                              visible: setupCol.liteExecution.stopped !== true
+                              label: "Disconnect lite"
+                              onClicked: waves.stopAppleLiteRuntime()
+                            }
+                            ActionButton {
+                              objectName: "appleResumeLiteRuntime"
+                              visible: setupCol.liteExecution.stopped === true
+                              label: "Reconnect lite"
+                              onClicked: waves.resumeAppleLiteRuntime()
                             }
                           }
                           // The published-image workflow carries

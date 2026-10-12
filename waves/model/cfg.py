@@ -168,6 +168,9 @@ class Settings(_JsonModel):
     apple_wrapper_container: str = ""
     apple_wrapper_image_digest: str = ""
     apple_wrapper_decrypt_port: int = 10020
+    apple_lite_container: str = ""
+    apple_lite_image_digest: str = ""
+    apple_lite_endpoint: str = ""
     apple_runtime_auto_install: bool = False
     # Integrity gate (spec §6): always-on Apple verification knobs.
     # Retries counts AUTOMATIC re-downloads after an integrity failure (2 means
@@ -492,6 +495,11 @@ class HelpSettings:
         "Expected immutable image ID for your locally built wrapper-v2 assets. Waves refuses a different image."
     )
     apple_wrapper_decrypt_port: str = "Loopback decryption port published by your wrapper-v2 service."
+    apple_lite_container: str = (
+        "Optional lite container you manage. Waves checks its status and disconnects without stopping it."
+    )
+    apple_lite_image_digest: str = "Expected immutable image ID for your lite runtime. Matching identity does not establish account access or qualification."
+    apple_lite_endpoint: str = "Guest loopback HTTP endpoint for lite status, including its port. The probe uses the container's private stdin; no published port is used."
     apple_runtime_auto_install: str = "Install approved pinned managed updates while downloads are idle. Default off; update checks follow Waves' update preferences."
     apple_integrity_retries: str = (
         "How many times an Apple track that fails its integrity check is automatically re-downloaded "

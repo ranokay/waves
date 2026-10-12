@@ -191,6 +191,9 @@ PATH_FIELDS = [
     "apple_wrapper_url",
     "apple_wrapper_container",
     "apple_wrapper_image_digest",
+    "apple_lite_container",
+    "apple_lite_image_digest",
+    "apple_lite_endpoint",
     "apple_cookies_path",
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.

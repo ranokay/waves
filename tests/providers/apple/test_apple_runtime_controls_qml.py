@@ -77,6 +77,14 @@ def run() -> int:
     assert q(button_script("appleCancelRuntimeSetup", trigger=True))
     wait_until(lambda: not bridge.appleExecutionState()["setup_busy"], 5000, message="setup cancellation finished")
     assert "cancelled" in states
+    q("waves.applySettings({apple_lite_container: 'isolated-lite', apple_lite_endpoint: 'http://127.0.0.1:12340'})")
+    wait_until(lambda: bool(q(button_script("appleStopLiteRuntime"))), 5000, message="separate lite disconnect visible")
+    assert q(button_script("appleStopLiteRuntime", trigger=True))
+    wait_until(lambda: bool(q(button_script("appleResumeLiteRuntime"))), 5000, message="lite disconnected")
+    assert not bridge.appleExecutionState()["stopped"]
+    assert q(button_script("appleResumeLiteRuntime", trigger=True))
+    wait_until(lambda: not bridge.appleLiteRuntimeState()["stopped"], 5000, message="lite explicitly reconnected")
+    assert bridge.appleLiteRuntimeState()["state"] == "unknown"
     return EXIT_OK
 
 

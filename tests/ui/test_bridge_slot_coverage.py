@@ -811,7 +811,7 @@ def test_installAppleRuntime_progress_reaches_the_card():
     states = []
 
     class _Manager:
-        def install(self, progress_cb, log_cb):
+        def install(self, progress_cb, log_cb, *, abort):
             progress_cb(0.5)
             log_cb("halfway")
             return {"version": "9.9"}
