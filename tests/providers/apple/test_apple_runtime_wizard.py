@@ -2315,3 +2315,32 @@ def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():
     assert _apple_cookies_resave_changed({}, "/old.txt") is False
     assert _apple_cookies_resave_changed({"apple_cookies_path": "/old.txt"}, "/old.txt") is False
     assert _apple_cookies_resave_changed({"apple_cookies_path": "/new.txt"}, "/old.txt") is True
+
+
+@pytest.mark.parametrize("admission", ["stopped", "confirmation_required", "incompatible"])
+def test_setup_keeps_cookies_tier_when_wrapper_is_authenticated_but_not_admitted(tmp_path, admission):
+    from waves.providers.apple.runtime_sessions import (
+        AppleRuntimeSessions,
+        RuntimeKind,
+        RuntimeProfile,
+        SessionEvidence,
+    )
+
+    host = _bridge_stub(tmp_path, cookies=_cookies_file(tmp_path, with_token=True))
+    host.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    sessions = AppleRuntimeSessions(tmp_path)
+    profile = RuntimeProfile("apple:wrapper-v2", RuntimeKind.USER_MANAGED, "wrapper-v2")
+    sessions.configure(profile)
+    sessions.observe(profile.id, SessionEvidence(True, True, True, admission != "incompatible"))
+    if admission == "stopped":
+        sessions.stop(profile.id)
+    host._apple_runtime_sessions = sessions
+    host._apple_runtime_profile = profile
+    auth = {"reachable": True, "state": "authenticated", "logged_in": True}
+    host._apple_wrapper_auth_cache = {"result": auth}
+    host.apple_wrapper_auth_state = lambda **kwargs: auth
+    host._apple_container_serves = lambda: True
+    state = WavesBridge.appleSetupState(host)
+    assert state["light"]["tier"] == "cookies"
+    assert state["wrapper"]["auth"]["logged_in"]
+    assert state["execution"]["state"] == admission

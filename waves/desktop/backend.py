@@ -15295,6 +15295,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """The sidecar supervisor for Apple jobs, or None on plain stubs."""
         sup = getattr(self, "_apple_supervisor", None)
         if sup is not None:
+            profile = getattr(self, "_apple_runtime_profile", None)
+            sessions = getattr(self, "_apple_runtime_sessions", None)
+            configure = getattr(sup, "configure_runtime", None)
+            if profile is not None and sessions is not None and callable(configure):
+                probe = getattr(self, "_apple_container_state", None)
+                container = probe() if callable(probe) else {}
+                configure(profile, sessions, binary=str(container.get("name") or "") or None)
             return sup
         # Plain unit-test stubs bind _run_apple_job without a bridge __init__:
         # build a throwaway supervisor around whatever runtime they carry so
@@ -21405,6 +21412,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if action == "resume"
             else None
         )
+        if action == "resume":
+            self._apple_wrapper_auth_cache = None
         profile = getattr(self, "_apple_runtime_profile", None)
         token = provider_contexts(self).capture(CTX_APPLE)
         self._invalidate_apple_engine_facts()
@@ -21427,7 +21436,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if action == "stop":
                         if not sessions.stop(runtime_id, expected_choice=choice):
                             return
-                        supervisor = getattr(self, "_apple_supervisor", None)
+                        supervisor = WavesBridge._apple_supervisor_for_job(self)
                         if (
                             profile != getattr(self, "_apple_runtime_profile", None)
                             or (supervisor is not None and not supervisor.stop())
@@ -22302,7 +22311,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             )
             supervisor = getattr(self, "_apple_supervisor", None)
             if supervisor is not None:
-                supervisor.configure_runtime(profile, sessions)
+                cached = (getattr(self, "_apple_container_cache", None) or {}).get("result") or {}
+                supervisor.configure_runtime(profile, sessions, binary=str(cached.get("name") or "") or None)
             provider.wrapper_decrypt_port = (
                 int(getattr(data, "apple_wrapper_decrypt_port", 10020)) if user_managed else 10020
             )
@@ -22637,11 +22647,33 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         url = self._apple_wrapper_base()
         gen = getattr(self, "_apple_session_gen", 0)
         token = provider_contexts(self).capture(CTX_APPLE)
+        identity_before = WavesBridge._apple_observe_wrapper_identity(self)
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        admission_before = sessions.revision("apple:wrapper-v2") if sessions is not None else (0, 0)
         try:
-            result = wrapper_auth_state(url, timeout=timeout)
+            if getattr(self, "_apple_runtime_sessions", None) is not None and identity_before.verified is not True:
+                result = {
+                    "reachable": None,
+                    "state": "",
+                    "logged_in": False,
+                    "account": "",
+                    "error": "Runtime identity has not been verified",
+                }
+            else:
+                result = wrapper_auth_state(url, timeout=timeout)
         except Exception:
             logger.debug("Apple wrapper auth probe failed", exc_info=True)
             result = {"reachable": False, "state": "", "logged_in": False, "account": "", "error": ""}
+        identity_after = WavesBridge._apple_observe_wrapper_identity(self)
+        runtime_revision = identity_after.revision if identity_before == identity_after else ""
+        if identity_before != identity_after:
+            result = {
+                "reachable": None,
+                "state": "",
+                "logged_in": False,
+                "account": "",
+                "error": "Runtime changed during account check",
+            }
         if gen != getattr(self, "_apple_session_gen", 0):
             # A sign-out landed while this probe was in flight: its answer
             # describes the account that was just dropped.
@@ -22650,12 +22682,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def publish() -> None:
             if gen != getattr(self, "_apple_session_gen", 0):
                 return
+            if sessions is not None and sessions.revision("apple:wrapper-v2") != admission_before:
+                return
             previous = getattr(self, "_apple_wrapper_auth_cache", None)
             previous_snapshot = None
             if isinstance(previous, dict) and isinstance(previous.get("result"), dict):
                 previous_snapshot = snapshot(previous["result"])
             try:
-                self._apple_wrapper_auth_cache = {"at": time.time(), "result": result}
+                self._apple_wrapper_auth_cache = {
+                    "at": time.time(),
+                    "result": result,
+                    "runtime_revision": runtime_revision,
+                }
             except Exception:
                 logger.debug("Apple wrapper auth cache store failed", exc_info=True)
             provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
@@ -22669,8 +22707,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 clear = getattr(self, "_apple_clear_session_expired", None)
                 if callable(clear):
                     clear(AppleCredential.WRAPPER)
-            if snapshot(result) != previous_snapshot:
-                sessions = getattr(self, "_apple_runtime_sessions", None)
+            if snapshot(result) != previous_snapshot or runtime_revision != (previous or {}).get(
+                "runtime_revision", ""
+            ):
                 if sessions is not None:
                     sessions.invalidate("apple:wrapper-v2")
                 WavesBridge._invalidate_apple_engine_facts(self)
@@ -22681,8 +22720,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 with contextlib.suppress(Exception):
                     self.appleStatusChanged.emit()
 
-        provider_contexts(self).commit(token, publish)
+        WavesBridge._publish_apple_runtime(self, token, publish)
         return result
+
+    def _apple_observe_wrapper_identity(self):
+        """Read one scoped instance identity on the calling worker."""
+        from waves.providers.apple.supervision import RuntimeIdentity
+
+        supervisor = WavesBridge._apple_supervisor_for_job(self)
+        observe = getattr(supervisor, "observe_identity", None)
+        if not callable(observe):
+            return RuntimeIdentity()
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        return observe(
+            WavesBridge._apple_wrapper_port_for_job(self), int(getattr(provider, "wrapper_decrypt_port", 10020))
+        )
 
     def apple_wrapper_auth_state(self, max_age_s: float = 30.0) -> dict:
         """The wrapper guest's account state for GUI-thread callers (cached).
@@ -23049,7 +23101,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     needs_attention = True
         # The full tier's sign-in: a wrapper guest that answers /me as
         # authenticated needs no cookies file at all.
-        wrapper_ready = bool(self._apple_wrapper_signed_in())
+        wrapper_authenticated = bool(self._apple_wrapper_signed_in())
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        wrapper_ready = wrapper_authenticated and (
+            sessions is None or sessions.readiness("apple:wrapper-v2") == "ready"
+        )
         if not signed_in and wrapper_ready and self._apple_fetch_binary_ready():
             signed_in = True
         serves = getattr(self, "_apple_container_serves", None)
@@ -23058,7 +23114,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # the light says attention, not signed in.
             needs_attention = True
             signed_in = False
-        sessions = getattr(self, "_apple_runtime_sessions", None)
         if sessions is not None and sessions.readiness("apple:wrapper-v2") != "ready":
             signed_in = account_signed_in and bool(self._apple_fetch_binary_ready())
         return {
@@ -23069,17 +23124,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "cookies_ready": cookies_ready and signed_in,
             "cookies_account_ready": account_signed_in,
             "wrapper_ready": wrapper_ready,
-            "account_signed_in": account_signed_in or wrapper_ready,
+            "account_signed_in": account_signed_in or wrapper_authenticated,
         }
 
     def _apple_engine_facts(self, token=None, generation: int | None = None) -> EngineFacts:
         """Prepare setup evidence on a worker; publish only into its context."""
         token = token or provider_contexts(self).capture(CTX_APPLE)
         generation = getattr(self, "_apple_engine_facts_gen", 0) if generation is None else generation
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        admission_before = sessions.revision("apple:wrapper-v2") if sessions is not None else (0, 0)
         flags = self._apple_live_flags()
         auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
-        sessions = getattr(self, "_apple_runtime_sessions", None)
         context_state = "unknown"
+        admission_revision = admission_before
         manager = getattr(self, "_apple_runtime", None)
         if manager is not None and hasattr(manager, "verify"):
             manager.verify()
@@ -23095,24 +23152,28 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 revision = ""
             storefront = provider.catalog_identity_context()[-1] if isinstance(provider, AppleProvider) else ""
             account = AccountContext("", storefront, revision)
-            supervisor = getattr(self, "_apple_supervisor", None)
-            verified = (
-                supervisor.verify_identity(
-                    self._apple_wrapper_port_for_job(), int(getattr(provider, "wrapper_decrypt_port", 10020))
-                )
-                if supervisor is not None
-                else None
-            )
-            session_revision = str(getattr(self, "_apple_session_gen", 0)) + str(auth.get("account", ""))
-            evidence = wrapper_session_evidence(auth, artifact_verified=verified, revision=session_revision)
+            identity = WavesBridge._apple_observe_wrapper_identity(self)
+            cache = getattr(self, "_apple_wrapper_auth_cache", None) or {}
+            if not identity.revision or cache.get("runtime_revision") != identity.revision:
+                auth = {}
+                schedule = getattr(self, "_schedule_apple_wrapper_auth_refresh", None)
+                if callable(schedule):
+                    schedule()
+            session_revision = str(getattr(self, "_apple_session_gen", 0)) + identity.revision
+            evidence = wrapper_session_evidence(auth, artifact_verified=identity.verified, revision=session_revision)
+
+            observation = []
 
             def observe() -> None:
                 if generation == getattr(self, "_apple_engine_facts_gen", 0):
-                    sessions.set_account(account)
-                    sessions.observe("apple:wrapper-v2", evidence)
+                    result = sessions.observe_current("apple:wrapper-v2", admission_before, account, evidence)
+                    if result is not None:
+                        observation.append(result)
 
             provider_contexts(self).commit(token, observe)
-            context_state = sessions.readiness("apple:wrapper-v2")
+            if not observation:
+                return EngineFacts(enabled=False)
+            context_state, admission_revision = observation[0]
         # A recognized /me response establishes the wrapper-v2 control
         # protocol shape, never decryption or entitlement qualification.
         protocol = True if auth.get("reachable") and auth.get("state") in ("authenticated", "logged_out") else None
@@ -23140,7 +23201,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         details = provider.engine_details(facts) if isinstance(provider, AppleProvider) else []
 
         def current() -> bool:
-            return provider_contexts(self).current(token) and generation == getattr(self, "_apple_engine_facts_gen", 0)
+            return (
+                provider_contexts(self).current(token)
+                and generation == getattr(self, "_apple_engine_facts_gen", 0)
+                and (sessions is None or sessions.revision("apple:wrapper-v2") == admission_revision)
+            )
 
         def publish() -> None:
             if not current():
@@ -23148,7 +23213,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
             def store() -> None:
                 if generation == getattr(self, "_apple_engine_facts_gen", 0):
-                    self._apple_engine_facts_cache = (token, time.time(), facts, details, generation)
+                    self._apple_engine_facts_cache = (
+                        token,
+                        time.time(),
+                        facts,
+                        details,
+                        generation,
+                        admission_revision,
+                    )
 
             if provider_contexts(self).commit(token, store) and current():
                 self.appleStatusChanged.emit()
@@ -23162,8 +23234,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Read only cached setup/account facts during queued offer validation."""
         cache = getattr(self, "_apple_engine_facts_cache", None)
         auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
+        sessions = getattr(self, "_apple_runtime_sessions", None)
         return (
             str(getattr(self, "_apple_engine_facts_gen", 0)),
+            repr(sessions.revision("apple:wrapper-v2")) if sessions is not None else "",
             repr(cache[2] if cache else None),
             str(auth.get("state")),
             str(auth.get("reachable")),
@@ -23180,7 +23254,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return []
         cache = getattr(self, "_apple_engine_facts_cache", None)
         generation = getattr(self, "_apple_engine_facts_gen", 0)
-        current = cache is not None and provider_contexts(self).current(cache[0]) and cache[4] == generation
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        current = (
+            cache is not None
+            and provider_contexts(self).current(cache[0])
+            and cache[4] == generation
+            and (sessions is None or (len(cache) > 5 and cache[5] == sessions.revision("apple:wrapper-v2")))
+        )
         details = cache[3] if current else provider.engine_details(EngineFacts())
         if not current or time.time() - cache[1] >= 30:
             pool = getattr(self, "threadpool", None)

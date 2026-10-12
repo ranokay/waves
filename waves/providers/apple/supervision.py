@@ -26,7 +26,10 @@ import logging
 import re
 import socket
 import time
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
+from threading import RLock
 
 # The held-not-failed verdicts are canonical in the engine (the sidecar's own
 # errors subclass them there); this module re-exports them so callers read
@@ -104,6 +107,41 @@ _LOOPBACK_HOSTS = {_LOOPBACK_BIND, "::1"}
 # volume shape). The host side lives under the managed runtime dir so the
 # session survives container restarts and needs no re-login.
 _WRAPPER_DATA_CONTAINER_PATH = "/app/rootfs/data/data/com.apple.android.music/files"
+
+_IDENTITY_FORMAT = (
+    '{"id":{{json .Id}},"image":{{json .Image}},"started_at":{{json .State.StartedAt}},'
+    '"running":{{json .State.Running}},"ports":{{json .NetworkSettings.Ports}},"mounts":{{json .Mounts}}}'
+)
+
+
+@dataclass(frozen=True)
+class RuntimeIdentity:
+    """Observed container identity, distinct from account authentication."""
+
+    verified: bool | None = None
+    revision: str = ""
+
+
+def _instance_revision(info: dict) -> str:
+    identifier, started, image = info.get("id"), info.get("started_at"), info.get("image")
+    if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{64}", identifier):
+        return ""
+    if not isinstance(image, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        return ""
+    if not isinstance(started, str) or not 0 < len(started) <= 128 or any(ord(item) < 32 for item in started):
+        return ""
+    return sha256(json.dumps([identifier, started, image]).encode()).hexdigest()
+
+
+def _owned_session_mount(mounts, expected: Path) -> bool:
+    return isinstance(mounts, list) and any(
+        isinstance(mount, dict)
+        and mount.get("Destination") == _WRAPPER_DATA_CONTAINER_PATH
+        and isinstance(mount.get("Source"), str)
+        and bool(mount["Source"])
+        and Path(mount["Source"]).resolve() == expected
+        for mount in mounts
+    )
 
 
 # User-facing words: one clear message, no wall of failures.
@@ -643,36 +681,94 @@ class SidecarSupervisor:
         self._last_activity: float | None = None
         self._runtime_profile: RuntimeProfile | None = None
         self._runtime_sessions: AppleRuntimeSessions | None = None
+        self._runtime_lock = RLock()
+        self._runtime_generation = 0
 
-    def configure_runtime(self, profile: RuntimeProfile, sessions: AppleRuntimeSessions) -> None:
+    def configure_runtime(
+        self, profile: RuntimeProfile, sessions: AppleRuntimeSessions, *, binary: str | None = None
+    ) -> None:
         """Bind lifecycle ownership without starting or modifying a service."""
         sessions.configure(profile)
-        self._runtime_profile = profile
-        self._runtime_sessions = sessions
+        with self._runtime_lock:
+            selected_binary = str(binary or "docker") if binary is not None else self._binary
+            if (
+                self._runtime_profile != profile
+                or self._runtime_sessions is not sessions
+                or self._binary != selected_binary
+            ):
+                self._runtime_generation += 1
+            self._runtime_profile = profile
+            self._runtime_sessions = sessions
+            self._binary = selected_binary
 
     def verify_identity(self, http_port: int, decrypt_port: int) -> bool | None:
-        """Inspect immutable identity and both private transports on a worker."""
-        profile = self._runtime_profile
+        """Whether a known image instance owns both live private transports."""
+        return self.observe_identity(http_port, decrypt_port).verified
+
+    def observe_identity(self, http_port: int, decrypt_port: int) -> RuntimeIdentity:
+        """Inspect one scoped instance on a worker, without account or guest data.
+
+        A lifecycle probe may tolerate an unreadable image to avoid recreation.
+        Admission instead requires known matching image IDs. The revision binds
+        separate account observations to this container's creation and start.
+        """
+        with self._runtime_lock:
+            profile, binary, generation = self._runtime_profile, self._binary, self._runtime_generation
         if profile is None:
-            return None
+            return RuntimeIdentity()
+        if profile.kind == RuntimeKind.USER_MANAGED and (
+            not profile.container or not re.fullmatch(r"sha256:[0-9a-f]{64}", profile.artifact_digest)
+        ):
+            return RuntimeIdentity()
+        container = profile.container if profile.kind == RuntimeKind.USER_MANAGED else self._container
+        try:
+            proc = self._run([binary, "inspect", "--format", _IDENTITY_FORMAT, "--", container], timeout=15)
+            info = json.loads(proc.stdout) if proc.returncode == 0 else None
+            result = self._identity_from_snapshot(profile, info, binary, http_port, decrypt_port)
+        except Exception:
+            logger.debug("Runtime identity inspection failed", exc_info=True)
+            result = RuntimeIdentity()
+        with self._runtime_lock:
+            return result if generation == self._runtime_generation else RuntimeIdentity()
+
+    def _identity_from_snapshot(
+        self, profile: RuntimeProfile, info, binary: str, http_port: int, decrypt_port: int
+    ) -> RuntimeIdentity:
+        revision = _instance_revision(info) if isinstance(info, dict) else ""
+        if not revision:
+            return RuntimeIdentity()
+        if info.get("running") is not True or not port_bindings_are_private(
+            json.dumps(info.get("ports")), http_port, decrypt_port
+        ):
+            return RuntimeIdentity(False, revision)
         if profile.kind == RuntimeKind.MANAGED:
-            status = self._manager.image_status() if self._manager is not None else {}
-            verified = status.get("verified")
-            if verified is not True:
-                return None if status.get("provenance") == "unknown" else verified
-            return (
-                self._container_owned()
-                and self._container_bindings_private(http_port, decrypt_port)
-                and self._container_image_is_current(self._resolve_image(""))
-            )
-        if not profile.container or not re.fullmatch(r"sha256:[0-9a-f]{64}", profile.artifact_digest):
-            return None
-        actual = self._container_image_id(profile.container)
-        if not actual:
-            return None
-        return actual == profile.artifact_digest and self._container_bindings_private(
-            http_port, decrypt_port, container=profile.container
+            return self._managed_identity(info, binary, revision)
+        if profile.kind != RuntimeKind.USER_MANAGED or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", profile.artifact_digest
+        ):
+            return RuntimeIdentity(None, revision)
+        return RuntimeIdentity(info["image"] == profile.artifact_digest, revision)
+
+    def _managed_identity(self, info: dict, binary: str, revision: str) -> RuntimeIdentity:
+        if self._manager is None:
+            return RuntimeIdentity(None, revision)
+        status = self._manager.image_status()
+        if status.get("verified") is not True:
+            return RuntimeIdentity(None if status.get("provenance") == "unknown" else False, revision)
+        if status.get("compatible") is not True or not _owned_session_mount(
+            info.get("mounts"), wrapper_data_host_dir(self._manager.app_dir).resolve()
+        ):
+            return RuntimeIdentity(False, revision)
+        image, digest = str(status.get("image") or ""), str(status.get("digest") or "")
+        if not image or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            return RuntimeIdentity(None, revision)
+        reference = image.rsplit(":", 1)[0] + "@" + digest
+        expected = self._inspect_image_id(
+            [binary, "image", "inspect", "--format", "{{.Id}}", reference], "Approved wrapper image"
         )
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected):
+            return RuntimeIdentity(None, revision)
+        return RuntimeIdentity(info["image"] == expected, revision)
 
     def is_deliberately_stopped(self) -> bool:
         profile, sessions = self._runtime_profile, self._runtime_sessions
@@ -766,6 +862,10 @@ class SidecarSupervisor:
 
     def _container_state(self) -> str:
         """Our sidecar's state ("running", "exited", ...) or "" when absent."""
+        return self._observed_container_state() or ""
+
+    def _observed_container_state(self) -> str | None:
+        """Empty means observed absence; None means the listing failed."""
         try:
             proc = self._run(
                 [self._binary, "ps", "-a", "--format", "{{.Names}} {{.State}}"],
@@ -773,10 +873,16 @@ class SidecarSupervisor:
             )
         except Exception:
             logger.debug("Wrapper container list failed", exc_info=True)
-            return ""
+            return None
         if getattr(proc, "returncode", 1) != 0:
-            return ""
-        return container_states(getattr(proc, "stdout", "") or "").get(self._container, "")
+            return None
+        output = getattr(proc, "stdout", None)
+        if not isinstance(output, str):
+            return None
+        states = container_states(output)
+        if len(states) != len([line for line in output.splitlines() if line.strip()]):
+            return None
+        return states.get(self._container, "")
 
     def _container_bindings_private(self, http_port: int, decrypt_port: int, *, container: str = "") -> bool:
         """Whether the existing sidecar publishes both ports on loopback only."""
@@ -805,14 +911,7 @@ class SidecarSupervisor:
             proc = self._run([self._binary, "inspect", "--format", "{{json .Mounts}}", self._container], timeout=15)
             mounts = json.loads(proc.stdout) if proc.returncode == 0 else []
             expected = wrapper_data_host_dir(self._manager.app_dir).resolve()
-            return isinstance(mounts, list) and any(
-                isinstance(mount, dict)
-                and mount.get("Destination") == _WRAPPER_DATA_CONTAINER_PATH
-                and isinstance(mount.get("Source"), str)
-                and bool(mount["Source"])
-                and Path(mount["Source"]).resolve() == expected
-                for mount in mounts
-            )
+            return _owned_session_mount(mounts, expected)
         except (OSError, ValueError, AttributeError):
             return False
 
@@ -1035,7 +1134,10 @@ class SidecarSupervisor:
         if profile is not None and profile.kind == RuntimeKind.USER_MANAGED:
             return True
         if profile is not None:
-            if self._container_state() in ("", "stopped", "exited"):
+            state = self._observed_container_state()
+            if state is None:
+                return False
+            if state in ("", "stopped", "exited"):
                 return True
             if not self._container_owned():
                 return False

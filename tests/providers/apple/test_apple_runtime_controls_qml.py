@@ -7,6 +7,7 @@ from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 from support.qml_probe import scene_js
 
 from waves.providers.apple.runtime import AppleRuntimeCancelled
+from waves.providers.apple.supervision import RuntimeIdentity
 
 
 @pytest.mark.qml
@@ -45,11 +46,14 @@ def run() -> int:
         "account": "",
         "error": "",
     }
-    bridge._apple_supervisor.verify_identity = lambda *args: True
+    bridge._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(True, "isolated-runtime")
     q(
         "waves.applySettings({apple_enabled: true, apple_runtime_mode: 'user_managed', apple_wrapper_url: 'http://127.0.0.1:50100'})"
     )
-    bridge._apple_wrapper_auth_cache = {"result": bridge.apple_wrapper_auth_state()}
+    bridge._apple_wrapper_auth_cache = {
+        "result": bridge.apple_wrapper_auth_state(),
+        "runtime_revision": "isolated-runtime",
+    }
     bridge._apple_engine_facts()
     q("settingsOpen = true; settingsPage.jumpToCard('providers_apple')")
     bridge.appleRuntimeStatusChanged.emit()

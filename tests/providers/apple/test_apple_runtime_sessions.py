@@ -1,5 +1,6 @@
 """Apple runtime admission keeps account evidence separate from reachability."""
 
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -145,6 +146,82 @@ def test_pending_restore_keeps_only_the_latest_requested_choice(tmp_path):
     assert restored.is_stopped("apple:future-runtime")
 
 
+@pytest.mark.parametrize("operation", ["stop", "resume", "restore"])
+def test_disk_flush_does_not_block_memory_calls_and_persists_choices_arriving_during_write(
+    tmp_path, monkeypatch, operation
+):
+    runtime_id = "apple:wrapper-v2"
+    if operation == "restore":
+        (tmp_path / "runtime-choices.json").write_text("corrupt choices", encoding="utf-8")
+    sessions = AppleRuntimeSessions(tmp_path, load_choices=operation != "restore")
+    sessions.configure(RuntimeProfile(runtime_id, RuntimeKind.USER_MANAGED, "wrapper-v2"))
+    if operation == "resume":
+        sessions.stop(runtime_id)
+    choice = sessions.request_stop(runtime_id) if operation == "stop" else sessions.request_resume(runtime_id)
+    flush_started = Event()
+    release_flush = Event()
+    memory_done = Event()
+    fsync = os.fsync
+    failures = []
+    outcome = []
+    observed = {}
+    actions = {
+        "restore": sessions.restore_choices,
+        "stop": lambda: sessions.stop(runtime_id, expected_choice=choice),
+        "resume": lambda: sessions.resume(runtime_id, expected_choice=choice),
+    }
+
+    def blocked_fsync(descriptor):
+        if not flush_started.is_set():
+            flush_started.set()
+            assert release_flush.wait(5), "the blocked choice flush was never released"
+        fsync(descriptor)
+
+    def save():
+        try:
+            outcome.append(actions[operation]())
+        except Exception as exc:
+            failures.append(exc)
+
+    def memory_calls():
+        try:
+            observed["readiness"] = sessions.readiness(runtime_id)
+            observed["revision"] = sessions.revision(runtime_id)
+            observed["stop"] = sessions.request_stop(runtime_id)
+            observed["resume"] = sessions.request_resume("apple:lite")
+            memory_done.set()
+        except Exception as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(os, "fsync", blocked_fsync)
+    writer = Thread(target=save)
+    memory_reader = Thread(target=memory_calls)
+    writer.start()
+    try:
+        assert flush_started.wait(2), "the choice worker never reached its flush"
+        memory_reader.start()
+        assert memory_done.wait(1), "memory admission and intent calls waited for the disk flush"
+        assert not release_flush.is_set()
+        assert observed["readiness"] == "stopped"
+        assert observed["stop"] > choice
+    finally:
+        release_flush.set()
+        writer.join(5)
+        if memory_reader.ident is not None:
+            memory_reader.join(5)
+
+    assert not writer.is_alive()
+    assert not memory_reader.is_alive()
+    assert not failures
+    assert outcome == [None if operation == "restore" else False]
+    assert sessions.is_stopped(runtime_id)
+    assert not sessions.is_stopped("apple:lite")
+    restored = AppleRuntimeSessions(tmp_path)
+    assert restored.is_stopped(runtime_id)
+    assert not restored.is_stopped("apple:lite")
+    assert restored.is_stopped("apple:future-runtime") is (operation == "restore")
+
+
 def test_failed_stop_still_blocks_the_selected_runtime_in_memory(tmp_path, monkeypatch):
     sessions = AppleRuntimeSessions(tmp_path)
     revision = sessions.revision("apple:wrapper-v2")
@@ -197,6 +274,46 @@ def test_first_account_establishment_preserves_the_current_probe_revision(tmp_pa
 
     assert sessions.revision(profile.id) == probe_revision
     sessions.observe(profile.id, SessionEvidence(True, True, True, True, "account-1", "us", "session-1"))
+    assert sessions.readiness(profile.id) == "ready"
+
+
+@pytest.mark.parametrize("change", ["stop", "account", "runtime"])
+def test_old_probe_cannot_restore_admission_after_context_changes(tmp_path, change):
+    sessions = AppleRuntimeSessions(tmp_path)
+    profile = RuntimeProfile("apple:wrapper-v2", RuntimeKind.USER_MANAGED, "wrapper-v2")
+    sessions.configure(profile)
+    revision = sessions.revision(profile.id)
+    if change == "stop":
+        sessions.request_stop(profile.id)
+    elif change == "account":
+        sessions.invalidate_account()
+    else:
+        sessions.configure(replace(profile, endpoint="http://127.0.0.1:50100"))
+    current_revision = sessions.revision(profile.id)
+
+    result = sessions.observe_current(
+        profile.id,
+        revision,
+        AccountContext("account-1", "us", "credentials-1"),
+        SessionEvidence(True, True, True, True, "account-1", "us", "session-1"),
+    )
+
+    assert result is None
+    assert sessions.revision(profile.id) == current_revision
+    assert not sessions.confirm_account(profile.id)
+
+
+def test_current_probe_establishes_matching_account_and_returns_its_admission_revision(tmp_path):
+    sessions = AppleRuntimeSessions(tmp_path)
+    profile = RuntimeProfile("apple:wrapper-v2", RuntimeKind.USER_MANAGED, "wrapper-v2")
+    sessions.configure(profile)
+    result = sessions.observe_current(
+        profile.id,
+        sessions.revision(profile.id),
+        AccountContext("account-1", "us", "credentials-1"),
+        SessionEvidence(True, True, True, True, "account-1", "us", "session-1"),
+    )
+    assert result == ("ready", sessions.revision(profile.id))
     assert sessions.readiness(profile.id) == "ready"
 
 
@@ -426,12 +543,18 @@ def test_external_artifact_and_private_bindings_must_match_before_admission(tmp_
 
     def inspect(args, **kwargs):
         calls.append(args)
-        outputs = {
-            "{{.Image}}": "sha256:" + "b" * 64,
-            "{{.State.Running}}": "true",
-            "{{json .HostConfig.PortBindings}}": '{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"50100"}],"10020/tcp":[{"HostIp":"127.0.0.1","HostPort":"10020"}]}',
+        observed = {
+            "id": "c" * 64,
+            "image": "sha256:" + "b" * 64,
+            "started_at": "2026-10-12T00:00:00Z",
+            "running": True,
+            "ports": {
+                "80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "50100"}],
+                "10020/tcp": [{"HostIp": "127.0.0.1", "HostPort": "10020"}],
+            },
+            "mounts": [],
         }
-        return SimpleNamespace(returncode=0, stdout=outputs.get(args[3], ""))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(observed))
 
     supervisor = SidecarSupervisor(runner=inspect)
     supervisor.configure_runtime(profile, sessions)
