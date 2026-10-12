@@ -32,6 +32,7 @@ from pathlib import Path
 # errors subclass them there); this module re-exports them so callers read
 # one hierarchy, never two same-named ones.
 from waves.providers.apple.engine import AppleHeld, AppleWrapperDown
+from waves.providers.apple.runtime_sessions import AppleRuntimeSessions, RuntimeKind, RuntimeProfile
 
 logger = logging.getLogger("waves.providers.apple.supervision")
 
@@ -640,6 +641,52 @@ class SidecarSupervisor:
         # None until the first noted wrapper activity: a monotonic clock can
         # legitimately read 0.0, so 0.0 must not mean "never noted".
         self._last_activity: float | None = None
+        self._runtime_profile: RuntimeProfile | None = None
+        self._runtime_sessions: AppleRuntimeSessions | None = None
+
+    def configure_runtime(self, profile: RuntimeProfile, sessions: AppleRuntimeSessions) -> None:
+        """Bind lifecycle ownership without starting or modifying a service."""
+        sessions.configure(profile)
+        self._runtime_profile = profile
+        self._runtime_sessions = sessions
+
+    def verify_identity(self, http_port: int, decrypt_port: int) -> bool | None:
+        """Inspect immutable identity and both private transports on a worker."""
+        profile = self._runtime_profile
+        if profile is None:
+            return None
+        if profile.kind == RuntimeKind.MANAGED:
+            status = self._manager.image_status() if self._manager is not None else {}
+            verified = status.get("verified")
+            if verified is not True:
+                return None if status.get("provenance") == "unknown" else verified
+            return (
+                self._container_owned()
+                and self._container_bindings_private(http_port, decrypt_port)
+                and self._container_image_is_current(self._resolve_image(""))
+            )
+        if not profile.container or not re.fullmatch(r"sha256:[0-9a-f]{64}", profile.artifact_digest):
+            return None
+        actual = self._container_image_id(profile.container)
+        if not actual:
+            return None
+        return actual == profile.artifact_digest and self._container_bindings_private(
+            http_port, decrypt_port, container=profile.container
+        )
+
+    def is_deliberately_stopped(self) -> bool:
+        profile, sessions = self._runtime_profile, self._runtime_sessions
+        return bool(profile is not None and sessions is not None and sessions.is_stopped(profile.id))
+
+    def _start_admission(self, port: int) -> bool | None:
+        profile, sessions = self._runtime_profile, self._runtime_sessions
+        if profile is None:
+            return None
+        if sessions is None or sessions.is_stopped(profile.id):
+            return False
+        if profile.kind == RuntimeKind.USER_MANAGED:
+            return self.verify_identity(port, profile.decrypt_port) is True and self.is_ready(port)
+        return None
 
     def note_activity(self) -> float:
         """Record Apple wrapper work; returns the stamp."""
@@ -688,6 +735,8 @@ class SidecarSupervisor:
     def _resolve_image(self, image: str) -> str:
         """The sidecar image to run: explicit, else the pinned managed one."""
         img = str(image or "").strip()
+        if not img and self._runtime_profile is not None and self._manager is not None:
+            return self._manager.active_image()
         if img or self._manager is None:
             return img
         try:
@@ -729,7 +778,7 @@ class SidecarSupervisor:
             return ""
         return container_states(getattr(proc, "stdout", "") or "").get(self._container, "")
 
-    def _container_bindings_private(self, http_port: int, decrypt_port: int) -> bool:
+    def _container_bindings_private(self, http_port: int, decrypt_port: int, *, container: str = "") -> bool:
         """Whether the existing sidecar publishes both ports on loopback only."""
         try:
             proc = self._run(
@@ -738,7 +787,7 @@ class SidecarSupervisor:
                     "inspect",
                     "--format",
                     "{{json .HostConfig.PortBindings}}",
-                    self._container,
+                    container or self._container,
                 ],
                 timeout=15,
             )
@@ -748,6 +797,24 @@ class SidecarSupervisor:
         if getattr(proc, "returncode", 1) != 0:
             return False
         return port_bindings_are_private(getattr(proc, "stdout", "") or "", http_port, decrypt_port)
+
+    def _container_owned(self) -> bool:
+        if self._manager is None:
+            return False
+        try:
+            proc = self._run([self._binary, "inspect", "--format", "{{json .Mounts}}", self._container], timeout=15)
+            mounts = json.loads(proc.stdout) if proc.returncode == 0 else []
+            expected = wrapper_data_host_dir(self._manager.app_dir).resolve()
+            return isinstance(mounts, list) and any(
+                isinstance(mount, dict)
+                and mount.get("Destination") == _WRAPPER_DATA_CONTAINER_PATH
+                and isinstance(mount.get("Source"), str)
+                and bool(mount["Source"])
+                and Path(mount["Source"]).resolve() == expected
+                for mount in mounts
+            )
+        except (OSError, ValueError, AttributeError):
+            return False
 
     def _inspect_image_id(self, args: list, label: str) -> str:
         """One image-ID inspect: trimmed stdout, "" when unreadable.
@@ -765,10 +832,10 @@ class SidecarSupervisor:
             return ""
         return str(getattr(proc, "stdout", "") or "").strip()
 
-    def _container_image_id(self) -> str:
+    def _container_image_id(self, container: str = "") -> str:
         """The image ID our sidecar was created from, "" when unreadable."""
         return self._inspect_image_id(
-            [self._binary, "inspect", "--format", "{{.Image}}", self._container],
+            [self._binary, "inspect", "--format", "{{.Image}}", container or self._container],
             "Wrapper container image",
         )
 
@@ -891,6 +958,10 @@ class SidecarSupervisor:
         port = _port_number(http_port)
         if port <= 0:
             return False
+        profile = self._runtime_profile
+        admission = self._start_admission(port)
+        if admission is not None:
+            return admission
         host_decrypt = _port_number(decrypt_port or WRAPPER_CONTAINER_DECRYPT_PORT, WRAPPER_CONTAINER_DECRYPT_PORT)
         # A sidecar whose published bindings are not loopback-private (an
         # older container or a stale mapping) is removed so the run below
@@ -898,7 +969,11 @@ class SidecarSupervisor:
         # data dir, so recreation preserves it. A removal that fails holds the
         # row instead of trusting the exposed container's health.
         state = self._container_state()
+        if profile is not None and state and not self._container_owned():
+            return False
         img = self._resolve_image(image)
+        if profile is not None and profile.kind == RuntimeKind.MANAGED and not img:
+            return False
         # A container whose bindings are exposed, or which was built from an
         # image other than the one the pin names, is removed so the run below
         # recreates it correctly; the session lives in the host data dir, so
@@ -926,6 +1001,12 @@ class SidecarSupervisor:
             host_data=host_data,
             start_timeout=start_timeout,
         )
+        return self._finish_start(state, img, port, host_decrypt, host_data, start_timeout)
+
+    def _finish_start(
+        self, state: str, img: str, port: int, host_decrypt: int, host_data: str, start_timeout: int
+    ) -> bool:
+        """Retry a failed start once; a recreated running container never churns again."""
         if self.is_ready(port):
             self.note_activity()
             return True
@@ -944,8 +1025,20 @@ class SidecarSupervisor:
             self.note_activity()
         return ready
 
-    def stop(self, timeout: int = 60) -> bool:
-        """Stop the idle sidecar (kept by name for the next lazy start)."""
+    def stop(self, timeout: int = 60, *, deliberate: bool = False) -> bool:
+        """An idle stop is restartable; deliberate Stop revokes runtime use."""
+        profile, sessions = self._runtime_profile, self._runtime_sessions
+        if deliberate:
+            if profile is None or sessions is None:
+                return False
+            sessions.stop(profile.id)
+        if profile is not None and profile.kind == RuntimeKind.USER_MANAGED:
+            return True
+        if profile is not None:
+            if self._container_state() in ("", "stopped", "exited"):
+                return True
+            if not self._container_owned():
+                return False
         try:
             proc = self._run(container_stop_args(self._container, self._binary), timeout=timeout)
         except Exception:

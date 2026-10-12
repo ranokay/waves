@@ -60,6 +60,10 @@ class EngineFacts:
     fetch_ready: bool | None = None
     protocol_compatible: bool | None = None
     wrapper_runtime_ready: bool | None = None
+    wrapper_context_ready: bool | None = None
+    wrapper_context_action: str = "confirm_account"
+    wrapper_stopped: bool = False
+    wrapper_runtime_kind: str = "managed"
 
 
 @dataclass(frozen=True)

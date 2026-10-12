@@ -202,6 +202,27 @@ changes discard pending results. Re-read on provider/session/setup changes and
 `appleStatusChanged` after refresh. Missing optional requirements affect only
 operations that use them.
 
+Apple runtime controls answer or act on the current execution context:
+
+| Slot                                              | Contract                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `appleExecutionState()`                           | Cached `{mode, state, stopped, setup_busy, can_confirm, updates}`. `mode` distinguishes managed and user-managed execution. Admission state is `unknown`, `unreachable`, `incompatible`, `sign_in_required`, `account_mismatch`, `confirmation_required`, `stopped` or `ready`.               |
+| `stopAppleExecution()` / `resumeAppleExecution()` | Persist deliberate Stop or explicitly reconnect. Stop disconnects a user-managed service without terminating it. Runtime-dependent jobs stay Held; unused cookies/catalog operations remain available. Reconnect requires fresh session evidence.                                             |
+| `confirmAppleRuntimeAccount()`                    | Confirm that the observed runtime uses the active Apple account/storefront when identity cannot be verified. Confirmation cannot override a known mismatch or missing artifact/protocol evidence, and expires on context changes.                                                             |
+| `cancelAppleRuntimeSetup()`                       | Cancel the current managed tool download or image pull before activation.                                                                                                                                                                                                                     |
+| `checkAppleRuntimeUpdate()`                       | Check approved pins shipped with Waves. `updates` names binary/image availability, installed and approved versions/digests, busy state and rollback availability. Checks follow the app's automatic update-check preference and cadence; optional idle installation requires separate opt-in. |
+| `rollbackAppleRuntime()` / `rollbackAppleImage()` | Restore a retained tool plus receipt, or a previously approved compatible local image receipt, while unused. Image rollback preserves the guest session and deliberate Stop.                                                                                                                  |
+
+`appleSetupState()` includes this cached context under `execution`. Wrapper auth
+presentation excludes machine account identifiers. Matching storefronts alone
+do not establish account equivalence. User-managed wrapper-v2 configuration
+requires a loopback endpoint, immutable local container identity and private
+HTTP/decryption port bindings. A matching supplied image identity proves those
+bytes, not distribution eligibility or native/media qualification. Lite runtime
+admission remains unknown until its adapter and qualification evidence exist.
+Wrapper-dependent engine actions can additionally be `confirm_account` or
+`resume_runtime`.
+
 `appleSetupRequested(reason)` carries the wizard step a pre-setup click was
 missing: `"cookies"` (no account yet — the cookies/wrapper tier) or
 `"runtime"` (no fetch binary), or `"setup"` / `""` for the wizard's top. The

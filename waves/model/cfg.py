@@ -163,6 +163,12 @@ class Settings(_JsonModel):
     # Never 80: that default is collision-prone on a desktop. A nonzero
     # value is a config-first override for a port the user knows is free.
     apple_wrapper_port: int = 0
+    apple_runtime_mode: str = "managed"
+    apple_wrapper_url: str = ""
+    apple_wrapper_container: str = ""
+    apple_wrapper_image_digest: str = ""
+    apple_wrapper_decrypt_port: int = 10020
+    apple_runtime_auto_install: bool = False
     # Integrity gate (spec §6): always-on Apple verification knobs.
     # Retries counts AUTOMATIC re-downloads after an integrity failure (2 means
     # 3 attempts total); the outbreak pre-filter (Encoded date >= 2025-05)
@@ -475,6 +481,18 @@ class HelpSettings:
         "Port the Apple wrapper's HTTP API runs on. 0 (the default) means Waves picks a free high port "
         "at setup time; the port-80 default is never used because it collides on desktops."
     )
+    apple_runtime_mode: str = (
+        "Waves manages its own wrapper, or connects to a service you manage. Stop disconnects a service you manage."
+    )
+    apple_wrapper_url: str = "Loopback HTTP endpoint for your wrapper-v2 service, including its port. Remote plaintext decryption is unsupported."
+    apple_wrapper_container: str = (
+        "Your container's name or ID. Waves inspects its image and private port bindings without modifying it."
+    )
+    apple_wrapper_image_digest: str = (
+        "Expected immutable image ID for your locally built wrapper-v2 assets. Waves refuses a different image."
+    )
+    apple_wrapper_decrypt_port: str = "Loopback decryption port published by your wrapper-v2 service."
+    apple_runtime_auto_install: str = "Install approved pinned managed updates while downloads are idle. Default off; update checks follow Waves' update preferences."
     apple_integrity_retries: str = (
         "How many times an Apple track that fails its integrity check is automatically re-downloaded "
         "before it is quarantined (2 means 3 attempts total). Outbreak-era files (Encoded date "

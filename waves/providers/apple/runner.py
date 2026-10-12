@@ -1845,6 +1845,12 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
     # migrates a sidecar still publishing on a wildcard host address.
     failures = 0
     while not job_abort.is_set():
+        stopped = getattr(sup, "is_deliberately_stopped", None)
+        if callable(stopped) and stopped():
+            set_held(hooks, qid, "The Apple runtime was stopped. Reconnect it in Settings to resume.")
+            if not sleep_abortable(HELD_POLL_SEC, job_abort):
+                return False
+            continue
         port = hooks.wrapper_port()
         if sup is not None and port:
             try:

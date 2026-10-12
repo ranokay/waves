@@ -38,9 +38,10 @@ import subprocess
 import tarfile
 import tempfile
 import time
+from collections.abc import Generator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 
 import requests
 
@@ -122,6 +123,15 @@ class AppleRuntimeUnsupportedPlatform(Exception):
 
 class AppleRuntimeCancelled(Exception):
     """Raised when a provision is aborted via its :class:`~threading.Event`."""
+
+
+class AppleRuntimeBusy(Exception):
+    """An active tool lease or another maintenance action prevents mutation."""
+
+
+def _check_runtime_abort(abort: Event | None) -> None:
+    if abort is not None and abort.is_set():
+        raise AppleRuntimeCancelled()
 
 
 @dataclass(frozen=True)
@@ -348,6 +358,44 @@ def _wrapper_account_label(payload: dict, auth: dict) -> str:
     return ""
 
 
+def _wrapper_context_fields(payload: dict, auth: dict) -> dict[str, str]:
+    """Read explicit machine identity fields, never a display/login label.
+
+    Conflicting identifiers or storefronts stay unknown. No value is inferred
+    from cookies, the catalog client's default, or an Apple ID email address.
+    """
+    accounts = tuple(value for value in (payload.get("account"), auth.get("account")) if isinstance(value, dict))
+    identities: set[str] = set()
+    storefronts: set[str] = set()
+    for block in (payload, auth, *accounts):
+        keys = ("account_id", "dsid", "id") if any(block is account for account in accounts) else ("account_id", "dsid")
+        for key in keys:
+            value = block.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                value = str(value)
+            if isinstance(value, str):
+                value = value.strip()
+                if 0 < len(value) <= 128 and all(
+                    character.isascii() and (character.isalnum() or character in "-_.:") for character in value
+                ):
+                    identities.add(value)
+        storefront = block.get("storefront")
+        if isinstance(storefront, int) and not isinstance(storefront, bool) and storefront > 0:
+            storefront = str(storefront)
+        if isinstance(storefront, str):
+            storefront = storefront.strip().lower()
+            if 0 < len(storefront) <= 64 and all(
+                character.isascii() and (character.isalnum() or character in "-_") for character in storefront
+            ):
+                storefronts.add(storefront)
+    result = {}
+    if len(identities) == 1:
+        result["account_id"] = identities.pop()
+    if len(storefronts) == 1:
+        result["storefront"] = storefronts.pop()
+    return result
+
+
 def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
     """The wrapper guest's account state from its ``/me`` endpoint.
 
@@ -356,6 +404,8 @@ def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
     ``authenticated``); ``logged_in`` folds it to one boolean, true whenever
     the guest answered with a state that is not ``logged_out`` (the same
     rule gamdl uses). Never raises: the caller reads the dict.
+    Optional ``account_id`` and ``storefront`` appear only when explicitly
+    supplied without conflicts. The account label is never an identifier.
     """
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -389,6 +439,7 @@ def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
         "logged_in": bool(state and state != "logged_out"),
         "account": _wrapper_account_label(payload, auth),
         "error": "",
+        **_wrapper_context_fields(payload, auth),
     }
 
 
@@ -586,6 +637,48 @@ class AppleRuntimeManager:
     def __init__(self, app_dir: str | os.PathLike) -> None:
         self.app_dir = Path(app_dir)
         self.os_key, self.arch = _safe_target()
+        self._lifecycle_lock = Lock()
+        self._users = 0
+        self._maintaining = False
+        self._binary_observation: tuple[tuple[int, int, int, int, int], str] | None = None
+
+    @contextlib.contextmanager
+    def usage(self, *, verify_binary: bool = True) -> Generator[None]:
+        """Lease this manager's tools for an active engine operation.
+
+        Callers share this manager instance. A maintenance action rejects new
+        leases, and an existing lease prevents install, removal and rollback.
+        Set verify_binary=False when the engine uses an explicit unmanaged tool.
+        """
+        with self._lifecycle_lock:
+            if self._maintaining:
+                raise AppleRuntimeBusy("Apple runtime maintenance is in progress.")
+            self._users += 1
+        try:
+            if verify_binary:
+                verified = self.verify()
+                integrity = verified.get("binary_integrity")
+                if integrity in ("mismatch", "incomplete") or (
+                    integrity == "unknown" and self._read_manifest().get("binary_sha256")
+                ):
+                    raise RuntimeError("The managed Apple tool cannot be verified. Reinstall or roll back it.")
+            yield
+        finally:
+            with self._lifecycle_lock:
+                self._users -= 1
+
+    @contextlib.contextmanager
+    def maintenance(self) -> Generator[None]:
+        """Acquire exclusive maintenance while no engine holds a usage lease."""
+        with self._lifecycle_lock:
+            if self._users or self._maintaining:
+                raise AppleRuntimeBusy("Apple runtime is in use. Install or roll back when it is idle.")
+            self._maintaining = True
+        try:
+            yield
+        finally:
+            with self._lifecycle_lock:
+                self._maintaining = False
 
     @property
     def runtime_dir(self) -> Path:
@@ -604,8 +697,24 @@ class AppleRuntimeManager:
         return self.runtime_dir / "nm3u8dlre.json"
 
     @property
+    def previous_dir(self) -> Path:
+        return self.runtime_dir / "nm3u8dlre-previous"
+
+    @property
+    def pending_dir(self) -> Path:
+        return self.runtime_dir / "nm3u8dlre-pending"
+
+    @property
     def port_path(self) -> Path:
         return self.runtime_dir / "wrapper-port.json"
+
+    def _private_dir(self, directory: Path) -> Path:
+        self.runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            self.runtime_dir.chmod(0o700)
+            directory.chmod(0o700)
+        return directory
 
     def engine_config_dir(self) -> Path:
         """Waves-owned isolated config dir for the Apple engine.
@@ -613,9 +722,11 @@ class AppleRuntimeManager:
         The engine never sees the user's home: anything it insists on
         materialising lands here, never in ``~/.gamdl/``.
         """
-        d = self.runtime_dir / "engine-config"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        return self._private_dir(self.runtime_dir / "engine-config")
+
+    def session_data_dir(self) -> Path:
+        """Private Waves-owned wrapper session storage, separate from tool files."""
+        return self._private_dir(self.runtime_dir / "wrapper-data")
 
     def engine_env(self, port: int = 0) -> dict:
         """Environment for engine subprocesses: isolated HOME + wrapper URL."""
@@ -665,7 +776,7 @@ class AppleRuntimeManager:
             port = int(preferred)
         else:
             port = pick_free_high_port()
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._private_dir(self.runtime_dir)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=self.runtime_dir, prefix="wrapper-port.", suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
@@ -680,8 +791,41 @@ class AppleRuntimeManager:
         return port
 
     def _base_status(self) -> dict:
-        """The wrapper pins every status answer carries, managed or not."""
-        return {"wrapper_image": WRAPPER_V2_IMAGE, "wrapper_libs": WRAPPER_LIBS_VERSION}
+        """Managed pins and cached integrity carried by every status response."""
+        return {
+            "wrapper_image": WRAPPER_V2_IMAGE,
+            "wrapper_libs": WRAPPER_LIBS_VERSION,
+            "binary_integrity": "incomplete" if self.pending_dir.exists() else "unknown",
+            "verified": False,
+            "rollback_available": self._generation_present(self.pending_dir)
+            or self._generation_present(self.previous_dir),
+        }
+
+    def _binary_fingerprint(self) -> tuple[int, int, int, int, int] | None:
+        try:
+            value = self.binary_path.stat()
+        except OSError:
+            return None
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    def verify(self) -> dict:
+        """Observe managed binary integrity on a worker and cache it for status.
+
+        Status performs only metadata reads. A changed file or a newly restored
+        manager remains unknown until this method or a usage lease observes it.
+        """
+        before = self._binary_fingerprint()
+        if before is not None:
+            try:
+                digest = sha256_file(self.binary_path)
+            except OSError:
+                self._binary_observation = None
+            else:
+                after = self._binary_fingerprint()
+                self._binary_observation = (before, digest) if before == after else None
+        else:
+            self._binary_observation = None
+        return self.status()
 
     def _install_is_stale(self) -> bool:
         """Whether the managed binary predates the shipped pin.
@@ -715,16 +859,25 @@ class AppleRuntimeManager:
         """
         if self.is_installed():
             mani = self._read_manifest()
+            recorded_digest = str(mani.get("binary_sha256") or "")
+            integrity = "unknown"
+            observed = self._binary_observation
+            if recorded_digest and observed is not None and observed[0] == self._binary_fingerprint():
+                integrity = "verified" if observed[1] == recorded_digest else "mismatch"
+            if self.pending_dir.exists():
+                integrity = "incomplete"
             return {
                 **self._base_status(),
                 "state": "managed",
-                "available": True,
+                "available": integrity not in ("mismatch", "incomplete"),
                 "managed": True,
                 "path": str(self.binary_path),
                 "version": str(mani.get("version") or NM3U8DLRE_VERSION),
                 "source_url": str(mani.get("url") or ""),
                 "sha256": str(mani.get("sha256") or ""),
                 "runtime_stale": self._install_is_stale(),
+                "binary_integrity": integrity,
+                "verified": integrity == "verified",
             }
         cp = (custom_path or "").strip()
         if cp and Path(cp).is_file():
@@ -764,6 +917,52 @@ class AppleRuntimeManager:
             "runtime_stale": False,
         }
 
+    def update_status(self) -> dict:
+        """Offer only the approved pins shipped with Waves, without a network check.
+
+        Missing optional assets are setup requirements rather than updates.
+        Bundled clients update with Waves. This policy approves no lite image
+        and never discovers or modifies a user-managed service.
+        """
+        current = self.status()
+        pin = pinned_release(self.os_key, self.arch)
+        image = self.image_status()
+        binary_update = bool(
+            pin
+            and current.get("managed")
+            and (
+                current.get("runtime_stale")
+                or not self._read_manifest().get("binary_sha256")
+                or current.get("binary_integrity") in ("mismatch", "incomplete")
+            )
+        )
+        image_update = bool(image["image"] and (not image["verified"] or not image["current"]))
+        with self._lifecycle_lock:
+            busy = bool(self._users or self._maintaining)
+        return {
+            "available": binary_update or image_update,
+            "manual_install_default": True,
+            "client_updates": "waves",
+            "busy": busy,
+            "rollback_available": bool(current["rollback_available"]),
+            "binary": {
+                "available": binary_update,
+                "version": pin.version if pin else "",
+                "source_url": pin.url if pin else "",
+                "sha256": pin.sha256 if pin else "",
+                "installed_version": str(current.get("version") or ""),
+                "integrity": str(current["binary_integrity"]),
+            },
+            "image": {
+                "available": image_update,
+                "image": WRAPPER_V2_IMAGE,
+                "digest": WRAPPER_V2_IMAGE_DIGEST,
+                "installed_image": image["image"],
+                "provenance": image["provenance"],
+                "rollback_available": image["rollback_available"],
+            },
+        }
+
     def install(
         self,
         release: Nm3u8dlreRelease | None = None,
@@ -774,11 +973,15 @@ class AppleRuntimeManager:
     ) -> dict:
         """Download, verify, extract and install N_m3u8DL-RE; return ``status()``.
 
-        Atomic like the FFmpeg manager: a fresh binary is staged next to the
-        target, checksum-verified, and smoke-tested before it is swapped in
-        via :func:`os.replace`. Provenance (source URL + checksum) is
-        recorded in the manifest.
+        Stage, checksum-verify and smoke-test before activation. A recovery
+        snapshot retains the preceding binary and receipt. An interrupted
+        activation remains unavailable until rollback restores that pair.
+        The receipt records the source archive and extracted binary digests.
         """
+        with self.maintenance():
+            return self._install(release, progress_cb, log_cb, abort, session)
+
+    def _install(self, release, progress_cb, log_cb, abort, session) -> dict:
 
         def _log(msg: str) -> None:
             logger.info("apple-runtime: %s", msg)
@@ -786,8 +989,7 @@ class AppleRuntimeManager:
                 log_cb(msg)
 
         def _check_abort() -> None:
-            if abort is not None and abort.is_set():
-                raise AppleRuntimeCancelled()
+            _check_runtime_abort(abort)
 
         sess = session or _session()
         if release is None:
@@ -796,7 +998,7 @@ class AppleRuntimeManager:
         if release is None:
             raise AppleRuntimeUnsupportedPlatform(f"No N_m3u8DL-RE build for {self.os_key}/{self.arch}")
 
-        self.bin_dir.mkdir(parents=True, exist_ok=True)
+        self._private_dir(self.bin_dir)
         _check_abort()
 
         _log(f"downloading N_m3u8DL-RE {release.version}")
@@ -830,59 +1032,280 @@ class AppleRuntimeManager:
             if not ver:
                 raise RuntimeError("N_m3u8DL-RE downloaded but would not run, keeping the existing binary")
 
-            os.replace(staged, self.binary_path)
+            manifest = {
+                **asdict(release),
+                "sha256": expected,
+                "binary_sha256": sha256_file(staged),
+                "binary_version": ver,
+                "installed_at": int(time.time()),
+            }
+            self._activate(staged, manifest, abort=abort)
         finally:
             arc_tmp.unlink(missing_ok=True)
             staged.unlink(missing_ok=True)
-
-        manifest = {
-            **asdict(release),
-            # Provenance (spec §10.6): the verified checksum beside the URL,
-            # so a diagnostics bundle shows where the bytes came from.
-            "sha256": expected,
-            "binary_version": ver,
-            "installed_at": int(time.time()),
-        }
-        fd_manifest, manifest_tmp = tempfile.mkstemp(
-            dir=self.runtime_dir, prefix=self.manifest_path.name + ".", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd_manifest, "w", encoding="utf-8") as fh:
-                json.dump(manifest, fh, indent=2)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(manifest_tmp, self.manifest_path)
-        except Exception:
-            with contextlib.suppress(OSError):
-                os.remove(manifest_tmp)
-            raise
         _log(f"installed N_m3u8DL-RE {ver}")
-        return self.status()
+        return self.verify()
+
+    def _activate(self, staged: Path, manifest: dict, *, abort: Event | None = None) -> None:
+        _check_runtime_abort(abort)
+        if self.pending_dir.exists():
+            raise RuntimeError("An Apple tool installation was interrupted. Roll back before installing again.")
+        fd_manifest, name = tempfile.mkstemp(dir=self.runtime_dir, prefix="nm3u8dlre.", suffix=".tmp")
+        staged_manifest = Path(name)
+        try:
+            with os.fdopen(fd_manifest, "w", encoding="utf-8") as output:
+                json.dump(manifest, output, indent=2)
+                output.flush()
+                os.fsync(output.fileno())
+            self._save_generation()
+            try:
+                _check_runtime_abort(abort)
+                os.replace(staged, self.binary_path)
+                os.replace(staged_manifest, self.manifest_path)
+                if (self.pending_dir / self.binary_path.name).is_file():
+                    if self.previous_dir.exists():
+                        shutil.rmtree(self.previous_dir)
+                    os.replace(self.pending_dir, self.previous_dir)
+                else:
+                    shutil.rmtree(self.pending_dir)
+            except Exception:
+                self._restore_generation(self.pending_dir)
+                shutil.rmtree(self.pending_dir)
+                raise
+        finally:
+            staged_manifest.unlink(missing_ok=True)
+
+    def _save_generation(self) -> None:
+        staged = Path(tempfile.mkdtemp(dir=self.runtime_dir, prefix="nm3u8dlre-generation."))
+        try:
+            receipt = {}
+            for path in (self.binary_path, self.manifest_path):
+                if path.is_file():
+                    copy = staged / path.name
+                    shutil.copy2(path, copy)
+                    receipt[path.name] = sha256_file(copy)
+            (staged / "generation.json").write_text(json.dumps(receipt), encoding="utf-8")
+            os.replace(staged, self.pending_dir)
+        finally:
+            if staged.exists():
+                shutil.rmtree(staged)
+
+    def _generation_receipt(self, directory: Path) -> dict[str, str] | None:
+        try:
+            receipt = json.loads((directory / "generation.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(receipt, dict):
+            return None
+        if not all(
+            name in (self.binary_path.name, self.manifest_path.name)
+            and isinstance(digest, str)
+            and len(digest) == 64
+            and all(character in "0123456789abcdef" for character in digest)
+            for name, digest in receipt.items()
+        ):
+            return None
+        if any(
+            (directory / name).is_file() != (name in receipt)
+            for name in (self.binary_path.name, self.manifest_path.name)
+        ):
+            return None
+        return receipt
+
+    def _generation_present(self, directory: Path) -> bool:
+        receipt = self._generation_receipt(directory)
+        return receipt is not None and all((directory / name).is_file() for name in receipt)
+
+    def _generation_matches(self, directory: Path) -> bool:
+        receipt = self._generation_receipt(directory)
+        if receipt is None:
+            return False
+        try:
+            return all(sha256_file(directory / name) == digest for name, digest in receipt.items())
+        except OSError:
+            return False
+
+    def _restore_generation(self, directory: Path) -> None:
+        if not self._generation_matches(directory):
+            raise RuntimeError("The previous Apple tool files do not match their recovery receipt.")
+        for target in (self.binary_path, self.manifest_path):
+            source = directory / target.name
+            if not source.is_file():
+                target.unlink(missing_ok=True)
+                continue
+            fd, name = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".restore")
+            os.close(fd)
+            staged = Path(name)
+            try:
+                shutil.copy2(source, staged)
+                os.replace(staged, target)
+            finally:
+                staged.unlink(missing_ok=True)
+
+    def rollback(self) -> dict:
+        """Restore the retained binary and its original receipt together.
+
+        An interrupted activation's snapshot takes precedence. Recovery never
+        downloads files or changes the wrapper's account/session storage.
+        """
+        with self.maintenance():
+            if self.pending_dir.exists():
+                self._restore_generation(self.pending_dir)
+                shutil.rmtree(self.pending_dir)
+                return self.verify()
+            if not self._generation_matches(self.previous_dir):
+                raise RuntimeError("The previous Apple tool files do not match their recovery receipt.")
+            self._save_generation()
+            try:
+                self._restore_generation(self.previous_dir)
+            except Exception:
+                self._restore_generation(self.pending_dir)
+                shutil.rmtree(self.pending_dir)
+                raise
+            shutil.rmtree(self.pending_dir)
+            return self.verify()
 
     def remove(self) -> dict:
-        self.binary_path.unlink(missing_ok=True)
-        self.manifest_path.unlink(missing_ok=True)
-        return self.status()
+        with self.maintenance():
+            self.binary_path.unlink(missing_ok=True)
+            self.manifest_path.unlink(missing_ok=True)
+            for generation in (self.previous_dir, self.pending_dir):
+                if generation.exists():
+                    shutil.rmtree(generation)
+            return self.status()
 
     @property
     def image_manifest_path(self) -> Path:
         return self.runtime_dir / "wrapper-image.json"
 
-    def image_pulled(self) -> bool:
-        """Whether the pinned wrapper-v2 image was pulled and verified by this manager."""
+    @property
+    def image_previous_path(self) -> Path:
+        return self.runtime_dir / "wrapper-image-previous.json"
+
+    def _read_image_receipt(self, path: Path) -> dict:
         try:
-            with open(self.image_manifest_path, encoding="utf-8") as fh:
-                data = json.load(fh)
-        except Exception:
-            return False
-        if not isinstance(data, dict) or data.get("image") != WRAPPER_V2_IMAGE or not data.get("pulled_at"):
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return receipt if isinstance(receipt, dict) else {}
+
+    def _image_receipt_status(self, receipt: dict) -> dict:
+        image = str(receipt.get("image") or "")
+        digest = str(receipt.get("digest") or "")
+        current = image == WRAPPER_V2_IMAGE and digest == WRAPPER_V2_IMAGE_DIGEST
+        repo = WRAPPER_V2_IMAGE.rsplit(":", 1)[0]
+        recorded_approval = bool(
+            image.startswith(repo + ":")
+            and digest.startswith("sha256:")
+            and len(digest) == 71
+            and all(character in "0123456789abcdef" for character in digest[7:])
+            and receipt.get("approved_image") == image
+            and receipt.get("approved_digest") == digest
+        )
+        verified = bool((current or recorded_approval) and receipt.get("digest_ok") is True)
+        compatible = bool(
+            verified
+            and str(receipt.get("libs") or (WRAPPER_LIBS_VERSION if current else "")) == WRAPPER_LIBS_VERSION
+            and str(receipt.get("protocol") or ("wrapper-v2" if current else "")) == "wrapper-v2"
+        )
+        provenance = "unknown"
+        if not image or not receipt.get("pulled_at"):
+            provenance = "missing"
+            verified = compatible = False
+        elif receipt.get("digest_ok") is False:
+            provenance = "mismatch"
+        elif verified:
+            provenance = "verified"
+        elif image != WRAPPER_V2_IMAGE:
+            provenance = "stale"
+        elif digest and digest != WRAPPER_V2_IMAGE_DIGEST:
+            provenance = "mismatch"
+        return {
+            "image": image,
+            "digest": digest,
+            "provenance": provenance,
+            "verified": verified,
+            "compatible": compatible,
+            "current": current,
+        }
+
+    def image_status(self) -> dict:
+        """Describe recorded image provenance without probing or starting it.
+
+        A legacy pull receipt without a digest is unknown. The current shipped
+        pin or a recorded prior shipped approval establishes verification.
+        Compatibility remains separate and is required for activation.
+        """
+        state = self._image_receipt_status(self._read_image_receipt(self.image_manifest_path))
+        previous = self._image_receipt_status(self._read_image_receipt(self.image_previous_path))
+        return {
+            **state,
+            "pulled": self.image_pulled(),
+            "rollback_available": previous["verified"] and previous["compatible"],
+        }
+
+    def active_image(self) -> str:
+        """The verified compatible immutable image for the next managed start."""
+        state = self.image_status()
+        if not state["verified"] or not state["compatible"]:
+            return ""
+        return state["image"].rsplit(":", 1)[0] + "@" + state["digest"]
+
+    def rollback_image(self, runner=None, binary: str = "docker") -> dict:
+        """Restore a previously approved compatible local image receipt.
+
+        This does not pull, start or stop any container. The supervisor consumes
+        active_image only on its next permitted start, preserving session state
+        and the separate intentional-stop choice.
+        """
+        with self.maintenance():
+            receipt = self._read_image_receipt(self.image_previous_path)
+            state = self._image_receipt_status(receipt)
+            if not state["verified"] or not state["compatible"]:
+                raise RuntimeError("The previous Apple image is not verified and compatible; no image was changed.")
+            reference = state["image"].rsplit(":", 1)[0] + "@" + state["digest"]
+            run = runner or subprocess.run
+            try:
+                result = run(
+                    [binary, "image", "inspect", "--format", "{{.Id}}", reference],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    **child_guard.NO_WINDOW,
+                )
+            except Exception as exc:
+                raise RuntimeError("The previous Apple image could not be inspected; no image was changed.") from exc
+            if result.returncode != 0 or not str(result.stdout or "").strip():
+                raise RuntimeError("The previous Apple image is not installed locally; no image was changed.")
+            self._write_image_receipt(receipt, self.image_manifest_path)
+            return self.image_status()
+
+    def image_pulled(self) -> bool:
+        """Whether setup has a pull receipt or compatible verified restored image.
+
+        Current legacy receipts may still be unknown. Admission requiring
+        verified provenance uses image_status rather than this setup flag.
+        """
+        data = self._read_image_receipt(self.image_manifest_path)
+        state = self._image_receipt_status(data)
+        if state["verified"] and state["compatible"]:
+            return True
+        if data.get("image") != WRAPPER_V2_IMAGE or not data.get("pulled_at"):
             return False
         # A receipt that recorded a mismatch (a hand-edited or future legacy
         # file) never counts as pulled; a missing field is an old receipt from
         # before digest verification, which pull-time checks cover on refresh.
-        return data.get("digest_ok") is not False
+        return data.get("digest_ok") is not False and state["provenance"] not in ("missing", "mismatch", "stale")
 
-    def ensure_image(self, runner=None, binary: str = "docker", log_cb=None) -> dict:
+    def ensure_image(
+        self,
+        runner=None,
+        binary: str = "docker",
+        log_cb=None,
+        *,
+        abort: Event | None = None,
+        require_verified: bool = False,
+    ) -> dict:
         """Pull the pinned Waves-built wrapper-v2 image and record it.
 
         Waves builds the image from source and pins the tag; this only
@@ -892,23 +1315,39 @@ class AppleRuntimeManager:
         manifest. ``runner`` is an injectable ``subprocess.run`` for tests.
         Running the container and its health/idle lifecycle is session
         supervision's job, not this manager's.
+        require_verified=True refuses an unreportable digest. Native commands
+        are cancellable when abort is supplied; injected synchronous runners
+        receive cancellation checks before and after their call.
         """
-        run = runner or (lambda *a, **k: subprocess.run(*a, **k))
+        with self.maintenance():
+            return self._ensure_image(runner, binary, log_cb, abort, require_verified)
+
+    def _ensure_image(self, runner, binary, log_cb, abort, require_verified) -> dict:
+        def check_abort() -> None:
+            _check_runtime_abort(abort)
+
+        check_abort()
+        run = runner or (lambda *a, **k: self._run_image_command(*a, abort=abort, **k))
         if log_cb:
             log_cb(f"pulling {WRAPPER_V2_IMAGE}")
         logger.info("apple-runtime: pulling %s", WRAPPER_V2_IMAGE)
+        check_abort()
         proc = run(
             [binary, "pull", WRAPPER_V2_IMAGE], capture_output=True, text=True, timeout=600, **child_guard.NO_WINDOW
         )
+        check_abort()
         if proc.returncode != 0:
             raise RuntimeError(describe_image_pull_error((proc.stderr or proc.stdout or "").strip(), WRAPPER_V2_IMAGE))
         digest = self._local_image_digest(run, binary)
+        check_abort()
         if digest and digest != WRAPPER_V2_IMAGE_DIGEST:
             raise RuntimeError(
                 "The pulled wrapper image does not match its pinned digest "
                 f"({digest} instead of {WRAPPER_V2_IMAGE_DIGEST}); refusing to use it."
             )
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        if require_verified and digest != WRAPPER_V2_IMAGE_DIGEST:
+            raise RuntimeError("Could not verify the pulled wrapper image digest; refusing verified admission.")
+        self._private_dir(self.runtime_dir)
         manifest = {
             "image": WRAPPER_V2_IMAGE,
             "libs": WRAPPER_LIBS_VERSION,
@@ -919,21 +1358,78 @@ class AppleRuntimeManager:
             # a mismatch never reaches the receipt.
             "digest": digest,
             "digest_ok": (digest == WRAPPER_V2_IMAGE_DIGEST) if digest else None,
+            "approved_image": WRAPPER_V2_IMAGE,
+            "approved_digest": WRAPPER_V2_IMAGE_DIGEST if digest == WRAPPER_V2_IMAGE_DIGEST else "",
+            "protocol": "wrapper-v2",
         }
+        previous = self._read_image_receipt(self.image_manifest_path)
+        previous_state = self._image_receipt_status(previous)
+        if (
+            previous_state["verified"]
+            and previous_state["compatible"]
+            and (previous.get("image"), previous.get("digest")) != (manifest["image"], manifest["digest"])
+        ):
+            self._write_image_receipt(previous, self.image_previous_path, abort=abort)
+        self._write_image_receipt(manifest, self.image_manifest_path, abort=abort)
+        if log_cb:
+            log_cb(f"pulled {WRAPPER_V2_IMAGE}")
+        return manifest
+
+    def _write_image_receipt(self, receipt: dict, path: Path, *, abort: Event | None = None) -> None:
         tmp_fd, tmp_name = tempfile.mkstemp(dir=self.runtime_dir, prefix="wrapper-image.", suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-                json.dump(manifest, fh, indent=2)
+                json.dump(receipt, fh, indent=2)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp_name, self.image_manifest_path)
+            _check_runtime_abort(abort)
+            os.replace(tmp_name, path)
         except Exception:
             with contextlib.suppress(OSError):
                 os.remove(tmp_name)
             raise
-        if log_cb:
-            log_cb(f"pulled {WRAPPER_V2_IMAGE}")
-        return manifest
+
+    def _run_image_command(
+        self,
+        command: list[str],
+        *,
+        abort: Event | None,
+        timeout: int,
+        capture_output: bool,
+        text: bool,
+        **options,
+    ):
+        if abort is None:
+            return subprocess.run(command, capture_output=capture_output, text=text, timeout=timeout, **options)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, **options)
+        deadline = time.monotonic() + timeout
+
+        def remaining_time() -> float:
+            _check_runtime_abort(abort)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            return remaining
+
+        try:
+            while True:
+                remaining = remaining_time()
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except BaseException:
+            if process.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.terminate()
+                try:
+                    process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    process.communicate(timeout=5)
+            raise
 
     def _local_image_digest(self, run, binary: str) -> str:
         """The pulled image's repo digest, or "" when the runtime cannot say."""

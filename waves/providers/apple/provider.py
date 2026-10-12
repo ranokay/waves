@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from threading import Event, Lock, RLock, local
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -261,6 +261,12 @@ class AppleProvider(Provider):
                 "apple_cookies_path",
                 "path_binary_nm3u8dlre",
                 "apple_wrapper_port",
+                "apple_runtime_mode",
+                "apple_wrapper_url",
+                "apple_wrapper_container",
+                "apple_wrapper_image_digest",
+                "apple_wrapper_decrypt_port",
+                "apple_runtime_auto_install",
                 "apple_quarantine_dir",
                 "apple_quarantine_keep",
             ),
@@ -304,6 +310,9 @@ class AppleProvider(Provider):
         self.cookies_path: str = ""
         self.nm3u8dlre_path: str = ""
         self.ffmpeg_path: str = ""
+        self.runtime_usage: Callable[[], AbstractContextManager] = nullcontext
+        self.runtime_context_revision: Callable[[str], tuple[int, int]] = lambda _runtime: (0, 0)
+        self.runtime_stopped: Callable[[str], bool] = lambda _runtime: False
         # How to start the download tool's guard (child_guard.launcher),
         # written by the bridge, which knows whether Waves runs packaged.
         # Empty starts the tool unguarded: it still stops with its job.
@@ -386,7 +395,9 @@ class AppleProvider(Provider):
                         "audio_types": [str(value) for value in requirement.audio_types],
                         "tiers": [str(value) for value in requirement.tiers],
                         "runtime": requirement.runtime,
-                        "runtime_kind": requirement.runtime_kind,
+                        "runtime_kind": facts.wrapper_runtime_kind
+                        if facts is not None and requirement.protocol
+                        else requirement.runtime_kind,
                         "account_boundary": requirement.account_boundary,
                         "protocol": requirement.protocol,
                         "formats": list(requirement.formats),
@@ -457,7 +468,8 @@ class AppleProvider(Provider):
             return
         self._fetch_scoped = True
         try:
-            yield self
+            with self.runtime_usage():
+                yield self
         finally:
             self._fetch_scoped = False
             self._drop_fetch_stack()
@@ -1469,12 +1481,19 @@ class AppleProvider(Provider):
             policy = EnginePolicy(order, policy.pin, policy.allow_fallback)
         facts = self.engine_facts_probe() if self.engine_facts_probe is not None else None
         engine = self._engines.select(request, policy, facts)
-        result = engine.execute(request)
-        if request.abort.is_set():
+        runtime_id = engine.readiness(request, facts or EngineFacts()).runtime
+        revision = self.runtime_context_revision(runtime_id)
+        with self.runtime_usage() if request.operation == EngineOperation.AUDIO else nullcontext():
+            result = engine.execute(request)
+        if request.abort.is_set() or revision != self.runtime_context_revision(runtime_id):
             if isinstance(result.value, StreamInfo) and result.value.local_file:
                 self.discard_delivery(result.value.local_file)
             from waves.providers.apple.engine import _AppleAborted
 
+            if not request.abort.is_set() and self.runtime_stopped(runtime_id):
+                from waves.providers.apple.engine import AppleWrapperDown
+
+                raise AppleWrapperDown()
             raise _AppleAborted()
         return engine, result
 

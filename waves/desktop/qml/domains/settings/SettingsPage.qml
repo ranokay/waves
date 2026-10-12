@@ -3969,6 +3969,7 @@ Item {
                           // can, there is nothing left for "skip for
                           // now" to defer.
                           readonly property bool skippable: !(page.appleSetupLive && page.appleSetupLive.light && page.appleSetupLive.light.downloads_ready === true)
+                          readonly property var execution: page.appleSetupLive && page.appleSetupLive.execution ? page.appleSetupLive.execution : ({})
                           Component.onCompleted: {
                             if (modelData.type === "apple_setup")
                               page.appleSetupLive = waves.appleSetupState()
@@ -4228,6 +4229,60 @@ Item {
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
                             textFormat: Text.PlainText
+                          }
+                          Text {
+                            visible: setupCol.execution.state === "confirmation_required"
+                            width: parent.width
+                            text: "Waves cannot verify that this runtime uses your active Apple account and storefront. Confirm them before using it."
+                            color: page.gold
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          Flow {
+                            width: parent.width
+                            spacing: 8
+                            ActionButton {
+                              objectName: "appleConfirmRuntimeAccount"
+                              visible: setupCol.execution.can_confirm === true
+                              label: "Confirm account"
+                              onClicked: waves.confirmAppleRuntimeAccount()
+                            }
+                            ActionButton {
+                              objectName: "appleStopExecution"
+                              visible: setupCol.execution.stopped !== true
+                              label: setupCol.execution.mode === "user_managed" ? "Disconnect runtime" : "Stop runtime"
+                              onClicked: waves.stopAppleExecution()
+                            }
+                            ActionButton {
+                              objectName: "appleResumeExecution"
+                              visible: setupCol.execution.stopped === true
+                              label: "Reconnect runtime"
+                              onClicked: waves.resumeAppleExecution()
+                            }
+                            ActionButton {
+                              objectName: "appleCancelRuntimeSetup"
+                              visible: setupCol.execution.setup_busy === true
+                              label: "Cancel setup"
+                              onClicked: waves.cancelAppleRuntimeSetup()
+                            }
+                            ActionButton {
+                              objectName: "appleCheckRuntimeUpdate"
+                              label: "Check approved updates"
+                              onClicked: waves.checkAppleRuntimeUpdate()
+                            }
+                            ActionButton {
+                              objectName: "appleRollbackRuntime"
+                              visible: setupCol.execution.updates && setupCol.execution.updates.rollback_available === true
+                              label: "Restore previous tool"
+                              onClicked: waves.rollbackAppleRuntime()
+                            }
+                            ActionButton {
+                              objectName: "appleRollbackImage"
+                              visible: setupCol.execution.mode !== "user_managed" && setupCol.execution.updates && setupCol.execution.updates.image && setupCol.execution.updates.image.rollback_available === true
+                              label: "Restore previous image"
+                              onClicked: waves.rollbackAppleImage()
+                            }
                           }
                           // The published-image workflow carries
                           // the guest libraries, so the wizard has no

@@ -4444,6 +4444,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             logger.debug("Apple runtime manager unavailable", exc_info=True)
             self._apple_runtime = None
         self._apple_runtime_inflight = False
+        self._apple_runtime_abort = Event()
+        self._apple_runtime_update_cache: dict = {}
         # Cached container-runtime probe: appleSetupState() runs
         # on the GUI thread, where a `docker info` against a hung daemon
         # would freeze Settings. GUI callers read this cache; workers
@@ -15334,6 +15336,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         answers, the port is free, or ownership cannot be told (a probe must
         not churn a working sidecar).
         """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if getattr(data, "apple_runtime_mode", "managed") == "user_managed":
+            return self._apple_wrapper_port_for_job()
         port = self._apple_wrapper_port_for_job()
         if not port:
             return 0
@@ -20447,6 +20452,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._waves_prefs["update_last_check"] = now
         self._save_waves_prefs()
         self.checkAppUpdate()
+        check_runtime = getattr(self, "checkAppleRuntimeUpdate", None)
+        if callable(check_runtime):
+            check_runtime()
 
     @Slot(bool)
     def resolveUpdateOptIn(self, enabled: bool) -> None:
@@ -20948,6 +20956,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             runtime_stale=bool(runtime.get("runtime_stale", False)),
             ffprobe_ready=ffprobe_ready,
         )
+        execution = WavesBridge.appleExecutionState(self)
+        if execution["mode"] == "user_managed":
+            steps = [step for step in steps if step["key"] not in ("container", "image", "port")]
+        for step in steps:
+            if step.get("action") == "apple_wrapper_login" and wrapper_auth.get("logged_in"):
+                step["detail"] = (
+                    "The wrapper session is authenticated. Runtime compatibility and account confirmation are checked separately."
+                )
         return {
             "light": described,
             "enabled": bool(flags.get("enabled", False)),
@@ -20959,6 +20975,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "error": cookies_error,
             },
             "runtime": runtime,
+            "execution": execution,
             "container": container,
             "wrapper": {
                 "image": WRAPPER_V2_IMAGE,
@@ -20966,7 +20983,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "image_pulled": image_pulled,
                 "port": port,
                 "url": wrapper_url(port) if port else "",
-                "auth": dict(wrapper_auth or {}),
+                "auth": {key: value for key, value in wrapper_auth.items() if key != "account_id"},
                 "login_hint": (
                     "Apple ID sign-in plus 2FA happens once inside the wrapper guest; "
                     "its tokens persist across container restarts."
@@ -21203,6 +21220,168 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return {"state": "missing", "available": False, "managed": False, "path": ""}
 
     @Slot(result="QVariant")
+    def appleExecutionState(self) -> dict:
+        """Cached account admission and deliberate runtime choices for Settings."""
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        profile = getattr(self, "_apple_runtime_profile", None)
+        return {
+            "mode": str(profile.kind) if profile is not None else "managed",
+            "state": sessions.readiness("apple:wrapper-v2") if sessions is not None else "unknown",
+            "stopped": sessions.is_stopped("apple:wrapper-v2") if sessions is not None else False,
+            "setup_busy": bool(getattr(self, "_apple_runtime_inflight", False)),
+            "updates": dict(getattr(self, "_apple_runtime_update_cache", {}) or {}),
+            "can_confirm": sessions.readiness("apple:wrapper-v2") == "confirmation_required"
+            if sessions is not None
+            else False,
+        }
+
+    @Slot()
+    def cancelAppleRuntimeSetup(self) -> None:
+        """Cancel the current download or pull before its activation."""
+        abort = getattr(self, "_apple_runtime_abort", None)
+        if abort is not None:
+            abort.set()
+
+    def _apple_execution_control(self, action: str) -> None:
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        if sessions is None:
+            return
+        token = provider_contexts(self).capture(CTX_APPLE)
+        self._invalidate_apple_engine_facts()
+        generation = getattr(self, "_apple_engine_facts_gen", 0)
+
+        def work() -> None:
+            if not provider_contexts(self).current(token) or generation != getattr(self, "_apple_engine_facts_gen", 0):
+                return
+            try:
+                with self._apple_sidecar_guard():
+                    if action == "stop":
+                        sessions.stop("apple:wrapper-v2")
+                        supervisor = getattr(self, "_apple_supervisor", None)
+                        if supervisor is not None and not supervisor.stop():
+                            operation_state(
+                                self,
+                                EventDomain.RUNTIME,
+                                "appleRuntimeStateChanged",
+                                "failed",
+                                "The runtime did not stop. Its use remains disconnected.",
+                                key="apple-execution-control",
+                                references=EventReferences(runtime_id="apple:wrapper-v2"),
+                                valid=lambda: provider_contexts(self).current(token),
+                            )
+                            return
+                    elif action == "resume":
+                        sessions.resume("apple:wrapper-v2")
+                    elif action == "rollback_image":
+                        self._apple_runtime.rollback_image()
+                    else:
+                        self._apple_runtime.rollback()
+                WavesBridge._publish_apple_runtime(self, token, self._configure_apple_provider)
+                message = {
+                    "stop": "Apple runtime stopped",
+                    "resume": "Apple runtime reconnected",
+                    "rollback": "Previous Apple runtime restored",
+                    "rollback_image": "Previous Apple image restored",
+                }[action]
+                operation_state(
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "done",
+                    message,
+                    key="apple-execution-control",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
+                    valid=lambda: provider_contexts(self).current(token),
+                )
+            except Exception as exc:
+                operation_state(
+                    self,
+                    EventDomain.RUNTIME,
+                    "appleRuntimeStateChanged",
+                    "failed",
+                    "The runtime action failed. Check Apple Music setup.",
+                    exception=exc,
+                    key="apple-execution-control",
+                    references=EventReferences(runtime_id="apple:wrapper-v2"),
+                    valid=lambda: provider_contexts(self).current(token),
+                )
+            finally:
+                self.appleRuntimeStatusChanged.emit()
+                self.appleStatusChanged.emit()
+
+        self.threadpool.start(Worker(work))
+
+    @Slot()
+    def stopAppleExecution(self) -> None:
+        """Stop owned execution or disconnect an external service."""
+        WavesBridge._apple_execution_control(self, "stop")
+
+    @Slot()
+    def resumeAppleExecution(self) -> None:
+        """Explicitly permit runtime use; background work cannot do this."""
+        WavesBridge._apple_execution_control(self, "resume")
+
+    @Slot()
+    def rollbackAppleRuntime(self) -> None:
+        """Restore a retained managed binary and its provenance while idle."""
+        WavesBridge._apple_execution_control(self, "rollback")
+
+    @Slot()
+    def rollbackAppleImage(self) -> None:
+        """Restore a compatible prior image receipt without touching a session."""
+        WavesBridge._apple_execution_control(self, "rollback_image")
+
+    @Slot()
+    def confirmAppleRuntimeAccount(self) -> None:
+        """Admit only the currently observed, otherwise compatible account."""
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        if sessions is not None and sessions.confirm_account("apple:wrapper-v2"):
+            self._invalidate_apple_engine_facts()
+            self.appleStatusChanged.emit()
+            self.appleRuntimeStatusChanged.emit()
+
+    def _publish_apple_runtime(self, token, callback) -> None:
+        """Commit runtime presentation through the GUI's guarded relay."""
+        relay = getattr(self, "_catalogEvent", None)
+        if relay is not None:
+            relay.emit(_CatalogEvent(token, callback))
+        else:
+            provider_contexts(self).commit(token, callback)
+
+    @Slot()
+    def checkAppleRuntimeUpdate(self) -> None:
+        """Offer only compatible pins approved in this Waves build."""
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            return
+        token = provider_contexts(self).capture(CTX_APPLE)
+
+        def work() -> None:
+            status = manager.update_status()
+
+            def publish() -> None:
+                self._apple_runtime_update_cache = status
+                self.appleRuntimeStatusChanged.emit()
+                data = getattr(getattr(self, "settings", None), "data", None)
+                sessions = getattr(self, "_apple_runtime_sessions", None)
+                if (
+                    bool(getattr(data, "apple_runtime_auto_install", False))
+                    and self._waves_pref_bool("auto_update")
+                    and not self._apple_busy()
+                    and not (sessions is not None and sessions.is_stopped("apple:wrapper-v2"))
+                ):
+                    if status.get("binary", {}).get("available"):
+                        self.installAppleRuntime()
+                    elif getattr(data, "apple_runtime_mode", "managed") != "user_managed" and status.get(
+                        "image", {}
+                    ).get("available"):
+                        self.installAppleImage()
+
+            WavesBridge._publish_apple_runtime(self, token, publish)
+
+        self.threadpool.start(Worker(work))
+
+    @Slot(result="QVariant")
     def appleEnsurePort(self) -> dict:
         """Persist and return the wrapper port: override when free, else picked."""
         manager = getattr(self, "_apple_runtime", None)
@@ -21254,6 +21433,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             )
             return
         self._apple_runtime_inflight = True
+        abort = getattr(self, "_apple_runtime_abort", None) or Event()
+        self._apple_runtime_abort = abort
+        abort.clear()
+        token = provider_contexts(self).capture(CTX_APPLE)
 
         def work() -> None:
             operation_state(
@@ -21268,6 +21451,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             try:
                 try:
                     status = manager.install(
+                        abort=abort,
                         progress_cb=lambda p: self.appleRuntimeProgress.emit(float(p)),
                         log_cb=lambda m: operation_state(
                             self,
@@ -21280,6 +21464,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         ),
                     )
                 except Exception as exc:
+                    from waves.providers.apple.runtime import AppleRuntimeCancelled
+
+                    if isinstance(exc, AppleRuntimeCancelled):
+                        operation_state(
+                            self,
+                            EventDomain.RUNTIME,
+                            "appleRuntimeStateChanged",
+                            "cancelled",
+                            "Apple runtime setup cancelled",
+                            key="apple-binary-install",
+                            references=EventReferences(runtime_id="N_m3u8DL-RE"),
+                        )
+                        return
                     logger.exception("Apple runtime install failed")
                     operation_state(
                         self,
@@ -21299,7 +21496,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     except Exception:
                         logger.debug("Apple runtime signal emit failed", exc_info=True)
                     return
-                self._configure_apple_provider()
+                WavesBridge._publish_apple_runtime(self, token, self._configure_apple_provider)
                 operation_state(
                     self,
                     EventDomain.RUNTIME,
@@ -21313,6 +21510,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.appleStatusChanged.emit()
             finally:
                 self._apple_runtime_inflight = False
+                self.appleRuntimeStatusChanged.emit()
 
         self.threadpool.start(Worker(work))
 
@@ -21391,7 +21589,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                                 "Sign out again when the container runtime is back."
                             )
                     manager = getattr(self, "_apple_runtime", None)
-                    if not failure and manager is not None:
+                    user_managed = getattr(data, "apple_runtime_mode", "managed") == "user_managed"
+                    if user_managed:
+                        sessions = getattr(self, "_apple_runtime_sessions", None)
+                        if sessions is not None:
+                            sessions.stop("apple:wrapper-v2")
+                    if not failure and manager is not None and not user_managed:
                         from waves.providers.apple.supervision import wrapper_data_host_dir
 
                         with contextlib.suppress(Exception):
@@ -21601,6 +21804,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             binary = "docker"
         self._apple_runtime_inflight = True
 
+        abort = getattr(self, "_apple_runtime_abort", None) or Event()
+        self._apple_runtime_abort = abort
+        abort.clear()
+        token = provider_contexts(self).capture(CTX_APPLE)
+
         def work() -> None:
             operation_state(
                 self,
@@ -21610,11 +21818,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "Pulling the wrapper image…",
                 key="apple-image-install",
                 references=EventReferences(runtime_id="apple:wrapper-v2"),
+                valid=lambda: provider_contexts(self).current(token),
             )
             try:
                 try:
                     manager.ensure_image(
                         binary=binary,
+                        abort=abort,
+                        require_verified=True,
                         log_cb=lambda m: operation_state(
                             self,
                             EventDomain.RUNTIME,
@@ -21626,6 +21837,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         ),
                     )
                 except Exception as exc:
+                    from waves.providers.apple.runtime import AppleRuntimeCancelled
+
+                    if isinstance(exc, AppleRuntimeCancelled):
+                        operation_state(
+                            self,
+                            EventDomain.RUNTIME,
+                            "appleRuntimeStateChanged",
+                            "cancelled",
+                            "Apple image setup cancelled",
+                            key="apple-image-install",
+                            references=EventReferences(runtime_id="apple:wrapper-v2"),
+                        )
+                        return
                     logger.exception("Apple wrapper image pull failed")
                     operation_state(
                         self,
@@ -21656,6 +21880,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.appleStatusChanged.emit()
             finally:
                 self._apple_runtime_inflight = False
+                self.appleRuntimeStatusChanged.emit()
 
         self.threadpool.start(Worker(work))
 
@@ -21832,6 +22057,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
             provider.offer_context_probe = lambda: WavesBridge._apple_offer_context(self)
+            manager = getattr(self, "_apple_runtime", None)
+            if manager is not None and hasattr(manager, "usage"):
+                custom_binary = bool(str(getattr(data, "path_binary_nm3u8dlre", "") or "").strip())
+                provider.runtime_usage = lambda: manager.usage(verify_binary=not custom_binary)
             # The download tool runs under a guard so it dies with Waves; a
             # packaged app re-executes its own binary for the guard.
             provider.guard_launcher = child_guard.launcher(
@@ -21850,6 +22079,44 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             logger.debug("Apple wrapper URL resolve failed", exc_info=True)
             with contextlib.suppress(Exception):
                 provider.wrapper_url = ""
+        from waves.providers.apple.runtime import WRAPPER_V2_IMAGE, WRAPPER_V2_IMAGE_DIGEST, AppleRuntimeManager
+        from waves.providers.apple.runtime_sessions import AppleRuntimeSessions, RuntimeKind, RuntimeProfile
+
+        manager = getattr(self, "_apple_runtime", None)
+        if isinstance(manager, AppleRuntimeManager):
+            sessions = getattr(self, "_apple_runtime_sessions", None)
+            if sessions is None:
+                sessions = AppleRuntimeSessions(manager.runtime_dir)
+                self._apple_runtime_sessions = sessions
+            user_managed = getattr(data, "apple_runtime_mode", "managed") == "user_managed"
+            image_receipt = manager.image_status()
+            profile = RuntimeProfile(
+                "apple:wrapper-v2",
+                RuntimeKind.USER_MANAGED if user_managed else RuntimeKind.MANAGED,
+                "wrapper-v2",
+                provider.wrapper_url,
+                str(getattr(data, "apple_wrapper_image_digest", "") or "")
+                if user_managed
+                else str(image_receipt.get("digest") or WRAPPER_V2_IMAGE_DIGEST),
+                "user-supplied" if user_managed else str(image_receipt.get("image") or WRAPPER_V2_IMAGE),
+                str(getattr(data, "apple_wrapper_container", "") or "") if user_managed else "",
+                decrypt_port=int(getattr(data, "apple_wrapper_decrypt_port", 10020)) if user_managed else 10020,
+            )
+            previous = getattr(self, "_apple_runtime_profile", None)
+            if previous is not None and previous != profile:
+                self._apple_session_gen = getattr(self, "_apple_session_gen", 0) + 1
+                self._apple_wrapper_auth_cache = None
+                self._apple_runtime_abort.set()
+            sessions.configure(profile)
+            self._apple_runtime_profile = profile
+            provider.runtime_context_revision = sessions.revision
+            provider.runtime_stopped = sessions.is_stopped
+            supervisor = getattr(self, "_apple_supervisor", None)
+            if supervisor is not None:
+                supervisor.configure_runtime(profile, sessions)
+            provider.wrapper_decrypt_port = (
+                int(getattr(data, "apple_wrapper_decrypt_port", 10020)) if user_managed else 10020
+            )
         # The engine's isolated config dir exists from here on, so anything
         # the engine materialises lands under Waves' own managed area, never
         # in a user-visible engine config file.
@@ -21917,6 +22184,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         would connect to. Module-level helper underneath, so plain stubs
         binding one resolver keep working without the other.
         """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if getattr(data, "apple_runtime_mode", "managed") == "user_managed":
+            from urllib.parse import urlsplit
+
+            from waves.providers.apple.runtime_sessions import local_wrapper_endpoint
+
+            try:
+                return int(urlsplit(local_wrapper_endpoint(str(getattr(data, "apple_wrapper_url", "")))).port or 0)
+            except ValueError:
+                return 0
         return _apple_effective_port(
             getattr(getattr(self, "settings", None), "data", None),
             getattr(self, "_apple_runtime", None),
@@ -21931,6 +22208,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         the wrapper session (whose tokens live in the guest) needs no
         re-login: the same URL answers again after a container restart.
         """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if getattr(data, "apple_runtime_mode", "managed") == "user_managed":
+            from waves.providers.apple.runtime_sessions import local_wrapper_endpoint
+
+            try:
+                return local_wrapper_endpoint(str(getattr(data, "apple_wrapper_url", "")))
+            except ValueError:
+                return ""
         resolve = getattr(self, "_apple_effective_wrapper_port", None)
         if callable(resolve):
             port = resolve()
@@ -21979,6 +22264,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             path = pathlib.Path(candidate).expanduser()
             try:
                 if path.is_file() and os.access(path, os.X_OK):
+                    manager = getattr(self, "_apple_runtime", None)
+                    if manager is not None and path == getattr(manager, "binary_path", None):
+                        status = manager.status()
+                        if status.get("available") is False:
+                            return False
                     return True
             except Exception:
                 logger.debug("Apple fetch-binary candidate check failed", exc_info=True)
@@ -22209,6 +22499,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         A port that cannot be provisioned raises so the form names that
         failure; an empty return means no wrapper tier exists on this machine.
         """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if getattr(data, "apple_runtime_mode", "managed") == "user_managed":
+            return self._resolve_apple_wrapper_url()
         manager = getattr(self, "_apple_runtime", None)
         if manager is None:
             return ""
@@ -22245,14 +22538,25 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # The idle stop decides under this same guard, so the guest this
         # sign-in just started is never stopped out from under its probe.
         with self._apple_sidecar_guard():
+            sessions = getattr(self, "_apple_runtime_sessions", None)
+            if sessions is not None:
+                if sessions.is_stopped("apple:wrapper-v2"):
+                    return False
+                profile = getattr(self, "_apple_runtime_profile", None)
+                if profile is not None and str(profile.kind) == "user_managed":
+                    data = getattr(getattr(self, "settings", None), "data", None)
+                    if sup.verify_identity(port, int(getattr(data, "apple_wrapper_decrypt_port", 10020))) is not True:
+                        return False
             with contextlib.suppress(Exception):
-                if sup.is_ready(port):
+                if sessions is None and sup.is_ready(port):
                     return True
             started = False
             with contextlib.suppress(Exception):
                 started = bool(sup.ensure_started(http_port=port))
             if started:
                 return True
+            if sessions is not None:
+                return False
             deadline = time.monotonic() + max(1.0, float(timeout))
             while time.monotonic() < deadline:
                 with contextlib.suppress(Exception):
@@ -22451,6 +22755,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         runtime whose daemon answers (the lazy start brings the sidecar
         back); a missing runtime or a stopped daemon does.
         """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if getattr(data, "apple_runtime_mode", "managed") == "user_managed":
+            auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
+            return bool(auth.get("reachable"))
         try:
             probe = self._apple_container_state()
         except Exception:
@@ -22504,6 +22812,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # the light says attention, not signed in.
             needs_attention = True
             signed_in = False
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        if sessions is not None and sessions.readiness("apple:wrapper-v2") != "ready":
+            signed_in = account_signed_in and bool(self._apple_fetch_binary_ready())
         return {
             "enabled": enabled,
             "runtime_ready": runtime_ready,
@@ -22521,6 +22832,41 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         generation = getattr(self, "_apple_engine_facts_gen", 0) if generation is None else generation
         flags = self._apple_live_flags()
         auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
+        sessions = getattr(self, "_apple_runtime_sessions", None)
+        context_state = "unknown"
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is not None and hasattr(manager, "verify"):
+            manager.verify()
+        if sessions is not None:
+            from waves.file_integrity import sha256_file
+            from waves.providers.apple.runtime_sessions import AccountContext, wrapper_session_evidence
+
+            provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+            cookies = str(getattr(provider, "cookies_path", "") or "")
+            try:
+                revision = sha256_file(cookies) if cookies else ""
+            except OSError:
+                revision = ""
+            storefront = provider.catalog_identity_context()[-1] if isinstance(provider, AppleProvider) else ""
+            account = AccountContext("", storefront, revision)
+            supervisor = getattr(self, "_apple_supervisor", None)
+            verified = (
+                supervisor.verify_identity(
+                    self._apple_wrapper_port_for_job(), int(getattr(provider, "wrapper_decrypt_port", 10020))
+                )
+                if supervisor is not None
+                else None
+            )
+            session_revision = str(getattr(self, "_apple_session_gen", 0)) + str(auth.get("account", ""))
+            evidence = wrapper_session_evidence(auth, artifact_verified=verified, revision=session_revision)
+
+            def observe() -> None:
+                if generation == getattr(self, "_apple_engine_facts_gen", 0):
+                    sessions.set_account(account)
+                    sessions.observe("apple:wrapper-v2", evidence)
+
+            provider_contexts(self).commit(token, observe)
+            context_state = sessions.readiness("apple:wrapper-v2")
         # A recognized /me response establishes the wrapper-v2 control
         # protocol shape, never decryption or entitlement qualification.
         protocol = True if auth.get("reachable") and auth.get("state") in ("authenticated", "logged_out") else None
@@ -22535,6 +22881,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             fetch_ready=bool(self._apple_fetch_binary_ready()),
             protocol_compatible=protocol,
             wrapper_runtime_ready=False if not self._apple_container_serves() else auth.get("reachable"),
+            wrapper_context_ready=True
+            if context_state == "ready"
+            else False
+            if context_state in ("confirmation_required", "account_mismatch", "incompatible")
+            else None,
+            wrapper_context_action="confirm_account" if context_state == "confirmation_required" else "setup",
+            wrapper_stopped=sessions.is_stopped("apple:wrapper-v2") if sessions is not None else False,
+            wrapper_runtime_kind=str(getattr(getattr(self, "_apple_runtime_profile", None), "kind", "managed")),
         )
         provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
         details = provider.engine_details(facts) if isinstance(provider, AppleProvider) else []
@@ -22779,6 +23133,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             or "path_binary_nm3u8dlre" in values
             or "apple_quarantine_dir" in values
             or "apple_wrapper_port" in values
+            or any(
+                key in values
+                for key in (
+                    "apple_runtime_mode",
+                    "apple_wrapper_url",
+                    "apple_wrapper_container",
+                    "apple_wrapper_image_digest",
+                    "apple_wrapper_decrypt_port",
+                )
+            )
         ):
             # The cookies-tier paths the Apple provider resolves against (the
             # quarantine dir re-registers its scan exclusion here as well).
