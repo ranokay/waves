@@ -236,3 +236,73 @@ def test_settings_runtime_restoration_waits_for_worker_instead_of_reading_on_sav
     workers.pop().run()
     assert reads == ["image receipt"]
     assert not WavesBridge.appleExecutionState(host)["stopped"]
+
+
+def test_lite_probe_completion_waits_for_the_gui_relay(tmp_path, monkeypatch):
+    host, sessions, workers, _ = bridge(tmp_path)
+    profile = RuntimeProfile("apple:lite", RuntimeKind.USER_MANAGED, "lite-status-v1", container="isolated-lite")
+    sessions.configure(profile)
+    host._apple_lite_profile = profile
+    host._apple_container_state = lambda: {"name": "docker"}
+    deliveries = []
+    host._catalogEvent = SimpleNamespace(emit=deliveries.append)
+    monkeypatch.setattr("waves.providers.apple.lite_runtime.probe_lite_runtime", lambda *args, **kwargs: {})
+    WavesBridge.refreshAppleLiteRuntime(host)
+    workers.pop().run()
+    assert WavesBridge.appleLiteRuntimeState(host)["checking"]
+    for event in deliveries:
+        event.deliver()
+    assert not WavesBridge.appleLiteRuntimeState(host)["checking"]
+
+
+def test_presentation_refresh_does_not_skip_physical_stop(tmp_path):
+    host, sessions, workers, _ = bridge(tmp_path)
+    stopped = []
+    host._apple_supervisor.stop = lambda: stopped.append(True) or True
+    WavesBridge.stopAppleExecution(host)
+    host._apple_engine_facts_gen += 1
+    workers.pop().run()
+    assert stopped == [True]
+    assert sessions.is_stopped("apple:wrapper-v2")
+
+
+def test_maintenance_does_not_cancel_a_queued_deliberate_stop(tmp_path):
+    host, _, workers, _ = bridge(tmp_path)
+    stopped = []
+    host._apple_supervisor.stop = lambda: stopped.append(True) or True
+    host._apple_runtime.rollback = lambda: None
+    WavesBridge.stopAppleExecution(host)
+    stop_worker = workers.pop()
+    WavesBridge.rollbackAppleRuntime(host)
+    workers.pop().run()
+    stop_worker.run()
+    assert AppleRuntimeSessions(tmp_path).is_stopped("apple:wrapper-v2")
+    assert stopped == [True]
+
+
+@pytest.mark.parametrize("runtime_id", ["apple:wrapper-v2", "apple:lite"])
+def test_latest_stop_wins_when_it_arrives_at_an_older_resume_commit(tmp_path, runtime_id):
+    host, sessions, workers, _ = bridge(tmp_path)
+    sessions.stop(runtime_id)
+    resume = sessions.resume
+    stopped = False
+
+    def resume_after_new_stop(resource, **kwargs):
+        nonlocal stopped
+        if not stopped:
+            stopped = True
+            if resource == "apple:lite":
+                WavesBridge.stopAppleLiteRuntime(host)
+            else:
+                WavesBridge.stopAppleExecution(host)
+            workers.pop().run()
+        return resume(resource, **kwargs)
+
+    sessions.resume = resume_after_new_stop
+    if runtime_id == "apple:lite":
+        WavesBridge.resumeAppleLiteRuntime(host)
+    else:
+        WavesBridge.resumeAppleExecution(host)
+    workers.pop().run()
+    assert sessions.is_stopped(runtime_id)
+    assert AppleRuntimeSessions(tmp_path).is_stopped(runtime_id)

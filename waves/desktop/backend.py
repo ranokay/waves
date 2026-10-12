@@ -21241,13 +21241,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Cached observations for the separate user-managed lite session."""
         sessions = getattr(self, "_apple_runtime_sessions", None)
         profile = getattr(self, "_apple_lite_profile", None)
+        token = getattr(self, "_apple_lite_probe_token", None)
         return {
             **dict(getattr(self, "_apple_lite_runtime_cache", {}) or {}),
             "configured": bool(profile is not None and profile.container),
             "kind": "user_managed",
             "state": sessions.readiness("apple:lite") if sessions is not None else "unknown",
             "stopped": sessions.is_stopped("apple:lite") if sessions is not None else False,
-            "checking": bool(getattr(self, "_apple_lite_probe_inflight", False)),
+            "checking": bool(getattr(self, "_apple_lite_probe_inflight", False))
+            and token is not None
+            and provider_contexts(self).current(token),
             "can_confirm": sessions.readiness("apple:lite") == "confirmation_required"
             if sessions is not None
             else False,
@@ -21262,7 +21265,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if sessions is None or profile is None or not profile.container or sessions.is_stopped(profile.id):
             return
         if getattr(self, "_apple_lite_probe_inflight", False):
-            return
+            previous_token = getattr(self, "_apple_lite_probe_token", None)
+            if previous_token is not None and provider_contexts(self).current(previous_token):
+                return
+            WavesBridge.cancelAppleLiteRuntimeProbe(self)
+            self._apple_lite_probe_inflight = False
         from waves.providers.apple.lite_runtime import probe_lite_runtime
         from waves.providers.apple.runtime_sessions import SessionEvidence
 
@@ -21270,6 +21277,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._apple_lite_probe_abort = abort
         self._apple_lite_probe_inflight = True
         token = provider_contexts(self).capture(CTX_APPLE)
+        self._apple_lite_probe_token = token
         revision = sessions.revision(profile.id)
 
         def work() -> None:
@@ -21301,8 +21309,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
                 WavesBridge._publish_apple_runtime(self, token, publish)
             finally:
-                self._apple_lite_probe_inflight = False
-                self.appleRuntimeStatusChanged.emit()
+
+                def finish() -> None:
+                    if getattr(self, "_apple_lite_probe_abort", None) is abort:
+                        self._apple_lite_probe_inflight = False
+                        self.appleRuntimeStatusChanged.emit()
+
+                WavesBridge._publish_apple_runtime(self, token, finish)
 
         self.threadpool.start(Worker(work))
 
@@ -21317,8 +21330,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if sessions is None:
             return
         WavesBridge.cancelAppleLiteRuntimeProbe(self)
-        if action == "stop":
-            sessions.request_stop("apple:lite")
+        choice = sessions.request_stop("apple:lite") if action == "stop" else sessions.request_resume("apple:lite")
         token = provider_contexts(self).capture(CTX_APPLE)
         control_generation = getattr(self, "_apple_lite_control_gen", 0) + 1
         self._apple_lite_control_gen = control_generation
@@ -21328,9 +21340,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return
             try:
                 if action == "stop":
-                    sessions.stop("apple:lite")
+                    applied = sessions.stop("apple:lite", expected_choice=choice)
                 else:
-                    sessions.resume("apple:lite")
+                    applied = sessions.resume("apple:lite", expected_choice=choice)
+                if not applied:
+                    return
                 WavesBridge._publish_apple_runtime(self, token, lambda: setattr(self, "_apple_lite_runtime_cache", {}))
             except Exception as exc:
                 operation_state(
@@ -21383,26 +21397,41 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         sessions = getattr(self, "_apple_runtime_sessions", None)
         if sessions is None:
             return
-        if action == "stop":
-            sessions.request_stop("apple:wrapper-v2")
+        runtime_id = "apple:wrapper-v2"
+        choice = (
+            sessions.request_stop(runtime_id)
+            if action == "stop"
+            else sessions.request_resume(runtime_id)
+            if action == "resume"
+            else None
+        )
+        profile = getattr(self, "_apple_runtime_profile", None)
         token = provider_contexts(self).capture(CTX_APPLE)
         self._invalidate_apple_engine_facts()
-        generation = getattr(self, "_apple_engine_facts_gen", 0)
-        control_generation = getattr(self, "_apple_execution_control_gen", 0) + 1
-        self._apple_execution_control_gen = control_generation
+        generation_attr = (
+            "_apple_execution_choice_gen" if action in ("stop", "resume") else "_apple_execution_maintenance_gen"
+        )
+        control_generation = getattr(self, generation_attr, 0) + 1
+        setattr(self, generation_attr, control_generation)
+
+        def current() -> bool:
+            return provider_contexts(self).current(token) and control_generation == getattr(self, generation_attr, 0)
 
         def work() -> None:
-            if control_generation != getattr(self, "_apple_execution_control_gen", 0):
+            if control_generation != getattr(self, generation_attr, 0):
                 return
             try:
                 with self._apple_sidecar_guard():
+                    if control_generation != getattr(self, generation_attr, 0):
+                        return
                     if action == "stop":
-                        sessions.stop("apple:wrapper-v2")
+                        if not sessions.stop(runtime_id, expected_choice=choice):
+                            return
                         supervisor = getattr(self, "_apple_supervisor", None)
                         if (
-                            supervisor is not None
-                            and generation == getattr(self, "_apple_engine_facts_gen", 0)
-                            and not supervisor.stop()
+                            profile != getattr(self, "_apple_runtime_profile", None)
+                            or (supervisor is not None and not supervisor.stop())
+                            or profile != getattr(self, "_apple_runtime_profile", None)
                         ):
                             operation_state(
                                 self,
@@ -21412,17 +21441,23 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                                 "The runtime did not stop. Its use remains disconnected.",
                                 key="apple-execution-control",
                                 references=EventReferences(runtime_id="apple:wrapper-v2"),
-                                valid=lambda: provider_contexts(self).current(token),
+                                valid=current,
                             )
                             return
                     elif action == "resume":
-                        sessions.resume("apple:wrapper-v2")
+                        if not sessions.resume(runtime_id, expected_choice=choice):
+                            return
                     elif action == "rollback_image":
                         container = self._apple_container_state()
                         self._apple_runtime.rollback_image(binary=str(container.get("name") or "docker"))
                     else:
                         self._apple_runtime.rollback()
-                WavesBridge._publish_apple_runtime(self, token, self._configure_apple_provider)
+
+                def publish() -> None:
+                    if current():
+                        self._configure_apple_provider()
+
+                WavesBridge._publish_apple_runtime(self, token, publish)
                 message = {
                     "stop": "Apple runtime stopped",
                     "resume": "Apple runtime reconnected",
@@ -21437,7 +21472,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     message,
                     key="apple-execution-control",
                     references=EventReferences(runtime_id="apple:wrapper-v2"),
-                    valid=lambda: provider_contexts(self).current(token),
+                    valid=current,
                 )
             except Exception as exc:
                 operation_state(
@@ -21449,7 +21484,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     exception=exc,
                     key="apple-execution-control",
                     references=EventReferences(runtime_id="apple:wrapper-v2"),
-                    valid=lambda: provider_contexts(self).current(token),
+                    valid=current,
                 )
             finally:
                 self.appleRuntimeStatusChanged.emit()

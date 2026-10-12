@@ -77,6 +77,65 @@ def test_status_regions_do_not_assert_authentication_or_qualification():
     assert result["error"] == ""
 
 
+def changing_runtime(changed):
+    initial = container()
+    inspections, executed = [], []
+    status = runner()
+
+    def run(command, **options):
+        if "inspect" in command:
+            observed = initial if not inspections else changed
+            inspections.append(observed)
+            return subprocess.CompletedProcess(command, 0, json.dumps(observed).encode(), b"")
+        # The configured name has already changed at this external boundary.
+        target = command[3]
+        executed.append(changed["id"] if target == profile().container else target)
+        return status(command, **options)
+
+    return run, inspections, executed
+
+
+def test_name_replacement_never_executes_the_replacement_and_discards_old_status():
+    run, _, executed = changing_runtime({**container(), "id": "c" * 64})
+    result = probe_lite_runtime(profile(), Event(), runner=run)
+    assert executed == ["b" * 64]
+    assert result["error"] == "runtime_context_changed"
+    assert result["artifact_verified"] is None
+    assert result["reachable"] is None
+    assert result["protocol_compatible"] is None
+    assert result["regions"] == []
+    assert result["session_revision"] == ""
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"started_at": "2026-10-12T09:00:00Z"},
+        {"image": "sha256:" + "c" * 64},
+        {"readonly": False},
+    ],
+)
+def test_restart_or_identity_or_confinement_change_discards_probe_evidence(change):
+    run, _, _ = changing_runtime({**container(), **change})
+    result = probe_lite_runtime(profile(), Event(), runner=run)
+    assert result["error"] == "runtime_context_changed"
+    assert result["artifact_verified"] is None
+    assert result["storefront"] == ""
+    assert result["regions"] == []
+    assert result["session_revision"] == ""
+    assert result["authenticated"] is None
+
+
+def test_stable_runtime_status_is_accepted_after_fresh_identity_inspection():
+    run, inspections, executed = changing_runtime(container())
+    result = probe_lite_runtime(profile(), Event(), runner=run)
+    assert executed == ["b" * 64]
+    assert len(inspections) == 2
+    assert result["error"] == ""
+    assert result["protocol_compatible"] is True
+    assert result["regions"] == ["ro"]
+
+
 def test_incomplete_confinement_inspection_never_contacts_the_status_service():
     info = container()
     del info["ports"]

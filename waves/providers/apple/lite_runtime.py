@@ -289,6 +289,35 @@ def _admit_inspection(info: dict, profile: RuntimeProfile, port: int, result: Li
     result["artifact_verified"] = True
 
 
+def _unchanged_inspection(
+    binary: str, profile: RuntimeProfile, initial: dict, abort: Event, runner: _Runner | None
+) -> bool:
+    try:
+        current = _json_object(
+            _command([binary, "inspect", "--format", _INSPECTION, "--", profile.container], None, 5, abort, runner)
+        )
+    except (_ProbeFailed, OSError, subprocess.SubprocessError):
+        _check_abort(abort)
+        return False
+    # Every identity and confinement field must still match the admitted snapshot.
+    return current == initial
+
+
+def _unknown_status(error: str = "") -> LiteRuntimeStatus:
+    return {
+        "reachable": None,
+        "protocol_compatible": None,
+        "artifact_verified": None,
+        "authenticated": None,
+        "account_id": "",
+        "storefront": "",
+        "session_revision": "",
+        "regions": [],
+        "qualification": "pending",
+        "error": error,
+    }
+
+
 def probe_lite_runtime(
     profile: RuntimeProfile, abort: Event, *, binary: str = "docker", runner: _Runner | None = None
 ) -> LiteRuntimeStatus:
@@ -299,18 +328,7 @@ def probe_lite_runtime(
     stays unknown even when status advertises a storefront. Session revision
     detects replacement/restart, not an unobservable in-place account change.
     """
-    result: LiteRuntimeStatus = {
-        "reachable": None,
-        "protocol_compatible": None,
-        "artifact_verified": None,
-        "authenticated": None,
-        "account_id": "",
-        "storefront": "",
-        "session_revision": "",
-        "regions": [],
-        "qualification": "pending",
-        "error": "",
-    }
+    result = _unknown_status()
     contacted = False
     try:
         _check_abort(abort)
@@ -321,18 +339,22 @@ def probe_lite_runtime(
         _admit_inspection(info, profile, port, result)
         contacted = True
         response = _command(
-            [binary, "exec", "--interactive", profile.container, "/usr/bin/python3", "-c", _STATUS_RPC],
+            [binary, "exec", "--interactive", info["id"], "/usr/bin/python3", "-c", _STATUS_RPC],
             json.dumps({"port": port}).encode(),
             10,
             abort,
             runner,
         )
-        result["reachable"] = True
-        result["protocol_compatible"] = False
-        regions = _regions(response)
-        result["regions"] = regions
-        result["storefront"] = regions[0] if regions and len(set(regions)) == 1 else ""
-        result["protocol_compatible"] = True
+        if _unchanged_inspection(binary, profile, info, abort, runner):
+            result["reachable"] = True
+            result["protocol_compatible"] = False
+            regions = _regions(response)
+            result["regions"] = regions
+            result["storefront"] = regions[0] if regions and len(set(regions)) == 1 else ""
+            result["protocol_compatible"] = True
+        else:
+            result = _unknown_status("runtime_context_changed")
+            contacted = False
     except _ProbeFailed as exc:
         result["error"] = str(exc)
     except (OSError, subprocess.SubprocessError):

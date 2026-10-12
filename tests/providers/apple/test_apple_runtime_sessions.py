@@ -71,8 +71,78 @@ def test_failed_resume_keeps_the_runtime_stopped_in_memory_and_after_restoration
         sessions.resume("apple:wrapper-v2")
 
     assert sessions.is_stopped("apple:wrapper-v2")
-    assert sessions.revision("apple:wrapper-v2") == revision
+    assert sessions.revision("apple:wrapper-v2") != revision
     assert AppleRuntimeSessions(tmp_path).is_stopped("apple:wrapper-v2")
+
+
+def test_queued_old_resume_cannot_undo_a_newer_stop(tmp_path):
+    sessions = AppleRuntimeSessions(tmp_path)
+    runtime_id = "apple:wrapper-v2"
+    sessions.stop(runtime_id)
+    older_resume = sessions.request_resume(runtime_id)
+    newer_stop = sessions.request_stop(runtime_id)
+    assert sessions.stop(runtime_id, expected_choice=newer_stop) is True
+    revision = sessions.revision(runtime_id)
+
+    assert sessions.resume(runtime_id, expected_choice=older_resume) is False
+
+    assert sessions.is_stopped(runtime_id)
+    assert sessions.revision(runtime_id) == revision
+    assert AppleRuntimeSessions(tmp_path).is_stopped(runtime_id)
+
+
+def test_queued_old_stop_cannot_overwrite_a_newer_resume(tmp_path):
+    sessions = AppleRuntimeSessions(tmp_path)
+    runtime_id = "apple:wrapper-v2"
+    older_stop = sessions.request_stop(runtime_id)
+    newer_resume = sessions.request_resume(runtime_id)
+    assert sessions.is_stopped(runtime_id)
+    assert sessions.resume(runtime_id, expected_choice=newer_resume) is True
+    revision = sessions.revision(runtime_id)
+
+    assert sessions.stop(runtime_id, expected_choice=older_stop) is False
+
+    assert not sessions.is_stopped(runtime_id)
+    assert sessions.revision(runtime_id) == revision
+    assert not AppleRuntimeSessions(tmp_path).is_stopped(runtime_id)
+
+
+def test_failed_latest_resume_keeps_the_requested_resource_held(tmp_path, monkeypatch):
+    sessions = AppleRuntimeSessions(tmp_path)
+    runtime_id = "apple:wrapper-v2"
+    sessions.stop(runtime_id)
+    resume_choice = sessions.request_resume(runtime_id)
+    assert sessions.is_stopped(runtime_id)
+
+    def fail_save(*args, **kwargs):
+        raise OSError("choice persistence refused")
+
+    monkeypatch.setattr(os, "replace", fail_save)
+    with pytest.raises(OSError, match="choice persistence refused"):
+        sessions.resume(runtime_id, expected_choice=resume_choice)
+
+    assert sessions.is_stopped(runtime_id)
+    assert AppleRuntimeSessions(tmp_path).is_stopped(runtime_id)
+
+
+def test_pending_restore_keeps_only_the_latest_requested_choice(tmp_path):
+    (tmp_path / "runtime-choices.json").write_text("corrupt choices", encoding="utf-8")
+    sessions = AppleRuntimeSessions(tmp_path, load_choices=False)
+    older_resume = sessions.request_resume("apple:wrapper-v2")
+    newer_stop = sessions.request_stop("apple:wrapper-v2")
+    assert sessions.resume("apple:wrapper-v2", expected_choice=older_resume) is False
+    assert sessions.stop("apple:wrapper-v2", expected_choice=newer_stop) is True
+    sessions.request_resume("apple:lite")
+
+    sessions.restore_choices()
+
+    assert sessions.is_stopped("apple:wrapper-v2")
+    assert not sessions.is_stopped("apple:lite")
+    assert sessions.is_stopped("apple:future-runtime")
+    restored = AppleRuntimeSessions(tmp_path)
+    assert restored.is_stopped("apple:wrapper-v2")
+    assert not restored.is_stopped("apple:lite")
+    assert restored.is_stopped("apple:future-runtime")
 
 
 def test_failed_stop_still_blocks_the_selected_runtime_in_memory(tmp_path, monkeypatch):

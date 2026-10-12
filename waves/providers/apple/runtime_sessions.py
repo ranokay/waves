@@ -118,6 +118,7 @@ class AppleRuntimeSessions:
         self._choices_restored = False
         self._restoring = False
         self._pending_choices: dict[str, bool] = {}
+        self._choice_intents: dict[str, tuple[int, bool]] = {}
         if load_choices:
             self.restore_choices()
 
@@ -198,30 +199,45 @@ class AppleRuntimeSessions:
                 (not self._state_valid or self._default_stopped) and runtime_id not in self._resumed
             )
 
-    def request_stop(self, runtime_id: str) -> None:
-        """Disconnect admission immediately; stop() persists this choice on a worker."""
-        with self._lock:
-            self._generations[runtime_id] = self._generations.get(runtime_id, 0) + 1
-            self._stopped.add(runtime_id)
-            self._resumed.discard(runtime_id)
-            self._sessions.pop(runtime_id, None)
-            self._confirmed.discard(runtime_id)
-            if not self._choices_restored:
-                self._pending_choices[runtime_id] = True
+    def _request_choice(self, runtime_id: str, *, wants_stop: bool) -> int:
+        choice = self._choice_intents.get(runtime_id, (0, True))[0] + 1
+        self._choice_intents[runtime_id] = choice, wants_stop
+        self._stopped.add(runtime_id)
+        self._resumed.discard(runtime_id)
+        self.invalidate(runtime_id)
+        if not self._choices_restored:
+            self._pending_choices[runtime_id] = wants_stop
+        return choice
 
-    def stop(self, runtime_id: str) -> None:
+    def request_stop(self, runtime_id: str) -> int:
+        """Disconnect immediately and return the latest Stop intent for its worker."""
         with self._lock:
-            self.request_stop(runtime_id)
+            return self._request_choice(runtime_id, wants_stop=True)
+
+    def request_resume(self, runtime_id: str) -> int:
+        """Record the latest Resume intent, keeping admission held until persistence."""
+        with self._lock:
+            return self._request_choice(runtime_id, wants_stop=False)
+
+    def stop(self, runtime_id: str, *, expected_choice: int | None = None) -> bool:
+        """Persist the latest Stop; a superseded worker cannot change choices."""
+        with self._lock:
+            choice = self.request_stop(runtime_id) if expected_choice is None else expected_choice
+            if self._choice_intents.get(runtime_id) != (choice, True):
+                return False
             if not self._choices_restored:
-                return
+                return True
             self._save_choices()
+            return True
 
-    def resume(self, runtime_id: str) -> None:
+    def resume(self, runtime_id: str, *, expected_choice: int | None = None) -> bool:
+        """Commit the latest Resume only after persistence succeeds under this lock."""
         with self._lock:
+            choice = self.request_resume(runtime_id) if expected_choice is None else expected_choice
+            if self._choice_intents.get(runtime_id) != (choice, False):
+                return False
             if not self._choices_restored:
-                self._pending_choices[runtime_id] = False
-                self.invalidate(runtime_id)
-                return
+                return True
             stopped = self._stopped - {runtime_id}
             resumed = set(self._resumed)
             default_stopped = self._default_stopped or not self._state_valid
@@ -233,6 +249,7 @@ class AppleRuntimeSessions:
             self._generations[runtime_id] = self._generations.get(runtime_id, 0) + 1
             self._sessions.pop(runtime_id, None)
             self._confirmed.discard(runtime_id)
+            return True
 
     def _save_choices(
         self,
