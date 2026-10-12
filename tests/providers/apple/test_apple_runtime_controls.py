@@ -37,6 +37,22 @@ def bridge(tmp_path):
     return host, sessions, workers, commands
 
 
+def account_bridge(tmp_path):
+    host, sessions, workers, commands = bridge(tmp_path)
+    deliveries = []
+    host._catalogEvent = SimpleNamespace(emit=deliveries.append)
+    host._apple_wrapper_base = lambda: host._apple_runtime_profile.endpoint
+    host._apple_wrapper_auth_refresh_lock = Lock()
+    for name in (
+        "apple_wrapper_auth_state",
+        "_schedule_apple_wrapper_auth_refresh",
+        "_scheduled_apple_wrapper_auth_refresh",
+        "_refresh_apple_wrapper_auth",
+    ):
+        setattr(host, name, getattr(WavesBridge, name).__get__(host))
+    return host, sessions, workers, commands, deliveries
+
+
 def test_public_stop_disconnects_external_runtime_on_worker_and_can_be_explicitly_resumed(tmp_path):
     host, sessions, workers, commands = bridge(tmp_path)
     WavesBridge.stopAppleExecution(host)
@@ -92,7 +108,7 @@ def test_saving_a_different_cookies_export_immediately_revokes_admission(tmp_pat
 
 
 def test_observed_machine_account_change_revokes_admission_with_unchanged_display_label(tmp_path, monkeypatch):
-    host, sessions, workers, _ = bridge(tmp_path)
+    host, sessions, workers, _, deliveries = account_bridge(tmp_path)
     profile = host._apple_runtime_profile
     sessions.configure(profile)
     sessions.observe(profile.id, SessionEvidence(True, True, True, True))
@@ -107,43 +123,39 @@ def test_observed_machine_account_change_revokes_admission_with_unchanged_displa
     }
     host._apple_wrapper_auth_cache = {"at": 0.0, "result": old}
     host._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(True, "observed-runtime")
-    host._apple_wrapper_base = lambda: profile.endpoint
-    for name in (
-        "apple_wrapper_auth_state",
-        "_schedule_apple_wrapper_auth_refresh",
-        "_scheduled_apple_wrapper_auth_refresh",
-        "_refresh_apple_wrapper_auth",
-    ):
-        setattr(host, name, getattr(WavesBridge, name).__get__(host))
     monkeypatch.setattr(
         "waves.providers.apple.runtime.wrapper_auth_state", lambda *args, **kwargs: {**old, "account_id": "second"}
     )
     WavesBridge.appleWrapperAuth(host)
     workers.pop().run()
+    deliveries.pop().deliver()
     assert sessions.revision(profile.id) != revision
-    assert not sessions.confirm_account(profile.id)
+    assert not WavesBridge.appleExecutionState(host)["can_confirm"]
+    assert WavesBridge.appleWrapperAuth(host)["account"] == "same-label"
     assert host.appleWrapperAuthChanged.emits
 
 
 @pytest.mark.parametrize("identity_verified", [None, False])
 def test_account_check_does_not_contact_an_unverified_runtime(tmp_path, monkeypatch, identity_verified):
-    host, _, _, _ = bridge(tmp_path)
+    host, _, workers, _, deliveries = account_bridge(tmp_path)
     calls = []
-    host._apple_wrapper_base = lambda: host._apple_runtime_profile.endpoint
     host._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(identity_verified, "runtime-1")
     monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", lambda *a, **kw: calls.append(True))
 
-    result = WavesBridge._refresh_apple_wrapper_auth(host)
+    assert not WavesBridge.appleWrapperAuth(host)["logged_in"]
+    workers.pop().run()
+    deliveries.pop().deliver()
+    result = WavesBridge.appleWrapperAuth(host)
 
     assert calls == []
-    assert result["reachable"] is None
+    assert result["reachable"] is False
     assert result["logged_in"] is False
     assert "not been verified" in result["error"]
+    assert not WavesBridge.appleExecutionState(host)["can_confirm"]
 
 
 def test_account_check_discards_a_response_when_the_runtime_instance_changes(tmp_path, monkeypatch):
-    host, sessions, _, _ = bridge(tmp_path)
-    host._apple_wrapper_base = lambda: host._apple_runtime_profile.endpoint
+    host, _, workers, _, deliveries = account_bridge(tmp_path)
     identities = iter((RuntimeIdentity(True, "runtime-1"), RuntimeIdentity(True, "runtime-2")))
     host._apple_supervisor.observe_identity = lambda *args: next(identities)
     monkeypatch.setattr(
@@ -151,38 +163,41 @@ def test_account_check_discards_a_response_when_the_runtime_instance_changes(tmp
         lambda *args, **kwargs: {"reachable": True, "state": "authenticated", "logged_in": True},
     )
 
-    result = WavesBridge._refresh_apple_wrapper_auth(host)
+    WavesBridge.appleWrapperAuth(host)
+    workers.pop().run()
+    deliveries.pop().deliver()
+    result = WavesBridge.appleWrapperAuth(host)
 
-    assert result["reachable"] is None
+    assert result["reachable"] is False
     assert result["logged_in"] is False
     assert result["error"] == "Runtime changed during account check"
-    assert host._apple_wrapper_auth_cache["runtime_revision"] == ""
-    assert not sessions.confirm_account("apple:wrapper-v2")
+    assert WavesBridge.appleExecutionState(host)["state"] == "unknown"
+    assert not WavesBridge.appleExecutionState(host)["can_confirm"]
 
 
 def test_queued_account_result_waits_for_gui_and_is_discarded_after_stop(tmp_path, monkeypatch):
-    host, sessions, _, _ = bridge(tmp_path)
-    pending = []
-    host._catalogEvent = SimpleNamespace(emit=pending.append)
-    host._apple_wrapper_base = lambda: host._apple_runtime_profile.endpoint
+    host, _, workers, _, deliveries = account_bridge(tmp_path)
     host._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(True, "runtime-1")
     monkeypatch.setattr(
         "waves.providers.apple.runtime.wrapper_auth_state",
         lambda *args, **kwargs: {"reachable": True, "state": "authenticated", "logged_in": True},
     )
-    WavesBridge._refresh_apple_wrapper_auth(host)
-    assert getattr(host, "_apple_wrapper_auth_cache", None) is None
-    assert len(pending) == 1
+    assert not WavesBridge.appleWrapperAuth(host)["logged_in"]
+    workers.pop().run()
+    assert not host.appleWrapperAuthChanged.emits
+    assert len(deliveries) == 1
+    assert not WavesBridge.appleWrapperAuth(host)["logged_in"]
 
-    sessions.request_stop("apple:wrapper-v2")
-    WavesBridge._on_catalog_event(host, pending.pop())
+    WavesBridge.stopAppleExecution(host)
+    deliveries.pop().deliver()
 
-    assert getattr(host, "_apple_wrapper_auth_cache", None) is None
+    assert not WavesBridge.appleWrapperAuth(host)["logged_in"]
+    assert WavesBridge.appleExecutionState(host)["state"] == "stopped"
     assert not host.appleWrapperAuthChanged.emits
 
 
 def test_account_check_uses_the_detected_container_runtime(tmp_path, monkeypatch):
-    host, sessions, _, commands = bridge(tmp_path)
+    host, sessions, workers, commands, deliveries = account_bridge(tmp_path)
     host._apple_runtime_profile = RuntimeProfile(
         "apple:wrapper-v2",
         RuntimeKind.USER_MANAGED,
@@ -192,19 +207,22 @@ def test_account_check_uses_the_detected_container_runtime(tmp_path, monkeypatch
         container="my-wrapper",
     )
     sessions.configure(host._apple_runtime_profile)
-    host._apple_wrapper_base = lambda: host._apple_runtime_profile.endpoint
     host._apple_container_state = lambda: {"name": "podman"}
     monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", lambda *a, **kw: {})
-    WavesBridge._refresh_apple_wrapper_auth(host)
+    WavesBridge.appleWrapperAuth(host)
+    workers.pop().run()
+    deliveries.pop().deliver()
     assert commands
     assert all(command[0][0] == "podman" for command in commands)
+    assert not WavesBridge.appleWrapperAuth(host)["logged_in"]
+    assert not WavesBridge.appleExecutionState(host)["can_confirm"]
 
 
 @pytest.mark.parametrize("change", ["instance", "stop_during_probe", "stop_before_publish"])
-def test_engine_facts_do_not_admit_stale_runtime_or_stop_context(tmp_path, change):
+def test_engine_presentation_does_not_admit_stale_runtime_or_stop_context(tmp_path, change):
     from waves.providers.apple.provider import AppleProvider
 
-    host, sessions, _, _ = bridge(tmp_path)
+    host, sessions, workers, _ = bridge(tmp_path)
     pending = []
     host.providers = {"apple": AppleProvider()}
     host._apple_live_flags = lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": True}
@@ -216,27 +234,42 @@ def test_engine_facts_do_not_admit_stale_runtime_or_stop_context(tmp_path, chang
         "runtime_revision": "runtime-1",
     }
     sessions.configure(host._apple_runtime_profile)
+    for name in ("_apple_engine_details", "_apple_engine_facts"):
+        setattr(host, name, getattr(WavesBridge, name).__get__(host))
+    host._provider_engine_probes = {"apple": host._apple_engine_details}
 
     def observe(*args):
         if change == "stop_during_probe":
-            sessions.request_stop("apple:wrapper-v2")
+            WavesBridge.stopAppleExecution(host)
         return RuntimeIdentity(True, "runtime-2" if change == "instance" else "runtime-1")
 
     host._apple_supervisor.observe_identity = observe
-    facts = WavesBridge._apple_engine_facts(host)
+    initial = WavesBridge.providerEngines(host, "apple")
+    wrapper = next(item for item in initial[0]["requirements"] if item["protocol"] == "wrapper-v2")
+    assert wrapper["state"] == "unknown"
+    workers.pop().run()
+    unpublished = WavesBridge.providerEngines(host, "apple")
+    wrapper = next(item for item in unpublished[0]["requirements"] if item["protocol"] == "wrapper-v2")
+    assert wrapper["state"] == "unknown"
     if change == "instance":
-        assert facts.wrapper_ready is None
-        assert sessions.readiness("apple:wrapper-v2") == "unknown"
-        assert not sessions.confirm_account("apple:wrapper-v2")
+        assert WavesBridge.appleExecutionState(host)["state"] == "unknown"
+        assert not WavesBridge.appleExecutionState(host)["can_confirm"]
+        assert len(pending) == 1
+        pending.pop().deliver()
     elif change == "stop_during_probe":
-        assert facts.enabled is False
+        assert WavesBridge.appleExecutionState(host)["state"] == "stopped"
         assert pending == []
     else:
-        assert facts.wrapper_ready is True
+        assert WavesBridge.appleExecutionState(host)["can_confirm"]
         assert len(pending) == 1
-        sessions.request_stop("apple:wrapper-v2")
-        WavesBridge._on_catalog_event(host, pending.pop())
-        assert getattr(host, "_apple_engine_facts_cache", None) is None
+        WavesBridge.stopAppleExecution(host)
+        signals_after_stop = len(host.appleStatusChanged.emits)
+        pending.pop().deliver()
+        assert len(host.appleStatusChanged.emits) == signals_after_stop
+        assert WavesBridge.appleExecutionState(host)["state"] == "stopped"
+    details = WavesBridge.providerEngines(host, "apple")
+    wrapper = next(item for item in details[0]["requirements"] if item["protocol"] == "wrapper-v2")
+    assert wrapper["state"] != "ready"
 
 
 @pytest.mark.parametrize(

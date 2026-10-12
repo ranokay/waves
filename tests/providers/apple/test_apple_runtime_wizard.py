@@ -951,11 +951,12 @@ def test_apple_sign_out_clears_the_account_session(tmp_path):
     assert "light" in [e[0] for e in events] and "runtime" in [e[0] for e in events]
 
 
-def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path):
+@pytest.mark.parametrize("reachable", [True, False])
+def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path, reachable):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     provider = SimpleNamespace(wrapper_logged_in=True, cookies_path="")
     stub.providers["apple"] = provider
-    stub._apple_supervisor = SimpleNamespace(stop=lambda: False, is_ready=lambda port: True)
+    stub._apple_supervisor = SimpleNamespace(stop=lambda: False, is_ready=lambda port: reachable)
     stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub)
     stub._apple_wrapper_port_for_job = lambda: 51234
     session_dir = wrapper_data_host_dir(tmp_path)
@@ -980,7 +981,7 @@ def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path):
         " Sign out again when the container runtime is back.",
     ) in emitted
     assert session_dir.exists(), "a guest that never stopped keeps its session volume"
-    assert stub._apple_wrapper_auth_cache == {"at": 1.0, "result": {"logged_in": True}}
+    assert stub._apple_wrapper_auth_cache["result"]["logged_in"] is False
     assert provider.wrapper_logged_in is True, "the still-running guest's session is not mirrored away"
     assert stub._apple_wrapper_login_result == {"ok": True, "needs_2fa": False, "error": ""}
 
@@ -2344,3 +2345,135 @@ def test_setup_keeps_cookies_tier_when_wrapper_is_authenticated_but_not_admitted
     assert state["light"]["tier"] == "cookies"
     assert state["wrapper"]["auth"]["logged_in"]
     assert state["execution"]["state"] == admission
+
+
+def _controlled_wrapper_login(tmp_path, *, mode="managed", verified=True):
+    """Control runtime observations while driving real credential actions."""
+    from threading import Event, Lock
+
+    from waves.providers.apple.provider import AppleProvider
+    from waves.providers.apple.runtime_sessions import (
+        AppleRuntimeSessions,
+        RuntimeKind,
+        RuntimeProfile,
+        SessionEvidence,
+    )
+    from waves.providers.apple.supervision import RuntimeIdentity
+
+    host = _bridge_stub(tmp_path)
+    host.settings.data.apple_runtime_mode = mode
+    host.settings.data.apple_wrapper_url = "http://127.0.0.1:50100"
+    host.settings.data.apple_wrapper_port = 50100
+    host.settings.data.apple_wrapper_image_digest = "sha256:" + "a" * 64
+    host.settings.data.apple_wrapper_container = "my-wrapper"
+    sessions = AppleRuntimeSessions(tmp_path)
+    profile = RuntimeProfile("apple:wrapper-v2", RuntimeKind(mode), "wrapper-v2", "http://127.0.0.1:50100")
+    sessions.configure(profile)
+    sessions.observe(profile.id, SessionEvidence(True, True, True, True))
+    assert sessions.confirm_account(profile.id)
+    host._apple_runtime_sessions = sessions
+    host._apple_runtime_profile = profile
+    host._apple_runtime_abort = Event()
+    host.providers["apple"] = AppleProvider()
+    supervisor = SimpleNamespace(
+        configure_runtime=lambda profile, sessions, **kwargs: sessions.configure(profile),
+        verify_identity=lambda *args: verified,
+        observe_identity=lambda *args: RuntimeIdentity(verified, "runtime-1"),
+        ensure_started=lambda **kwargs: True,
+    )
+    host._apple_supervisor = supervisor
+    host._apple_supervisor_for_job = lambda: supervisor
+    workers = []
+    host.threadpool = SimpleNamespace(start=workers.append)
+    _bind_wrapper_login(host)
+    for name in ("_apple_effective_wrapper_port", "_resolve_apple_wrapper_url", "_invalidate_apple_engine_facts"):
+        setattr(host, name, getattr(WavesBridge, name).__get__(host))
+    host._apple_wrapper_port_for_start = host._apple_effective_wrapper_port
+    host.apple_wrapper_auth_state = lambda **kwargs: {"logged_in": False, "state": "logged_out"}
+    host._refresh_apple_wrapper_auth = lambda: None
+    host._waves_prefs = {}
+    host._settings_save_lock = Lock()
+    host._ffmpeg_flag_prefs = {}
+    host._resolve_ffmpeg_locked = lambda: ""
+    host._submit_settings_write = lambda: None
+    host._ffmpeg_source_label = lambda: "missing"
+    host._configure_apple_provider = WavesBridge._configure_apple_provider.__get__(host)
+    host._logged_in = False
+    host._set_status = lambda message: None
+    return host, sessions, workers, supervisor
+
+
+@pytest.mark.parametrize("mode", ["managed", "user_managed"])
+@pytest.mark.parametrize("verified", [None, False, True])
+@pytest.mark.parametrize("action", ["login", "2fa"])
+def test_credentials_are_sent_only_to_a_verified_current_runtime(tmp_path, monkeypatch, mode, verified, action):
+    host, _, workers, _ = _controlled_wrapper_login(tmp_path, mode=mode, verified=verified)
+    posted = []
+    request = lambda url, *args: posted.append(url) or {"ok": True, "needs_2fa": False}
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login", request)
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login_2fa", request)
+    if action == "login":
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+    else:
+        WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+    workers.pop().run()
+    state = WavesBridge.appleWrapperAuth(host)
+    assert posted == (["http://127.0.0.1:50100"] if verified is True else [])
+    assert state["login_ok"] is (verified is True)
+    assert not state["busy"]
+
+
+@pytest.mark.parametrize("action", ["login", "2fa"])
+@pytest.mark.parametrize("change", ["queued_settings", "startup_settings", "startup_stop"])
+def test_runtime_changes_during_a_credential_action_prevent_submission(tmp_path, monkeypatch, action, change):
+    host, sessions, workers, supervisor = _controlled_wrapper_login(tmp_path)
+    posted = []
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_login", lambda *args: posted.append(args) or {"ok": True}
+    )
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_login_2fa", lambda *args: posted.append(args) or {"ok": True}
+    )
+
+    def switch_runtime():
+        WavesBridge.applySettings(
+            host, {"apple_runtime_mode": "user_managed", "apple_wrapper_url": "http://127.0.0.1:50101"}
+        )
+
+    if change.startswith("startup"):
+
+        def start(**kwargs):
+            if change == "startup_settings":
+                switch_runtime()
+            else:
+                WavesBridge.stopAppleExecution(host)
+            return True
+
+        supervisor.ensure_started = start
+    if action == "login":
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+    else:
+        WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+    if change == "queued_settings":
+        switch_runtime()
+    workers.pop(0).run()
+    assert posted == []
+    assert WavesBridge.appleWrapperAuth(host)["login_ok"] is not True
+    assert not sessions.confirm_account("apple:wrapper-v2")
+
+
+@pytest.mark.parametrize("action", ["login", "2fa", "signout"])
+def test_account_actions_revoke_admission_before_the_worker_starts(tmp_path, action):
+    host, sessions, workers, _ = _controlled_wrapper_login(tmp_path)
+    revision = sessions.revision("apple:wrapper-v2")
+    assert WavesBridge.appleExecutionState(host)["state"] == "ready"
+    if action == "login":
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+    elif action == "2fa":
+        WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+    else:
+        WavesBridge.appleSignOut(host)
+    assert len(workers) == 1
+    assert sessions.revision("apple:wrapper-v2") != revision
+    assert WavesBridge.appleExecutionState(host)["state"] == "unknown"
+    assert not WavesBridge.appleExecutionState(host)["can_confirm"]
