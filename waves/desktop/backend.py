@@ -22988,6 +22988,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         WavesBridge._invalidate_apple_account_evidence(self)
         token = provider_contexts(self).capture(CTX_APPLE)
         generation = getattr(self, "_apple_session_gen", 0)
+
+        def current() -> bool:
+            return provider_contexts(self).current(token) and generation == getattr(self, "_apple_session_gen", 0)
+
+        def publish_result(result: dict) -> None:
+            def publish() -> None:
+                if current():
+                    self._apple_wrapper_login_result = result
+                    self.appleWrapperAuthChanged.emit()
+
+            if current():
+                WavesBridge._publish_apple_runtime(self, token, publish)
+
         self._apple_wrapper_login_inflight = True
         # A new attempt clears the last error and shows the form as busy
         # while the guest is provisioned, started and probed.
@@ -22998,14 +23011,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             try:
                 with _apple_auth_lock_for(self):
-                    if not provider_contexts(self).current(token) or generation != getattr(
-                        self, "_apple_session_gen", 0
-                    ):
+                    if not current():
                         return
                     result = callback()
-                    if not provider_contexts(self).current(token) or generation != getattr(
-                        self, "_apple_session_gen", 0
-                    ):
+                    if not current():
                         return
                     result = dict(result or {})
                     if result.get("ok") is False and not result.get("needs_2fa"):
@@ -23026,7 +23035,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                                 details=(str(result.get("error") or ""),),
                                 actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
                             ),
-                            lambda: provider_contexts(self).current(token),
+                            current,
                         )
                         result["error"] = failure.summary
                     elif result.get("ok") is True and not result.get("needs_2fa"):
@@ -23034,7 +23043,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                             self,
                             EventDomain.ACCOUNT,
                             key="wrapper-login",
-                            valid=lambda: provider_contexts(self).current(token),
+                            valid=current,
                         )
                     safe_result = {
                         "ok": result.get("ok"),
@@ -23043,11 +23052,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         if result.get("needs_2fa") or result.get("ok") is True
                         else redaction.scrub_event_text(str(result.get("error") or "")),
                     }
-                    if not provider_contexts(self).commit(
-                        token, lambda: setattr(self, "_apple_wrapper_login_result", safe_result)
-                    ):
-                        return
-                    if result and result.get("ok") and not result.get("needs_2fa"):
+                    publish_result(safe_result)
+                    if current() and result and result.get("ok") and not result.get("needs_2fa"):
                         self._refresh_apple_wrapper_auth()
             except Exception as exc:
                 logger.debug("Apple wrapper login call failed", exc_info=True)
@@ -23058,15 +23064,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     key="wrapper-login",
                     exception=exc,
                     references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
-                    valid=lambda: provider_contexts(self).current(token),
+                    valid=current,
                     actions=(EventAction.OPEN_SETTINGS, EventAction.COPY_DIAGNOSTICS),
                 )
-                if provider_contexts(self).current(token):
-                    self._apple_wrapper_login_result = {
+                publish_result(
+                    {
                         "ok": False,
                         "needs_2fa": False,
                         "error": "Sign-in failed. Try again.",
                     }
+                )
             finally:
                 self._apple_wrapper_login_inflight = False
                 with contextlib.suppress(Exception):

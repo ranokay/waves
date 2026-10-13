@@ -874,7 +874,7 @@ def test_wrapper_login_retry_resolves_only_its_notice_after_non_two_factor_succe
     stub._run_apple_wrapper_login(lambda: {"ok": True, "needs_2fa": True, "error": ""})
     loop.processEvents()
     assert stub.appleWrapperAuth()["needs_2fa"] is True
-    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is not None
+    assert not any(payload["lifecycle"] == "resolved" for payload in delivered)
 
     refreshed = []
     stub._refresh_apple_wrapper_auth = lambda: refreshed.append(True)
@@ -2477,3 +2477,89 @@ def test_account_actions_revoke_admission_before_the_worker_starts(tmp_path, act
     assert sessions.revision("apple:wrapper-v2") != revision
     assert WavesBridge.appleExecutionState(host)["state"] == "unknown"
     assert not WavesBridge.appleExecutionState(host)["can_confirm"]
+
+
+@pytest.mark.qml
+@pytest.mark.parametrize("outcome", ["failure", "success", "exception"])
+@pytest.mark.parametrize("action", ["login", "2fa"])
+def test_replaced_runtime_drops_delayed_login_results_and_notices(tmp_path, monkeypatch, outcome, action):
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    host, _, workers, _ = _controlled_wrapper_login(tmp_path)
+    pending = []
+    delivered = []
+    host._catalogEvent = SimpleNamespace(emit=pending.append)
+    host._events = ApplicationEvents()
+    host._events.changed.connect(delivered.append)
+    attention = application_event(
+        EventDomain.ACCOUNT,
+        "The current wrapper sign-in needs attention.",
+        key="wrapper-login",
+        references=EventReferences(provider_id="apple", runtime_id="apple:wrapper-v2"),
+        actions=(EventAction.COPY_DIAGNOSTICS,),
+    )
+    host._events.publish(attention)
+    loop.processEvents()
+
+    def request(*args):
+        if outcome == "exception":
+            raise RuntimeError("Isolated credential request failed")
+        return {"ok": outcome == "success", "needs_2fa": False, "error": "Isolated sign-in failure"}
+
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login", request)
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login_2fa", request)
+    try:
+        if action == "login":
+            WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+        else:
+            WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+        workers.pop(0).run()
+        assert WavesBridge.appleWrapperAuth(host)["login_ok"] is None
+        assert not WavesBridge.appleWrapperAuth(host)["busy"]
+
+        WavesBridge.applySettings(
+            host, {"apple_runtime_mode": "user_managed", "apple_wrapper_url": "http://127.0.0.1:50101"}
+        )
+        for event in pending:
+            WavesBridge._on_catalog_event(host, event)
+        loop.processEvents()
+
+        assert WavesBridge.appleWrapperAuth(host)["login_ok"] is None
+        assert WavesBridge.appleWrapperAuth(host)["login_error"] == ""
+        assert [payload["summary"] for payload in delivered] == [attention.summary]
+        assert host._events.action(attention.id, EventAction.COPY_DIAGNOSTICS) is not None
+    finally:
+        host._events.close()
+        loop.processEvents()
+
+
+@pytest.mark.qml
+def test_login_exception_after_runtime_switch_cannot_restore_the_form(tmp_path, monkeypatch):
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    host, _, workers, _ = _controlled_wrapper_login(tmp_path)
+    pending = []
+    delivered = []
+    host._catalogEvent = SimpleNamespace(emit=pending.append)
+    host._events = ApplicationEvents()
+    host._events.changed.connect(delivered.append)
+
+    def request(*args):
+        WavesBridge.applySettings(
+            host, {"apple_runtime_mode": "user_managed", "apple_wrapper_url": "http://127.0.0.1:50101"}
+        )
+        raise RuntimeError("Isolated credential request failed")
+
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login", request)
+    try:
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+        workers.pop(0).run()
+        for event in pending:
+            WavesBridge._on_catalog_event(host, event)
+        loop.processEvents()
+
+        assert WavesBridge.appleWrapperAuth(host)["login_ok"] is None
+        assert WavesBridge.appleWrapperAuth(host)["login_error"] == ""
+        assert not WavesBridge.appleWrapperAuth(host)["busy"]
+        assert delivered == []
+    finally:
+        host._events.close()
+        loop.processEvents()
