@@ -136,29 +136,23 @@ def _run_scenario() -> int:
     assert entries >= 3, "the boot sign-in error, the active issue and the completion are all kept"
     ids = [str(q(f"notificationCenter.items[{index}].id")) for index in range(entries)]
     assert ids.index(done.id) < ids.index(active.id), "the newest update leads the issue it followed"
-    expand = q(
-        scene_js(
-            "return findFirst(notificationCenter.contentItem,"
-            " function (o) { return o.objectName === 'notificationExpand'; });"
-        )
+    card = (
+        "findFirst(notificationCenter.contentItem, function (o) {"
+        " return o.objectName === 'notificationCard' && o.visible === true"
+        f" && o.identity === {json.dumps(active.id)}; }})"
     )
-    assert expand is not None, "rows expand"
-    q(
-        scene_js(
-            "findFirst(notificationCenter.contentItem,"
-            " function (o) { return o.objectName === 'notificationExpand'; }).triggered();"
-            " return 1;"
-        )
+    expander = "findFirst(c, function (o) { return o.objectName === 'notificationExpand' && o.visible === true; })"
+    wait_until(
+        lambda: bool(q(scene_js(f"var c = {card}; return c && {expander} !== null;"))),
+        timeout_ms=10000,
+        message="the retained issue has a visible detail expander",
     )
-    settle(100)
-    expanded = q(
-        scene_js(
-            "var c = findFirst(notificationCenter.contentItem,"
-            " function (o) { return o.objectName === 'notificationCard'; });"
-            " return c && c.expanded === true;"
-        )
+    q(scene_js(f"var c = {card}; {expander}.triggered(); return 1;"))
+    wait_until(
+        lambda: bool(q(scene_js(f"var c = {card}; return c && c.expanded === true;"))),
+        timeout_ms=10000,
+        message="the detail expander opens its retained issue row",
     )
-    assert bool(expanded), "the detail expander opens the row"
 
     checkpoint("every tab stop in the center is named")
     stops = json.loads(
