@@ -353,6 +353,58 @@ def test_native_probe_cancellation_reaps_only_its_owned_command(monkeypatch):
     assert all(process.poll() is not None for process in processes)
 
 
+def test_automatic_detection_uses_running_podman_without_retaining_host_diagnostics():
+    commands = []
+    execute = runner()
+
+    def run(command, **options):
+        commands.append(command)
+        if command[1:] == ["info"]:
+            if command[0] == "docker":
+                return subprocess.CompletedProcess(command, 1, b"private-host-diagnostic", b"")
+            return subprocess.CompletedProcess(command, 0, b"private-host-diagnostic", b"")
+        return execute(command, **options)
+
+    result = probe_lite_runtime(profile(), Event(), binary=None, runner=run)
+    assert result["protocol_compatible"] is True
+    assert commands[:2] == [["docker", "info"], ["podman", "info"]]
+    assert all(command[0] == "podman" for command in commands[2:])
+    assert "private-host-diagnostic" not in str(result)
+
+
+@pytest.mark.integration
+def test_cancellation_during_detection_reaps_its_command_without_starting_a_fallback(monkeypatch):
+    original = subprocess.Popen
+    processes, commands, results = [], [], []
+    started, finished, abort = Event(), Event(), Event()
+
+    def launch(command, **options):
+        commands.append(command)
+        process = original([sys.executable, "-c", "import time; time.sleep(60)"], **options)
+        processes.append(process)
+        started.set()
+        return process
+
+    def work():
+        try:
+            results.append(probe_lite_runtime(profile(), abort, binary=None))
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    thread = Thread(target=work, daemon=True)
+    thread.start()
+    try:
+        assert started.wait(timeout=2)
+    finally:
+        abort.set()
+    assert finished.wait(timeout=5)
+    thread.join(timeout=1)
+    assert results[0]["error"] == "cancelled"
+    assert commands == [["docker", "info"]]
+    assert processes[0].poll() is not None
+
+
 def test_native_probe_launch_failure_does_not_expose_external_diagnostics(monkeypatch):
     def unavailable(*args, **options):
         raise OSError("secret-runtime-diagnostic")

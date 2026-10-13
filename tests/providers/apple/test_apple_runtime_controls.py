@@ -31,7 +31,6 @@ def bridge(tmp_path):
         ),
         threadpool=SimpleNamespace(start=workers.append),
         _apple_sidecar_guard=nullcontext,
-        _refresh_apple_container_cache=lambda: {"name": "docker", "available": True, "running": True},
         _invalidate_apple_engine_facts=lambda: None,
         _configure_apple_provider=lambda: None,
     )
@@ -412,13 +411,15 @@ def test_lite_regions_never_admit_an_unverified_account(tmp_path, monkeypatch):
     assert sessions.readiness("apple:lite") != "ready"
 
 
-def test_lite_check_waits_for_fresh_container_detection_on_its_worker(tmp_path, monkeypatch):
+def test_lite_check_delegates_detection_without_mutating_the_container_cache(tmp_path, monkeypatch):
     host, sessions, workers, _ = bridge(tmp_path)
     profile = RuntimeProfile("apple:lite", RuntimeKind.USER_MANAGED, "lite-session-v1", container="isolated-lite")
     sessions.configure(profile)
     host._apple_lite_profile = profile
     host._apple_container_state = lambda: {"checking": True, "name": ""}
     host._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(host)
+    cached = {"at": 0, "result": {"name": "", "checking": True}}
+    host._apple_container_cache = cached
     detections, probes = [], []
 
     def detect(**options):
@@ -436,8 +437,10 @@ def test_lite_check_waits_for_fresh_container_detection_on_its_worker(tmp_path, 
     assert probes == []
     assert len(workers) == 1
     workers.pop().run()
-    assert detections == [{"timeout": 10}]
-    assert probes == ["podman"]
+    assert detections == []
+    assert probes == [None]
+    assert host._apple_container_cache is cached
+    assert cached == {"at": 0, "result": {"name": "", "checking": True}}
     assert WavesBridge.appleLiteRuntimeState(host)["reachable"] is True
 
 

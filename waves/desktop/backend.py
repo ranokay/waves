@@ -21297,11 +21297,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                container = self._refresh_apple_container_cache()
                 result = probe_lite_runtime(
                     profile,
                     abort,
-                    binary=str(container.get("name") or "docker"),
+                    binary=None,
                     application_kind="packaged" if runtime_paths.is_frozen() else "source",
                 )
 

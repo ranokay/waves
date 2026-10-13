@@ -232,7 +232,9 @@ def _close_command(process: subprocess.Popen[bytes], reader: Thread, reader_star
         process.stdout.close()
 
 
-def _native_command(command: list[str], payload: bytes | None, timeout: int, abort: Event) -> bytes:
+def _native_command(
+    command: list[str], payload: bytes | None, timeout: int, abort: Event
+) -> subprocess.CompletedProcess[bytes]:
     process = subprocess.Popen(  # noqa: S603 - fixed Docker operations, validated container, no shell
         command,
         stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
@@ -271,26 +273,44 @@ def _native_command(command: list[str], payload: bytes | None, timeout: int, abo
         reader.join(timeout=1)
         if reader.is_alive() or failed.is_set() or overflow.is_set():
             raise _ProbeFailed("runtime_probe_bound")
-        if process.returncode != 0:
+        if process.returncode is None:
             raise _ProbeFailed("runtime_probe_failed")
-        return bytes(output)
+        return subprocess.CompletedProcess(command, process.returncode, bytes(output), b"")
     finally:
         _close_command(process, reader, reader_started)
 
 
-def _command(command: list[str], payload: bytes | None, timeout: int, abort: Event, runner: _Runner | None) -> bytes:
+def _command_result(
+    command: list[str], payload: bytes | None, timeout: int, abort: Event, runner: _Runner | None
+) -> subprocess.CompletedProcess[bytes]:
     _check_abort(abort)
     if runner is None:
-        output = _native_command(command, payload, timeout, abort)
+        result = _native_command(command, payload, timeout, abort)
     else:
         result = runner(command, input=payload, timeout=timeout, capture_output=True)
-        _check_abort(abort)
-        if result.returncode != 0:
-            raise _ProbeFailed("runtime_probe_failed")
-        output = result.stdout
-    if not isinstance(output, bytes) or len(output) > _COMMAND_LIMIT:
+    _check_abort(abort)
+    if not isinstance(result.stdout, bytes) or len(result.stdout) > _COMMAND_LIMIT:
         raise _ProbeFailed("runtime_probe_bound")
-    return output
+    return result
+
+
+def _command(command: list[str], payload: bytes | None, timeout: int, abort: Event, runner: _Runner | None) -> bytes:
+    result = _command_result(command, payload, timeout, abort, runner)
+    if result.returncode != 0:
+        raise _ProbeFailed("runtime_probe_failed")
+    return result.stdout
+
+
+def _detect_binary(abort: Event, runner: _Runner | None) -> str:
+    from waves.providers.apple.runtime import detect_container_runtime
+
+    def run(command: list[str], *, timeout: int, **_options) -> subprocess.CompletedProcess[bytes]:
+        # Detection reads only return codes; capture stays bounded bytes.
+        return _command_result(command, None, timeout, abort, runner)
+
+    container = detect_container_runtime(runner=run, timeout=5)
+    _check_abort(abort)
+    return str(container.get("name") or "docker")
 
 
 def _rpc_body(output: bytes, protocol: Literal["status", "session"]) -> bytes:
@@ -422,7 +442,7 @@ def probe_lite_runtime(
     profile: RuntimeProfile,
     abort: Event,
     *,
-    binary: str = "docker",
+    binary: str | None = "docker",
     runner: _Runner | None = None,
     approval: LiteSessionApproval | None = None,
     application_kind: str = "source",
@@ -433,12 +453,16 @@ def probe_lite_runtime(
     Native commands bound output and poll cancellation. Legacy status regions
     leave authentication unknown. The versioned session route supplies fresh
     authentication and credential continuity, never an account identifier.
+    With binary=None, detect Docker/Podman using the same owned cancellable
+    commands. Detection stays local and publishes no shared bridge cache.
     """
     result = _unknown_status()
     contacted = False
     try:
         _check_abort(abort)
         port = _profile_port(profile)
+        if binary is None:
+            binary = _detect_binary(abort, runner)
         info = _json_object(
             _command([binary, "inspect", "--format", _INSPECTION, "--", profile.container], None, 5, abort, runner)
         )

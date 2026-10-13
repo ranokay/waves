@@ -6,7 +6,7 @@ import pytest
 from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 from support.qml_probe import scene_js
 
-from waves.providers.apple import lite_runtime, runtime
+from waves.providers.apple import lite_runtime
 from waves.providers.apple.runtime import AppleRuntimeCancelled
 from waves.providers.apple.supervision import RuntimeIdentity
 
@@ -145,7 +145,6 @@ def run() -> int:
     wait_until(lambda: bool(q(button_script("appleStopLiteRuntime"))), 5000, message="separate lite disconnect visible")
     assert not q(button_script("appleResumeLiteRuntime", visible_only=False))
     bridge._apple_container_state = lambda: {"name": "docker"}
-    runtime.detect_container_runtime = lambda **kwargs: {"name": "docker", "available": True, "running": True}
     lite_reply = {
         "reachable": True,
         "protocol_compatible": True,
