@@ -4314,7 +4314,7 @@ Item {
                               }
                             }
                             Loader {
-                              active: (setupCol.execution.mode !== "user_managed" && setupCol.execution.updates && setupCol.execution.updates.image && setupCol.execution.updates.image.rollback_available === true) === true
+                              active: (setupCol.execution.mode !== "user_managed" && setupCol.execution.image && setupCol.execution.image.rollback_available === true) === true
                               visible: active
                               width: item ? item.implicitWidth : 0
                               height: item ? item.implicitHeight : 0

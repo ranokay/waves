@@ -6,7 +6,7 @@ import pytest
 from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 from support.qml_probe import scene_js
 
-from waves.providers.apple import lite_runtime
+from waves.providers.apple import lite_runtime, runtime
 from waves.providers.apple.runtime import AppleRuntimeCancelled
 from waves.providers.apple.supervision import RuntimeIdentity
 
@@ -44,12 +44,30 @@ def run() -> int:
         return booted
     _, q, _, bridge = booted
     restored = []
+    bridge._apple_runtime.image_status = lambda: {
+        "image": "synthetic-restored-image",
+        "digest": "sha256:" + "a" * 64,
+        "rollback_available": True,
+    }
     bridge.appleRuntimeStatusChanged.connect(lambda: restored.append(True))
     q("waves.bootRevealed()")
     wait_until(
         lambda: bool(restored) and not bridge.appleExecutionState()["stopped"],
         5000,
         message="runtime stop choice restored",
+    )
+    q("waves.applySettings({apple_enabled: true, apple_runtime_mode: 'managed'})")
+    q("settingsOpen = true; settingsPage.jumpToCard('providers_apple')")
+    wait_until(
+        lambda: bridge.appleExecutionState()["image"].get("rollback_available") is True,
+        5000,
+        message="verified previous image receipt restored",
+    )
+    assert bridge.appleExecutionState()["updates"] == {}
+    wait_until(
+        lambda: bool(q(button_script("appleRollbackImage"))),
+        5000,
+        message="restored image rollback visible without update check",
     )
     bridge.apple_wrapper_auth_state = lambda **kwargs: {
         "reachable": True,
@@ -127,6 +145,7 @@ def run() -> int:
     wait_until(lambda: bool(q(button_script("appleStopLiteRuntime"))), 5000, message="separate lite disconnect visible")
     assert not q(button_script("appleResumeLiteRuntime", visible_only=False))
     bridge._apple_container_state = lambda: {"name": "docker"}
+    runtime.detect_container_runtime = lambda **kwargs: {"name": "docker", "available": True, "running": True}
     lite_reply = {
         "reachable": True,
         "protocol_compatible": True,

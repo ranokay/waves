@@ -20449,9 +20449,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def startupUpdateCheck(self) -> None:
         """Throttled, opt-in check fired once from QML at startup. No-ops unless
         ``auto_update`` is on; with the ``daily`` cadence it also skips if the
-        last check was under 24h ago. This is the only automatic outbound
-        request the app ever makes, and only when the user has enabled it."""
-        if not self._waves_pref_bool("auto_update") or not self._updater.is_configured():
+        last check was under 24h ago. App and Apple runtime checks share that
+        opt-in and cadence; Apple checks also run when this build has no
+        configured app updater."""
+        if not self._waves_pref_bool("auto_update"):
             return
         cadence = self._waves_prefs.get("update_cadence", "daily")
         try:
@@ -20464,7 +20465,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Stamp before firing so a slow check can't double-trigger.
         self._waves_prefs["update_last_check"] = now
         self._save_waves_prefs()
-        self.checkAppUpdate()
+        if self._updater.is_configured():
+            self.checkAppUpdate()
         check_runtime = getattr(self, "checkAppleRuntimeUpdate", None)
         if callable(check_runtime):
             check_runtime()
@@ -20482,9 +20484,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Clear any stale throttle stamp (a user who once enabled then disabled
         # auto-update in Settings still carries one), so the accept always
         # produces the immediate check the button promises. Reset to 0, never
-        # pop: the key doubles as setWavesPref's whitelist entry, and the
-        # dormant-updater early return in startupUpdateCheck would otherwise
-        # leave it missing for the rest of the session.
+        # pop: the key doubles as setWavesPref's whitelist entry.
         self._waves_prefs["update_last_check"] = 0
         self._waves_prefs["auto_update"] = True
         self._save_waves_prefs()
@@ -21297,7 +21297,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                container = self._apple_container_state()
+                container = self._refresh_apple_container_cache()
                 result = probe_lite_runtime(
                     profile,
                     abort,

@@ -31,6 +31,7 @@ def bridge(tmp_path):
         ),
         threadpool=SimpleNamespace(start=workers.append),
         _apple_sidecar_guard=nullcontext,
+        _refresh_apple_container_cache=lambda: {"name": "docker", "available": True, "running": True},
         _invalidate_apple_engine_facts=lambda: None,
         _configure_apple_provider=lambda: None,
     )
@@ -409,6 +410,70 @@ def test_lite_regions_never_admit_an_unverified_account(tmp_path, monkeypatch):
     assert not state["can_confirm"]
     WavesBridge.confirmAppleRuntimeSession(host, "apple:lite")
     assert sessions.readiness("apple:lite") != "ready"
+
+
+def test_lite_check_waits_for_fresh_container_detection_on_its_worker(tmp_path, monkeypatch):
+    host, sessions, workers, _ = bridge(tmp_path)
+    profile = RuntimeProfile("apple:lite", RuntimeKind.USER_MANAGED, "lite-session-v1", container="isolated-lite")
+    sessions.configure(profile)
+    host._apple_lite_profile = profile
+    host._apple_container_state = lambda: {"checking": True, "name": ""}
+    host._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(host)
+    detections, probes = [], []
+
+    def detect(**options):
+        detections.append(options)
+        return {"name": "podman", "available": True, "running": True}
+
+    def probe(*args, **options):
+        probes.append(options["binary"])
+        return {"reachable": True, "authenticated": None, "qualification": "pending"}
+
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", detect)
+    monkeypatch.setattr("waves.providers.apple.lite_runtime.probe_lite_runtime", probe)
+    WavesBridge.refreshAppleLiteRuntime(host)
+    assert detections == []
+    assert probes == []
+    assert len(workers) == 1
+    workers.pop().run()
+    assert detections == [{"timeout": 10}]
+    assert probes == ["podman"]
+    assert WavesBridge.appleLiteRuntimeState(host)["reachable"] is True
+
+
+@pytest.mark.parametrize(
+    "configured,automatic,cadence,age,checks",
+    [
+        (False, True, "daily", 90000, True),
+        (True, True, "daily", 90000, True),
+        (False, False, "daily", 90000, False),
+        (False, True, "daily", 300, False),
+        (True, True, "daily", 300, False),
+        (False, True, "launch", 300, True),
+    ],
+)
+def test_runtime_startup_checks_share_opt_in_and_cadence_without_requiring_app_updater(
+    tmp_path, monkeypatch, configured, automatic, cadence, age, checks
+):
+    host, _, workers, _ = bridge(tmp_path)
+    calls, saves = [], []
+    now = 200000
+    host._waves_prefs = {"auto_update": automatic, "update_cadence": cadence, "update_last_check": now - age}
+    host._waves_pref_bool = WavesBridge._waves_pref_bool.__get__(host)
+    host._updater = SimpleNamespace(is_configured=lambda: configured)
+    host._save_waves_prefs = lambda: saves.append(True)
+    host.checkAppUpdate = lambda: calls.append("app")
+    host.checkAppleRuntimeUpdate = WavesBridge.checkAppleRuntimeUpdate.__get__(host)
+    host._apple_runtime.update_status = lambda: calls.append("runtime") or {"binary": {}, "image": {}}
+    monkeypatch.setattr("waves.desktop.backend.time.time", lambda: now)
+    WavesBridge.startupUpdateCheck(host)
+    assert len(workers) == int(checks)
+    while workers:
+        workers.pop().run()
+    assert calls.count("runtime") == int(checks)
+    assert calls.count("app") == int(checks and configured)
+    assert len(saves) == int(checks)
+    assert host._waves_prefs["update_last_check"] == (now if checks else now - age)
 
 
 @pytest.mark.parametrize("approved", [False, True])
