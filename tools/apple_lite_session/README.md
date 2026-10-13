@@ -52,10 +52,22 @@ also fail; the observer does not infer account logout.
 
 The request uses the checked native CurlEasy transport, verified TLS, a fixed
 HTTPS URL, no redirects or proxy, bounded headers/body and one observation at a
-time. It performs no developer-token scrape, token refresh or media request.
-The native policy can override the requested five-second timeout to fifteen
-seconds; the guest RPC read timeout is eighteen seconds and its owned host
-command has a twenty-second bound. Host cancellation discards the result and
+time. Each observation obtains a developer token through the runtime's existing
+native SDK factory in a fresh helper executable. Its cached developer token can
+expire independently of the account token. Process exit reclaims opaque SDK
+allocations whose release operations are not qualified. The private helper
+bypasses argument files, sign-in and service startup; only a bounded anonymous
+pipe carries its token to the observer. EOF, exit 0 and a safe token are all
+required. A twenty-second deadline kills and reaps a stalled helper. The extension does not replace the cached account token
+or write credential files. Factory success remains insufficient; only the
+subsequent authenticated storefront response establishes authentication. No web
+developer-token scrape or media request is performed by the observer.
+The native policy can override each request's timeout to fifteen seconds.
+The guest RPC has a forty-second read timeout and its owned host command
+has a forty-five-second bound, allowing for the bounded helper and storefront
+request. SDK acquisition failure or timeout leaves the result unknown. SDK
+initialization can access its own runtime storage; the extension does not claim
+that native storage is read-only. Host cancellation discards the result and
 reaps its command. Cancellation of the guest's in-flight native request and its
 latency require native qualification.
 

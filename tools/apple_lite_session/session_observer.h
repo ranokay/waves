@@ -290,6 +290,20 @@ inline std::string version(const struct stat& info) {
     return value.str();
 }
 
+inline std::string directory_version(const struct stat& info) {
+#ifdef __linux__
+    // inotify records directory metadata and credential-file ABA changes.
+    // Unrelated SDK storage must not change this credential witness.
+    std::ostringstream value;
+    value << info.st_dev << ':' << info.st_ino << ':' << info.st_mode << ':' << info.st_uid;
+    return value.str();
+#else
+    return version(info);
+#endif
+}
+
+const char* const kCredentialFileNames[] = {"DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"};
+
 struct Files {
     bool valid = false;
     std::string dev_token, music_token, storefront, versions;
@@ -301,11 +315,10 @@ inline Files read_files(const std::string& directory) {
     if (dir < 0) return files;
     struct stat owner;
     bool valid = fstat(dir, &owner) == 0 && S_ISDIR(owner.st_mode) && owner.st_uid == geteuid() && (owner.st_mode & 0777) == 0700;
-    if (valid) files.versions = version(owner);
-    const char* names[] = {"DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"};
+    if (valid) files.versions = directory_version(owner);
     std::string* values[] = {&files.dev_token, &files.music_token, &files.storefront};
     for (size_t i = 0; valid && i < 3; ++i) {
-        const int fd = openat(dir, names[i], O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+        const int fd = openat(dir, kCredentialFileNames[i], O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
         struct stat before, after;
         valid = fd >= 0 && fstat(fd, &before) == 0 && S_ISREG(before.st_mode) && before.st_uid == geteuid() &&
             (before.st_mode & 0777) == 0600 && before.st_nlink == 1 && before.st_size > 0 && before.st_size <= static_cast<off_t>(kTokenLimit);
@@ -324,7 +337,7 @@ inline Files read_files(const std::string& directory) {
         while (!values[i]->empty() && (values[i]->back() == '\r' || values[i]->back() == '\n' || values[i]->back() == ' ')) values[i]->pop_back();
     }
     struct stat after;
-    if (valid) valid = fstat(dir, &after) == 0 && version(owner) == version(after);
+    if (valid) valid = fstat(dir, &after) == 0 && directory_version(owner) == directory_version(after);
     if (close(dir) != 0) valid = false;
     files.valid = valid;
     return files;
@@ -380,10 +393,20 @@ public:
                 directory_.clear();
                 return true;
             }
-            changed = true;
             for (size_t offset = 0; offset < static_cast<size_t>(amount);) {
+                if (static_cast<size_t>(amount) - offset < sizeof(struct inotify_event)) { unavailable = true; return true; }
                 const struct inotify_event* event = reinterpret_cast<const struct inotify_event*>(buffer + offset);
-                if (event->mask & (IN_Q_OVERFLOW | IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) unavailable = true;
+                if (event->len > static_cast<size_t>(amount) - offset - sizeof(struct inotify_event)) { unavailable = true; return true; }
+                const bool lost = event->mask & (IN_Q_OVERFLOW | IN_IGNORED | IN_UNMOUNT | IN_DELETE_SELF | IN_MOVE_SELF);
+                if (lost) unavailable = true;
+                if (!event->len || lost) changed = true;
+                else {
+                    size_t length = 0;
+                    while (length < event->len && event->name[length]) ++length;
+                    if (length == event->len) { unavailable = true; return true; }
+                    const std::string name(event->name, length);
+                    for (const char* credential : kCredentialFileNames) if (name == credential) changed = true;
+                }
                 offset += sizeof(struct inotify_event) + event->len;
             }
         }

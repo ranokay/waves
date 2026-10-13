@@ -54,7 +54,7 @@ try:
 except Exception:
     sys.exit(1)
 """
-_SESSION_RPC = _STATUS_RPC.replace("'GET', '/status'", "'GET', '/waves/session/v1'").replace("timeout=5", "timeout=18")
+_SESSION_RPC = _STATUS_RPC.replace("'GET', '/status'", "'GET', '/waves/session/v1'").replace("timeout=5", "timeout=40")
 _SESSION_ERRORS = {
     "",
     "credentials_unavailable",
@@ -479,7 +479,7 @@ def probe_lite_runtime(
                 _SESSION_RPC if profile.protocol == "lite-session-v1" else _STATUS_RPC,
             ],
             json.dumps({"port": port}).encode(),
-            20 if profile.protocol == "lite-session-v1" else 10,
+            45 if profile.protocol == "lite-session-v1" else 10,
             abort,
             runner,
         )

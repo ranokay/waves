@@ -30,10 +30,16 @@ inline size_t receive_body(char* data, size_t size, size_t count, void* context)
     }
 }
 
-inline UpstreamResponse request_storefront(const std::string& developer, const std::string& music) {
+inline UpstreamResponse request_storefront(const std::string& persisted_developer, const std::string& music,
+        const std::function<std::string()>& developer_source) {
     UpstreamResponse response;
     response.transport_ok = false;
-    if (!header_valid(developer) || !header_valid(music)) return response;
+    if (!header_valid(persisted_developer) || !header_valid(music)) return response;
+    // Native developer tokens expire independently of the cached account token.
+    // Only the live request below establishes authentication. The persisted
+    // context stays intact while the isolated source supplies a fresh token.
+    const std::string developer = developer_source();
+    if (!header_valid(developer)) return response;
     CurlEasy curl;
     if (!curl.ok) return response;
     CurlSlist headers;

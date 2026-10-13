@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,11 @@ int main(int argc, char** argv) {
             if (rename(replacement.c_str(), file.c_str()) != 0) return UpstreamResponse();
             if (mode == "file_aba" && rename((directory + "/retained").c_str(), file.c_str()) != 0) return UpstreamResponse();
         }
+        if (mode == "runtime_storage") {
+            std::ofstream state(directory + "/SYNTHETIC_RUNTIME_STATE");
+            state << "unrelated-runtime-state";
+        }
+        if (mode == "directory_aba") { chmod(directory.c_str(), 0755); chmod(directory.c_str(), 0700); }
         if (mode == "remove") unlink((directory + "/MUSIC_TOKEN").c_str());
         if (mode == "busy") busy = observer.observe(directory, source, [](const std::string&, const std::string&) { return UpstreamResponse(); }).json();
         UpstreamResponse response;
@@ -133,6 +139,7 @@ VALID_BODY = '{"data":[{"id":"ro","type":"storefronts"}]}'
 
 
 def observe(program, directory, mode="success", body=VALID_BODY):
+    (directory / "fixture-mode").write_text(mode)
     result = subprocess.run(  # noqa: S603 (owned observer and synthetic credential directory)
         [str(program), str(directory), mode], input=body, capture_output=True, text=True, timeout=5
     )
@@ -151,6 +158,7 @@ def observe(program, directory, mode="success", body=VALID_BODY):
         ("cache_mismatch", "credentials_unavailable"),
         ("cached_aba", "credential_context_changed"),
         ("file_aba", "credential_context_changed"),
+        ("directory_aba", "credential_context_changed"),
         ("remove", "credential_context_changed"),
         ("seed_failed", "observer_unavailable"),
     ],
@@ -240,7 +248,7 @@ def test_wiring_patch_contains_the_tested_observer_and_exact_source_outputs():
     # the separately applied source patch from drifting from those headers.
     manifest = json.loads((SOURCE / "manifest.json").read_text())
     assert hashlib.sha256((SOURCE / "session-observer.patch").read_bytes()).hexdigest() == manifest["patch_sha256"]
-    for name in ("session_observer.h", "session_transport.h"):
+    for name in ("session_observer.h", "session_transport.h", "session_developer.h"):
         assert hashlib.sha256((SOURCE / name).read_bytes()).hexdigest() == manifest["outputs"]["lite/" + name]
         section = (SOURCE / "session-observer.patch").read_text().split("+++ b/lite/" + name + "\n", 1)[1]
         added = []
@@ -286,7 +294,8 @@ CURLOPT_ACCEPT_ENCODING
 };
 const long CURLPROTO_HTTPS = 2;
 extern std::string mode;
-extern size_t calls;
+extern size_t calls, developer_calls, sdk_calls;
+std::string fetch_dev_token();
 struct CurlSlist {
     void* list = this;
     bool ok = true;
@@ -309,14 +318,22 @@ struct CurlEasy {
     source = folder / "transport.cpp"
     source.write_text(r"""
 #include "session_transport.h"
+#include "session_developer.h"
+#include <fstream>
 #include <iostream>
 std::string mode;
-size_t calls = 0;
+size_t calls = 0, developer_calls = 0, sdk_calls = 0;
+std::string fetch_dev_token() {
+    ++sdk_calls;
+    throw std::runtime_error("private SDK allocations must stay in the helper");
+}
 bool CurlEasy::perform() {
     ++calls;
     const CurlSlist* headers = static_cast<CurlSlist*>(pointers[CURLOPT_HTTPHEADER]);
     if (mode == "perform_failed" || !headers ||
-        headers->entries != std::vector<std::string>{"Authorization: Bearer synthetic-developer", "Music-User-Token: synthetic-user", "Accept: application/json"} ||
+        headers->entries != std::vector<std::string>{
+            mode == "expired_developer" ? "Authorization: Bearer synthetic-renewed-developer" : "Authorization: Bearer synthetic-developer",
+            "Music-User-Token: synthetic-user", "Accept: application/json"} ||
         strings[CURLOPT_URL] != "https://api.music.apple.com/v1/me/storefront" ||
         strings[10004] != "" || strings[10177] != "*" || strings[CURLOPT_ACCEPT_ENCODING] != "identity" ||
         numbers[CURLOPT_SSL_VERIFYPEER] != 1 || numbers[CURLOPT_SSL_VERIFYHOST] != 2 ||
@@ -329,6 +346,27 @@ bool CurlEasy::perform() {
     return writer && writer(&body[0], 1, body.size(), pointers[CURLOPT_WRITEDATA]) == body.size();
 }
 int main(int argc, char** argv) {
+    if (argc == 4 && std::string(argv[1]) == "--waves-session-developer" && std::string(argv[2]) == "--base-dir") {
+        if (!waves_lite_session::developer_output_ready()) _exit(2);
+        const std::string directory = argv[3];
+        std::ifstream input(directory + "/fixture-mode");
+        std::getline(input, mode);
+        std::ofstream pid_file(directory + "/../helper.pid");
+        pid_file << getpid(); pid_file.close();
+        // A helper's unrelated logs never share the private token channel.
+        std::cout << "private-stdout-secret" << std::endl;
+        std::cerr << "private-stderr-secret" << std::endl;
+        if (mode == "developer_killed") kill(getpid(), SIGKILL);
+        if (mode == "developer_exception") _exit(7);
+        if (mode == "developer_deadline") { poll(nullptr, 0, 30000); _exit(0); }
+        const std::string token = mode == "expired_developer" ? "synthetic-renewed-developer" :
+            mode == "developer_unavailable" ? "" :
+            mode == "developer_unsafe" ? "private-secret\r\nInjected: secret" :
+            mode == "developer_oversized" ? std::string(8193, 'x') : "synthetic-developer";
+        // Deliberately hostile synthetic helpers exercise the receiving boundary.
+        if (!token.empty() && write(3, token.data(), token.size()) != static_cast<ssize_t>(token.size())) _exit(8);
+        _exit(mode == "developer_partial_failure" ? 9 : 0);
+    }
     if (argc != 3) return 2;
     mode = argv[2];
     waves_lite_session::Observer observer;
@@ -338,8 +376,13 @@ int main(int argc, char** argv) {
         out.storefront = "ro";
         out.generation = 1;
         return true;
-    }, waves_lite_session::request_storefront);
-    std::cout << observation.json() << std::endl << "{\"calls\":" << calls << "}" << std::endl;
+    }, [&](const std::string& developer, const std::string& music) {
+        return waves_lite_session::request_storefront(developer, music, [&] {
+            ++developer_calls;
+            return waves_lite_session::read_developer_process(argv[1], argv[0]);
+        });
+    });
+    std::cout << observation.json() << std::endl << "{\"calls\":" << calls << ",\"developer_calls\":" << developer_calls << ",\"sdk_calls\":" << sdk_calls << "}" << std::endl;
 }
 """)
     binary = folder / "transport"
@@ -388,3 +431,71 @@ def test_native_transport_requires_verified_fixed_request_and_truthful_failures(
     assert packets[-1]["calls"] == calls
     assert packets[0]["storefront"] == ("ro" if authenticated else "")
     assert "synthetic" not in result.stdout
+
+
+def test_expired_cached_developer_does_not_block_current_account_verification(native_transport_program, tmp_path):
+    packets, result = observe(native_transport_program, credentials(tmp_path), "expired_developer")
+    assert packets[0]["authenticated"] is True
+    assert packets[0]["storefront"] == "ro"
+    assert packets[0]["account_id"] == ""
+    assert "synthetic" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "developer_unavailable",
+        "developer_unsafe",
+        "developer_exception",
+        "developer_killed",
+        "developer_partial_failure",
+        "developer_oversized",
+    ],
+)
+def test_failed_developer_helper_cannot_advertise_authentication(native_transport_program, tmp_path, mode):
+    packets, result = observe(native_transport_program, credentials(tmp_path), mode)
+    assert packets[0]["authenticated"] is None
+    assert packets[0]["account_id"] == ""
+    assert packets[0]["storefront"] == ""
+    assert packets[-1]["calls"] == 0
+    assert "private" not in result.stdout
+    assert "synthetic" not in result.stdout
+
+
+def test_each_check_verifies_the_account_and_reaps_its_sdk_helper(native_transport_program, tmp_path):
+    packets, result = observe(native_transport_program, credentials(tmp_path))
+    assert packets[0]["authenticated"] is True
+    assert packets[-1] == {"calls": 1, "developer_calls": 1, "sdk_calls": 0}
+    assert "synthetic" not in result.stdout
+    assert "private" not in result.stdout + result.stderr
+    child = int((tmp_path / "helper.pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)
+
+
+def test_developer_helper_deadline_kills_and_reaps_without_authentication(native_transport_program, tmp_path):
+    directory = credentials(tmp_path)
+    (directory / "fixture-mode").write_text("developer_deadline")
+    result = subprocess.run(  # noqa: S603 (owned synthetic helper and observer)
+        [str(native_transport_program), str(directory), "developer_deadline"],
+        input=VALID_BODY,
+        capture_output=True,
+        text=True,
+        timeout=25,
+    )
+    assert result.returncode == 0
+    packet = json.loads(result.stdout.splitlines()[0])
+    assert packet["authenticated"] is None
+    assert packet["error"] == "upstream_unavailable"
+    child = int((directory.parent / "helper.pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)
+    assert "private" not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux inotify separates runtime storage from credentials")
+def test_unrelated_runtime_storage_does_not_revoke_unchanged_credentials(observer_program, tmp_path):
+    packets, _ = observe(observer_program, credentials(tmp_path), "runtime_storage")
+    assert packets[0]["authenticated"] is True
+    assert packets[0]["storefront"] == "ro"
+    assert packets[0]["error"] == ""

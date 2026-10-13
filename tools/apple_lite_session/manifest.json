@@ -17,11 +17,12 @@
     "lite/login_child.h": "7ca8c4162cf60a7c74a802333be9621f990be71d012be04aa7ba617d0210de7d",
     "lite/logger.h": "621c590233b5c66985787d37475e8521288bbd610db815c79c99d1abf8a2b029"
   },
-  "patch_sha256": "a1b29146c26aa88692979600fc720403f3e8b78deead14fd0228d72625137ab8",
+  "patch_sha256": "3bc4f36df97e193ae4c8e2c318d70af94548afdace29eaf10cfb97436055cf7c",
   "outputs": {
-    "lite/lite_main.cpp": "cb96178894dfcbdb4f686c809d77f1dd898caf736fc9568470c38af4a9c26a1a",
-    "lite/session_observer.h": "0dc6b838340b749ac02226a7515c243af724259a62297071313eaa030a88c21b",
-    "lite/session_transport.h": "54f365428d2af7f6cf41169acacb02c19f5b33d9d45db390c10659c7e777bf07"
+    "lite/lite_main.cpp": "21b8c3203f268e677d93e78ca723fcf7a8f6345c5169745574169ef1fe8f01e5",
+    "lite/session_observer.h": "a178bb2a93f3afc424d599bec70fbb84c02bfae59d5cdb91f6bf68b2a776f05c",
+    "lite/session_transport.h": "c54c8749e2568c8c1c77b9ff796a1c28646d906d0d21a32e13f01cf6316e18d8",
+    "lite/session_developer.h": "9533428e9cf13740f722d036356df80aa0d058c2f60ad37c952fcd0ee945671a"
   },
   "native_qualification": "pending",
   "artifact_approval": "pending"
