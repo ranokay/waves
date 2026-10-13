@@ -5,9 +5,12 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import QCoreApplication
 from support.bridge_stub import BridgeStub
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.diagnostics.events import ApplicationEvents
+from waves.desktop.providers.lifecycle import provider_contexts
 from waves.providers.apple.runtime import AppleRuntimeManager
 from waves.providers.apple.runtime_sessions import AppleRuntimeSessions, RuntimeKind, RuntimeProfile, SessionEvidence
 from waves.providers.apple.supervision import RuntimeIdentity, SidecarSupervisor
@@ -359,6 +362,123 @@ def test_update_policy_never_installs_an_external_runtime_image(tmp_path):
     WavesBridge.checkAppleRuntimeUpdate(host)
     workers.pop().run()
     assert calls == []
+
+
+@pytest.fixture
+def update_check_bridge(tmp_path):
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    host, _, workers, _, deliveries = account_bridge(tmp_path)
+    host._events = ApplicationEvents()
+    host._events.changed.connect(host.applicationEvent.emit)
+    try:
+        yield host, workers, deliveries, loop
+    finally:
+        host._events.close()
+        loop.processEvents()
+
+
+@pytest.mark.qml
+def test_failed_runtime_update_check_replaces_stale_offer_and_recovers_on_success(update_check_bridge):
+    host, workers, deliveries, loop = update_check_bridge
+    installs = []
+    host._waves_pref_bool = lambda key: True
+    host._apple_busy = lambda: False
+    host.installAppleRuntime = lambda: installs.append("binary")
+    host._apple_runtime.update_status = lambda: {"available": True, "binary": {"available": True}}
+    WavesBridge.checkAppleRuntimeUpdate(host)
+    workers.pop().run()
+    WavesBridge._on_catalog_event(host, deliveries.pop())
+    loop.processEvents()
+    assert WavesBridge.appleExecutionState(host)["updates"]["available"]
+
+    def fail_check():
+        raise RuntimeError("private-upstream-secret")
+
+    host._apple_runtime.update_status = fail_check
+    host.settings.data.apple_runtime_auto_install = True
+    changed = len(host.appleRuntimeStatusChanged.emits)
+    WavesBridge.checkAppleRuntimeUpdate(host)
+    workers.pop().run()
+    assert WavesBridge.appleExecutionState(host)["updates"]["available"]
+    assert len(host.appleRuntimeStatusChanged.emits) == changed
+    assert host.applicationEvent.emits == []
+
+    WavesBridge._on_catalog_event(host, deliveries.pop())
+    loop.processEvents()
+    failure = WavesBridge.appleExecutionState(host)["updates"]
+    assert failure == {"available": False, "error": "Could not check Apple runtime updates. Try again in Settings."}
+    assert len(host.appleRuntimeStatusChanged.emits) == changed + 1
+    notice = host.applicationEvent.emits[-1]
+    assert notice["summary"] == failure["error"]
+    assert notice["lifecycle"] == "active"
+    assert notice["actions"] == ["open_settings"]
+    assert "private-upstream-secret" not in str(notice)
+    assert installs == []
+
+    host._apple_runtime.update_status = lambda: {"available": False}
+    WavesBridge.checkAppleRuntimeUpdate(host)
+    workers.pop().run()
+    WavesBridge._on_catalog_event(host, deliveries.pop())
+    loop.processEvents()
+    assert WavesBridge.appleExecutionState(host)["updates"] == {"available": False}
+    resolved = host.applicationEvent.emits[-1]
+    assert resolved["id"] == notice["id"]
+    assert resolved["lifecycle"] == "resolved"
+
+
+@pytest.mark.qml
+@pytest.mark.parametrize("pending_stage", ["worker", "notification"])
+def test_newer_runtime_update_check_supersedes_an_older_failure(update_check_bridge, pending_stage):
+    host, workers, deliveries, loop = update_check_bridge
+    host._waves_pref_bool = lambda key: False
+    latest = {"available": True, "binary": {"available": True}}
+
+    def fail_check():
+        raise RuntimeError("private-upstream-secret")
+
+    WavesBridge.checkAppleRuntimeUpdate(host)
+    older = workers.pop()
+    if pending_stage == "notification":
+        host._apple_runtime.update_status = fail_check
+        older.run()
+        WavesBridge._on_catalog_event(host, deliveries.pop())
+    WavesBridge.checkAppleRuntimeUpdate(host)
+    host._apple_runtime.update_status = lambda: latest
+    workers.pop().run()
+    WavesBridge._on_catalog_event(host, deliveries.pop())
+
+    if pending_stage == "worker":
+        host._apple_runtime.update_status = fail_check
+        older.run()
+    for event in deliveries:
+        WavesBridge._on_catalog_event(host, event)
+    loop.processEvents()
+    assert WavesBridge.appleExecutionState(host)["updates"] == latest
+    assert host.applicationEvent.emits == []
+
+
+@pytest.mark.qml
+@pytest.mark.parametrize("failure_delivered", [False, True])
+def test_provider_context_change_discards_pending_update_failure_notice(update_check_bridge, failure_delivered):
+    host, workers, deliveries, loop = update_check_bridge
+
+    def fail_check():
+        raise RuntimeError("private-upstream-secret")
+
+    host._apple_runtime.update_status = fail_check
+    WavesBridge.checkAppleRuntimeUpdate(host)
+    workers.pop().run()
+    queued = deliveries.pop()
+    if failure_delivered:
+        WavesBridge._on_catalog_event(host, queued)
+    changed = len(host.appleRuntimeStatusChanged.emits)
+    provider_contexts(host).revoke("apple")
+    if not failure_delivered:
+        WavesBridge._on_catalog_event(host, queued)
+        assert WavesBridge.appleExecutionState(host)["updates"] == {}
+    loop.processEvents()
+    assert len(host.appleRuntimeStatusChanged.emits) == changed
+    assert host.applicationEvent.emits == []
 
 
 def test_lite_disconnect_is_immediate_independent_and_persists_without_service_commands(tmp_path):

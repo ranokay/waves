@@ -21557,13 +21557,44 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if manager is None:
             return
         token = provider_contexts(self).capture(CTX_APPLE)
+        generation = getattr(self, "_apple_runtime_update_gen", 0) + 1
+        self._apple_runtime_update_gen = generation
+
+        def current() -> bool:
+            return provider_contexts(self).current(token) and generation == self._apple_runtime_update_gen
 
         def work() -> None:
-            status = manager.update_status()
+            try:
+                status: dict = manager.update_status()
+            except Exception:
+                status = {
+                    "available": False,
+                    "error": "Could not check Apple runtime updates. Try again in Settings.",
+                }
 
             def publish() -> None:
+                if not current():
+                    return
                 self._apple_runtime_update_cache = status
                 self.appleRuntimeStatusChanged.emit()
+                if status.get("error"):
+                    report_failure(
+                        self,
+                        EventDomain.RUNTIME,
+                        status["error"],
+                        scope=FailureScope.CONFIGURATION,
+                        key="apple-runtime-update-check",
+                        references=EventReferences(provider_id=CTX_APPLE, runtime_id="apple:wrapper-v2"),
+                        valid=current,
+                        actions=(EventAction.OPEN_SETTINGS,),
+                    )
+                    return
+                resolve_events(
+                    self,
+                    EventDomain.RUNTIME,
+                    key="apple-runtime-update-check",
+                    valid=current,
+                )
                 data = getattr(getattr(self, "settings", None), "data", None)
                 sessions = getattr(self, "_apple_runtime_sessions", None)
                 if (
