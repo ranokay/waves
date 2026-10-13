@@ -19,7 +19,7 @@ import sys
 import time
 from dataclasses import dataclass
 from threading import Event, Thread
-from typing import Protocol, TypedDict, Unpack
+from typing import Literal, Protocol, TypedDict, Unpack
 from urllib.parse import urlsplit
 
 from waves.providers.apple.child_guard import NO_WINDOW
@@ -293,17 +293,21 @@ def _command(command: list[str], payload: bytes | None, timeout: int, abort: Eve
     return output
 
 
-def _regions(output: bytes) -> list[str]:
+def _rpc_body(output: bytes, protocol: Literal["status", "session"]) -> bytes:
     reply = _json_object(output)
     if type(reply.get("status")) is not int or reply["status"] != 200 or reply.get("encoding") != "identity":
-        raise _ProbeFailed("invalid_status_http_response")
+        raise _ProbeFailed(f"invalid_{protocol}_http_response")
     try:
         body = base64.b64decode(reply["body"], validate=True)
     except (KeyError, TypeError, ValueError, binascii.Error) as exc:
-        raise _ProbeFailed("invalid_status_rpc_response") from exc
+        raise _ProbeFailed(f"invalid_{protocol}_rpc_response") from exc
     if not 0 < len(body) <= _STATUS_LIMIT:
-        raise _ProbeFailed("status_response_bound")
-    status = _json_object(body)
+        raise _ProbeFailed(f"{protocol}_response_bound")
+    return body
+
+
+def _regions(output: bytes) -> list[str]:
+    status = _json_object(_rpc_body(output, "status"))
     data = status.get("data")
     if type(status.get("code")) is not int or status["code"] != 0 or not isinstance(status.get("msg"), str):
         raise _ProbeFailed("invalid_status_protocol")
@@ -329,16 +333,7 @@ def _admit_inspection(info: dict, profile: RuntimeProfile, port: int, result: Li
 
 
 def _session_observation(output: bytes, result: LiteRuntimeStatus) -> None:
-    reply = _json_object(output)
-    if type(reply.get("status")) is not int or reply["status"] != 200 or reply.get("encoding") != "identity":
-        raise _ProbeFailed("invalid_session_http_response")
-    try:
-        body = base64.b64decode(reply["body"], validate=True)
-    except (KeyError, TypeError, ValueError) as exc:
-        raise _ProbeFailed("invalid_session_rpc_response") from exc
-    if not 0 < len(body) <= _STATUS_LIMIT:
-        raise _ProbeFailed("session_response_bound")
-    packet = _json_object(body)
+    packet = _json_object(_rpc_body(output, "session"))
     if set(packet) != {"protocol", "authenticated", "storefront", "account_id", "session_revision", "error"}:
         raise _ProbeFailed("invalid_session_protocol")
     authenticated, storefront = packet["authenticated"], packet["storefront"]
