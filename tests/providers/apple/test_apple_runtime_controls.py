@@ -53,6 +53,61 @@ def account_bridge(tmp_path):
     return host, sessions, workers, commands, deliveries
 
 
+def records_bridge(tmp_path):
+    from waves.model.cfg import Settings
+    from waves.providers.apple.provider import AppleProvider
+
+    host, sessions, workers, commands, deliveries = account_bridge(tmp_path)
+    host.providers = {"apple": AppleProvider()}
+    host.settings.data = Settings()
+    host._waves_prefs = {}
+    host._settings_save_lock = Lock()
+    host._ffmpeg_flag_prefs = {}
+    host._resolve_ffmpeg_locked = lambda: ""
+    host._resolve_apple_wrapper_url = lambda: "http://127.0.0.1:50100"
+    host._configure_apple_provider = WavesBridge._configure_apple_provider.__get__(host)
+    host._submit_settings_write = lambda: None
+    host._ffmpeg_source_label = lambda: "missing"
+    host._logged_in = False
+    host._set_status = lambda message: None
+    host._apple_quarantine_root = lambda: tmp_path / "quarantine"
+    return host, sessions, workers, commands, deliveries
+
+
+def test_restored_image_survives_an_intervening_account_observation(tmp_path, monkeypatch):
+    host, _, workers, _, deliveries = records_bridge(tmp_path)
+    receipt = {"image": "synthetic-approved-image", "digest": "sha256:" + "a" * 64}
+    host._apple_runtime.image_status = lambda: receipt
+    host._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(True, "current-instance")
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_auth_state",
+        lambda *args, **kwargs: {"reachable": True, "state": "authenticated", "account_id": "synthetic-account"},
+    )
+    WavesBridge.applySettings(host, {"apple_wrapper_port": 50100})
+    workers.pop().run()
+    WavesBridge.appleWrapperAuth(host)
+    workers.pop().run()
+    deliveries.pop().deliver()
+    assert WavesBridge.appleWrapperAuth(host)["state"] == "authenticated"
+    deliveries.pop().deliver()
+    assert WavesBridge.appleExecutionState(host)["image"] == receipt
+
+
+def test_newer_image_restoration_supersedes_an_older_queued_result(tmp_path):
+    host, _, workers, _, deliveries = records_bridge(tmp_path)
+    first = {"image": "first-approved-image", "digest": "sha256:" + "a" * 64}
+    latest = {"image": "latest-approved-image", "digest": "sha256:" + "b" * 64}
+    receipts = iter((first, latest))
+    host._apple_runtime.image_status = lambda: next(receipts)
+    WavesBridge.applySettings(host, {"apple_wrapper_port": 50100})
+    workers.pop().run()
+    WavesBridge.applySettings(host, {"apple_wrapper_port": 50101})
+    workers.pop().run()
+    deliveries.pop().deliver()
+    deliveries.pop().deliver()
+    assert WavesBridge.appleExecutionState(host)["image"] == latest
+
+
 def test_public_stop_disconnects_external_runtime_on_worker_and_can_be_explicitly_resumed(tmp_path):
     host, sessions, workers, commands = bridge(tmp_path)
     WavesBridge.stopAppleExecution(host)
@@ -354,6 +409,76 @@ def test_lite_regions_never_admit_an_unverified_account(tmp_path, monkeypatch):
     assert not state["can_confirm"]
     WavesBridge.confirmAppleRuntimeSession(host, "apple:lite")
     assert sessions.readiness("apple:lite") != "ready"
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_lite_account_confirmation_requires_both_fresh_session_and_artifact_approval(tmp_path, monkeypatch, approved):
+    from waves.providers.apple.runtime_sessions import AccountContext
+
+    host, sessions, workers, _ = bridge(tmp_path)
+    profile = RuntimeProfile("apple:lite", RuntimeKind.USER_MANAGED, "lite-session-v1", container="isolated-lite")
+    sessions.configure(profile)
+    sessions.set_account(AccountContext("active-account", "ro", "cookies-one"))
+    host._apple_lite_profile = profile
+    host._apple_container_state = lambda: {"name": "docker"}
+    result = {
+        "reachable": True,
+        "protocol_compatible": True,
+        "session_protocol_compatible": True,
+        "artifact_verified": True,
+        "authenticated": True,
+        "account_id": "",
+        "storefront": "ro",
+        "session_revision": "observed-session-one",
+        "qualification": "approved" if approved else "pending",
+        "approval_record": "https://example.test/qualification" if approved else "",
+    }
+    monkeypatch.setattr("waves.providers.apple.lite_runtime.probe_lite_runtime", lambda *args, **kwargs: dict(result))
+    WavesBridge.refreshAppleLiteRuntime(host)
+    workers.pop().run()
+    observed = WavesBridge.appleLiteRuntimeState(host)
+    assert observed["authenticated"] is True
+    assert observed["qualification"] == result["qualification"]
+    assert observed["can_confirm"] is approved
+    WavesBridge.confirmAppleRuntimeSession(host, "apple:lite")
+    assert (WavesBridge.appleLiteRuntimeState(host)["state"] == "ready") is approved
+    if approved:
+        result["session_revision"] = "observed-session-two"
+        WavesBridge.refreshAppleLiteRuntime(host)
+        workers.pop().run()
+        assert WavesBridge.appleLiteRuntimeState(host)["state"] == "confirmation_required"
+
+
+def test_delayed_lite_session_observation_cannot_restore_a_changed_account(tmp_path, monkeypatch):
+    from waves.providers.apple.runtime_sessions import AccountContext
+
+    host, sessions, workers, _ = bridge(tmp_path)
+    profile = RuntimeProfile("apple:lite", RuntimeKind.USER_MANAGED, "lite-session-v1", container="isolated-lite")
+    sessions.configure(profile)
+    sessions.set_account(AccountContext("active-account", "ro", "cookies-one"))
+    host._apple_lite_profile = profile
+    host._apple_container_state = lambda: {"name": "docker"}
+
+    def probe(*args, **kwargs):
+        sessions.set_account(AccountContext("changed-account", "ro", "cookies-two"))
+        return {
+            "reachable": True,
+            "protocol_compatible": True,
+            "session_protocol_compatible": True,
+            "artifact_verified": True,
+            "authenticated": True,
+            "storefront": "ro",
+            "session_revision": "old-session",
+            "qualification": "approved",
+        }
+
+    monkeypatch.setattr("waves.providers.apple.lite_runtime.probe_lite_runtime", probe)
+    WavesBridge.refreshAppleLiteRuntime(host)
+    workers.pop().run()
+    state = WavesBridge.appleLiteRuntimeState(host)
+    assert not state["can_confirm"]
+    assert state["state"] != "ready"
+    assert "authenticated" not in state
 
 
 def test_settings_runtime_restoration_waits_for_worker_instead_of_reading_on_save(tmp_path):

@@ -6,6 +6,7 @@ import pytest
 from support.qml import EXIT_OK, boot_main_qml, run_scenario, wait_until
 from support.qml_probe import scene_js
 
+from waves.providers.apple import lite_runtime
 from waves.providers.apple.runtime import AppleRuntimeCancelled
 from waves.providers.apple.supervision import RuntimeIdentity
 
@@ -125,6 +126,58 @@ def run() -> int:
     q("waves.applySettings({apple_lite_container: 'isolated-lite', apple_lite_endpoint: 'http://127.0.0.1:12340'})")
     wait_until(lambda: bool(q(button_script("appleStopLiteRuntime"))), 5000, message="separate lite disconnect visible")
     assert not q(button_script("appleResumeLiteRuntime", visible_only=False))
+    bridge._apple_container_state = lambda: {"name": "docker"}
+    lite_reply = {
+        "reachable": True,
+        "protocol_compatible": True,
+        "session_protocol_compatible": True,
+        "artifact_verified": True,
+        "authenticated": True,
+        "account_id": "",
+        "storefront": bridge.providers["apple"].catalog_identity_context()[-1] or "us",
+        "session_revision": "synthetic-lite-session-one",
+        "qualification": "pending",
+        "approval_record": "",
+    }
+    lite_runtime.probe_lite_runtime = lambda *args, **kwargs: dict(lite_reply)
+    assert q(button_script("appleCheckLiteRuntime", trigger=True))
+    wait_until(
+        lambda: bridge.appleLiteRuntimeState().get("authenticated") is True,
+        5000,
+        message="lite authentication observation published",
+    )
+    assert not q(button_script("appleConfirmLiteRuntimeAccount", visible_only=False))
+    wait_until(
+        lambda: bool(
+            q(
+                scene_js("""
+            var state = findFirst(settingsPage, function(o) {
+                return o.objectName === 'appleLiteSessionState' && o.visible === true;
+            });
+            return !!state && state.text.indexOf('Runtime reports a signed-in session') >= 0 && state.text.indexOf('qualification is pending') >= 0;
+        """)
+            )
+        ),
+        5000,
+        message="lite authentication and pending qualification rendered separately",
+    )
+    lite_reply["qualification"] = "approved"
+    lite_reply["approval_record"] = "https://example.test/qualification"
+    assert q(button_script("appleCheckLiteRuntime", trigger=True))
+    wait_until(
+        lambda: bool(q(button_script("appleConfirmLiteRuntimeAccount"))),
+        5000,
+        message="approved lite account confirmation visible",
+    )
+    assert q(button_script("appleConfirmLiteRuntimeAccount", trigger=True))
+    wait_until(lambda: bridge.appleLiteRuntimeState()["state"] == "ready", 5000, message="lite account confirmed")
+    lite_reply["session_revision"] = "synthetic-lite-session-two"
+    assert q(button_script("appleCheckLiteRuntime", trigger=True))
+    wait_until(
+        lambda: bridge.appleLiteRuntimeState()["state"] == "confirmation_required",
+        5000,
+        message="lite session change revoked confirmation",
+    )
     assert q(button_script("appleStopLiteRuntime", trigger=True))
     wait_until(lambda: bool(q(button_script("appleResumeLiteRuntime"))), 5000, message="lite disconnected")
     assert not q(button_script("appleStopLiteRuntime", visible_only=False))

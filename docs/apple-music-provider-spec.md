@@ -80,11 +80,18 @@ admitting that session to automatic routing. Never copy account state between
 engines to infer compatibility.
 
 Settings can configure a separate user-managed lite runtime's immutable image
-identity and guest loopback status endpoint. Its status-only probe checks the
-private container transport and reports regions; the current status contract
-does not report authentication or account identity. Disconnect/reconnect choices
-are independent of wrapper-v2. Lite account admission and qualification remain
-unknown until approved observations and native evidence establish them.
+identity and guest loopback endpoint. The
+[session source extension](../tools/apple_lite_session/README.md) adds a private,
+versioned observer using a fresh authenticated user-storefront request and
+credential continuity. It keeps account identity unknown and requires user
+confirmation of equivalence. The client rejects malformed claims, binds the
+session revision to the inspected container, and admits the session only when
+an explicit approval record pins its image and source/patch identity and
+matches the native host and source or packaged application scope. No session artifacts are
+approved yet. A status-only runtime can still report regions after an observer
+404 response; those regions cannot establish authentication. Disconnect/reconnect
+choices remain independent of wrapper-v2. Native qualification and whole-stack
+artifact approval remain required.
 
 The adapter must bound media memory, requests and cancellation, validate ranges
 and sample layouts, and publish only after codec/quality and whole-file decode

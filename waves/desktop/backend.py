@@ -21243,6 +21243,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "stopped": sessions.is_stopped("apple:wrapper-v2") if sessions is not None else False,
             "setup_busy": bool(getattr(self, "_apple_runtime_inflight", False)),
             "updates": dict(getattr(self, "_apple_runtime_update_cache", {}) or {}),
+            "image": dict(getattr(self, "_apple_runtime_image_cache", {}) or {}),
             "can_confirm": sessions.readiness("apple:wrapper-v2") == "confirmation_required"
             if sessions is not None
             else False,
@@ -21255,8 +21256,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         sessions = getattr(self, "_apple_runtime_sessions", None)
         profile = getattr(self, "_apple_lite_profile", None)
         token = getattr(self, "_apple_lite_probe_token", None)
+        cache = dict(getattr(self, "_apple_lite_runtime_cache", {}) or {})
         return {
-            **dict(getattr(self, "_apple_lite_runtime_cache", {}) or {}),
+            **cache,
             "configured": bool(profile is not None and profile.container),
             "kind": "user_managed",
             "state": sessions.readiness("apple:lite") if sessions is not None else "unknown",
@@ -21267,12 +21269,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "can_confirm": sessions.readiness("apple:lite") == "confirmation_required"
             if sessions is not None
             else False,
-            "qualification": "pending",
+            "qualification": str(cache.get("qualification") or "pending"),
         }
 
     @Slot()
     def refreshAppleLiteRuntime(self) -> None:
-        """Observe status over private container stdin; never start the service."""
+        """Observe the separate session over private stdin; never start it."""
         sessions = getattr(self, "_apple_runtime_sessions", None)
         profile = getattr(self, "_apple_lite_profile", None)
         if sessions is None or profile is None or not profile.container or sessions.is_stopped(profile.id):
@@ -21296,7 +21298,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             try:
                 container = self._apple_container_state()
-                result = probe_lite_runtime(profile, abort, binary=str(container.get("name") or "docker"))
+                result = probe_lite_runtime(
+                    profile,
+                    abort,
+                    binary=str(container.get("name") or "docker"),
+                    application_kind="packaged" if runtime_paths.is_frozen() else "source",
+                )
 
                 def publish() -> None:
                     if (
@@ -21310,8 +21317,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         SessionEvidence(
                             result.get("reachable"),
                             result.get("authenticated"),
-                            result.get("protocol_compatible"),
-                            result.get("artifact_verified"),
+                            result.get("session_protocol_compatible"),
+                            result.get("artifact_verified") if result.get("qualification") == "approved" else None,
                             str(result.get("account_id") or ""),
                             str(result.get("storefront") or ""),
                             str(result.get("session_revision") or ""),
@@ -22349,7 +22356,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         profile = RuntimeProfile(
             "apple:lite",
             RuntimeKind.USER_MANAGED,
-            "lite-status-v1",
+            "lite-session-v1",
             str(getattr(data, "apple_lite_endpoint", "") or ""),
             str(getattr(data, "apple_lite_image_digest", "") or ""),
             "user-supplied",
@@ -22363,6 +22370,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     def _schedule_apple_runtime_records(self) -> None:
         """Restore records on a worker after the launch water has finished."""
+        generation = getattr(self, "_apple_runtime_records_gen", 0) + 1
+        self._apple_runtime_records_gen = generation
         if not getattr(self, "_boot_revealed", True):
             self._apple_runtime_records_pending = True
             return
@@ -22372,7 +22381,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if manager is None or sessions is None or pool is None:
             return
         token = provider_contexts(self).capture(CTX_APPLE)
-        generation = getattr(self, "_apple_engine_facts_gen", 0)
 
         def work() -> None:
             try:
@@ -22380,7 +22388,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 receipt = manager.image_status()
 
                 def publish() -> None:
-                    if generation != getattr(self, "_apple_engine_facts_gen", 0):
+                    if generation != getattr(self, "_apple_runtime_records_gen", 0):
                         return
                     self._apple_runtime_image_cache = receipt
                     WavesBridge._configure_apple_provider(self, refresh_records=False)

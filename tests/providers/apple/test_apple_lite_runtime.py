@@ -3,6 +3,7 @@
 import base64
 import io
 import json
+import platform
 import subprocess
 import sys
 from dataclasses import replace
@@ -38,6 +39,8 @@ def container():
         "bindings": {},
         "readonly": True,
         "cap_drop": ["ALL"],
+        "privileged": False,
+        "cap_add": None,
         "user": "501:20",
         "args": ["--base-dir", "/data", "--host", "127.0.0.1", "--port", "12340"],
         "network": "my-isolated-network",
@@ -401,3 +404,184 @@ def test_native_probe_pipe_failure_reaps_the_command_and_closes_input(monkeypatc
     assert owned.poll() is not None
     assert owned.stdin.closed
     assert "secret-runtime-diagnostic" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"privileged": True},
+        {"privileged": None},
+        {"privileged": 0},
+        {"cap_add": ["NET_ADMIN"]},
+        {"cap_add": "ALL"},
+        {"cap_add": {}},
+    ],
+)
+def test_privileged_or_added_capability_runtime_is_not_admitted(change):
+    calls = []
+    execute = runner(info={**container(), **change})
+
+    def run(command, **options):
+        calls.append(command)
+        return execute(command, **options)
+
+    result = probe_lite_runtime(profile(), Event(), runner=run)
+    assert result["artifact_verified"] is False
+    assert result["error"] == "runtime_not_confined"
+    assert all("exec" not in command for command in calls)
+
+
+@pytest.mark.parametrize("field", ["privileged", "cap_add"])
+def test_missing_privilege_inspection_cannot_admit_a_runtime(field):
+    info = container()
+    info.pop(field)
+    result = probe_lite_runtime(profile(), Event(), runner=runner(info=info))
+    assert result["artifact_verified"] is False
+    assert result["error"] == "runtime_not_confined"
+
+
+def session_runner(packet):
+    def run(command, **options):
+        if "inspect" in command:
+            output = container()
+        else:
+            assert "exec" in command
+            assert "/waves/session/v1" in command[-1]
+            assert json.loads(options["input"]) == {"port": 12340}
+            output = {
+                "status": 200,
+                "encoding": "identity",
+                "body": base64.b64encode(json.dumps(packet).encode()).decode(),
+            }
+        return subprocess.CompletedProcess(command, 0, json.dumps(output).encode(), b"")
+
+    return run
+
+
+def session_packet(**changes):
+    return {
+        "protocol": "waves-lite-session-v1",
+        "authenticated": True,
+        "storefront": "ro",
+        "account_id": "",
+        "session_revision": "c" * 32 + ":1",
+        "error": "",
+        **changes,
+    }
+
+
+def test_fresh_versioned_session_is_observed_without_implying_artifact_approval():
+    result = probe_lite_runtime(
+        replace(profile(), protocol="lite-session-v1"), Event(), runner=session_runner(session_packet())
+    )
+    assert result["reachable"] is True
+    assert result["protocol_compatible"] is True
+    assert result["session_protocol_compatible"] is True
+    assert result["authenticated"] is True
+    assert result["account_id"] == ""
+    assert result["storefront"] == "ro"
+    assert result["qualification"] == "pending"
+    assert result["approval_record"] == ""
+    assert result["session_revision"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"protocol": "unreviewed-session-v2"},
+        {"authenticated": 1},
+        {"authenticated": False},
+        {"storefront": "RO"},
+        {"storefront": ["ro"]},
+        {"account_id": "private-account-label"},
+        {"session_revision": "private-token"},
+        {"session_revision": "c" * 32 + ":0"},
+        {"session_revision": "c" * 32 + ":9007199254740992"},
+        {"error": "private-upstream-diagnostic"},
+        {"error": "upstream_rejected"},
+        {"qualification": "approved"},
+    ],
+)
+def test_session_claims_require_the_exact_reviewed_contract(change):
+    result = probe_lite_runtime(
+        replace(profile(), protocol="lite-session-v1"), Event(), runner=session_runner(session_packet(**change))
+    )
+    assert result["authenticated"] is None
+    assert result["session_protocol_compatible"] is False
+    assert result["qualification"] == "pending"
+    assert result["error"] == "invalid_session_protocol"
+    assert "private-" not in str(result)
+
+
+@pytest.mark.parametrize("error", ["upstream_rejected", "upstream_unavailable", "credential_context_changed"])
+def test_unknown_session_responses_do_not_misclassify_a_rejected_request_as_logout(error):
+    result = probe_lite_runtime(
+        replace(profile(), protocol="lite-session-v1"),
+        Event(),
+        runner=session_runner(session_packet(authenticated=None, storefront="", error=error)),
+    )
+    assert result["authenticated"] is None
+    assert result["session_protocol_compatible"] is True
+    assert result["storefront"] == ""
+    assert result["error"] == error
+
+
+def test_approval_is_bound_to_the_artifact_and_native_host():
+    from waves.providers.apple.lite_runtime import LiteSessionApproval
+
+    approval = LiteSessionApproval(
+        IMAGE, sys.platform, platform.machine(), "d" * 40, "e" * 64, "https://example.test/qualification"
+    )
+    result = probe_lite_runtime(
+        replace(profile(), protocol="lite-session-v1"),
+        Event(),
+        approval=approval,
+        runner=session_runner(session_packet()),
+    )
+    assert result["authenticated"] is True
+    assert result["qualification"] == "approved"
+    assert result["approval_record"] == "https://example.test/qualification"
+    for wrong in (
+        replace(approval, image_digest="sha256:" + "f" * 64),
+        replace(approval, host_platform="other-platform"),
+        replace(approval, host_architecture="other-architecture"),
+        replace(approval, source_revision=""),
+        replace(approval, patch_sha256=""),
+        replace(approval, approval_record=""),
+        replace(approval, application_kind="packaged"),
+    ):
+        result = probe_lite_runtime(
+            replace(profile(), protocol="lite-session-v1"),
+            Event(),
+            approval=wrong,
+            runner=session_runner(session_packet()),
+        )
+        assert result["authenticated"] is True
+        assert result["qualification"] == "pending"
+        assert result["approval_record"] == ""
+
+
+def test_missing_session_observer_preserves_status_regions_without_authentication():
+    legacy = {"code": 0, "msg": "SUCCESS", "data": {"regions": ["ro"], "authenticated": True, "account_id": "private"}}
+
+    def run(command, **options):
+        if "inspect" in command:
+            response = container()
+        elif "/waves/session/v1" in command[-1]:
+            response = {"status": 404, "encoding": "identity", "body": ""}
+        else:
+            response = {
+                "status": 200,
+                "encoding": "identity",
+                "body": base64.b64encode(json.dumps(legacy).encode()).decode(),
+            }
+        return subprocess.CompletedProcess(command, 0, json.dumps(response).encode(), b"")
+
+    result = probe_lite_runtime(replace(profile(), protocol="lite-session-v1"), Event(), runner=run)
+    assert result["regions"] == ["ro"]
+    assert result["protocol_compatible"] is True
+    assert result["session_protocol_compatible"] is False
+    assert result["authenticated"] is None
+    assert result["qualification"] == "pending"
+    assert result["error"] == "session_observer_unavailable"
+    assert "private" not in str(result)

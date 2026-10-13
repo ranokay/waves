@@ -1491,12 +1491,16 @@ class AppleProvider(Provider):
         }
         facts = self.engine_facts_probe() if self.engine_facts_probe is not None else None
         engine = self._engines.select(request, policy, facts)
-        runtime_id = engine.readiness(request, facts or EngineFacts()).runtime
+        readiness = engine.readiness(request, facts or EngineFacts())
+        runtime_id = readiness.runtime
         revision = revisions.get(runtime_id)
 
         def ensure_current(result: EngineResult | None = None) -> None:
             stopped = self.runtime_stopped(runtime_id)
-            if not request.abort.is_set() and not stopped and revision == self.runtime_context_revision(runtime_id):
+            current_revision = self.runtime_context_revision(runtime_id)
+            same_runtime = revision is not None and revision[1] == current_revision[1]
+            same_account = not readiness.account_boundary or revision == current_revision
+            if not request.abort.is_set() and not stopped and same_runtime and same_account:
                 return
             if result is not None and isinstance(result.value, StreamInfo) and result.value.local_file:
                 self.discard_delivery(result.value.local_file)

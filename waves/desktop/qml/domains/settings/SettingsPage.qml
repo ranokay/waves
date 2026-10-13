@@ -4326,9 +4326,10 @@ Item {
                             }
                           }
                           Text {
+                            objectName: "appleLiteSessionState"
                             visible: setupCol.liteExecution.configured === true
                             width: parent.width
-                            text: "Lite runtime: " + String(setupCol.liteExecution.state || "unknown") + ". Account access and qualification have not been verified."
+                            text: "Lite runtime: " + String(setupCol.liteExecution.state || "unknown") + ". " + (setupCol.liteExecution.authenticated === true ? (setupCol.liteExecution.qualification === "approved" ? "Session authenticated." : "Runtime reports a signed-in session; qualification is pending.") : "Authentication has not been verified.")
                             color: page.textLo
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap

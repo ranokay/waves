@@ -1,0 +1,28 @@
+{
+  "protocol": "waves-lite-session-v1",
+  "upstream_source": "https://github.com/WorldObservationLog/wrapper/tree/2fd7e0eaef081f93cf687428b965674937832ba4",
+  "checked_prerequisite": "https://github.com/ranokay/waves/issues/579#issuecomment-6117628523",
+  "inputs": {
+    "CMakeLists.txt": "a09637f189854ea9197475d5910df8bb42e5f32f5790b4f4324ee9ff2058b9a1",
+    "lite/lite_main.cpp": "1fdc2a9bc2479887729e6337076adc821dce56c5b0bbb3f3ece4d92fa9cfac8f",
+    "lite/lite.h": "9975848879e0f0f7b4dffabac20ba4da853bf904eb46b9b6292c5c4b66ac3a63",
+    "lite/apple_api.cpp": "2ae605a59431643d94053e512b505a44ac18c9498541bb75bc4a32842c9ef8b7",
+    "lite/native_transport.h": "2ea12024507626012f9fc36c0871025def7262c866b3655dc58abc346941516e",
+    "lite/token_file.h": "31b33f1bd1ca13e6cff2bae021412889da3f84ea544ad04e709e979e9612e360",
+    "lite/tokens.cpp": "699668ddf287b3604a775a4834954fe8dc7b1ab91901e583a3db6a965ac055f7",
+    "lite/auth.cpp": "b3ab92016b7e559b59c9ad0676ee2d36bfb5adfed01fca7655a6505b3b846599",
+    "lite/internal.h": "56ddf31635bc8aec08004c0b5a26861ff4d935b54c36a1a55738f405a3b33878",
+    "lite/private_input.h": "309a8ac351979a04bb4d86a09886ca88f5f84dc71cbba5315d0a6d88cc9c7feb",
+    "lite/private_console.h": "95af271d3aa35e38766384b21e2b4fce3a5e69bc033920a399e2df07ab60a705",
+    "lite/login_child.h": "7ca8c4162cf60a7c74a802333be9621f990be71d012be04aa7ba617d0210de7d",
+    "lite/logger.h": "621c590233b5c66985787d37475e8521288bbd610db815c79c99d1abf8a2b029"
+  },
+  "patch_sha256": "a1b29146c26aa88692979600fc720403f3e8b78deead14fd0228d72625137ab8",
+  "outputs": {
+    "lite/lite_main.cpp": "cb96178894dfcbdb4f686c809d77f1dd898caf736fc9568470c38af4a9c26a1a",
+    "lite/session_observer.h": "0dc6b838340b749ac02226a7515c243af724259a62297071313eaa030a88c21b",
+    "lite/session_transport.h": "54f365428d2af7f6cf41169acacb02c19f5b33d9d45db390c10659c7e777bf07"
+  },
+  "native_qualification": "pending",
+  "artifact_approval": "pending"
+}

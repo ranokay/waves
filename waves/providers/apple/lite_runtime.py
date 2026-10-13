@@ -1,7 +1,8 @@
-"""Bounded status observation of a confined user-managed lite runtime.
+"""Bounded status and session observation of a confined user-managed lite runtime.
 
-Image identity and the lite status protocol establish no authentication,
-distribution approval or delivered-media qualification.
+Image identity and advertised regions establish no authentication. The versioned
+session observer establishes authentication separately from artifact approval
+and delivered-media qualification.
 """
 
 from __future__ import annotations
@@ -11,9 +12,12 @@ import binascii
 import contextlib
 import hashlib
 import json
+import platform
 import re
 import subprocess
+import sys
 import time
+from dataclasses import dataclass
 from threading import Event, Thread
 from typing import Protocol, TypedDict, Unpack
 from urllib.parse import urlsplit
@@ -27,7 +31,8 @@ _INSPECTION = (
     '{"id":{{json .Id}},"image":{{json .Image}},"started_at":{{json .State.StartedAt}},'
     '"running":{{json .State.Running}},"ports":{{json .NetworkSettings.Ports}},'
     '"bindings":{{json .HostConfig.PortBindings}},"readonly":{{json .HostConfig.ReadonlyRootfs}},'
-    '"cap_drop":{{json .HostConfig.CapDrop}},"user":{{json .Config.User}},'
+    '"cap_drop":{{json .HostConfig.CapDrop}},"cap_add":{{json .HostConfig.CapAdd}},'
+    '"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},'
     '"args":{{json .Args}},"network":{{json .HostConfig.NetworkMode}}}'
 )
 # Only the port enters stdin. The guest can observe one fixed status route.
@@ -49,6 +54,35 @@ try:
 except Exception:
     sys.exit(1)
 """
+_SESSION_RPC = _STATUS_RPC.replace("'GET', '/status'", "'GET', '/waves/session/v1'").replace("timeout=5", "timeout=18")
+_SESSION_ERRORS = {
+    "",
+    "credentials_unavailable",
+    "credential_context_changed",
+    "observer_busy",
+    "upstream_unavailable",
+    "upstream_rejected",
+    "invalid_upstream_response",
+    "observer_unavailable",
+}
+
+
+@dataclass(frozen=True)
+class LiteSessionApproval:
+    """Reviewed native evidence for one exact user-managed artifact and host."""
+
+    image_digest: str
+    host_platform: str
+    host_architecture: str
+    source_revision: str
+    patch_sha256: str
+    approval_record: str
+    application_kind: str = "source"
+
+
+# Entries require recorded artifact, transport and native-host qualification.
+# A configured digest or a runtime's own assertion cannot create approval.
+APPROVED_LITE_SESSION_ARTIFACTS: tuple[LiteSessionApproval, ...] = ()
 
 
 class LiteRuntimeStatus(TypedDict):
@@ -59,6 +93,8 @@ class LiteRuntimeStatus(TypedDict):
     account_id: str
     storefront: str
     session_revision: str
+    session_protocol_compatible: bool | None
+    approval_record: str
     regions: list[str]
     qualification: str
     error: str
@@ -103,7 +139,7 @@ def _json_object(data: bytes) -> dict:
 
 
 def _profile_port(profile: RuntimeProfile) -> int:
-    if profile.kind != RuntimeKind.USER_MANAGED or profile.protocol != "lite-status-v1":
+    if profile.kind != RuntimeKind.USER_MANAGED or profile.protocol not in ("lite-status-v1", "lite-session-v1"):
         raise _ProbeFailed("invalid_runtime_profile")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", profile.container):
         raise _ProbeFailed("invalid_runtime_container")
@@ -137,6 +173,9 @@ def _confined(info: dict, port: int) -> bool:
         and re.fullmatch(r"[1-9][0-9]*(?::[0-9]+)?", info["user"])
         and isinstance(capabilities, list)
         and "ALL" in capabilities
+        and info.get("privileged") is False
+        and "cap_add" in info
+        and (info["cap_add"] is None or info["cap_add"] == [])
         and isinstance(info.get("network"), str)
         and info["network"] not in ("", "host")
         and "ports" in info
@@ -289,6 +328,50 @@ def _admit_inspection(info: dict, profile: RuntimeProfile, port: int, result: Li
     result["artifact_verified"] = True
 
 
+def _session_observation(output: bytes, result: LiteRuntimeStatus) -> None:
+    reply = _json_object(output)
+    if type(reply.get("status")) is not int or reply["status"] != 200 or reply.get("encoding") != "identity":
+        raise _ProbeFailed("invalid_session_http_response")
+    try:
+        body = base64.b64decode(reply["body"], validate=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _ProbeFailed("invalid_session_rpc_response") from exc
+    if not 0 < len(body) <= _STATUS_LIMIT:
+        raise _ProbeFailed("session_response_bound")
+    packet = _json_object(body)
+    if set(packet) != {"protocol", "authenticated", "storefront", "account_id", "session_revision", "error"}:
+        raise _ProbeFailed("invalid_session_protocol")
+    authenticated, storefront = packet["authenticated"], packet["storefront"]
+    revision, error = packet["session_revision"], packet["error"]
+    valid_revision = (
+        isinstance(revision, str)
+        and re.fullmatch(r"[0-9a-f]{32}:[1-9][0-9]{0,15}", revision) is not None
+        and int(revision.split(":")[1]) <= (1 << 53) - 1
+    )
+    if (
+        packet["protocol"] != "waves-lite-session-v1"
+        or packet["account_id"] != ""
+        or not isinstance(error, str)
+        or error not in _SESSION_ERRORS
+        or not (valid_revision or (revision == "" and authenticated is None and error == "observer_unavailable"))
+    ):
+        raise _ProbeFailed("invalid_session_protocol")
+    if authenticated is True:
+        if error or not isinstance(storefront, str) or re.fullmatch(r"[a-z]{2}", storefront) is None:
+            raise _ProbeFailed("invalid_session_protocol")
+    elif authenticated is not None or storefront != "":
+        raise _ProbeFailed("invalid_session_protocol")
+    result["authenticated"] = authenticated
+    result["storefront"] = storefront
+    result["regions"] = [storefront] if storefront else []
+    result["session_revision"] = (
+        hashlib.sha256(json.dumps([result["session_revision"], revision]).encode()).hexdigest() if revision else ""
+    )
+    result["error"] = error
+    result["protocol_compatible"] = True
+    result["session_protocol_compatible"] = True
+
+
 def _unchanged_inspection(
     binary: str, profile: RuntimeProfile, initial: dict, abort: Event, runner: _Runner | None
 ) -> bool:
@@ -312,21 +395,49 @@ def _unknown_status(error: str = "") -> LiteRuntimeStatus:
         "account_id": "",
         "storefront": "",
         "session_revision": "",
+        "session_protocol_compatible": None,
+        "approval_record": "",
         "regions": [],
         "qualification": "pending",
         "error": error,
     }
 
 
+def _apply_session_approval(
+    profile: RuntimeProfile, result: LiteRuntimeStatus, approval: LiteSessionApproval | None, application_kind: str
+) -> None:
+    candidates = (approval,) if approval is not None else APPROVED_LITE_SESSION_ARTIFACTS
+    for record in candidates:
+        if (
+            record.image_digest == profile.artifact_digest
+            and record.host_platform == sys.platform
+            and record.host_architecture.casefold() == platform.machine().casefold()
+            and record.application_kind == application_kind
+            and re.fullmatch(r"[0-9a-f]{40}", record.source_revision)
+            and re.fullmatch(r"[0-9a-f]{64}", record.patch_sha256)
+            and 0 < len(record.approval_record) <= 1024
+            and record.approval_record.startswith("https://")
+        ):
+            result["qualification"] = "approved"
+            result["approval_record"] = record.approval_record
+            return
+
+
 def probe_lite_runtime(
-    profile: RuntimeProfile, abort: Event, *, binary: str = "docker", runner: _Runner | None = None
+    profile: RuntimeProfile,
+    abort: Event,
+    *,
+    binary: str = "docker",
+    runner: _Runner | None = None,
+    approval: LiteSessionApproval | None = None,
+    application_kind: str = "source",
 ) -> LiteRuntimeStatus:
-    """Observe identity, confinement and GET /status without service mutation.
+    """Observe identity, confinement and one fixed private runtime route.
 
     Run on a worker. The injected runner has subprocess.run's bytes interface;
-    native commands also bound output and poll cancellation. Authentication
-    stays unknown even when status advertises a storefront. Session revision
-    detects replacement/restart, not an unobservable in-place account change.
+    Native commands bound output and poll cancellation. Legacy status regions
+    leave authentication unknown. The versioned session route supplies fresh
+    authentication and credential continuity, never an account identifier.
     """
     result = _unknown_status()
     contacted = False
@@ -339,19 +450,44 @@ def probe_lite_runtime(
         _admit_inspection(info, profile, port, result)
         contacted = True
         response = _command(
-            [binary, "exec", "--interactive", info["id"], "/usr/bin/python3", "-c", _STATUS_RPC],
+            [
+                binary,
+                "exec",
+                "--interactive",
+                info["id"],
+                "/usr/bin/python3",
+                "-c",
+                _SESSION_RPC if profile.protocol == "lite-session-v1" else _STATUS_RPC,
+            ],
             json.dumps({"port": port}).encode(),
-            10,
+            20 if profile.protocol == "lite-session-v1" else 10,
             abort,
             runner,
         )
+        session_missing = profile.protocol == "lite-session-v1" and _json_object(response).get("status") == 404
+        if session_missing:
+            response = _command(
+                [binary, "exec", "--interactive", info["id"], "/usr/bin/python3", "-c", _STATUS_RPC],
+                json.dumps({"port": port}).encode(),
+                10,
+                abort,
+                runner,
+            )
         if _unchanged_inspection(binary, profile, info, abort, runner):
             result["reachable"] = True
             result["protocol_compatible"] = False
-            regions = _regions(response)
-            result["regions"] = regions
-            result["storefront"] = regions[0] if regions and len(set(regions)) == 1 else ""
-            result["protocol_compatible"] = True
+            if profile.protocol == "lite-session-v1" and not session_missing:
+                result["session_protocol_compatible"] = False
+                _session_observation(response, result)
+                _apply_session_approval(profile, result, approval, application_kind)
+            else:
+                regions = _regions(response)
+                result["regions"] = regions
+                result["storefront"] = regions[0] if regions and len(set(regions)) == 1 else ""
+                result["protocol_compatible"] = True
+                if session_missing:
+                    result["session_protocol_compatible"] = False
+                    result["error"] = "session_observer_unavailable"
         else:
             result = _unknown_status("runtime_context_changed")
             contacted = False
