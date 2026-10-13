@@ -13,6 +13,12 @@ links their Python, QML and test owners. Settings payload construction belongs
 to `settings/schema.py`, provider cards/status to `providers/presentation.py`.
 Their Qt entry points remain on this context object.
 
+## Launch lifecycle
+
+| Slot             | Contract                                                                                                                                                                                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bootRevealed()` | QML reports the completed launch reveal. Release incubation throttling, then schedule saved search loading, stale-work cleanup and pending Apple runtime-record restoration. Runtime admission stays held until persisted Stop choices are restored. |
+
 ## Download policy settings
 
 `settingsSchema()` exposes the one `settings.json` policy store through dotted

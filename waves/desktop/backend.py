@@ -4196,6 +4196,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # app.py's incubation throttle release, injected the same way; fired
         # once by bootRevealed and cleared.
         self._boot_reveal_hook = None
+        self._boot_revealed = False
+        self._apple_runtime_records_pending = False
         # Live asynchronous-incubation object count, pushed by app.py's
         # controller; read by the boot handover gate (bootIncubationBusy).
         self._incubation_count = 0
@@ -12663,6 +12665,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot()
     def bootRevealed(self) -> None:
         """QML reports the launch overlay has finished revealing the interface."""
+        self._boot_revealed = True
         hook, self._boot_reveal_hook = self._boot_reveal_hook, None
         if hook is not None:
             with contextlib.suppress(Exception):
@@ -12681,6 +12684,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Apple temp folders a killed or crashed Waves left behind (the
         # fragments of a fetch it never finished); live owners' stay.
         self.threadpool.start(Worker(workdirs.sweep_stale))
+        if getattr(self, "_apple_runtime_records_pending", False):
+            self._apple_runtime_records_pending = False
+            WavesBridge._schedule_apple_runtime_records(self)
 
     @Slot(result=str)
     def motionVideoUrl(self) -> str:
@@ -22356,7 +22362,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._apple_lite_profile = profile
 
     def _schedule_apple_runtime_records(self) -> None:
-        """Restore stop choices and image receipts off the settings slot path."""
+        """Restore records on a worker after the launch water has finished."""
+        if not getattr(self, "_boot_revealed", True):
+            self._apple_runtime_records_pending = True
+            return
         manager = getattr(self, "_apple_runtime", None)
         sessions = getattr(self, "_apple_runtime_sessions", None)
         pool = getattr(self, "threadpool", None)
