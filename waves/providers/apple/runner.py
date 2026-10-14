@@ -2517,6 +2517,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
     last_failure: Failure | None = None
     failed_names: list[str] = []
     landed: list = []
+    revoked = False
     # The lyrics/art options this job runs with: the row's per-click
     # Chooser pins when it has any, the provider's stored options otherwise.
     options = job_options(hooks, getattr(spec, "chooser_toggles", None))
@@ -2745,6 +2746,9 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             emit_progress(signals, collection, pos, total, media_id, qid)
             continue
         except _AppleAborted:
+            # Every STOP path sets job_abort; an abort without it is the
+            # provider revoking the fetch after an account or runtime change.
+            revoked = not job_abort.is_set()
             break
         except _AppleSetupRequired as exc:
             # The runtime cannot come back on its own: end the whole run
@@ -2805,6 +2809,16 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             }
         )
         emit_progress(signals, collection, pos, total, media_id, qid)
+    if revoked:
+        raise _AppleJobIncomplete(
+            f"{ok} of {total} tracks downloaded (the Apple account or runtime changed)",
+            Failure(
+                FailureScope.RUNTIME,
+                EventCode.FAILED,
+                "The Apple account or runtime changed during this download. Retry it to finish.",
+                retryable=True,
+            ),
+        )
     if collection and landed and hooks.settings().data.playlist_create and not job_abort.is_set():
         # The _Name.m3u8 the playlist_create setting promises, in landed
         # order (mirrors the engine's playlist_populate scope).

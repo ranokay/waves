@@ -240,6 +240,38 @@ def test_custom_tool_usage_does_not_validate_an_unused_managed_binary(tmp_path):
         pass
 
 
+def test_nested_tool_leases_verify_the_binary_once_per_outer_lease(tmp_path, monkeypatch):
+    from threading import Thread
+
+    from waves.providers.apple import runtime
+
+    manager = AppleRuntimeManager(tmp_path)
+    install_tool(manager, "1.0")
+    hashed = []
+    real = runtime.sha256_file
+    monkeypatch.setattr(runtime, "sha256_file", lambda path: hashed.append(path) or real(path))
+
+    # A job's outer lease verifies once; each track's nested lease and setup
+    # probe on that thread reuse it, since maintenance cannot change the tool.
+    with manager.usage():
+        for _ in range(3):
+            with manager.usage():
+                assert manager.verify()["binary_integrity"] == "verified"
+        assert len(hashed) == 1
+
+        def lease() -> None:
+            with manager.usage():
+                pass
+
+        other = Thread(target=lease)
+        other.start()
+        other.join()
+        assert len(hashed) == 2, "another thread's lease verifies on its own"
+
+    manager.verify()
+    assert len(hashed) == 3, "verification outside a lease still reads the file"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits do not describe Windows ACLs")
 def test_runtime_private_directories_repair_inherited_permissions(tmp_path):
     manager = AppleRuntimeManager(tmp_path)
@@ -408,6 +440,32 @@ def test_approved_image_update_can_restore_a_compatible_verified_immutable_image
     assert manager.active_image() == repo + "@" + WRAPPER_V2_IMAGE_DIGEST
     assert seen == [["docker", "image", "inspect", "--format", "{{.Id}}", repo + "@" + WRAPPER_V2_IMAGE_DIGEST]]
     assert session_file.read_text() == "test session remains isolated"
+
+
+def test_a_receipt_cannot_approve_an_image_no_build_shipped(tmp_path):
+    # The receipt is writable app data: repeating its own pin in the approval
+    # fields must not admit a tag under the Waves repository that no build approved.
+    manager = AppleRuntimeManager(tmp_path)
+    image = WRAPPER_V2_IMAGE.rsplit(":", 1)[0] + ":0.0.1-unshipped"
+    digest = "sha256:" + "2" * 64
+    receipt = {
+        "image": image,
+        "libs": runtime.WRAPPER_LIBS_VERSION,
+        "pulled_at": 1,
+        "digest": digest,
+        "digest_ok": True,
+        "approved_image": image,
+        "approved_digest": digest,
+        "protocol": "wrapper-v2",
+    }
+    manager.image_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manager.image_manifest_path.write_text(json.dumps(receipt))
+    manager.image_previous_path.write_text(json.dumps(receipt))
+
+    status = manager.image_status()
+    assert status["verified"] is False
+    assert status["rollback_available"] is False
+    assert manager.active_image() == ""
 
 
 @pytest.mark.parametrize("failure", ["missing_local", "incompatible_protocol", "unknown_provenance"])

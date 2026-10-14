@@ -179,6 +179,15 @@ def test_the_supervision_seconds_fields_span_their_defaults():
     assert fields["apple_pacing_delay_sec"]["maximum"] >= 30.0
 
 
+def test_the_wrapper_port_fields_span_the_tcp_range():
+    fields = {f["key"]: f for f in _providers()["providers_apple"]["fields"]}
+    decrypt = fields["apple_wrapper_decrypt_port"]
+    assert (decrypt["minimum"], decrypt["maximum"]) == (1, 65535)
+    assert decrypt["minimum"] <= decrypt["value"] <= decrypt["maximum"]
+    # 0 asks setup to pick a free high port.
+    assert (fields["apple_wrapper_port"]["minimum"], fields["apple_wrapper_port"]["maximum"]) == (0, 65535)
+
+
 def test_the_status_light_flips_with_the_switch_and_the_session():
     on = WavesBridge.settingsSchema(_schema_stub(apple_enabled=True))
     cards = {p["id"]: p for p in next(s for s in on if s["id"] == "providers")["providers"]}

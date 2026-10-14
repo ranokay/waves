@@ -876,6 +876,59 @@ def test_a_stranger_at_the_true_extension_does_not_skip_the_fetch(tmp_path, monk
     assert not (base / "Aphex Twin" / "Xtal.flac").exists()
 
 
+@pytest.mark.parametrize("kind", ["album", "track"])
+def test_runtime_context_change_settles_the_job_incomplete(tmp_path, kind):
+    from waves.providers.apple.engine import _AppleAborted
+
+    # An account or runtime change revokes the fetch without the user's STOP:
+    # the job's abort stays clear, so nothing may read the run as finished.
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(_AppleAborted())
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    collection = kind == "album"
+    spec = SimpleNamespace(kind=kind, collection=collection, media_id=f"apple:{kind}-1")
+
+    with pytest.raises(DownloadIncomplete, match="account or runtime changed") as excinfo:
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _album_resource() if collection else _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert excinfo.value.failure.retryable is True
+
+
+def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
+    from waves.providers.apple.engine import _AppleAborted
+
+    abort = Event()
+
+    def stop(raw, tier, audio_type):
+        abort.set()
+        raise _AppleAborted()
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = stop
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=abort,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+
+
 def test_album_job_reports_a_partial_shortfall(tmp_path):
     provider = _FakeProvider(fixture=None)
 
