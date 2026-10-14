@@ -101,6 +101,7 @@ FLAG_FIELDS = [
     # Integrity gate (spec §6): keep-vs-delete for quarantined
     # files, default keep. The quarantine folder itself is a path field below.
     "apple_quarantine_keep",
+    "apple_runtime_auto_install",
     # Advanced
     "downsample_enabled",
     "metadata_replay_gain",
@@ -134,6 +135,7 @@ NUMBER_FIELDS = [
     # Setup wizard: wrapper HTTP API port override. 0 means pick
     # a free high port; rendered as a plain number field in the Apple section.
     "apple_wrapper_port",
+    "apple_wrapper_decrypt_port",
     # Session supervision (spec §3): proactive Apple pacing, same
     # shape as TIDAL's api_rate_limit_* (pause after N songs for N seconds).
     "apple_pacing_batch_size",
@@ -185,6 +187,13 @@ PATH_FIELDS = [
     # Cookies tier: a Netscape cookies export that unlocks Apple downloads,
     # browsed like the FFmpeg override above.
     "apple_engine",
+    "apple_runtime_mode",
+    "apple_wrapper_url",
+    "apple_wrapper_container",
+    "apple_wrapper_image_digest",
+    "apple_lite_container",
+    "apple_lite_image_digest",
+    "apple_lite_endpoint",
     "apple_cookies_path",
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
@@ -357,6 +366,8 @@ FIELD_LABELS = {
 # Human labels for enum dropdown values, keyed by field then by enum member
 # name (the stored value). Unmapped members fall back to the raw name.
 ENUM_LABELS = {
+    "apple_engine": {"auto": "Auto", "gamdl": "gamdl"},
+    "apple_runtime_mode": {"managed": "Managed by Waves", "user_managed": "Managed by me"},
     # Per-provider audio quality: the Waves rungs, each provider
     # stating them in its own codecs with "Up to" ceilings, so the
     # dropdown reads as a fidelity promise: bitrate for lossy rungs, bit depth
@@ -518,13 +529,14 @@ class SettingsSchema:
         def auto_field(key: str) -> dict:
             """Build a field dict for an engine ``Settings`` key, choosing the
             control type from the registries above."""
-            if key == "apple_engine":
+            if key in ("apple_engine", "apple_runtime_mode"):
+                members = {"apple_engine": ("auto", "gamdl"), "apple_runtime_mode": ("managed", "user_managed")}[key]
                 return field(
                     key,
                     "enum",
-                    str(getattr(d, key, "auto")),
+                    str(getattr(d, key, members[0])),
                     {
-                        "options": [{"value": "auto", "label": "Auto"}, {"value": "gamdl", "label": "gamdl"}],
+                        "options": enum_options(key, members),
                     },
                 )
             if key in ENUM_BY_FIELD:

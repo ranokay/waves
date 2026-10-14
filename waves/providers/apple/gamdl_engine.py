@@ -130,11 +130,18 @@ class GamdlEngine:
         elif request.operation == EngineOperation.ARTWORK:
             pass
         elif request.operation == EngineOperation.LYRICS:
+            wrapper_account = (
+                facts.wrapper_ready
+                if facts.wrapper_context_ready is True and not facts.wrapper_stopped
+                else False
+                if facts.wrapper_context_ready is False or facts.wrapper_stopped
+                else None
+            )
             account = (
                 True
-                if True in (facts.cookies_ready, facts.wrapper_ready)
+                if True in (facts.cookies_ready, wrapper_account)
                 else False
-                if facts.cookies_ready is False and facts.wrapper_ready is False
+                if facts.cookies_ready is False and wrapper_account is False
                 else None
             )
             state = (
@@ -151,6 +158,8 @@ class GamdlEngine:
 
     @staticmethod
     def _audio_readiness(requirement: EngineRequirement, facts: EngineFacts) -> tuple[ReadinessState, str]:
+        if requirement.protocol and facts.wrapper_stopped:
+            return ReadinessState.SETUP_REQUIRED, "resume_runtime"
         if requirement.protocol and facts.wrapper_runtime_ready is False:
             return ReadinessState.SETUP_REQUIRED, "setup"
         account = facts.wrapper_ready if requirement.protocol else facts.cookies_ready
@@ -171,6 +180,12 @@ class GamdlEngine:
         if facts.fetch_ready is not True:
             return (
                 (ReadinessState.SETUP_REQUIRED, "setup") if facts.fetch_ready is False else (ReadinessState.UNKNOWN, "")
+            )
+        if requirement.protocol and facts.wrapper_context_ready is not True:
+            return (
+                (ReadinessState.SETUP_REQUIRED, facts.wrapper_context_action)
+                if facts.wrapper_context_ready is False
+                else (ReadinessState.UNKNOWN, "")
             )
         return ReadinessState.READY, ""
 

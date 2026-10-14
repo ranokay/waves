@@ -37,6 +37,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    wait_until,
 )
 
 _MARK = "BOOT-JOBS:"
@@ -45,6 +46,7 @@ _MARK = "BOOT-JOBS:"
 # machine is a FALSE PASS on a slower one, where a job dispatched after the
 # clock ran out is simply never seen.
 _SWEEP = "LibraryMixin._rebuild_library_index.<locals>.work"
+_RUNTIME_RECORDS = "WavesBridge._schedule_apple_runtime_records.<locals>.work"
 # How long the sweep has to appear, and how long the sample runs on past it to
 # catch whatever is dispatched alongside it.
 _SWEEP_WAIT_MS = 15_000
@@ -148,7 +150,16 @@ def _run_scenario() -> int:
     with open(os.path.join(cfg, "waves.json"), "w", encoding="utf-8") as fh:
         json.dump({"library_enabled": True, "library_source": "separate", "library_folder": lib}, fh)
 
+    from waves.providers.apple.runtime import AppleRuntimeManager
+    from waves.providers.apple.runtime_sessions import AppleRuntimeSessions
+
+    sessions = AppleRuntimeSessions(AppleRuntimeManager(cfg).runtime_dir)
+    sessions.stop("apple:wrapper-v2")
+
     bridge = WavesBridge(tidal=None)
+    if not bridge.appleLiteRuntimeState()["stopped"]:
+        print("unrestored runtime choices admit work before the reveal", file=sys.stderr)
+        return EXIT_REGRESSED
     loop = QEventLoop()
     # What a real launch does between construction and the reveal: the library
     # sweep is dispatched with the sandbox's folder configured, the water
@@ -175,8 +186,18 @@ def _run_scenario() -> int:
     with lock:
         ran = sorted(set(seen))
     bridge.bootRevealed()
-    QTimer.singleShot(200, loop.quit)
-    loop.exec()
+    wait_until(
+        lambda: not bridge.appleLiteRuntimeState()["stopped"],
+        timeout_ms=5000,
+        message="runtime choices restore after boot reveal",
+    )
+    if bridge.appleExecutionState()["stopped"] is not True:
+        print("the restored deliberate wrapper Stop was lost", file=sys.stderr)
+        return EXIT_REGRESSED
+    with lock:
+        if _RUNTIME_RECORDS not in seen:
+            print("runtime record restoration was never dispatched after reveal", file=sys.stderr)
+            return EXIT_REGRESSED
     print(_MARK + ",".join(ran))
     with contextlib.suppress(Exception):
         bridge.shutdown()

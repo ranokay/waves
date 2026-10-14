@@ -3,7 +3,7 @@
 Accepted Apple Music integration contract, amended 2026-10-03. The existing
 gamdl route, audio/asset rules and compatibility invariants below are the
 maintained baseline. Multiple engines, offers/cross-provider fulfillment,
-redesigned surfaces and managed-asset update extensions are **planned**, not
+redesigned surfaces and additional lite runtime integration are **planned**, not
 released or qualified by this document. The [architecture map](architecture.md)
 names current owners; the [ADRs](adr/) own shared product decisions. Qualification
 and delivery evidence stays in the owning issues/PRs and releases.
@@ -78,6 +78,20 @@ delivery remain separate facts. Matching storefronts alone do not prove account
 equivalence. Obtain user confirmation when identity cannot be verified before
 admitting that session to automatic routing. Never copy account state between
 engines to infer compatibility.
+
+Settings can configure a separate user-managed lite runtime's immutable image
+identity and guest loopback endpoint. The
+[session source extension](../tools/apple_lite_session/README.md) adds a private,
+versioned observer using a fresh authenticated user-storefront request and
+credential continuity. It keeps account identity unknown and requires user
+confirmation of equivalence. The client rejects malformed claims, binds the
+session revision to the inspected container, and admits the session only when
+an explicit approval record pins its image and source/patch identity and
+matches the native host and source or packaged application scope. No session artifacts are
+approved yet. A status-only runtime can still report regions after an observer
+404 response; those regions cannot establish authentication. Disconnect/reconnect
+choices remain independent of wrapper-v2. Native qualification and whole-stack
+artifact approval remain required.
 
 The adapter must bound media memory, requests and cancellation, validate ranges
 and sample layouts, and publish only after codec/quality and whole-file decode
@@ -349,10 +363,12 @@ Chooser defaults read Settings; no separate defaults store is introduced.
 3. **Host tools.** Detect and guide required tools/container runtime. Host-tool
    installation is a separate explicit action; missing unused engines do not
    force setup. Runtime requirements vary by qualified engine/operation (§2).
-4. **Updates.** Bundled client upgrades accompany Waves releases. Planned managed
-   assets may receive separately approved, compatible version-pinned updates
-   using the app's update-check preference. Manual installation is default;
-   optional automatic installation runs idle with rollback. Preserve queued
+4. **Updates.** Bundled client upgrades accompany Waves releases. Managed
+   assets offer compatible version/digest pins approved in the installed Waves
+   build, using the app's update-check preference. Manual installation is default;
+   optional automatic installation runs idle. Tool rollback restores paired
+   bytes/provenance; image rollback restores only an approved compatible local
+   immutable image receipt and preserves session state. Preserve queued
    intent, compatibility and active attempts. User-managed services are not
    automatically modified. A fetched release is not qualification evidence.
 5. **Platforms.** New capabilities satisfy [ADR 0010](adr/0010-provider-engine-runtime-boundary.md)

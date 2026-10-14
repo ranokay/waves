@@ -147,7 +147,7 @@ def test_engine_choice_is_captured_for_a_job_and_provider_identity_stays_apple()
         (audio(audio_type=AudioType.ATMOS), EngineFacts(True, True, False, True, False), ReadinessState.READY),
         (
             audio(required_codec="alac", tier=QualityTier.LOSSLESS),
-            EngineFacts(True, False, True, True, True, True),
+            EngineFacts(True, False, True, True, True, True, wrapper_context_ready=True),
             ReadinessState.READY,
         ),
         (
@@ -330,6 +330,20 @@ def test_wrapper_runtime_and_unverified_protocol_never_masquerade_as_account_fai
     unknown_protocol = replace(offline, wrapper_runtime_ready=True, protocol_compatible=None)
     state = engine.readiness(request, unknown_protocol)
     assert state.state == ReadinessState.UNKNOWN and state.action == ""
+
+
+def test_deliberate_runtime_stop_and_account_confirmation_gate_only_wrapper_requests():
+    from dataclasses import replace
+
+    engine = GamdlEngine(AppleProvider())
+    facts = EngineFacts(True, True, True, True, True, True, wrapper_context_ready=True)
+    stopped = replace(facts, wrapper_stopped=True)
+    wrapper = audio(tier=QualityTier.LOSSLESS, required_codec="alac")
+    assert engine.readiness(wrapper, stopped).action == "resume_runtime"
+    assert engine.readiness(audio(), stopped).state == ReadinessState.READY
+    unconfirmed = replace(facts, wrapper_context_ready=False)
+    assert engine.readiness(wrapper, unconfirmed).action == "confirm_account"
+    assert engine.readiness(audio(), unconfirmed).state == ReadinessState.READY
 
 
 def test_stereo_delivery_from_an_atmos_ask_classifies_the_actual_wrapper_boundary(monkeypatch):

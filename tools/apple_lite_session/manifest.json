@@ -1,0 +1,29 @@
+{
+  "protocol": "waves-lite-session-v1",
+  "upstream_source": "https://github.com/WorldObservationLog/wrapper/tree/2fd7e0eaef081f93cf687428b965674937832ba4",
+  "checked_prerequisite": "https://github.com/ranokay/waves/issues/579#issuecomment-6117628523",
+  "inputs": {
+    "CMakeLists.txt": "a09637f189854ea9197475d5910df8bb42e5f32f5790b4f4324ee9ff2058b9a1",
+    "lite/lite_main.cpp": "1fdc2a9bc2479887729e6337076adc821dce56c5b0bbb3f3ece4d92fa9cfac8f",
+    "lite/lite.h": "9975848879e0f0f7b4dffabac20ba4da853bf904eb46b9b6292c5c4b66ac3a63",
+    "lite/apple_api.cpp": "2ae605a59431643d94053e512b505a44ac18c9498541bb75bc4a32842c9ef8b7",
+    "lite/native_transport.h": "2ea12024507626012f9fc36c0871025def7262c866b3655dc58abc346941516e",
+    "lite/token_file.h": "31b33f1bd1ca13e6cff2bae021412889da3f84ea544ad04e709e979e9612e360",
+    "lite/tokens.cpp": "699668ddf287b3604a775a4834954fe8dc7b1ab91901e583a3db6a965ac055f7",
+    "lite/auth.cpp": "b3ab92016b7e559b59c9ad0676ee2d36bfb5adfed01fca7655a6505b3b846599",
+    "lite/internal.h": "56ddf31635bc8aec08004c0b5a26861ff4d935b54c36a1a55738f405a3b33878",
+    "lite/private_input.h": "309a8ac351979a04bb4d86a09886ca88f5f84dc71cbba5315d0a6d88cc9c7feb",
+    "lite/private_console.h": "95af271d3aa35e38766384b21e2b4fce3a5e69bc033920a399e2df07ab60a705",
+    "lite/login_child.h": "7ca8c4162cf60a7c74a802333be9621f990be71d012be04aa7ba617d0210de7d",
+    "lite/logger.h": "621c590233b5c66985787d37475e8521288bbd610db815c79c99d1abf8a2b029"
+  },
+  "patch_sha256": "3bc4f36df97e193ae4c8e2c318d70af94548afdace29eaf10cfb97436055cf7c",
+  "outputs": {
+    "lite/lite_main.cpp": "21b8c3203f268e677d93e78ca723fcf7a8f6345c5169745574169ef1fe8f01e5",
+    "lite/session_observer.h": "a178bb2a93f3afc424d599bec70fbb84c02bfae59d5cdb91f6bf68b2a776f05c",
+    "lite/session_transport.h": "c54c8749e2568c8c1c77b9ff796a1c28646d906d0d21a32e13f01cf6316e18d8",
+    "lite/session_developer.h": "9533428e9cf13740f722d036356df80aa0d058c2f60ad37c952fcd0ee945671a"
+  },
+  "native_qualification": "pending",
+  "artifact_approval": "pending"
+}

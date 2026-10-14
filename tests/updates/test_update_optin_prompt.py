@@ -78,8 +78,7 @@ def test_accept_clears_a_stale_throttle_stamp():
     """A user who once enabled then disabled auto-update in Settings still
     carries update_last_check; the accept must clear it so the immediate check
     the button promises is not silently throttled away. Reset to 0, never
-    popped: the key doubles as setWavesPref's whitelist entry, and a dormant
-    updater's early return in startupUpdateCheck would leave it missing."""
+    popped: the key also doubles as setWavesPref's whitelist entry."""
     stub = _optin_stub()
     stub._waves_prefs["update_last_check"] = 4102444800
     _bind(stub, "resolveUpdateOptIn")(True)

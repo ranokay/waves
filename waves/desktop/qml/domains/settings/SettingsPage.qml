@@ -254,6 +254,12 @@ Item {
   // stay local, the bridge makes the call and the guest owns the session.
   property bool appleLoginOpen: false
   property var appleWrapperLive: ({})
+  // Secrets belong to the page, so authentication clears them even while
+  // the sign-in form is unloaded.
+  onAppleWrapperLiveChanged: if (appleWrapperLive.logged_in === true) {
+    appleLoginPass = ""
+    appleLogin2fa = ""
+  }
   property string appleLoginUser: ""
   property string appleLoginPass: ""
   property string appleLogin2fa: ""
@@ -3676,17 +3682,23 @@ Item {
                               page.setv(modelData.key, t)
                             }
                           }
-                          SStepper {
-                            label: String(modelData.label)
-                            visible: modelData.type === "int" || modelData.type === "float"
+                          Loader {
+                            active: modelData.type === "int" || modelData.type === "float"
+                            visible: active
                             Layout.alignment: Qt.AlignVCenter
-                            value: (modelData.type === "int" || modelData.type === "float") ? page.val(modelData) : 0
-                            minimum: modelData.minimum !== undefined ? modelData.minimum : 1
-                            maximum: modelData.maximum !== undefined ? modelData.maximum : 9999
-                            step: modelData.step !== undefined ? modelData.step : 1
-                            decimals: modelData.decimals !== undefined ? modelData.decimals : 0
-                            onChanged: function (v) {
-                              page.setv(modelData.key, v)
+                            width: item ? item.implicitWidth : 0
+                            height: item ? item.implicitHeight : 0
+                            sourceComponent: SStepper {
+                              objectName: "settingsStepper_" + modelData.key
+                              label: String(modelData.label)
+                              value: (modelData.type === "int" || modelData.type === "float") ? page.val(modelData) : 0
+                              minimum: modelData.minimum !== undefined ? modelData.minimum : 1
+                              maximum: modelData.maximum !== undefined ? modelData.maximum : 9999
+                              step: modelData.step !== undefined ? modelData.step : 1
+                              decimals: modelData.decimals !== undefined ? modelData.decimals : 0
+                              onChanged: function (v) {
+                                page.setv(modelData.key, v)
+                              }
                             }
                           }
                         }
@@ -3969,6 +3981,8 @@ Item {
                           // can, there is nothing left for "skip for
                           // now" to defer.
                           readonly property bool skippable: !(page.appleSetupLive && page.appleSetupLive.light && page.appleSetupLive.light.downloads_ready === true)
+                          readonly property var execution: page.appleSetupLive && page.appleSetupLive.execution ? page.appleSetupLive.execution : ({})
+                          readonly property var liteExecution: execution.lite || ({})
                           Component.onCompleted: {
                             if (modelData.type === "apple_setup")
                               page.appleSetupLive = waves.appleSetupState()
@@ -4117,101 +4131,99 @@ Item {
                               // login step's button toggles it, the
                               // bridge makes the call and the guest
                               // owns the session.
-                              Column {
-                                id: appleLoginForm
-                                visible: String(modelData.key) === "login" && page.appleLoginOpen
+                              Loader {
+                                active: String(modelData.key) === "login" && page.appleLoginOpen
+                                visible: active
                                 x: 16
                                 width: parent.width - 16
-                                spacing: 6
-                                readonly property bool busy: page.appleWrapperLive.busy === true
-                                readonly property bool needs2fa: page.appleWrapperLive.needs_2fa === true
-                                readonly property bool signedIn: page.appleWrapperLive.logged_in === true
-                                // The guest answers "authenticated"; the bridge folds
-                                // that to logged_in. A signed-in form drops the
-                                // typed secret from its local fields.
-                                onSignedInChanged: if (signedIn) {
-                                  page.appleLoginPass = ""
-                                  page.appleLogin2fa = ""
-                                }
-                                Text {
-                                  visible: appleLoginForm.signedIn
+                                sourceComponent: Column {
+                                  id: appleLoginForm
+                                  objectName: "appleRuntimeLoginForm"
                                   width: parent.width
-                                  text: "Signed in" + (String(page.appleWrapperLive.account || "") !== "" ? " as " + page.appleWrapperLive.account : "") + "."
-                                  color: page.accent
-                                  font.pixelSize: 12
-                                  wrapMode: Text.WordWrap
-                                  textFormat: Text.PlainText
-                                }
-                                SText {
-                                  visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
-                                  width: parent.width
-                                  text: page.appleLoginUser
-                                  placeholderText: "Apple ID"
-                                  onEdited: function (t) {
-                                    page.appleLoginUser = t
-                                  }
-                                }
-                                SText {
-                                  visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
-                                  width: parent.width
-                                  text: page.appleLoginPass
-                                  placeholderText: "Password"
-                                  echoMode: TextInput.Password
-                                  onEdited: function (t) {
-                                    page.appleLoginPass = t
-                                  }
-                                }
-                                SText {
-                                  visible: !appleLoginForm.signedIn && appleLoginForm.needs2fa
-                                  width: parent.width
-                                  text: page.appleLogin2fa
-                                  placeholderText: "Two-factor code"
-                                  onEdited: function (t) {
-                                    page.appleLogin2fa = t
-                                  }
-                                }
-                                Rectangle {
-                                  visible: !appleLoginForm.signedIn
-                                  width: appleSignTxt.width + page.btnPadH * 2
-                                  height: appleSignTxt.height + page.btnPadV * 2
-                                  radius: page.btnRad
-                                  color: page.accentCont
-                                  border.color: page.accentDim
-                                  border.width: 1
-                                  opacity: appleLoginForm.busy ? 0.45 : 1.0
+                                  spacing: 6
+                                  readonly property bool busy: page.appleWrapperLive.busy === true
+                                  readonly property bool needs2fa: page.appleWrapperLive.needs_2fa === true
+                                  readonly property bool signedIn: page.appleWrapperLive.logged_in === true
                                   Text {
-                                    id: appleSignTxt
-                                    anchors.centerIn: parent
-                                    text: appleLoginForm.busy ? "SIGNING IN…" : (appleLoginForm.needs2fa ? "VERIFY CODE" : "SIGN IN")
-                                    textFormat: Text.PlainText
+                                    visible: appleLoginForm.signedIn
+                                    width: parent.width
+                                    text: "Signed in" + (String(page.appleWrapperLive.account || "") !== "" ? " as " + page.appleWrapperLive.account : "") + "."
                                     color: page.accent
-                                    font.family: page.uiFont
                                     font.pixelSize: 12
-                                    font.bold: true
-                                    font.letterSpacing: page.btnTrack
+                                    wrapMode: Text.WordWrap
+                                    textFormat: Text.PlainText
                                   }
-                                  TapAction {
-                                    accessibleLabel: "Sign in to Apple Music"
-                                    focusRadius: 8
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    enabled: !appleLoginForm.busy
-                                    onTriggered: {
-                                      if (appleLoginForm.needs2fa)
-                                        waves.appleWrapperSubmit2fa(page.appleLogin2fa)
-                                      else
-                                        waves.appleWrapperLogin(page.appleLoginUser, page.appleLoginPass)
+                                  SText {
+                                    visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
+                                    width: parent.width
+                                    text: page.appleLoginUser
+                                    placeholderText: "Apple ID"
+                                    onEdited: function (t) {
+                                      page.appleLoginUser = t
                                     }
                                   }
-                                }
-                                Text {
-                                  visible: String(page.appleWrapperLive.login_error || "") !== ""
-                                  width: parent.width
-                                  text: String(page.appleWrapperLive.login_error || "")
-                                  color: page.red
-                                  font.pixelSize: 12
-                                  wrapMode: Text.WordWrap
-                                  textFormat: Text.PlainText
+                                  SText {
+                                    visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
+                                    width: parent.width
+                                    text: page.appleLoginPass
+                                    placeholderText: "Password"
+                                    echoMode: TextInput.Password
+                                    onEdited: function (t) {
+                                      page.appleLoginPass = t
+                                    }
+                                  }
+                                  SText {
+                                    visible: !appleLoginForm.signedIn && appleLoginForm.needs2fa
+                                    width: parent.width
+                                    text: page.appleLogin2fa
+                                    placeholderText: "Two-factor code"
+                                    onEdited: function (t) {
+                                      page.appleLogin2fa = t
+                                    }
+                                  }
+                                  Rectangle {
+                                    visible: !appleLoginForm.signedIn
+                                    width: appleSignTxt.width + page.btnPadH * 2
+                                    height: appleSignTxt.height + page.btnPadV * 2
+                                    radius: page.btnRad
+                                    color: page.accentCont
+                                    border.color: page.accentDim
+                                    border.width: 1
+                                    opacity: appleLoginForm.busy ? 0.45 : 1.0
+                                    Text {
+                                      id: appleSignTxt
+                                      anchors.centerIn: parent
+                                      text: appleLoginForm.busy ? "SIGNING IN…" : (appleLoginForm.needs2fa ? "VERIFY CODE" : "SIGN IN")
+                                      textFormat: Text.PlainText
+                                      color: page.accent
+                                      font.family: page.uiFont
+                                      font.pixelSize: 12
+                                      font.bold: true
+                                      font.letterSpacing: page.btnTrack
+                                    }
+                                    TapAction {
+                                      accessibleLabel: "Sign in to Apple Music"
+                                      focusRadius: 8
+                                      anchors.fill: parent
+                                      cursorShape: Qt.PointingHandCursor
+                                      enabled: !appleLoginForm.busy
+                                      onTriggered: {
+                                        if (appleLoginForm.needs2fa)
+                                          waves.appleWrapperSubmit2fa(page.appleLogin2fa)
+                                        else
+                                          waves.appleWrapperLogin(page.appleLoginUser, page.appleLoginPass)
+                                      }
+                                    }
+                                  }
+                                  Text {
+                                    visible: String(page.appleWrapperLive.login_error || "") !== ""
+                                    width: parent.width
+                                    text: String(page.appleWrapperLive.login_error || "")
+                                    color: page.red
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    textFormat: Text.PlainText
+                                  }
                                 }
                               }
                             }
@@ -4228,6 +4240,160 @@ Item {
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
                             textFormat: Text.PlainText
+                          }
+                          Text {
+                            visible: setupCol.execution.state === "confirmation_required"
+                            width: parent.width
+                            text: "Waves cannot verify that this runtime uses your active Apple account and storefront. Confirm them before using it."
+                            color: page.gold
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          Flow {
+                            width: parent.width
+                            spacing: 8
+                            Loader {
+                              active: setupCol.execution.can_confirm === true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleConfirmRuntimeAccount"
+                                label: "Confirm account"
+                                onClicked: waves.confirmAppleRuntimeAccount()
+                              }
+                            }
+                            Loader {
+                              active: setupCol.execution.stopped !== true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleStopExecution"
+                                label: setupCol.execution.mode === "user_managed" ? "Disconnect runtime" : "Stop runtime"
+                                onClicked: waves.stopAppleExecution()
+                              }
+                            }
+                            Loader {
+                              active: setupCol.execution.stopped === true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleResumeExecution"
+                                label: "Reconnect runtime"
+                                onClicked: waves.resumeAppleExecution()
+                              }
+                            }
+                            Loader {
+                              active: setupCol.execution.setup_busy === true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleCancelRuntimeSetup"
+                                label: "Cancel setup"
+                                onClicked: waves.cancelAppleRuntimeSetup()
+                              }
+                            }
+                            ActionButton {
+                              objectName: "appleCheckRuntimeUpdate"
+                              label: "Check approved updates"
+                              onClicked: waves.checkAppleRuntimeUpdate()
+                            }
+                            Loader {
+                              active: (setupCol.execution.updates && setupCol.execution.updates.rollback_available === true) === true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleRollbackRuntime"
+                                label: "Restore previous tool"
+                                onClicked: waves.rollbackAppleRuntime()
+                              }
+                            }
+                            Loader {
+                              active: (setupCol.execution.mode !== "user_managed" && setupCol.execution.image && setupCol.execution.image.rollback_available === true) === true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleRollbackImage"
+                                label: "Restore previous image"
+                                onClicked: waves.rollbackAppleImage()
+                              }
+                            }
+                          }
+                          Text {
+                            objectName: "appleLiteSessionState"
+                            visible: setupCol.liteExecution.configured === true
+                            width: parent.width
+                            text: "Lite runtime: " + String(setupCol.liteExecution.state || "unknown") + ". " + (setupCol.liteExecution.authenticated === true ? (setupCol.liteExecution.qualification === "approved" ? "Session authenticated." : "Runtime reports a signed-in session; qualification is pending.") : "Authentication has not been verified.")
+                            color: page.textLo
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          Flow {
+                            visible: setupCol.liteExecution.configured === true
+                            width: parent.width
+                            spacing: 8
+                            Loader {
+                              active: setupCol.liteExecution.configured === true && (setupCol.liteExecution.stopped !== true && setupCol.liteExecution.checking !== true)
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleCheckLiteRuntime"
+                                label: "Check lite status"
+                                onClicked: waves.refreshAppleLiteRuntime()
+                              }
+                            }
+                            Loader {
+                              active: setupCol.liteExecution.configured === true && (setupCol.liteExecution.checking === true)
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleCancelLiteRuntimeProbe"
+                                label: "Cancel lite check"
+                                onClicked: waves.cancelAppleLiteRuntimeProbe()
+                              }
+                            }
+                            Loader {
+                              active: setupCol.liteExecution.configured === true && (setupCol.liteExecution.can_confirm === true)
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleConfirmLiteRuntimeAccount"
+                                label: "Confirm lite account"
+                                onClicked: waves.confirmAppleRuntimeSession("apple:lite")
+                              }
+                            }
+                            Loader {
+                              active: setupCol.liteExecution.configured === true && (setupCol.liteExecution.stopped !== true)
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleStopLiteRuntime"
+                                label: "Disconnect lite"
+                                onClicked: waves.stopAppleLiteRuntime()
+                              }
+                            }
+                            Loader {
+                              active: setupCol.liteExecution.configured === true && (setupCol.liteExecution.stopped === true)
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleResumeLiteRuntime"
+                                label: "Reconnect lite"
+                                onClicked: waves.resumeAppleLiteRuntime()
+                              }
+                            }
                           }
                           // The published-image workflow carries
                           // the guest libraries, so the wizard has no
