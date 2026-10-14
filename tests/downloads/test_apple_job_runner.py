@@ -902,10 +902,19 @@ def test_runtime_context_change_settles_the_job_incomplete(tmp_path, kind):
     assert excinfo.value.failure.retryable is True
 
 
-def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stopped_meanwhile", [False, True], ids=["held", "provider-stopped"])
+def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monkeypatch, stopped_meanwhile):
     from waves.providers.apple.engine import AppleWrapperDown
 
+    row = {"status": "running", "reason": ""}
+
+    def queue_status(qid, state, detail=""):
+        row.update(status=state, reason=detail)
+
     def restart_failed(*args, **kwargs):
+        if stopped_meanwhile:
+            # A provider-disable stop words the row before it sets the abort.
+            queue_status(1, "cancelled", "Apple Music was turned off")
         raise RuntimeError("synthetic restart failure")
 
     provider = _FakeProvider(fixture=None)
@@ -913,8 +922,8 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
     monkeypatch.setattr(runner, "ensure_sidecar", restart_failed)
     stub = _bind(_stub(tmp_path / "lib", provider))
     hooks = stub._apple_job_hooks()
-    statuses = []
-    hooks.queue_status = lambda qid, state, detail="": statuses.append(state)
+    hooks.queue_status = queue_status
+    hooks.queue_item = lambda qid: row
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
 
     with pytest.raises(DownloadIncomplete, match="1 failed") as excinfo:
@@ -929,9 +938,12 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
         )
 
     assert "account or runtime changed" not in str(excinfo.value)
-    # The run moves past the failed track, so its row is no longer Held:
-    # Clear Queued must not take a row that is still downloading.
-    assert statuses == ["queued", "running"]
+    if stopped_meanwhile:
+        assert row == {"status": "cancelled", "reason": "Apple Music was turned off"}
+    else:
+        # The run moves past the failed track, so its row is no longer Held:
+        # Clear Queued must not take a row that is still downloading.
+        assert row["status"] == "running"
 
 
 def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):

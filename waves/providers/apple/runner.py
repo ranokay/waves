@@ -1659,6 +1659,18 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
         time.sleep(min(0.25, remaining))
 
 
+def resume_held(hooks: AppleJobHooks, qid: int) -> None:
+    """Show a held row running again, unless a stop settled it meanwhile.
+
+    A provider-disable stop words its row cancelled before it sets the job's
+    abort, so an unconditional reset would erase those words.
+    """
+    with contextlib.suppress(Exception):
+        row = hooks.queue_item(int(qid))
+        if row is not None and row.get("status") == "queued":
+            hooks.queue_status(int(qid), "running", "")
+
+
 def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
     """Hold an Apple row with one clear message (presentation, not a state).
 
@@ -1865,8 +1877,7 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
                 with contextlib.suppress(Exception):
                     hooks.note_activity()
                 # A row held on an earlier poll resumes visibly.
-                with contextlib.suppress(Exception):
-                    hooks.queue_status(int(qid), "running", "")
+                resume_held(hooks, qid)
                 return True
             # Still down: hold with the setup words rather than fail a
             # blip, but bounded: a start that keeps failing needs the
@@ -2707,8 +2718,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                             # down error; only STOP ends the run as aborted.
                             # The run goes on, so the row leaves its hold.
                             logger.debug("Apple sidecar re-ensure failed", exc_info=True)
-                            with contextlib.suppress(Exception):
-                                hooks.queue_status(int(qid), "running", "")
+                            resume_held(hooks, qid)
                             raise exc from exc.__cause__
                         if not ensured or job_abort.is_set():
                             raise _AppleAborted() from exc
