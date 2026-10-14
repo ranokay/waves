@@ -228,4 +228,8 @@ cookies.txt
 # Root-scoped on purpose: the tracked tests/ files that mention "audit" in their
 # names are real source and must stay tracked.
 /*audit*.md
-/notes/*audit*.md
+
+# Private notes: nothing new in notes/ is ever swept into a commit. The notes
+# already tracked stay tracked (ignoring never untracks a file); a new one that
+# belongs in the private history is added on purpose with `git add -f`.
+/notes/*
