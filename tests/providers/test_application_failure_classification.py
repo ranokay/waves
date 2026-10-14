@@ -132,7 +132,7 @@ def test_apple_event_failure_does_not_interrupt_existing_held_state() -> None:
         raise RuntimeError("event relay gone")
 
     hooks = runner.AppleJobHooks(
-        event=broken_event, move_live_row=lambda qid, state, reason: statuses.append((qid, state, reason))
+        event=broken_event, move_unsettled_row=lambda qid, state, reason: statuses.append((qid, state, reason))
     )
     runner.set_held(hooks, 8)
     assert statuses[0][:2] == (8, "queued")

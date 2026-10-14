@@ -158,7 +158,7 @@ class _Row(dict):
     def queue_status(self, qid, state, detail=""):
         self.update(status=state, reason=detail)
 
-    def move_live_row(self, qid, state, detail=""):
+    def move_unsettled_row(self, qid, state, detail=""):
         if self["status"] in ("queued", "running"):
             self.queue_status(qid, state, detail)
             if state == "queued":
@@ -170,7 +170,7 @@ class _Row(dict):
 
     def bind(self, hooks) -> None:
         hooks.queue_status = self.queue_status
-        hooks.move_live_row = self.move_live_row
+        hooks.move_unsettled_row = self.move_unsettled_row
         hooks.resume_held_row = self.resume_held_row
 
 
@@ -981,6 +981,45 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
         assert row["status"] == "running"
 
 
+def test_a_first_ensure_that_errors_after_holding_fetches_with_the_row_resumed(tmp_path, monkeypatch):
+    from waves.providers.apple.engine import AppleTrackUnavailable
+
+    # A poll held the row, then the ensure itself errored: the run proceeds
+    # to fetch, so the row cannot stay Held under Queued while it downloads.
+    def held_then_errored(hooks, qid, job_abort, *, need_wrapper):
+        runner.set_held(hooks, qid)
+        raise RuntimeError("synthetic poll failure")
+
+    row = _Row()
+    fetched_under: list[dict] = []
+
+    def fetch(raw, tier, audio_type):
+        fetched_under.append(dict(row))
+        raise AppleTrackUnavailable("not in this storefront")
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = fetch
+    monkeypatch.setattr(runner, "ensure_sidecar", held_then_errored)
+    stub = _bind(_stub(tmp_path / "lib", provider, _queue_index={1: {"askQuality": "LOSSLESS", "quality": "LOSSLESS"}}))
+    hooks = stub._apple_job_hooks()
+    row.bind(hooks)
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with contextlib.suppress(DownloadIncomplete):
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert row.held, "the ensure held the row before it errored"
+    assert fetched_under == [{"status": "running", "reason": ""}], "the fetch ran under a Held row"
+
+
 def test_a_revoked_album_publishes_no_playlist(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import _AppleAborted
@@ -1719,11 +1758,14 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
     calls = []
+    row = _Row()
+    retried_on: list[dict] = []
 
     def flaky(raw, tier, audio_type):
         calls.append(audio_type)
         if len(calls) == 1:
             raise AppleCredentialsError("The cookies export is not signed in")
+        retried_on.append(dict(row))
         return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
 
     provider.resolve_stream = flaky
@@ -1731,20 +1773,18 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     stub = _bind(_stub(base, provider))
     stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
     stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
-    held = []
-    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     emitted = []
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     stub._set_status = lambda *args: None
     waited = []
     monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort, **k: waited.append(True) or True)
-    resumed = []
-    monkeypatch.setattr(runner, "resume_held", lambda hooks, qid: resumed.append((qid, len(calls))))
+    hooks = stub._apple_job_hooks()
+    row.bind(hooks)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     summary = runner.run_apple_job(
-        stub._apple_job_hooks(),
+        hooks,
         1,
         spec,
         _song_resource(),
@@ -1756,8 +1796,8 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the session returns"
     assert waited == [True]
-    assert held and held[0][0] == 1 and "cookies export" in held[0][1]
-    assert resumed == [(1, 1)], "the row leaves its hold before the retried fetch"
+    assert row.held and "cookies export" in row.held[0]
+    assert retried_on == [{"status": "running", "reason": ""}], "the retry ran under a Held row"
     assert stub._apple_session_expired is False, "a landed track lifts the marker"
     assert emitted, "the light re-reads on the failure and the recovery"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
@@ -1840,7 +1880,7 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     setup_requests: list[str] = []
     hooks.event = application_events.append
     hooks.queue_status = lambda *args: settled.append(args)
-    hooks.move_live_row = lambda *args: settled.append(args)
+    hooks.move_unsettled_row = lambda *args: settled.append(args)
     hooks.finish_job = finished.append
     hooks.gate_reachability = lambda _retry, _media_id: True
     hooks.download_failed_with_folder = lambda *_args: False
@@ -2339,7 +2379,7 @@ def _probe_gate_setup(*, abort_during_probe: bool, row_present: bool):
         settings=lambda: SimpleNamespace(data=SimpleNamespace(download_base_path="/tmp/waves-out")),
         queue_item=lambda qid: {"qid": qid} if row_present else None,
         queue_status=lambda qid, status, reason="": calls["statuses"].append(status),
-        move_live_row=lambda qid, status, reason="": calls["statuses"].append(status),
+        move_unsettled_row=lambda qid, status, reason="": calls["statuses"].append(status),
         download_state=lambda media_id, state: None,
         download_progress=lambda media_id, pct: None,
         bump_groups=lambda *args: None,

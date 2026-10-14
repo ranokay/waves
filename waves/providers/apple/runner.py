@@ -250,9 +250,9 @@ class AppleJobHooks:
     event: Callable[[ApplicationEvent], None] = _noop
     queue_status: Callable[..., None] = _noop
     # The worker's own start, held and throttled writes: the row moves only
-    # while it is still queued or running (an atomic move), so a stop that
-    # settled it first keeps its words.
-    move_live_row: Callable[..., None] = _noop
+    # while it is unsettled, queued or running (an atomic move), so a stop
+    # that settled it first keeps its words.
+    move_unsettled_row: Callable[..., None] = _noop
     # Held -> running, only while the row is still held (an atomic move).
     resume_held_row: Callable[[int], None] = _noop
     queue_progress: Callable[..., None] = _noop
@@ -1640,7 +1640,7 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
     with contextlib.suppress(Exception):
         hooks.status(throttled_message(total))
     with contextlib.suppress(Exception):
-        hooks.move_live_row(int(qid), "running", throttled_message(total))
+        hooks.move_unsettled_row(int(qid), "running", throttled_message(total))
     _publish_job_failure(
         hooks,
         qid,
@@ -1661,7 +1661,7 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
             with contextlib.suppress(Exception):
                 hooks.status(throttled_message(remaining))
             with contextlib.suppress(Exception):
-                hooks.move_live_row(int(qid), "running", throttled_message(remaining))
+                hooks.move_unsettled_row(int(qid), "running", throttled_message(remaining))
         time.sleep(min(0.25, remaining))
 
 
@@ -1679,15 +1679,16 @@ def resume_held(hooks: AppleJobHooks, qid: int) -> None:
 def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
     """Hold an Apple row with one clear message (presentation, not a state).
 
-    The row sits under Queued with its reason; it resumes automatically
-    when the runtime returns and respects STOP while it waits.
+    The row sits under Queued with its reason, unless a stop already
+    settled it; it resumes automatically when the runtime returns and
+    respects STOP while it waits.
     """
     try:
         message = held_message(detail)
     except Exception:
         message = "Held: the Apple runtime is not running. Waiting for it to return."
     with contextlib.suppress(Exception):
-        hooks.move_live_row(int(qid), "queued", message)
+        hooks.move_unsettled_row(int(qid), "queued", message)
     with contextlib.suppress(Exception):
         hooks.status(message)
     if not detail:
@@ -2554,6 +2555,9 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             raise DownloadIncomplete(str(exc)) from exc
         except Exception:
             logger.debug("Apple sidecar ensure failed; proceeding to fetch", exc_info=True)
+            # A poll may have held the row before the error: the fetch runs,
+            # so the row leaves its hold.
+            resume_held(hooks, qid)
             ensured = True
         if not ensured:
             raise _AppleAborted()
@@ -2993,7 +2997,7 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         return
     # A provider stop words the row before it sets this abort: the start
     # moves only a row the stop has not settled.
-    hooks.move_live_row(qid, "running")
+    hooks.move_unsettled_row(qid, "running")
     hooks.download_progress(media_id, 0.0)
     hooks.download_state(media_id, "running")
     hooks.status(f"Downloading {name}…")
