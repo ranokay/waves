@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -255,7 +256,11 @@ def test_binary_case_conflicts_are_checked_against_other_tracked_paths(checkout,
 def test_comprehensive_gate_retains_lock_type_and_dependency_failures(checkout, step):
     if step == "lock":
         project = checkout / "pyproject.toml"
-        project.write_text(project.read_text().replace('"ruff==0.16.10"', '"ruff==0.16.9"'))
+        # Widening the exact pin changes the locked specifier whatever version
+        # Dependabot last moved ruff to.
+        text, pins = re.subn(r'"ruff==([^"]+)"', r'"ruff>=\1"', project.read_text())
+        assert pins == 1
+        project.write_text(text)
     elif step == "ty":
         (checkout / "waves/invalid.py").write_text('def value() -> int:\n    return "wrong"\n')
     else:
