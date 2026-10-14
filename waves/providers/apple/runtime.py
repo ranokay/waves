@@ -54,6 +54,10 @@ logger = logging.getLogger("waves.providers.apple.runtime")
 _HTTP_TIMEOUT = 30
 _IO_CHUNK = 1 << 16  # 64 KiB streaming chunks
 _UA = "Waves-apple-runtime"
+# POSIX ctime moves on every write, so an unchanged stat fingerprint proves an
+# unchanged file. Windows reports creation time instead, which a same-size
+# rewrite that restores mtime leaves alone.
+STAT_REVEALS_REWRITES = os.name != "nt"
 
 # Pins: config-first initial values; engine bumps ride Waves' updater (spec 10.4).
 
@@ -665,8 +669,8 @@ class AppleRuntimeManager:
         self._maintaining = False
         self._binary_observation: tuple[tuple[int, int, int, int, int], str] | None = None
         # How many usage leases this thread holds. While one is held,
-        # maintenance cannot replace the tool, so verify() hashes it only
-        # when its file metadata changed.
+        # maintenance cannot replace the tool, so on POSIX verify() hashes it
+        # only when its file metadata changed.
         self._leases = local()
 
     @contextlib.contextmanager
@@ -844,13 +848,17 @@ class AppleRuntimeManager:
         Status performs only metadata reads. A changed file or a newly restored
         manager remains unknown until this method or a usage lease observes it.
         Inside a lease on this thread, an observation of a file with unchanged
-        stat metadata stands. A replaced or rewritten file changes its inode,
-        size, mtime or POSIX ctime and is hashed; Windows reports creation time
-        as ctime, so there a same-size rewrite that restores mtime goes unseen.
+        stat metadata stands on POSIX, where any rewrite moves the ctime.
+        Windows reports creation time as ctime, so there every call hashes.
         """
         before = self._binary_fingerprint()
         observation = self._binary_observation
-        if getattr(self._leases, "depth", 0) and observation is not None and observation[0] == before:
+        if (
+            STAT_REVEALS_REWRITES
+            and getattr(self._leases, "depth", 0)
+            and observation is not None
+            and observation[0] == before
+        ):
             return self.status()
         if before is not None:
             try:

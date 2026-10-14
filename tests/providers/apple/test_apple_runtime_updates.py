@@ -251,10 +251,11 @@ def counted_tool(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("outer_verifies", [True, False], ids=["managed-tool", "custom-tool"])
-def test_an_unchanged_tool_is_hashed_once_per_thread_of_leases(counted_tool, outer_verifies):
+def test_an_unchanged_tool_is_hashed_once_per_thread_of_leases(counted_tool, monkeypatch, outer_verifies):
     from threading import Thread
 
     manager, hashed = counted_tool
+    monkeypatch.setattr(runtime, "STAT_REVEALS_REWRITES", True)
 
     # A job's outer lease spans its tracks; each track's lease and setup probe
     # on that thread reuse one observation while maintenance stays excluded.
@@ -275,6 +276,18 @@ def test_an_unchanged_tool_is_hashed_once_per_thread_of_leases(counted_tool, out
 
     manager.verify()
     assert len(hashed) == 3, "verification outside a lease still reads the file"
+
+
+def test_leases_hash_the_tool_on_every_check_where_stat_misses_rewrites(counted_tool, monkeypatch):
+    # Windows reports creation time as ctime, so a same-size rewrite that
+    # restores mtime keeps the fingerprint: nothing may trust it there.
+    manager, hashed = counted_tool
+    monkeypatch.setattr(runtime, "STAT_REVEALS_REWRITES", False)
+
+    with manager.usage(), manager.usage():
+        manager.verify()
+
+    assert len(hashed) == 3
 
 
 def test_a_tool_replaced_during_a_job_is_refused_by_the_next_track(counted_tool):

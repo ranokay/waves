@@ -15115,6 +15115,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             status=lambda text: self._set_status(text),
             event=deliver_event,
             queue_status=lambda qid, status, reason="": self._set_queue_status(qid, status, reason),
+            resume_held_row=lambda qid: self._set_queue_status(qid, "running", "", expect="queued"),
             queue_progress=lambda qid, pct: self._set_queue_progress(qid, pct),
             queue_item=lambda qid: self._queue_item(qid),
             queue_mark_changed=lambda qid: self._queue_mark_changed(qid),
