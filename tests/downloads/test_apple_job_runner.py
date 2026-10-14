@@ -146,6 +146,34 @@ class _Relay:
         raise AttributeError(name)
 
 
+class _Row(dict):
+    """One running queue row behind a job's status hooks, with the bridge's
+    atomic moves: a live write lands only on a queued or running row, and a
+    resume only on a held one."""
+
+    def __init__(self):
+        super().__init__(status="running", reason="")
+        self.held: list[str] = []
+
+    def queue_status(self, qid, state, detail=""):
+        self.update(status=state, reason=detail)
+
+    def move_live_row(self, qid, state, detail=""):
+        if self["status"] in ("queued", "running"):
+            self.queue_status(qid, state, detail)
+            if state == "queued":
+                self.held.append(detail)
+
+    def resume_held_row(self, qid):
+        if self["status"] == "queued":
+            self.queue_status(qid, "running")
+
+    def bind(self, hooks) -> None:
+        hooks.queue_status = self.queue_status
+        hooks.move_live_row = self.move_live_row
+        hooks.resume_held_row = self.resume_held_row
+
+
 class _FakeProvider:
     """The Apple seam, with a scripted fetch (copies a fixture file)."""
 
@@ -906,21 +934,13 @@ def test_runtime_context_change_settles_the_job_incomplete(tmp_path, kind):
 def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monkeypatch, meanwhile):
     from waves.providers.apple.engine import AppleWrapperDown
 
-    row = {"status": "running", "reason": ""}
+    row = _Row()
     abort = Event()
-
-    def queue_status(qid, state, detail=""):
-        row.update(status=state, reason=detail)
-
-    def resume_held_row(qid):
-        # The bridge's atomic move: held -> running only while still held.
-        if row["status"] == "queued":
-            queue_status(qid, "running")
 
     def restart_failed(*args, **kwargs):
         if meanwhile == "provider-stop":
             # A provider-disable stop words the row before it sets the abort.
-            queue_status(1, "cancelled", "Apple Music was turned off")
+            row.queue_status(1, "cancelled", "Apple Music was turned off")
         elif meanwhile == "stop":
             abort.set()
         raise RuntimeError("synthetic restart failure")
@@ -930,8 +950,7 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
     monkeypatch.setattr(runner, "ensure_sidecar", restart_failed)
     stub = _bind(_stub(tmp_path / "lib", provider))
     hooks = stub._apple_job_hooks()
-    hooks.queue_status = queue_status
-    hooks.resume_held_row = resume_held_row
+    row.bind(hooks)
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
 
     def run():
@@ -1719,6 +1738,8 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     stub._set_status = lambda *args: None
     waited = []
     monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort, **k: waited.append(True) or True)
+    resumed = []
+    monkeypatch.setattr(runner, "resume_held", lambda hooks, qid: resumed.append((qid, len(calls))))
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
@@ -1736,6 +1757,7 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     assert len(calls) == 2, "the same track retries in place once the session returns"
     assert waited == [True]
     assert held and held[0][0] == 1 and "cookies export" in held[0][1]
+    assert resumed == [(1, 1)], "the row leaves its hold before the retried fetch"
     assert stub._apple_session_expired is False, "a landed track lifts the marker"
     assert emitted, "the light re-reads on the failure and the recovery"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
@@ -1818,6 +1840,7 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     setup_requests: list[str] = []
     hooks.event = application_events.append
     hooks.queue_status = lambda *args: settled.append(args)
+    hooks.move_live_row = lambda *args: settled.append(args)
     hooks.finish_job = finished.append
     hooks.gate_reachability = lambda _retry, _media_id: True
     hooks.download_failed_with_folder = lambda *_args: False
@@ -1859,8 +1882,9 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
 def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch, failure_kind):
     """A restored wrapper account or runtime retries the same track in place.
 
-    The runner publishes one held event and resolves that event only after
-    the retried delivery lands.
+    The row leaves its hold before the retry, so Clear Queued cannot take a
+    row that is downloading. The runner publishes one held event and
+    resolves that event only after the retried delivery lands.
     """
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import AppleCredential, AppleCredentialsError, AppleWrapperDown
@@ -1877,9 +1901,13 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     provider = _FakeProvider(fixture=staged)
     provider.classify_failure = AppleProvider().classify_failure
     calls = []
+    row = _Row()
+    retried_on: list[dict] = []
 
     def _flaky(raw, tier, audio_type):
         calls.append(audio_type)
+        if len(calls) > 1:
+            retried_on.append(dict(row))
         if len(calls) == 1:
             if failure_kind == "runtime":
                 raise AppleWrapperDown("token=account-secret-value /Users/private-account/wrapper")
@@ -1901,7 +1929,6 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
     application_events: list[ApplicationEvent] = []
-    held: list[tuple[int, str]] = []
     started_ports: list[int] = []
     sidecar_guard = Lock()
     runtime = SimpleNamespace(read_port=lambda: 1234, app_dir=str(tmp_path))
@@ -1910,7 +1937,7 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
         note_activity=lambda: None,
     )
     hooks.event = application_events.append
-    hooks.queue_status = lambda qid, state, detail="": held.append((qid, detail)) if state == "queued" else None
+    row.bind(hooks)
     hooks.runtime = lambda: runtime
     hooks.wrapper_port = runtime.read_port
     hooks.supervisor = lambda: supervisor
@@ -1935,7 +1962,8 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the guest returns"
     assert started_ports == ([1234] if failure_kind == "runtime" else [])
-    assert held and ("wrapper session" if failure_kind == "credential" else "not running") in held[0][1]
+    assert row.held and ("wrapper session" if failure_kind == "credential" else "not running") in row.held[0]
+    assert retried_on == [{"status": "running", "reason": ""}], "the retry ran under a Held row"
     assert getattr(stub, "_apple_session_expired", False) is False, "a landed track lifts the marker"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
     assert not any(ev.get("status") == "failed" for ev in relay.events)
@@ -2311,6 +2339,7 @@ def _probe_gate_setup(*, abort_during_probe: bool, row_present: bool):
         settings=lambda: SimpleNamespace(data=SimpleNamespace(download_base_path="/tmp/waves-out")),
         queue_item=lambda qid: {"qid": qid} if row_present else None,
         queue_status=lambda qid, status, reason="": calls["statuses"].append(status),
+        move_live_row=lambda qid, status, reason="": calls["statuses"].append(status),
         download_state=lambda media_id, state: None,
         download_progress=lambda media_id, pct: None,
         bump_groups=lambda *args: None,

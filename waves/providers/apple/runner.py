@@ -249,6 +249,10 @@ class AppleJobHooks:
     status: Callable[[str], None] = _noop
     event: Callable[[ApplicationEvent], None] = _noop
     queue_status: Callable[..., None] = _noop
+    # The worker's own start, held and throttled writes: the row moves only
+    # while it is still queued or running (an atomic move), so a stop that
+    # settled it first keeps its words.
+    move_live_row: Callable[..., None] = _noop
     # Held -> running, only while the row is still held (an atomic move).
     resume_held_row: Callable[[int], None] = _noop
     queue_progress: Callable[..., None] = _noop
@@ -1636,7 +1640,7 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
     with contextlib.suppress(Exception):
         hooks.status(throttled_message(total))
     with contextlib.suppress(Exception):
-        hooks.queue_status(int(qid), "running", throttled_message(total))
+        hooks.move_live_row(int(qid), "running", throttled_message(total))
     _publish_job_failure(
         hooks,
         qid,
@@ -1657,7 +1661,7 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
             with contextlib.suppress(Exception):
                 hooks.status(throttled_message(remaining))
             with contextlib.suppress(Exception):
-                hooks.queue_status(int(qid), "running", throttled_message(remaining))
+                hooks.move_live_row(int(qid), "running", throttled_message(remaining))
         time.sleep(min(0.25, remaining))
 
 
@@ -1683,7 +1687,7 @@ def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
     except Exception:
         message = "Held: the Apple runtime is not running. Waiting for it to return."
     with contextlib.suppress(Exception):
-        hooks.queue_status(int(qid), "queued", message)
+        hooks.move_live_row(int(qid), "queued", message)
     with contextlib.suppress(Exception):
         hooks.status(message)
     if not detail:
@@ -2694,6 +2698,9 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                         _publish_job_failure(hooks, qid, _classified_failure(hooks, exc))
                         if not wait_for_session(hooks, provider, job_abort, credential=credential):
                             raise _AppleAborted() from exc
+                        # The retry downloads, so the row leaves its hold:
+                        # Clear Queued must not take a running download.
+                        resume_held(hooks, qid)
                         continue
                     # A dead sidecar holds the row while a return is
                     # plausible: one clear message, automatic resume. A
@@ -2984,7 +2991,9 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         hooks.bump_groups(media_id, None, "failed")
         hooks.finish_job(qid)
         return
-    hooks.queue_status(qid, "running")
+    # A provider stop words the row before it sets this abort: the start
+    # moves only a row the stop has not settled.
+    hooks.move_live_row(qid, "running")
     hooks.download_progress(media_id, 0.0)
     hooks.download_state(media_id, "running")
     hooks.status(f"Downloading {name}…")

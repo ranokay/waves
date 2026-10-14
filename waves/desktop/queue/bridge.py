@@ -711,19 +711,19 @@ class QueueMixin:
     def _queue_item(self, qid: int) -> dict | None:
         return self._queue_index.get(qid)
 
-    def _set_queue_status(self, qid: int, status: str, reason: str = "", *, expect: str = "") -> None:
+    def _set_queue_status(self, qid: int, status: str, reason: str = "", *, expect: tuple[str, ...] = ()) -> None:
         """Move a row to its new status, optionally with the reason it got
         there. A status that carries no reason clears the one the row had --
         a row retried in place and finished cannot keep explaining a failure
         that no longer stands -- except a wordless cancel settle on a row a
         stop already worded: the provider-disable reason survives the
         worker's own settle. With ``expect``, the row moves only while it
-        still has that status, checked and written under the queue lock a
-        provider stop rewrites rows under."""
+        still has one of those statuses, checked and written under the queue
+        lock a provider stop rewrites rows under."""
         reason = scrub_event_text(str(reason or ""))
         with self._queue_lock if expect else contextlib.nullcontext():
             item = self._queue_item(qid)
-            if item is None or (expect and item["status"] != expect):
+            if item is None or (expect and item["status"] not in expect):
                 return
             if item["status"] == status and item.get("reason", "") == reason:
                 return

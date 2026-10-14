@@ -605,9 +605,9 @@ def _bridge_stub(**settings_overrides):
     stub._queue_index = {}
     stub._queue_item = lambda qid: stub._queue_index.get(qid)
 
-    def set_queue_status(qid, status, reason="", *, expect=""):
+    def set_queue_status(qid, status, reason="", *, expect=()):
         row = stub._queue_index.setdefault(int(qid), {})
-        if not expect or row.get("status") == expect:
+        if not expect or row.get("status") in expect:
             row.update(status=status, reason=reason)
 
     stub._set_queue_status = set_queue_status
@@ -638,6 +638,7 @@ def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path, monkeypatch):
 
 def test_backend_throttle_wait_counts_down_and_respects_stop():
     stub = _bridge_stub()
+    stub._queue_index[7] = {"status": "running", "reason": ""}
     abort = Event()
     assert stub._apple_throttle_wait(7, 0.05, abort) is True
     row = stub._queue_index[7]

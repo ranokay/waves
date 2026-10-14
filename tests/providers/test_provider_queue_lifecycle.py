@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +16,7 @@ from waves.desktop.backend import WavesBridge
 from waves.desktop.providers.lifecycle import ProviderContexts
 from waves.desktop.queue.bridge import QueueMixin
 from waves.desktop.queue.runtime import JobRuntime
+from waves.providers.apple import runner
 
 
 def _row(qid: int, media_id: str, status: str = "queued", audio_type: str = "stereo") -> dict:
@@ -391,8 +392,85 @@ def test_a_held_row_resumes_only_while_it_is_still_held():
 
     assert queue._stop_provider_queue("apple", "Apple Music was turned off") == 1
     for qid in (1, 2):
-        queue._set_queue_status(qid, "running", "", expect="queued")
+        queue._set_queue_status(qid, "running", "", expect=("queued",))
 
     assert queue._queue_index[1]["status"] == "cancelled"
     assert queue._queue_index[1]["reason"] == "Apple Music was turned off"
     assert (queue._queue_index[2]["status"], queue._queue_index[2]["reason"]) == ("running", "")
+
+
+def _stop_with_a_worker_inside(queue: _Queue, worker_write) -> None:
+    """Run an Apple provider stop with a worker write inside its window.
+
+    The stop words its rows under the queue lock, then cleans up before it
+    sets the jobs' aborts: a worker that read its abort clear writes there.
+    """
+    cleanup = queue._clear_retry_refetches
+
+    def inside_the_window(provider_id: str) -> None:
+        worker_write()
+        cleanup(provider_id)
+
+    queue._clear_retry_refetches = inside_the_window
+    assert queue._stop_provider_queue("apple", "Apple Music was turned off") == 1
+
+
+@pytest.mark.parametrize("write", ["held", "held for setup", "throttled"])
+def test_a_worker_write_inside_a_provider_stop_keeps_the_stops_words(write):
+    queue = _Queue([_row(1, "apple:17", "running")])
+    queue._jobs.specs = {1: SimpleNamespace(provider_id="apple")}
+    abort = queue._jobs.aborts[1] = Event()
+    hooks = WavesBridge._apple_job_hooks(queue)
+
+    def worker_write() -> None:
+        if write == "throttled":
+            runner.throttle_wait(hooks, 1, 0.0, abort)
+        else:
+            runner.set_held(hooks, 1, "The wrapper tier has no port yet." if write == "held for setup" else "")
+
+    _stop_with_a_worker_inside(queue, worker_write)
+    assert abort.is_set()
+    # The job body's own settle once its abort lands carries no words.
+    hooks.queue_status(1, "cancelled")
+
+    row = queue._queue_index[1]
+    assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
+
+
+def test_a_job_that_starts_inside_a_provider_stop_keeps_the_stops_words(monkeypatch):
+    queue = _Queue([_row(1, "apple:17")])
+    queue._jobs.specs = {1: SimpleNamespace(provider_id="apple")}
+    abort = queue._jobs.aborts[1] = Event()
+    hooks = WavesBridge._apple_job_hooks(queue)
+    hooks.gate_reachability = lambda retry, media_id="": True
+    hooks.finish_job = lambda qid: None
+    running = Event()
+    failures: list[BaseException] = []
+
+    def run_until_the_abort(*args, job_abort, **kwargs) -> str:
+        running.set()
+        assert job_abort.wait(5)
+        return ""
+
+    monkeypatch.setattr(runner, "run_apple_job", run_until_the_abort)
+    spec = SimpleNamespace(kind="album", file_template="", collection=True, media_id="apple:17")
+
+    def body() -> None:
+        try:
+            runner.run_job_body(hooks, 1, spec, None, signals=None, job_abort=abort, row_ask=None, name="Album")
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = Thread(target=body)
+
+    def start_the_job() -> None:
+        # The worker has read its abort clear and writes its start.
+        worker.start()
+        assert running.wait(5)
+
+    _stop_with_a_worker_inside(queue, start_the_job)
+    worker.join(5)
+
+    assert not worker.is_alive() and failures == []
+    row = queue._queue_index[1]
+    assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
