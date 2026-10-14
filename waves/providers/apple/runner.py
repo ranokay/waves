@@ -2705,8 +2705,11 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                         except Exception:
                             # A restart that errors fails this track with its
                             # down error; only STOP ends the run as aborted.
+                            # The run goes on, so the row leaves its hold.
                             logger.debug("Apple sidecar re-ensure failed", exc_info=True)
-                            raise exc from None
+                            with contextlib.suppress(Exception):
+                                hooks.queue_status(int(qid), "running", "")
+                            raise exc from exc.__cause__
                         if not ensured or job_abort.is_set():
                             raise _AppleAborted() from exc
                         continue

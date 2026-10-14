@@ -155,7 +155,7 @@ def test_the_current_image_pin_is_listed_as_approved():
     )
 
     assert (WRAPPER_V2_IMAGE, WRAPPER_V2_IMAGE_DIGEST, WRAPPER_LIBS_VERSION) in APPROVED_WRAPPER_V2_IMAGES
-    assert len({pin[:2] for pin in APPROVED_WRAPPER_V2_IMAGES}) == len(APPROVED_WRAPPER_V2_IMAGES)
+    assert len({(pin.image, pin.digest) for pin in APPROVED_WRAPPER_V2_IMAGES}) == len(APPROVED_WRAPPER_V2_IMAGES)
 
 
 def test_the_publish_checks_out_this_repo_for_the_notices_templates():

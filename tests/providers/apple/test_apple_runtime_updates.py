@@ -456,25 +456,29 @@ def test_approved_image_update_can_restore_a_compatible_verified_immutable_image
     assert session_file.read_text() == "test session remains isolated"
 
 
+def write_receipt(path, image, digest, **fields):
+    """A pulled wrapper image receipt as ensure_image records it, overridable per field."""
+    receipt = {"image": image, "digest": digest, "digest_ok": True, "pulled_at": 1, **fields}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(receipt))
+
+
 def test_a_receipt_cannot_approve_an_image_no_build_shipped(tmp_path):
     # The receipt is writable app data: repeating its own pin in the approval
     # fields must not admit a tag under the Waves repository that no build approved.
     manager = AppleRuntimeManager(tmp_path)
     image = WRAPPER_V2_IMAGE.rsplit(":", 1)[0] + ":0.0.1-unshipped"
     digest = "sha256:" + "2" * 64
-    receipt = {
-        "image": image,
-        "libs": runtime.WRAPPER_LIBS_VERSION,
-        "pulled_at": 1,
-        "digest": digest,
-        "digest_ok": True,
-        "approved_image": image,
-        "approved_digest": digest,
-        "protocol": "wrapper-v2",
-    }
-    manager.image_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manager.image_manifest_path.write_text(json.dumps(receipt))
-    manager.image_previous_path.write_text(json.dumps(receipt))
+    for path in (manager.image_manifest_path, manager.image_previous_path):
+        write_receipt(
+            path,
+            image,
+            digest,
+            libs=runtime.WRAPPER_LIBS_VERSION,
+            protocol="wrapper-v2",
+            approved_image=image,
+            approved_digest=digest,
+        )
 
     status = manager.image_status()
     assert status["verified"] is False
@@ -482,27 +486,27 @@ def test_a_receipt_cannot_approve_an_image_no_build_shipped(tmp_path):
     assert manager.active_image() == ""
 
 
-def test_an_approved_pin_built_for_other_guest_libs_cannot_be_restored(tmp_path, monkeypatch):
-    # Compatibility comes from the build's pin list; a receipt claiming the
-    # current guest libs cannot make an older approved image restorable.
+@pytest.mark.parametrize(
+    "pin_libs,recorded,restorable",
+    [
+        # A receipt claiming the current guest libs cannot make an older
+        # approved image restorable when the build says it carries others.
+        ("16.0.0", {"libs": runtime.WRAPPER_LIBS_VERSION, "protocol": "wrapper-v2"}, False),
+        # A receipt written before libs and protocol were recorded takes both
+        # from the approved pin.
+        (runtime.WRAPPER_LIBS_VERSION, {}, True),
+        # Recorded fields can still narrow the pin's verdict.
+        (runtime.WRAPPER_LIBS_VERSION, {"protocol": "different-protocol"}, False),
+    ],
+)
+def test_older_image_compatibility_comes_from_the_approved_pin(tmp_path, monkeypatch, pin_libs, recorded, restorable):
     image = WRAPPER_V2_IMAGE.rsplit(":", 1)[0] + ":0.2.0"
     digest = "sha256:" + "3" * 64
-    monkeypatch.setattr(runtime, "APPROVED_WRAPPER_V2_IMAGES", ((image, digest, "16.0.0"),))
+    monkeypatch.setattr(runtime, "APPROVED_WRAPPER_V2_IMAGES", (runtime.ApprovedImage(image, digest, pin_libs),))
     manager = AppleRuntimeManager(tmp_path)
-    receipt = {
-        "image": image,
-        "libs": runtime.WRAPPER_LIBS_VERSION,
-        "pulled_at": 1,
-        "digest": digest,
-        "digest_ok": True,
-        "protocol": "wrapper-v2",
-    }
-    manager.image_previous_path.parent.mkdir(parents=True, exist_ok=True)
-    manager.image_previous_path.write_text(json.dumps(receipt))
+    write_receipt(manager.image_previous_path, image, digest, **recorded)
 
-    assert manager.image_status()["rollback_available"] is False
-    with pytest.raises(RuntimeError, match="no image was changed"):
-        manager.rollback_image(runner=lambda command, **kwargs: SimpleNamespace(returncode=0, stdout="id", stderr=""))
+    assert manager.image_status()["rollback_available"] is restorable
 
 
 @pytest.mark.parametrize("failure", ["missing_local", "incompatible_protocol", "unknown_provenance"])

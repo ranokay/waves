@@ -102,8 +102,8 @@ Security exception: a yt-dlp security advisory is a valid standalone bump reason
    to the new tag and its publish digest in one commit, and append the new
    pin with its guest-lib version to `APPROVED_WRAPPER_V2_IMAGES` while
    keeping the earlier entries, so a restored previous image still verifies;
-   the packaging tests fail if they drift. Never retag: the app refuses a pull whose digest does not match the
-   pin.
+   the packaging tests fail if they drift. Never retag: the app refuses a
+   pull whose digest does not match the pin.
 4. Confirm with a live wrapper-tier fetch before closing the issue.
 
 ### Qt / PySide6

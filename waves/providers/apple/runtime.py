@@ -42,6 +42,7 @@ from collections.abc import Generator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import Event, Lock, local
+from typing import NamedTuple
 
 import requests
 
@@ -63,22 +64,33 @@ _UA = "Waves-apple-runtime"
 # retagged or mutated registry copy is refused.
 WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.4"
 WRAPPER_V2_IMAGE_DIGEST = "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b"
-# The (image, digest, guest libs) pins this build approves for rollback. A
-# stored receipt verifies only by naming one, since app data cannot approve
-# itself; the libs entry decides its compatibility. A pin bump appends the
-# new pin and keeps the previous ones.
-APPROVED_WRAPPER_V2_IMAGES: tuple[tuple[str, str, str], ...] = (
-    (
-        "ghcr.io/ranokay/waves-wrapper-v2:0.2.4",
-        "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b",
-        "17.0.0",
-    ),
-)
 # The wrapper's guest-lib set this image was built against, mirrored from
 # wrapper-v2's LIBS_VERSION.json. Surfaced in the wizard's image detail and
 # in the custom-build extraction plan, so an image and an APK can never
 # silently disagree.
 WRAPPER_LIBS_VERSION = "17.0.0"
+
+
+class ApprovedImage(NamedTuple):
+    """A wrapper-v2 image pin and the guest-lib set it was built against."""
+
+    image: str
+    digest: str
+    libs: str
+
+
+# The pins this build approves for rollback. A stored receipt verifies only by
+# naming one, since app data cannot approve itself; the pin's libs decide its
+# compatibility. A pin bump appends the new pin and keeps the previous ones.
+APPROVED_WRAPPER_V2_IMAGES: tuple[ApprovedImage, ...] = (
+    ApprovedImage(
+        "ghcr.io/ranokay/waves-wrapper-v2:0.2.4",
+        "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b",
+        "17.0.0",
+    ),
+)
+
+
 # The N_m3u8DL-RE release the managed install provisions: the latest
 # published upstream tag at pin time. Pinned so every machine fetches the
 # same bytes; bumps ship through Waves' normal update channel with
@@ -831,17 +843,15 @@ class AppleRuntimeManager:
 
         Status performs only metadata reads. A changed file or a newly restored
         manager remains unknown until this method or a usage lease observes it.
-        Inside a lease on this thread, an observation of the unchanged file
-        stands; a replaced or rewritten file changes its ctime and is hashed.
+        Inside a lease on this thread, an observation of a file with unchanged
+        stat metadata stands. A replaced or rewritten file changes its inode,
+        size, mtime or POSIX ctime and is hashed; Windows reports creation time
+        as ctime, so there a same-size rewrite that restores mtime goes unseen.
         """
-        observation = self._binary_observation
-        if (
-            getattr(self._leases, "depth", 0)
-            and observation is not None
-            and observation[0] == self._binary_fingerprint()
-        ):
-            return self.status()
         before = self._binary_fingerprint()
+        observation = self._binary_observation
+        if getattr(self._leases, "depth", 0) and observation is not None and observation[0] == before:
+            return self.status()
         if before is not None:
             try:
                 digest = sha256_file(self.binary_path)
@@ -1226,7 +1236,7 @@ class AppleRuntimeManager:
             WRAPPER_LIBS_VERSION
             if current
             else next(
-                (libs for pin, pinned, libs in APPROVED_WRAPPER_V2_IMAGES if (pin, pinned) == (image, digest)), ""
+                (pin.libs for pin in APPROVED_WRAPPER_V2_IMAGES if (pin.image, pin.digest) == (image, digest)), ""
             )
         )
         verified = bool(approved_libs and receipt.get("digest_ok") is True)

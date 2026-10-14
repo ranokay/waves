@@ -160,6 +160,7 @@ def test_image_update_publishes_its_recovery_receipt(tmp_path):
         (RuntimeKind.MANAGED, True, {"current": True, "verified": True}, False),
         (RuntimeKind.MANAGED, False, {"current": False, "verified": True}, False),
         (RuntimeKind.USER_MANAGED, True, {"current": False, "verified": True}, False),
+        (RuntimeKind.BUILT_IN, True, {"current": False, "verified": True}, False),
     ],
 )
 def test_offered_image_update_stays_installable_until_it_is_current(tmp_path, kind, offered, receipt, installable):

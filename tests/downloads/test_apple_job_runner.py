@@ -910,15 +910,16 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
 
     provider = _FakeProvider(fixture=None)
     provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(AppleWrapperDown("down"))
-    monkeypatch.setattr(runner, "is_wrapper_down_error", lambda exc: True)
-    monkeypatch.setattr(runner, "set_held", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "ensure_sidecar", restart_failed)
     stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    statuses = []
+    hooks.queue_status = lambda qid, state, detail="": statuses.append(state)
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
 
     with pytest.raises(DownloadIncomplete, match="1 failed") as excinfo:
         runner.run_apple_job(
-            stub._apple_job_hooks(),
+            hooks,
             1,
             spec,
             _album_resource(),
@@ -928,6 +929,9 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
         )
 
     assert "account or runtime changed" not in str(excinfo.value)
+    # The run moves past the failed track, so its row is no longer Held:
+    # Clear Queued must not take a row that is still downloading.
+    assert statuses == ["queued", "running"]
 
 
 def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
