@@ -962,7 +962,7 @@ def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monke
         assert row["status"] == "running"
 
 
-def test_a_revoked_album_keeps_the_playlist_of_its_landed_tracks(tmp_path, monkeypatch):
+def test_a_revoked_album_publishes_no_playlist(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import _AppleAborted
 
@@ -995,9 +995,9 @@ def test_a_revoked_album_keeps_the_playlist_of_its_landed_tracks(tmp_path, monke
             file_template="{artist_name}/{track_title}",
         )
 
-    playlists = list(base.rglob("*.m3u8"))
-    assert len(playlists) == 1
-    assert len(playlists[0].read_text().splitlines()) == 1
+    # Revocation can precede the provider stop's abort; like a stop, the run
+    # writes nothing more into the library once its context is gone.
+    assert list(base.rglob("*.m3u8")) == []
 
 
 def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):

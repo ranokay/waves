@@ -2827,6 +2827,18 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             }
         )
         emit_progress(signals, collection, pos, total, media_id, qid)
+    if revoked:
+        # A revoked context publishes nothing more, playlist included: the
+        # provider may be turning off, and a stop writes none either.
+        raise _AppleJobIncomplete(
+            f"{ok} of {total} tracks downloaded (the Apple account or runtime changed)",
+            Failure(
+                FailureScope.RUNTIME,
+                EventCode.FAILED,
+                "The Apple account or runtime changed during this download. Retry it to finish.",
+                retryable=True,
+            ),
+        )
     if collection and landed and hooks.settings().data.playlist_create and not job_abort.is_set():
         # The _Name.m3u8 the playlist_create setting promises, in landed
         # order (mirrors the engine's playlist_populate scope).
@@ -2845,17 +2857,6 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
         )
     # Settlement: the job body's finally drops the job's abort token and
     # relay exactly once.
-    if revoked:
-        # Like any shortfall, the landed tracks keep their playlist above.
-        raise _AppleJobIncomplete(
-            f"{ok} of {total} tracks downloaded (the Apple account or runtime changed)",
-            Failure(
-                FailureScope.RUNTIME,
-                EventCode.FAILED,
-                "The Apple account or runtime changed during this download. Retry it to finish.",
-                retryable=True,
-            ),
-        )
     if total == 1 and not collection:
         if ok or skipped:
             return "" if ok else " (already downloaded)"
