@@ -876,6 +876,157 @@ def test_a_stranger_at_the_true_extension_does_not_skip_the_fetch(tmp_path, monk
     assert not (base / "Aphex Twin" / "Xtal.flac").exists()
 
 
+@pytest.mark.parametrize("kind", ["album", "track"])
+def test_runtime_context_change_settles_the_job_incomplete(tmp_path, kind):
+    from waves.providers.apple.engine import _AppleAborted
+
+    # An account or runtime change revokes the fetch without the user's STOP:
+    # the job's abort stays clear, so nothing may read the run as finished.
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(_AppleAborted())
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    collection = kind == "album"
+    spec = SimpleNamespace(kind=kind, collection=collection, media_id=f"apple:{kind}-1")
+
+    with pytest.raises(DownloadIncomplete, match="account or runtime changed") as excinfo:
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _album_resource() if collection else _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert excinfo.value.failure.retryable is True
+
+
+@pytest.mark.parametrize("meanwhile", ["nothing", "provider-stop", "stop"])
+def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monkeypatch, meanwhile):
+    from waves.providers.apple.engine import AppleWrapperDown
+
+    row = {"status": "running", "reason": ""}
+    abort = Event()
+
+    def queue_status(qid, state, detail=""):
+        row.update(status=state, reason=detail)
+
+    def resume_held_row(qid):
+        # The bridge's atomic move: held -> running only while still held.
+        if row["status"] == "queued":
+            queue_status(qid, "running")
+
+    def restart_failed(*args, **kwargs):
+        if meanwhile == "provider-stop":
+            # A provider-disable stop words the row before it sets the abort.
+            queue_status(1, "cancelled", "Apple Music was turned off")
+        elif meanwhile == "stop":
+            abort.set()
+        raise RuntimeError("synthetic restart failure")
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(AppleWrapperDown("down"))
+    monkeypatch.setattr(runner, "ensure_sidecar", restart_failed)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.queue_status = queue_status
+    hooks.resume_held_row = resume_held_row
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    def run():
+        return runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _album_resource(),
+            signals=_Relay(),
+            job_abort=abort,
+            file_template="{artist_name}/{track_title}",
+        )
+
+    if meanwhile == "stop":
+        # A STOP during the failed restart ends the run as a stop: no failed
+        # track, and the row stays held for the job body to settle cancelled.
+        assert run() == ""
+        assert row["status"] == "queued"
+        return
+    with pytest.raises(DownloadIncomplete, match="1 failed") as excinfo:
+        run()
+    assert "account or runtime changed" not in str(excinfo.value)
+    if meanwhile == "provider-stop":
+        assert row == {"status": "cancelled", "reason": "Apple Music was turned off"}
+    else:
+        # The run moves past the failed track, so its row is no longer Held:
+        # Clear Queued must not take a row that is still downloading.
+        assert row["status"] == "running"
+
+
+def test_a_revoked_album_publishes_no_playlist(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import _AppleAborted
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _ThreeTrackProvider(staged)
+    deliver = provider.resolve_stream
+
+    def revoke_after_the_first(raw, tier, audio_type):
+        if provider.fetched:
+            raise _AppleAborted()
+        return deliver(raw, tier, audio_type)
+
+    provider.resolve_stream = revoke_after_the_first
+    base = tmp_path / "lib"
+    hooks = _three_track_hooks(provider, base, settings=_settings(base, playlist_create=True))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    with pytest.raises(DownloadIncomplete, match="1 of 3 tracks downloaded"):
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _album_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    # Revocation can precede the provider stop's abort; like a stop, the run
+    # writes nothing more into the library once its context is gone.
+    assert list(base.rglob("*.m3u8")) == []
+
+
+def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
+    from waves.providers.apple.engine import _AppleAborted
+
+    abort = Event()
+
+    def stop(raw, tier, audio_type):
+        abort.set()
+        raise _AppleAborted()
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = stop
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=abort,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+
+
 def test_album_job_reports_a_partial_shortfall(tmp_path):
     provider = _FakeProvider(fixture=None)
 

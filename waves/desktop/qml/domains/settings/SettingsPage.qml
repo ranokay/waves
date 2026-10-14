@@ -4303,6 +4303,17 @@ Item {
                               onClicked: waves.checkAppleRuntimeUpdate()
                             }
                             Loader {
+                              active: setupCol.execution.image_update_available === true
+                              visible: active
+                              width: item ? item.implicitWidth : 0
+                              height: item ? item.implicitHeight : 0
+                              sourceComponent: ActionButton {
+                                objectName: "appleInstallImageUpdate"
+                                label: "Install image update"
+                                onClicked: waves.installAppleImage()
+                              }
+                            }
+                            Loader {
                               active: (setupCol.execution.updates && setupCol.execution.updates.rollback_available === true) === true
                               visible: active
                               width: item ? item.implicitWidth : 0

@@ -77,6 +77,28 @@ def records_bridge(tmp_path):
     return host, sessions, workers, commands, deliveries
 
 
+def engine_bridge(tmp_path, storefront):
+    """A wrapper-tier bridge whose engine facts probe an authenticated session."""
+    from waves.providers.apple.provider import AppleProvider
+
+    host, sessions, workers, _ = bridge(tmp_path)
+    pending = []
+    host.providers = {"apple": AppleProvider()}
+    host._apple_live_flags = lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": True}
+    host._apple_fetch_binary_ready = lambda: True
+    host._apple_container_serves = lambda: True
+    host._catalogEvent = SimpleNamespace(emit=pending.append)
+    host._apple_wrapper_auth_cache = {
+        "result": {"reachable": True, "state": "authenticated", "logged_in": True, "storefront": storefront},
+        "runtime_revision": "runtime-1",
+    }
+    sessions.configure(host._apple_runtime_profile)
+    for name in ("_apple_engine_details", "_apple_engine_facts"):
+        setattr(host, name, getattr(WavesBridge, name).__get__(host))
+    host._provider_engine_probes = {"apple": host._apple_engine_details}
+    return host, workers, pending
+
+
 def test_restored_image_survives_an_intervening_account_observation(tmp_path, monkeypatch):
     host, _, workers, _, deliveries = records_bridge(tmp_path)
     receipt = {"image": "synthetic-approved-image", "digest": "sha256:" + "a" * 64}
@@ -109,6 +131,47 @@ def test_newer_image_restoration_supersedes_an_older_queued_result(tmp_path):
     deliveries.pop().deliver()
     deliveries.pop().deliver()
     assert WavesBridge.appleExecutionState(host)["image"] == latest
+
+
+def test_image_update_publishes_its_recovery_receipt(tmp_path):
+    host, _, workers, _, deliveries = records_bridge(tmp_path)
+    host._apple_container_state = lambda: {"name": "docker", "available": True, "running": True}
+    host._apple_runtime.ensure_image = lambda **kwargs: None
+    host._apple_runtime_image_cache = {"image": "previous-approved-image", "rollback_available": False}
+    updated = {"image": "current-approved-image", "rollback_available": True}
+    host._apple_runtime.image_status = lambda: updated
+
+    WavesBridge.installAppleImage(host)
+    workers.pop().run()
+    while deliveries or workers:
+        if deliveries:
+            deliveries.pop(0).deliver()
+        else:
+            workers.pop(0).run()
+
+    assert WavesBridge.appleExecutionState(host)["image"] == updated
+
+
+@pytest.mark.parametrize(
+    "kind,offered,receipt,installable",
+    [
+        (RuntimeKind.MANAGED, True, {"current": False, "verified": True}, True),
+        (RuntimeKind.MANAGED, True, {"current": True, "verified": False}, True),
+        (RuntimeKind.MANAGED, True, {"current": True, "verified": True}, False),
+        (RuntimeKind.MANAGED, False, {"current": False, "verified": True}, False),
+        (RuntimeKind.USER_MANAGED, True, {"current": False, "verified": True}, False),
+        (RuntimeKind.BUILT_IN, True, {"current": False, "verified": True}, False),
+    ],
+)
+def test_offered_image_update_stays_installable_until_it_is_current(tmp_path, kind, offered, receipt, installable):
+    # A verified older image still runs, so setup reads it as pulled; the
+    # offered pin needs its own install action while manual install is the default.
+    host, *_ = bridge(tmp_path)
+    host._apple_runtime_profile = RuntimeProfile("apple:wrapper-v2", kind, "wrapper-v2", "http://127.0.0.1:50100")
+    host._apple_runtime_update_cache = {"image": {"available": offered}}
+    host._apple_runtime_image_cache = {"image": "approved-image", **receipt}
+
+    assert WavesBridge.appleExecutionState(host)["image_update_available"] is installable
 
 
 def test_public_stop_disconnects_external_runtime_on_worker_and_can_be_explicitly_resumed(tmp_path):
@@ -278,23 +341,7 @@ def test_account_check_uses_the_detected_container_runtime(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("change", ["instance", "stop_during_probe", "stop_before_publish"])
 def test_engine_presentation_does_not_admit_stale_runtime_or_stop_context(tmp_path, change):
-    from waves.providers.apple.provider import AppleProvider
-
-    host, sessions, workers, _ = bridge(tmp_path)
-    pending = []
-    host.providers = {"apple": AppleProvider()}
-    host._apple_live_flags = lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": True}
-    host._apple_fetch_binary_ready = lambda: True
-    host._apple_container_serves = lambda: True
-    host._catalogEvent = SimpleNamespace(emit=pending.append)
-    host._apple_wrapper_auth_cache = {
-        "result": {"reachable": True, "state": "authenticated", "logged_in": True, "storefront": "us"},
-        "runtime_revision": "runtime-1",
-    }
-    sessions.configure(host._apple_runtime_profile)
-    for name in ("_apple_engine_details", "_apple_engine_facts"):
-        setattr(host, name, getattr(WavesBridge, name).__get__(host))
-    host._provider_engine_probes = {"apple": host._apple_engine_details}
+    host, workers, pending = engine_bridge(tmp_path, "us")
 
     def observe(*args):
         if change == "stop_during_probe":
@@ -328,6 +375,21 @@ def test_engine_presentation_does_not_admit_stale_runtime_or_stop_context(tmp_pa
     details = WavesBridge.providerEngines(host, "apple")
     wrapper = next(item for item in details[0]["requirements"] if item["protocol"] == "wrapper-v2")
     assert wrapper["state"] != "ready"
+
+
+def test_public_catalog_storefront_is_not_account_evidence(tmp_path):
+    # The catalog client signs no account in, so its storefront is gamdl's
+    # public default; a wrapper account elsewhere must stay confirmable.
+    host, workers, pending = engine_bridge(tmp_path, "gb")
+    host._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(True, "runtime-1")
+
+    WavesBridge.providerEngines(host, "apple")
+    workers.pop().run()
+    pending.pop().deliver()
+
+    state = WavesBridge.appleExecutionState(host)
+    assert state["state"] == "confirmation_required"
+    assert state["can_confirm"]
 
 
 @pytest.mark.parametrize(

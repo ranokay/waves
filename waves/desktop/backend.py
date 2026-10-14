@@ -15115,6 +15115,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             status=lambda text: self._set_status(text),
             event=deliver_event,
             queue_status=lambda qid, status, reason="": self._set_queue_status(qid, status, reason),
+            resume_held_row=lambda qid: self._set_queue_status(qid, "running", "", expect="queued"),
             queue_progress=lambda qid, pct: self._set_queue_progress(qid, pct),
             queue_item=lambda qid: self._queue_item(qid),
             queue_mark_changed=lambda qid: self._queue_mark_changed(qid),
@@ -21237,13 +21238,23 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Cached account admission and deliberate runtime choices for Settings."""
         sessions = getattr(self, "_apple_runtime_sessions", None)
         profile = getattr(self, "_apple_runtime_profile", None)
+        mode = str(profile.kind) if profile is not None else "managed"
+        updates = dict(getattr(self, "_apple_runtime_update_cache", {}) or {})
+        image = dict(getattr(self, "_apple_runtime_image_cache", {}) or {})
         return {
-            "mode": str(profile.kind) if profile is not None else "managed",
+            "mode": mode,
             "state": sessions.readiness("apple:wrapper-v2") if sessions is not None else "unknown",
             "stopped": sessions.is_stopped("apple:wrapper-v2") if sessions is not None else False,
             "setup_busy": bool(getattr(self, "_apple_runtime_inflight", False)),
-            "updates": dict(getattr(self, "_apple_runtime_update_cache", {}) or {}),
-            "image": dict(getattr(self, "_apple_runtime_image_cache", {}) or {}),
+            "updates": updates,
+            "image": image,
+            # Setup counts a verified older image as pulled, so an offered pin
+            # needs its own install action until the refreshed receipt is current.
+            "image_update_available": bool(
+                mode == "managed"
+                and (updates.get("image") or {}).get("available")
+                and not (image.get("current") and image.get("verified"))
+            ),
             "can_confirm": sessions.readiness("apple:wrapper-v2") == "confirmation_required"
             if sessions is not None
             else False,
@@ -22102,6 +22113,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     key="apple-image-install",
                     references=EventReferences(runtime_id="apple:wrapper-v2"),
                 )
+                # Settings reads the receipt cache, which only the records
+                # worker refreshes: rerun it so the new image and its
+                # recovery receipt appear, as rollback does.
+                WavesBridge._publish_apple_runtime(self, token, self._configure_apple_provider)
                 self.appleRuntimeStatusChanged.emit()
                 self.appleStatusChanged.emit()
             finally:
@@ -23272,8 +23287,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 revision = sha256_file(cookies) if cookies else ""
             except OSError:
                 revision = ""
-            storefront = provider.catalog_identity_context()[-1] if isinstance(provider, AppleProvider) else ""
-            account = AccountContext("", storefront, revision)
+            # The catalog client signs no account in, so its storefront is the
+            # public default, never account evidence. Unknown keeps a session
+            # from another storefront confirmable instead of mismatched.
+            account = AccountContext("", "", revision)
             identity = WavesBridge._apple_observe_wrapper_identity(self)
             cache = getattr(self, "_apple_wrapper_auth_cache", None) or {}
             if not identity.revision or cache.get("runtime_revision") != identity.revision:

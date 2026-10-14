@@ -240,6 +240,65 @@ def test_custom_tool_usage_does_not_validate_an_unused_managed_binary(tmp_path):
         pass
 
 
+@pytest.fixture
+def counted_tool(tmp_path, monkeypatch):
+    """An installed tool seen by a fresh manager, counting each full hash."""
+    install_tool(AppleRuntimeManager(tmp_path), "1.0")
+    hashed = []
+    real = runtime.sha256_file
+    monkeypatch.setattr(runtime, "sha256_file", lambda path: hashed.append(path) or real(path))
+    return AppleRuntimeManager(tmp_path), hashed
+
+
+@pytest.mark.parametrize("outer_verifies", [True, False], ids=["managed-tool", "custom-tool"])
+def test_an_unchanged_tool_is_hashed_once_per_thread_of_leases(counted_tool, monkeypatch, outer_verifies):
+    from threading import Thread
+
+    manager, hashed = counted_tool
+    monkeypatch.setattr(runtime, "STAT_REVEALS_REWRITES", True)
+
+    # A job's outer lease spans its tracks; each track's lease and setup probe
+    # on that thread reuse one observation while maintenance stays excluded.
+    with manager.usage(verify_binary=outer_verifies):
+        for _ in range(3):
+            with manager.usage():
+                assert manager.verify()["binary_integrity"] == "verified"
+        assert len(hashed) == 1
+
+        def lease() -> None:
+            with manager.usage():
+                pass
+
+        other = Thread(target=lease)
+        other.start()
+        other.join()
+        assert len(hashed) == 2, "another thread's lease verifies on its own"
+
+    manager.verify()
+    assert len(hashed) == 3, "verification outside a lease still reads the file"
+
+
+def test_leases_hash_the_tool_on_every_check_where_stat_misses_rewrites(counted_tool, monkeypatch):
+    # Windows reports creation time as ctime, so a same-size rewrite that
+    # restores mtime keeps the fingerprint: nothing may trust it there.
+    manager, hashed = counted_tool
+    monkeypatch.setattr(runtime, "STAT_REVEALS_REWRITES", False)
+
+    with manager.usage(), manager.usage():
+        manager.verify()
+
+    assert len(hashed) == 3
+
+
+def test_a_tool_replaced_during_a_job_is_refused_by_the_next_track(counted_tool):
+    manager, _ = counted_tool
+
+    with manager.usage():
+        manager.binary_path.write_bytes(b"replaced outside Waves")
+        with pytest.raises(RuntimeError, match="cannot be verified"), manager.usage():
+            pass
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits do not describe Windows ACLs")
 def test_runtime_private_directories_repair_inherited_permissions(tmp_path):
     manager = AppleRuntimeManager(tmp_path)
@@ -408,6 +467,59 @@ def test_approved_image_update_can_restore_a_compatible_verified_immutable_image
     assert manager.active_image() == repo + "@" + WRAPPER_V2_IMAGE_DIGEST
     assert seen == [["docker", "image", "inspect", "--format", "{{.Id}}", repo + "@" + WRAPPER_V2_IMAGE_DIGEST]]
     assert session_file.read_text() == "test session remains isolated"
+
+
+def write_receipt(path, image, digest, **fields):
+    """A pulled wrapper image receipt as ensure_image records it, overridable per field."""
+    receipt = {"image": image, "digest": digest, "digest_ok": True, "pulled_at": 1, **fields}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(receipt))
+
+
+def test_a_receipt_cannot_approve_an_image_no_build_shipped(tmp_path):
+    # The receipt is writable app data: repeating its own pin in the approval
+    # fields must not admit a tag under the Waves repository that no build approved.
+    manager = AppleRuntimeManager(tmp_path)
+    image = WRAPPER_V2_IMAGE.rsplit(":", 1)[0] + ":0.0.1-unshipped"
+    digest = "sha256:" + "2" * 64
+    for path in (manager.image_manifest_path, manager.image_previous_path):
+        write_receipt(
+            path,
+            image,
+            digest,
+            libs=runtime.WRAPPER_LIBS_VERSION,
+            protocol="wrapper-v2",
+            approved_image=image,
+            approved_digest=digest,
+        )
+
+    status = manager.image_status()
+    assert status["verified"] is False
+    assert status["rollback_available"] is False
+    assert manager.active_image() == ""
+
+
+@pytest.mark.parametrize(
+    "pin_libs,recorded,restorable",
+    [
+        # A receipt claiming the current guest libs cannot make an older
+        # approved image restorable when the build says it carries others.
+        ("16.0.0", {"libs": runtime.WRAPPER_LIBS_VERSION, "protocol": "wrapper-v2"}, False),
+        # A receipt written before libs and protocol were recorded takes both
+        # from the approved pin.
+        (runtime.WRAPPER_LIBS_VERSION, {}, True),
+        # Recorded fields can still narrow the pin's verdict.
+        (runtime.WRAPPER_LIBS_VERSION, {"protocol": "different-protocol"}, False),
+    ],
+)
+def test_older_image_compatibility_comes_from_the_approved_pin(tmp_path, monkeypatch, pin_libs, recorded, restorable):
+    image = WRAPPER_V2_IMAGE.rsplit(":", 1)[0] + ":0.2.0"
+    digest = "sha256:" + "3" * 64
+    monkeypatch.setattr(runtime, "APPROVED_WRAPPER_V2_IMAGES", (runtime.ApprovedImage(image, digest, pin_libs),))
+    manager = AppleRuntimeManager(tmp_path)
+    write_receipt(manager.image_previous_path, image, digest, **recorded)
+
+    assert manager.image_status()["rollback_available"] is restorable
 
 
 @pytest.mark.parametrize("failure", ["missing_local", "incompatible_protocol", "unknown_provenance"])

@@ -41,7 +41,8 @@ import time
 from collections.abc import Generator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, local
+from typing import NamedTuple
 
 import requests
 
@@ -53,6 +54,10 @@ logger = logging.getLogger("waves.providers.apple.runtime")
 _HTTP_TIMEOUT = 30
 _IO_CHUNK = 1 << 16  # 64 KiB streaming chunks
 _UA = "Waves-apple-runtime"
+# POSIX ctime moves on every write, so an unchanged stat fingerprint proves an
+# unchanged file. Windows reports creation time instead, which a same-size
+# rewrite that restores mtime leaves alone.
+STAT_REVEALS_REWRITES = os.name != "nt"
 
 # Pins: config-first initial values; engine bumps ride Waves' updater (spec 10.4).
 
@@ -68,6 +73,28 @@ WRAPPER_V2_IMAGE_DIGEST = "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d3
 # in the custom-build extraction plan, so an image and an APK can never
 # silently disagree.
 WRAPPER_LIBS_VERSION = "17.0.0"
+
+
+class ApprovedImage(NamedTuple):
+    """A wrapper-v2 image pin and the guest-lib set it was built against."""
+
+    image: str
+    digest: str
+    libs: str
+
+
+# The pins this build approves for rollback. A stored receipt verifies only by
+# naming one, since app data cannot approve itself; the pin's libs decide its
+# compatibility. A pin bump appends the new pin and keeps the previous ones.
+APPROVED_WRAPPER_V2_IMAGES: tuple[ApprovedImage, ...] = (
+    ApprovedImage(
+        "ghcr.io/ranokay/waves-wrapper-v2:0.2.4",
+        "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b",
+        "17.0.0",
+    ),
+)
+
+
 # The N_m3u8DL-RE release the managed install provisions: the latest
 # published upstream tag at pin time. Pinned so every machine fetches the
 # same bytes; bumps ship through Waves' normal update channel with
@@ -641,6 +668,10 @@ class AppleRuntimeManager:
         self._users = 0
         self._maintaining = False
         self._binary_observation: tuple[tuple[int, int, int, int, int], str] | None = None
+        # How many usage leases this thread holds. While one is held,
+        # maintenance cannot replace the tool, so on POSIX verify() hashes it
+        # only when its file metadata changed.
+        self._leases = local()
 
     @contextlib.contextmanager
     def usage(self, *, verify_binary: bool = True) -> Generator[None]:
@@ -654,6 +685,7 @@ class AppleRuntimeManager:
             if self._maintaining:
                 raise AppleRuntimeBusy("Apple runtime maintenance is in progress.")
             self._users += 1
+        depth = getattr(self._leases, "depth", 0)
         try:
             if verify_binary:
                 verified = self.verify()
@@ -662,8 +694,10 @@ class AppleRuntimeManager:
                     integrity == "unknown" and self._read_manifest().get("binary_sha256")
                 ):
                     raise RuntimeError("The managed Apple tool cannot be verified. Reinstall or roll back it.")
+            self._leases.depth = depth + 1
             yield
         finally:
+            self._leases.depth = depth
             with self._lifecycle_lock:
                 self._users -= 1
 
@@ -813,8 +847,19 @@ class AppleRuntimeManager:
 
         Status performs only metadata reads. A changed file or a newly restored
         manager remains unknown until this method or a usage lease observes it.
+        Inside a lease on this thread, an observation of a file with unchanged
+        stat metadata stands on POSIX, where any rewrite moves the ctime.
+        Windows reports creation time as ctime, so there every call hashes.
         """
         before = self._binary_fingerprint()
+        observation = self._binary_observation
+        if (
+            STAT_REVEALS_REWRITES
+            and getattr(self._leases, "depth", 0)
+            and observation is not None
+            and observation[0] == before
+        ):
+            return self.status()
         if before is not None:
             try:
                 digest = sha256_file(self.binary_path)
@@ -1193,20 +1238,21 @@ class AppleRuntimeManager:
         image = str(receipt.get("image") or "")
         digest = str(receipt.get("digest") or "")
         current = image == WRAPPER_V2_IMAGE and digest == WRAPPER_V2_IMAGE_DIGEST
-        repo = WRAPPER_V2_IMAGE.rsplit(":", 1)[0]
-        recorded_approval = bool(
-            image.startswith(repo + ":")
-            and digest.startswith("sha256:")
-            and len(digest) == 71
-            and all(character in "0123456789abcdef" for character in digest[7:])
-            and receipt.get("approved_image") == image
-            and receipt.get("approved_digest") == digest
+        # The build, not the receipt, says which guest libs an approved pin
+        # carries; a receipt's own libs or protocol can only narrow that.
+        approved_libs = (
+            WRAPPER_LIBS_VERSION
+            if current
+            else next(
+                (pin.libs for pin in APPROVED_WRAPPER_V2_IMAGES if (pin.image, pin.digest) == (image, digest)), ""
+            )
         )
-        verified = bool((current or recorded_approval) and receipt.get("digest_ok") is True)
+        verified = bool(approved_libs and receipt.get("digest_ok") is True)
         compatible = bool(
             verified
-            and str(receipt.get("libs") or (WRAPPER_LIBS_VERSION if current else "")) == WRAPPER_LIBS_VERSION
-            and str(receipt.get("protocol") or ("wrapper-v2" if current else "")) == "wrapper-v2"
+            and approved_libs == WRAPPER_LIBS_VERSION
+            and str(receipt.get("libs") or approved_libs) == approved_libs
+            and str(receipt.get("protocol") or "wrapper-v2") == "wrapper-v2"
         )
         provenance = "unknown"
         if not image or not receipt.get("pulled_at"):
@@ -1232,9 +1278,9 @@ class AppleRuntimeManager:
     def image_status(self) -> dict:
         """Describe recorded image provenance without probing or starting it.
 
-        A legacy pull receipt without a digest is unknown. The current shipped
-        pin or a recorded prior shipped approval establishes verification.
-        Compatibility remains separate and is required for activation.
+        A legacy pull receipt without a digest is unknown. The current pin or
+        an earlier pin listed in APPROVED_WRAPPER_V2_IMAGES establishes
+        verification. Compatibility remains separate and is required for activation.
         """
         state = self._image_receipt_status(self._read_image_receipt(self.image_manifest_path))
         previous = self._image_receipt_status(self._read_image_receipt(self.image_previous_path))
@@ -1358,8 +1404,6 @@ class AppleRuntimeManager:
             # a mismatch never reaches the receipt.
             "digest": digest,
             "digest_ok": (digest == WRAPPER_V2_IMAGE_DIGEST) if digest else None,
-            "approved_image": WRAPPER_V2_IMAGE,
-            "approved_digest": WRAPPER_V2_IMAGE_DIGEST if digest == WRAPPER_V2_IMAGE_DIGEST else "",
             "protocol": "wrapper-v2",
         }
         previous = self._read_image_receipt(self.image_manifest_path)

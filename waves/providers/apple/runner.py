@@ -249,6 +249,8 @@ class AppleJobHooks:
     status: Callable[[str], None] = _noop
     event: Callable[[ApplicationEvent], None] = _noop
     queue_status: Callable[..., None] = _noop
+    # Held -> running, only while the row is still held (an atomic move).
+    resume_held_row: Callable[[int], None] = _noop
     queue_progress: Callable[..., None] = _noop
     queue_item: Callable[[int], Any] = _quality_none
     queue_mark_changed: Callable[[int], None] = _noop
@@ -1659,6 +1661,17 @@ def throttle_wait(hooks: AppleJobHooks, qid: int, wait: float, job_abort, track_
         time.sleep(min(0.25, remaining))
 
 
+def resume_held(hooks: AppleJobHooks, qid: int) -> None:
+    """Show a held row running again, unless a stop settled it meanwhile.
+
+    A provider-disable stop words its row cancelled before it sets the job's
+    abort, so an unconditional reset would erase those words; the bridge
+    checks and moves the row under the lock that stop takes.
+    """
+    with contextlib.suppress(Exception):
+        hooks.resume_held_row(int(qid))
+
+
 def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
     """Hold an Apple row with one clear message (presentation, not a state).
 
@@ -1865,8 +1878,7 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
                 with contextlib.suppress(Exception):
                     hooks.note_activity()
                 # A row held on an earlier poll resumes visibly.
-                with contextlib.suppress(Exception):
-                    hooks.queue_status(int(qid), "running", "")
+                resume_held(hooks, qid)
                 return True
             # Still down: hold with the setup words rather than fail a
             # blip, but bounded: a start that keeps failing needs the
@@ -2517,6 +2529,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
     last_failure: Failure | None = None
     failed_names: list[str] = []
     landed: list = []
+    revoked = False
     # The lyrics/art options this job runs with: the row's per-click
     # Chooser pins when it has any, the provider's stored options otherwise.
     options = job_options(hooks, getattr(spec, "chooser_toggles", None))
@@ -2702,8 +2715,14 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                             # setup words instead of holding again.
                             raise
                         except Exception:
+                            # A restart that errors fails this track with its
+                            # down error; only STOP ends the run as aborted.
+                            # The run goes on, so the row leaves its hold.
                             logger.debug("Apple sidecar re-ensure failed", exc_info=True)
-                            ensured = False
+                            if job_abort.is_set():
+                                raise _AppleAborted() from exc
+                            resume_held(hooks, qid)
+                            raise exc from exc.__cause__
                         if not ensured or job_abort.is_set():
                             raise _AppleAborted() from exc
                         continue
@@ -2745,6 +2764,9 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             emit_progress(signals, collection, pos, total, media_id, qid)
             continue
         except _AppleAborted:
+            # Every STOP path sets job_abort; an abort without it is the
+            # provider revoking the fetch after an account or runtime change.
+            revoked = not job_abort.is_set()
             break
         except _AppleSetupRequired as exc:
             # The runtime cannot come back on its own: end the whole run
@@ -2805,6 +2827,18 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             }
         )
         emit_progress(signals, collection, pos, total, media_id, qid)
+    if revoked:
+        # A revoked context publishes nothing more, playlist included: the
+        # provider may be turning off, and a stop writes none either.
+        raise _AppleJobIncomplete(
+            f"{ok} of {total} tracks downloaded (the Apple account or runtime changed)",
+            Failure(
+                FailureScope.RUNTIME,
+                EventCode.FAILED,
+                "The Apple account or runtime changed during this download. Retry it to finish.",
+                retryable=True,
+            ),
+        )
     if collection and landed and hooks.settings().data.playlist_create and not job_abort.is_set():
         # The _Name.m3u8 the playlist_create setting promises, in landed
         # order (mirrors the engine's playlist_populate scope).

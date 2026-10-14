@@ -144,6 +144,20 @@ def test_the_pinned_image_digest_matches_the_runbook():
     assert WRAPPER_V2_IMAGE_DIGEST in RUNBOOK.read_text(), "the image digest pin and the runbook disagree"
 
 
+def test_the_current_image_pin_is_listed_as_approved():
+    # A bump appends to runtime.APPROVED_WRAPPER_V2_IMAGES and keeps the
+    # previous pin, or that pin's rollback receipt stops verifying.
+    from waves.providers.apple.runtime import (
+        APPROVED_WRAPPER_V2_IMAGES,
+        WRAPPER_LIBS_VERSION,
+        WRAPPER_V2_IMAGE,
+        WRAPPER_V2_IMAGE_DIGEST,
+    )
+
+    assert (WRAPPER_V2_IMAGE, WRAPPER_V2_IMAGE_DIGEST, WRAPPER_LIBS_VERSION) in APPROVED_WRAPPER_V2_IMAGES
+    assert len({(pin.image, pin.digest) for pin in APPROVED_WRAPPER_V2_IMAGES}) == len(APPROVED_WRAPPER_V2_IMAGES)
+
+
 def test_the_publish_checks_out_this_repo_for_the_notices_templates():
     steps = _workflow()["jobs"]["build"]["steps"]
     names = [s.get("name") for s in steps]

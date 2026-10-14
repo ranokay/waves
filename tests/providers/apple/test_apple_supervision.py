@@ -604,10 +604,13 @@ def _bridge_stub(**settings_overrides):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     stub._queue_index = {}
     stub._queue_item = lambda qid: stub._queue_index.get(qid)
-    stub._set_queue_status = lambda qid, status, reason="": (
-        stub._queue_index.setdefault(int(qid), {}).__setitem__("status", status)
-        or stub._queue_index[int(qid)].__setitem__("reason", reason)
-    )
+
+    def set_queue_status(qid, status, reason="", *, expect=""):
+        row = stub._queue_index.setdefault(int(qid), {})
+        if not expect or row.get("status") == expect:
+            row.update(status=status, reason=reason)
+
+    stub._set_queue_status = set_queue_status
     stub._set_status = lambda msg: setattr(stub, "last_status", msg)
     return stub
 

@@ -379,3 +379,20 @@ def test_failed_refetch_releases_its_marker_and_keeps_the_stopped_ask():
     assert queue.statuses[-1] == ITEM_FETCH_FAILED
     assert not queue._refetch_inflight and not queue._retry_refetch_tokens
     assert not queue.retries
+
+
+def test_a_held_row_resumes_only_while_it_is_still_held():
+    # A worker resuming a held row cannot overwrite a provider stop's words:
+    # the expect move reads and writes under the lock that stop rewrites under.
+    queue = _Queue([_row(1, "apple:17"), _row(2, "tidal:18")])
+    queue._jobs.specs = {1: SimpleNamespace(provider_id="apple"), 2: SimpleNamespace(provider_id="tidal")}
+    for qid in (1, 2):
+        queue._set_queue_status(qid, "queued", "Held: the Apple runtime is not running.")
+
+    assert queue._stop_provider_queue("apple", "Apple Music was turned off") == 1
+    for qid in (1, 2):
+        queue._set_queue_status(qid, "running", "", expect="queued")
+
+    assert queue._queue_index[1]["status"] == "cancelled"
+    assert queue._queue_index[1]["reason"] == "Apple Music was turned off"
+    assert (queue._queue_index[2]["status"], queue._queue_index[2]["reason"]) == ("running", "")

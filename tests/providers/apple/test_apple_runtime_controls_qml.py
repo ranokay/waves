@@ -69,6 +69,14 @@ def run() -> int:
         5000,
         message="restored image rollback visible without update check",
     )
+    assert not q(button_script("appleInstallImageUpdate", visible_only=False))
+    bridge._apple_runtime_update_cache = {"image": {"available": True}}
+    bridge.appleRuntimeStatusChanged.emit()
+    wait_until(
+        lambda: bool(q(button_script("appleInstallImageUpdate"))),
+        5000,
+        message="offered image update installable beside a restored image",
+    )
     bridge.apple_wrapper_auth_state = lambda **kwargs: {
         "reachable": True,
         "state": "authenticated",
@@ -95,6 +103,7 @@ def run() -> int:
         "appleCancelRuntimeSetup",
         "appleRollbackRuntime",
         "appleRollbackImage",
+        "appleInstallImageUpdate",
         "appleCheckLiteRuntime",
         "appleCancelLiteRuntimeProbe",
         "appleConfirmLiteRuntimeAccount",

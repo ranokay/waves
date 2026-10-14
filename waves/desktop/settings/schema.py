@@ -141,6 +141,13 @@ NUMBER_FIELDS = [
     "apple_pacing_batch_size",
 ]
 
+# TCP port numbers outgrow the stepper's default 9999 cap: the decryption
+# port ships at 10020. The wrapper override's 0 picks a free port.
+PORT_FIELD_BOUNDS = {
+    "apple_wrapper_port": {"minimum": 0, "maximum": 65535},
+    "apple_wrapper_decrypt_port": {"minimum": 1, "maximum": 65535},
+}
+
 # Second-scale floats (Advanced), rendered as a decimal stepper.
 FLOAT_FIELDS = [
     "download_delay_sec_min",
@@ -555,7 +562,7 @@ class SettingsSchema:
                     {"minimum": 0, "maximum": maximum, "step": 0.5, "decimals": 1},
                 )
             if key in NUMBER_FIELDS:
-                return field(key, "int", int(getattr(d, key)))
+                return field(key, "int", int(getattr(d, key)), PORT_FIELD_BOUNDS.get(key))
             if key in FLAG_FIELDS:
                 return field(key, "bool", bool(getattr(d, key)))
             if key in MAP_FIELDS:

@@ -99,9 +99,11 @@ Security exception: a yt-dlp security advisory is a valid standalone bump reason
 2. The workflow builds `linux/arm64` from upstream source plus the blessed
    APK, smoke-tests `/health` and the decrypt port, and pushes a **new tag**.
 3. Move `WRAPPER_V2_IMAGE`, `WRAPPER_V2_IMAGE_DIGEST` and the runbook table
-   to the new tag and its publish digest in one commit; the packaging tests
-   fail if they drift. Never retag: the app refuses a pull whose digest does
-   not match the pin.
+   to the new tag and its publish digest in one commit, and append the new
+   pin with its guest-lib version to `APPROVED_WRAPPER_V2_IMAGES` while
+   keeping the earlier entries, so a restored previous image still verifies;
+   the packaging tests fail if they drift. Never retag: the app refuses a
+   pull whose digest does not match the pin.
 4. Confirm with a live wrapper-tier fetch before closing the issue.
 
 ### Qt / PySide6
