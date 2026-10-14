@@ -147,25 +147,28 @@ class _Relay:
 
 
 class _Row(dict):
-    """One running queue row behind a job's status hooks, with the bridge's
-    atomic moves: a live write lands only on a queued or running row, and a
-    resume only on a held one."""
+    """Job 1's running queue row behind its status hooks, with the bridge's
+    atomic moves: an unsettled write lands only on a queued or running row,
+    and a resume only on a held one. A write for another qid misses it."""
+
+    qid = 1
 
     def __init__(self):
         super().__init__(status="running", reason="")
         self.held: list[str] = []
 
     def queue_status(self, qid, state, detail=""):
-        self.update(status=state, reason=detail)
+        if qid == self.qid:
+            self.update(status=state, reason=detail)
 
     def move_unsettled_row(self, qid, state, detail=""):
-        if self["status"] in ("queued", "running"):
+        if qid == self.qid and self["status"] in ("queued", "running"):
             self.queue_status(qid, state, detail)
             if state == "queued":
                 self.held.append(detail)
 
     def resume_held_row(self, qid):
-        if self["status"] == "queued":
+        if qid == self.qid and self["status"] == "queued":
             self.queue_status(qid, "running")
 
     def bind(self, hooks) -> None:
