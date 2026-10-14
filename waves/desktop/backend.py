@@ -21250,7 +21250,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Setup counts a verified older image as pulled, so an offered pin
             # needs its own install action until the refreshed receipt is current.
             "image_update_available": bool(
-                mode != "user_managed"
+                mode == "managed"
                 and (updates.get("image") or {}).get("available")
                 and not (image.get("current") and image.get("verified"))
             ),

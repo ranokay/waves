@@ -902,6 +902,34 @@ def test_runtime_context_change_settles_the_job_incomplete(tmp_path, kind):
     assert excinfo.value.failure.retryable is True
 
 
+def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monkeypatch):
+    from waves.providers.apple.engine import AppleWrapperDown
+
+    def restart_failed(*args, **kwargs):
+        raise RuntimeError("synthetic restart failure")
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(AppleWrapperDown("down"))
+    monkeypatch.setattr(runner, "is_wrapper_down_error", lambda exc: True)
+    monkeypatch.setattr(runner, "set_held", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "ensure_sidecar", restart_failed)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    with pytest.raises(DownloadIncomplete, match="1 failed") as excinfo:
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _album_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert "account or runtime changed" not in str(excinfo.value)
+
+
 def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
     from waves.providers.apple.engine import _AppleAborted
 

@@ -77,6 +77,28 @@ def records_bridge(tmp_path):
     return host, sessions, workers, commands, deliveries
 
 
+def engine_bridge(tmp_path, storefront):
+    """A wrapper-tier bridge whose engine facts probe an authenticated session."""
+    from waves.providers.apple.provider import AppleProvider
+
+    host, sessions, workers, _ = bridge(tmp_path)
+    pending = []
+    host.providers = {"apple": AppleProvider()}
+    host._apple_live_flags = lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": True}
+    host._apple_fetch_binary_ready = lambda: True
+    host._apple_container_serves = lambda: True
+    host._catalogEvent = SimpleNamespace(emit=pending.append)
+    host._apple_wrapper_auth_cache = {
+        "result": {"reachable": True, "state": "authenticated", "logged_in": True, "storefront": storefront},
+        "runtime_revision": "runtime-1",
+    }
+    sessions.configure(host._apple_runtime_profile)
+    for name in ("_apple_engine_details", "_apple_engine_facts"):
+        setattr(host, name, getattr(WavesBridge, name).__get__(host))
+    host._provider_engine_probes = {"apple": host._apple_engine_details}
+    return host, workers, pending
+
+
 def test_restored_image_survives_an_intervening_account_observation(tmp_path, monkeypatch):
     host, _, workers, _, deliveries = records_bridge(tmp_path)
     receipt = {"image": "synthetic-approved-image", "digest": "sha256:" + "a" * 64}
@@ -318,23 +340,7 @@ def test_account_check_uses_the_detected_container_runtime(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("change", ["instance", "stop_during_probe", "stop_before_publish"])
 def test_engine_presentation_does_not_admit_stale_runtime_or_stop_context(tmp_path, change):
-    from waves.providers.apple.provider import AppleProvider
-
-    host, sessions, workers, _ = bridge(tmp_path)
-    pending = []
-    host.providers = {"apple": AppleProvider()}
-    host._apple_live_flags = lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": True}
-    host._apple_fetch_binary_ready = lambda: True
-    host._apple_container_serves = lambda: True
-    host._catalogEvent = SimpleNamespace(emit=pending.append)
-    host._apple_wrapper_auth_cache = {
-        "result": {"reachable": True, "state": "authenticated", "logged_in": True, "storefront": "us"},
-        "runtime_revision": "runtime-1",
-    }
-    sessions.configure(host._apple_runtime_profile)
-    for name in ("_apple_engine_details", "_apple_engine_facts"):
-        setattr(host, name, getattr(WavesBridge, name).__get__(host))
-    host._provider_engine_probes = {"apple": host._apple_engine_details}
+    host, workers, pending = engine_bridge(tmp_path, "us")
 
     def observe(*args):
         if change == "stop_during_probe":
@@ -371,25 +377,9 @@ def test_engine_presentation_does_not_admit_stale_runtime_or_stop_context(tmp_pa
 
 
 def test_public_catalog_storefront_is_not_account_evidence(tmp_path):
-    from waves.providers.apple.provider import AppleProvider
-
     # The catalog client signs no account in, so its storefront is gamdl's
     # public default; a wrapper account elsewhere must stay confirmable.
-    host, sessions, workers, _ = bridge(tmp_path)
-    pending = []
-    host.providers = {"apple": AppleProvider()}
-    host._apple_live_flags = lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": True}
-    host._apple_fetch_binary_ready = lambda: True
-    host._apple_container_serves = lambda: True
-    host._catalogEvent = SimpleNamespace(emit=pending.append)
-    host._apple_wrapper_auth_cache = {
-        "result": {"reachable": True, "state": "authenticated", "logged_in": True, "storefront": "gb"},
-        "runtime_revision": "runtime-1",
-    }
-    sessions.configure(host._apple_runtime_profile)
-    for name in ("_apple_engine_details", "_apple_engine_facts"):
-        setattr(host, name, getattr(WavesBridge, name).__get__(host))
-    host._provider_engine_probes = {"apple": host._apple_engine_details}
+    host, workers, pending = engine_bridge(tmp_path, "gb")
     host._apple_supervisor.observe_identity = lambda *args: RuntimeIdentity(True, "runtime-1")
 
     WavesBridge.providerEngines(host, "apple")

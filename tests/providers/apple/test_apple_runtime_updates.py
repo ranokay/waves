@@ -240,20 +240,25 @@ def test_custom_tool_usage_does_not_validate_an_unused_managed_binary(tmp_path):
         pass
 
 
-def test_nested_tool_leases_verify_the_binary_once_per_outer_lease(tmp_path, monkeypatch):
-    from threading import Thread
-
-    from waves.providers.apple import runtime
-
-    manager = AppleRuntimeManager(tmp_path)
-    install_tool(manager, "1.0")
+@pytest.fixture
+def counted_tool(tmp_path, monkeypatch):
+    """An installed tool seen by a fresh manager, counting each full hash."""
+    install_tool(AppleRuntimeManager(tmp_path), "1.0")
     hashed = []
     real = runtime.sha256_file
     monkeypatch.setattr(runtime, "sha256_file", lambda path: hashed.append(path) or real(path))
+    return AppleRuntimeManager(tmp_path), hashed
 
-    # A job's outer lease verifies once; each track's nested lease and setup
-    # probe on that thread reuse it, since maintenance cannot change the tool.
-    with manager.usage():
+
+@pytest.mark.parametrize("outer_verifies", [True, False], ids=["managed-tool", "custom-tool"])
+def test_an_unchanged_tool_is_hashed_once_per_thread_of_leases(counted_tool, outer_verifies):
+    from threading import Thread
+
+    manager, hashed = counted_tool
+
+    # A job's outer lease spans its tracks; each track's lease and setup probe
+    # on that thread reuse one observation while maintenance stays excluded.
+    with manager.usage(verify_binary=outer_verifies):
         for _ in range(3):
             with manager.usage():
                 assert manager.verify()["binary_integrity"] == "verified"
@@ -270,6 +275,15 @@ def test_nested_tool_leases_verify_the_binary_once_per_outer_lease(tmp_path, mon
 
     manager.verify()
     assert len(hashed) == 3, "verification outside a lease still reads the file"
+
+
+def test_a_tool_replaced_during_a_job_is_refused_by_the_next_track(counted_tool):
+    manager, _ = counted_tool
+
+    with manager.usage():
+        manager.binary_path.write_bytes(b"replaced outside Waves")
+        with pytest.raises(RuntimeError, match="cannot be verified"), manager.usage():
+            pass
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits do not describe Windows ACLs")
@@ -466,6 +480,29 @@ def test_a_receipt_cannot_approve_an_image_no_build_shipped(tmp_path):
     assert status["verified"] is False
     assert status["rollback_available"] is False
     assert manager.active_image() == ""
+
+
+def test_an_approved_pin_built_for_other_guest_libs_cannot_be_restored(tmp_path, monkeypatch):
+    # Compatibility comes from the build's pin list; a receipt claiming the
+    # current guest libs cannot make an older approved image restorable.
+    image = WRAPPER_V2_IMAGE.rsplit(":", 1)[0] + ":0.2.0"
+    digest = "sha256:" + "3" * 64
+    monkeypatch.setattr(runtime, "APPROVED_WRAPPER_V2_IMAGES", ((image, digest, "16.0.0"),))
+    manager = AppleRuntimeManager(tmp_path)
+    receipt = {
+        "image": image,
+        "libs": runtime.WRAPPER_LIBS_VERSION,
+        "pulled_at": 1,
+        "digest": digest,
+        "digest_ok": True,
+        "protocol": "wrapper-v2",
+    }
+    manager.image_previous_path.parent.mkdir(parents=True, exist_ok=True)
+    manager.image_previous_path.write_text(json.dumps(receipt))
+
+    assert manager.image_status()["rollback_available"] is False
+    with pytest.raises(RuntimeError, match="no image was changed"):
+        manager.rollback_image(runner=lambda command, **kwargs: SimpleNamespace(returncode=0, stdout="id", stderr=""))
 
 
 @pytest.mark.parametrize("failure", ["missing_local", "incompatible_protocol", "unknown_provenance"])
