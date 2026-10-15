@@ -1505,7 +1505,8 @@ def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.ffmpeg
-def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
+@pytest.mark.parametrize("countdown", ["ticks", "cannot run"])
+def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch, countdown):
     from waves.providers.apple import AppleProvider as _RealProvider
     from waves.providers.apple import engine as apple_engine
 
@@ -1537,6 +1538,8 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     stub.settings = _settings(base, apple_quality_audio="HI_RES_LOSSLESS")
     stub._queue_index = {1: {"askQuality": "HIGH", "quality": "HIGH"}}
     monkeypatch.setattr(runner, "sleep_abortable", lambda *a: True)
+    if countdown == "cannot run":
+        monkeypatch.setattr(runner, "throttle_wait", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no clock")))
     hooks = stub._apple_job_hooks()
     row.bind(hooks)
     relay = _Relay()
@@ -1556,9 +1559,10 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     assert summary == ""
     assert len(calls) == 2
     assert tiers == [QualityTier.HIGH, QualityTier.HIGH]
-    # The countdown showed, then ended with its wait: the retry downloads
-    # under the job's own line, not "Retrying now." for the rest of the job.
-    assert any(line.startswith("Throttled") for line in row.lines)
+    # The wait showed, then ended: the retry downloads under the job's own
+    # line, not the wait's words for the rest of the job.
+    shown = "Throttled" if countdown == "ticks" else "Apple is rate-limiting"
+    assert any(line.startswith(shown) for line in row.lines)
     assert retried_on == [{"status": "running", "reason": "", "line": _LINE}]
     assert next(ev for ev in relay.events if ev.get("status") == "done")
 

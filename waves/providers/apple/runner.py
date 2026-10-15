@@ -249,7 +249,7 @@ class AppleJobHooks:
     status: Callable[[str], None] = _noop
     event: Callable[[ApplicationEvent], None] = _noop
     # Answers False when the queue refused the write: a stop settled (or a
-    # clear removed) the row first. See row_moved.
+    # clear removed) the row first. See move_row.
     queue_status: Callable[..., bool | None] = _noop
     # Held -> running, only while the row is still held (an atomic move).
     resume_held_row: Callable[[int], None] = _noop
@@ -515,6 +515,15 @@ def sleep_abortable(seconds: float, job_abort) -> bool:
         time.sleep(min(0.2, remaining))
 
 
+def _pause_event(hooks: AppleJobHooks):
+    """The queue's run event (set while it runs), or None without one."""
+    try:
+        reader = getattr(hooks, "pause_event", None)
+        return reader() if callable(reader) else None
+    except Exception:
+        return None
+
+
 def wait_while_paused(hooks: AppleJobHooks, job_abort) -> bool:
     """Block while the queue is paused, staying responsive to abort.
 
@@ -522,11 +531,7 @@ def wait_while_paused(hooks: AppleJobHooks, job_abort) -> bool:
     resume or abort is picked up promptly): True means abort, False to
     proceed. A hook without a pause event never waits.
     """
-    try:
-        reader = getattr(hooks, "pause_event", None)
-        event = reader() if callable(reader) else None
-    except Exception:
-        return False
+    event = _pause_event(hooks)
     if event is None:
         return False
     while not event.is_set():
@@ -1674,14 +1679,20 @@ def throttle_wait(
 
 
 def show_line(hooks: AppleJobHooks, line: str) -> None:
-    """Put the job's own status line back once a wait that replaced it ends."""
-    if line:
-        with contextlib.suppress(Exception):
-            hooks.status(line)
+    """Put the job's own status line back once a wait that replaced it ends.
+
+    A paused queue keeps its "Downloads paused" line: the job parks before
+    its next track.
+    """
+    paused = _pause_event(hooks)
+    if not line or (paused is not None and not paused.is_set()):
+        return
+    with contextlib.suppress(Exception):
+        hooks.status(line)
 
 
-def row_moved(hooks: AppleJobHooks, qid: int, status: str, reason: str = "") -> bool:
-    """Write this job's row status, and answer whether the queue took it.
+def move_row(hooks: AppleJobHooks, qid: int, status: str, reason: str = "") -> bool:
+    """Move this job's row to ``status``, and answer whether the queue took it.
 
     False means a stop settled (or a clear removed) the row first, so the
     job ends as that stop. Only the queue's explicit refusal counts: a stub
@@ -1690,7 +1701,7 @@ def row_moved(hooks: AppleJobHooks, qid: int, status: str, reason: str = "") -> 
     return hooks.queue_status(qid, status, reason) is not False
 
 
-def resume_held(hooks: AppleJobHooks, qid: int, line: str = "") -> None:
+def resume_held(hooks: AppleJobHooks, qid: int, *, line: str = "") -> None:
     """Show a held row running again, unless a stop settled it meanwhile,
     and put the job's status line (``line``) back over the held words.
 
@@ -1910,7 +1921,7 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
                 with contextlib.suppress(Exception):
                     hooks.note_activity()
                 # A row held on an earlier poll resumes visibly.
-                resume_held(hooks, qid, line)
+                resume_held(hooks, qid, line=line)
                 return True
             # Still down: hold with the setup words rather than fail a
             # blip, but bounded: a start that keeps failing needs the
@@ -2586,7 +2597,7 @@ def run_apple_job(
             logger.debug("Apple sidecar ensure failed; proceeding to fetch", exc_info=True)
             # A poll may have held the row before the error: the fetch runs,
             # so the row leaves its hold.
-            resume_held(hooks, qid, status_line)
+            resume_held(hooks, qid, line=status_line)
             ensured = True
         if not ensured:
             raise _AppleAborted()
@@ -2733,7 +2744,7 @@ def run_apple_job(
                             raise _AppleAborted() from exc
                         # The retry downloads, so the row leaves its hold:
                         # Clear Queued must not take a running download.
-                        resume_held(hooks, qid, status_line)
+                        resume_held(hooks, qid, line=status_line)
                         continue
                     # A dead sidecar holds the row while a return is
                     # plausible: one clear message, automatic resume. A
@@ -2761,7 +2772,7 @@ def run_apple_job(
                             logger.debug("Apple sidecar re-ensure failed", exc_info=True)
                             if job_abort.is_set():
                                 raise _AppleAborted() from exc
-                            resume_held(hooks, qid, status_line)
+                            resume_held(hooks, qid, line=status_line)
                             raise exc from exc.__cause__
                         if not ensured or job_abort.is_set():
                             raise _AppleAborted() from exc
@@ -2790,6 +2801,8 @@ def run_apple_job(
                         with contextlib.suppress(Exception):
                             hooks.status(f"Apple is rate-limiting; retrying in {int(wait)}s…")
                         waited = sleep_abortable(wait, job_abort)
+                        if waited:
+                            show_line(hooks, status_line)
                     if not waited:
                         raise _AppleAborted() from exc
         except AppleTrackUnavailable as exc:
@@ -3023,15 +3036,21 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         if hooks.withdraw_row_for_hold is None:
             hooks.remove_row(qid)
         elif not hooks.withdraw_row_for_hold(qid):
+            # A stop settled the row during the probe: nothing is held, so
+            # nothing resumes by itself.
             hooks.discard_pending_downloads([media_id])
+            hooks.status(f"Cancelled {name}")
         hooks.emit_queue()
         return
     # A provider stop words the row cancelled before it sets this abort:
     # the queue then refuses the start, and the job ends as that stop.
-    if job_abort.is_set() or not row_moved(hooks, qid, "running"):
+    refused = not job_abort.is_set() and not move_row(hooks, qid, "running")
+    if job_abort.is_set() or refused:
         hooks.queue_status(qid, "cancelled")
         hooks.download_state(media_id, "")
         hooks.bump_groups(media_id, None, "failed")
+        if refused:
+            hooks.status(f"Cancelled {name}")
         hooks.finish_job(qid)
         return
     status_line = f"Downloading {name}…"
@@ -3079,24 +3098,25 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         if job_abort.is_set():
             stopped()
         else:
-            # The REDOWNLOAD force survives while a sibling Version row
-            # still needs it (dual rows share one media id); the last
-            # finisher drops it with the claim override, like the engine.
-            try:
-                outstanding = bool(hooks.media_work_outstanding(media_id, qid))
-            except Exception:
-                # Hook-less stubs answer the default: discard, as before.
-                outstanding = False
-            if not outstanding:
-                hooks.redownload_overrides().discard(media_id)
-                hooks.library_claim_overrides().discard(media_id)
-            hooks.download_progress(media_id, 100.0)
             hooks.queue_progress(qid, 100.0)
-            hooks.download_state(media_id, "done")
-            if not row_moved(hooks, qid, "done"):
-                # A stop settled the row while the run finished.
+            if not move_row(hooks, qid, "done"):
+                # A stop settled the row while the run finished. Its Stopped
+                # row keeps the forces below: its RETRY reads them back.
                 stopped()
             else:
+                # The REDOWNLOAD force survives while a sibling Version row
+                # still needs it (dual rows share one media id); the last
+                # finisher drops it with the claim override, like the engine.
+                try:
+                    outstanding = bool(hooks.media_work_outstanding(media_id, qid))
+                except Exception:
+                    # Hook-less stubs answer the default: discard, as before.
+                    outstanding = False
+                if not outstanding:
+                    hooks.redownload_overrides().discard(media_id)
+                    hooks.library_claim_overrides().discard(media_id)
+                hooks.download_progress(media_id, 100.0)
+                hooks.download_state(media_id, "done")
                 hooks.bump_groups(media_id, 100.0, "done")
                 hooks.status(f"Finished {name}{summary}")
                 hooks.devlog_done("download", f"done {type_media} id={media_id}", hooks.devlog_clock() - started_at)
@@ -3108,11 +3128,11 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         else:
             logger.exception("Apple download failed for %s", hooks.redact(name))
             reason = str(exc) if isinstance(exc, (DownloadIncomplete, AppleCredentialsError)) else ""
-            hooks.download_state(media_id, "failed")
-            if not row_moved(hooks, qid, "failed", reason):
+            if not move_row(hooks, qid, "failed", reason):
                 # A stop settled the row while the run failed.
                 stopped()
             else:
+                hooks.download_state(media_id, "failed")
                 _publish_job_failure(hooks, qid, _classified_failure(hooks, exc), exception=exc, media_id=media_id)
                 hooks.bump_groups(media_id, None, "failed")
                 hooks.status(f"Failed {name}{': ' + reason if reason else ''}")

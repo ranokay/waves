@@ -637,20 +637,24 @@ def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path, monkeypatch):
     assert slept == [30.0]
 
 
-@pytest.mark.parametrize("stopped", [False, True])
-def test_a_pacing_pause_that_ends_puts_the_job_line_back(monkeypatch, stopped):
+@pytest.mark.parametrize("meanwhile", ["nothing", "stop", "pause"])
+def test_a_pacing_pause_that_ends_puts_the_job_line_back(monkeypatch, meanwhile):
     from waves.providers.apple import runner
 
     stub = _bridge_stub(apple_pacing_batch_size=25, apple_pacing_delay_sec=30.0)
     lines: list[str] = []
     stub._set_status = lines.append
-    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: not stopped)
+    if meanwhile == "pause":
+        stub._event_run = Event()  # cleared: the user paused the queue
+    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: meanwhile != "stop")
 
     resumed = runner.pace_if_due(stub._apple_job_hooks(), 26, Event(), 1, line="Downloading Album…")
 
-    assert resumed is not stopped
-    # A STOP mid-pause leaves the line to the stop's own settle.
-    assert lines == ["Pausing Apple downloads for 30s…"] + ([] if stopped else ["Downloading Album…"])
+    assert resumed is (meanwhile != "stop")
+    # A STOP mid-pause leaves the line to the stop's own settle, and a paused
+    # queue keeps "Downloads paused" while the job parks at its next track.
+    restored = ["Downloading Album…"] if meanwhile == "nothing" else []
+    assert lines == ["Pausing Apple downloads for 30s…", *restored]
 
 
 def test_backend_throttle_wait_counts_down_and_respects_stop():

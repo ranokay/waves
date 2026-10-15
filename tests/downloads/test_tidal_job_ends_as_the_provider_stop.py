@@ -68,8 +68,9 @@ class _Stub(BridgeStub, QueueMixin):
         self._queue = [{"qid": 1, "media_id": "m1", "status": "queued", "reason": "", "type": "track", "name": "Track"}]
         self._queue_lock = Lock()
         self._merge_plans: dict = {}
-        self._redownload_overrides: set = set()
-        self._library_claim_overrides: set = set()
+        # The REDOWNLOAD force and claim override a Stopped row's RETRY reads.
+        self._redownload_overrides: set = {"m1"}
+        self._library_claim_overrides: set = {"m1"}
         self.settings = SimpleNamespace(
             data=SimpleNamespace(download_base_path="/tmp/waves-out", download_delay=False, downloads_concurrent_max=2)
         )
@@ -94,9 +95,13 @@ class _Stub(BridgeStub, QueueMixin):
         return SimpleNamespace(id="m1", name="Track", artist=SimpleNamespace(name="Artist"), artists=[], duration=200)
 
     def _gate_reachability(self, retry, media_id) -> bool:
-        self.stop_if("probe", "probe raises")
+        self.stop_if("probe", "probe raises", "probe holds")
         if self.stop_lands == "probe raises":
             raise DownloadIncomplete("The original download folder is unavailable. Retry after reconnecting it.")
+        if self.stop_lands == "probe holds":
+            # The folder is gone: the gate holds the download for its return.
+            self._pending_downloads.append((media_id, retry))
+            return False
         return True
 
     def _emit_queue(self) -> None:
@@ -135,16 +140,23 @@ def _run(stop_lands: str) -> _Stub:
     return stub
 
 
-@pytest.mark.parametrize("stop_lands", ["resolve", "probe", "probe raises", "finish", "fail"])
-def test_a_tidal_job_overtaken_by_a_provider_stop_keeps_its_words(stop_lands):
+_EVERY_MOMENT = ["resolve", "probe", "probe raises", "probe holds", "finish", "fail"]
+
+
+@pytest.mark.parametrize("stop_lands", _EVERY_MOMENT)
+def test_a_tidal_job_overtaken_by_a_provider_stop_ends_as_that_stop(stop_lands):
     stub = _run(stop_lands)
 
     row = stub._queue[0]
     assert (row["status"], row["reason"]) == ("cancelled", _WORDS)
     assert stub.downloadState.emits[-1] == ("m1", ""), "the button is handed back idle"
+    lit = {state for mid, state in stub.downloadState.emits if mid == "m1"} & {"done", "failed"}
+    assert not lit, "the button lit an outcome the stop overrode"
+    assert stub.statuses[-1] == "Cancelled Track"
+    assert stub._pending_downloads == [], "nothing is held to resume by itself"
 
 
-@pytest.mark.parametrize("stop_lands", ["resolve", "probe", "probe raises"])
+@pytest.mark.parametrize("stop_lands", ["resolve", "probe", "probe raises", "probe holds"])
 def test_a_tidal_job_stopped_before_it_starts_never_lights_its_button(stop_lands):
     stub = _run(stop_lands)
 
@@ -152,11 +164,10 @@ def test_a_tidal_job_stopped_before_it_starts_never_lights_its_button(stop_lands
     assert stub.downloadProgress.emits == []
 
 
-@pytest.mark.parametrize("stop_lands", ["finish", "fail"])
-def test_a_tidal_run_that_ends_inside_the_stop_reads_cancelled(stop_lands):
-    stub = _run(stop_lands)
+def test_a_finish_the_stop_overrode_keeps_what_its_retry_needs():
+    stub = _run("finish")
 
-    assert stub.statuses[-1] == "Cancelled Track"
+    assert stub._redownload_overrides == stub._library_claim_overrides == {"m1"}
 
 
 def test_a_tidal_job_nobody_stopped_still_finishes():
@@ -165,3 +176,4 @@ def test_a_tidal_job_nobody_stopped_still_finishes():
     assert stub._queue[0]["status"] == "done"
     assert stub.downloadState.emits[-1] == ("m1", "done")
     assert stub.statuses[-1].startswith("Finished Track")
+    assert stub._redownload_overrides == stub._library_claim_overrides == set()

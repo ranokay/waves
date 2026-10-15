@@ -353,6 +353,22 @@ def test_folder_remounted_midflight_replays_immediately(monkeypatch):
     assert b._watch_requests == 0
 
 
+@pytest.mark.parametrize("verdict,remounted", [("dead", False), ("ok", True)])
+def test_folder_death_inside_a_stop_announces_no_recovery(monkeypatch, verdict, remounted):
+    # A stop worded the row cancelled before setting the abort: nothing is
+    # held, so nothing may promise to resume or replay.
+    b = _midflight_bridge(monkeypatch, verdict, remounted=remounted)
+    b._queue[0].update(status="cancelled", reason="Signed out of TIDAL")
+    b._bump_download_groups = lambda *args: None
+
+    assert b._download_failed_with_folder(lambda: None, "m1", 7, "Song") is True
+
+    assert b._pending_downloads == [], "the replay outlived the stop"
+    assert b._queue == [{"qid": 7, "status": "cancelled", "reason": "Signed out of TIDAL"}]
+    assert (b._watch_requests, b._recovered) == (0, 0)
+    assert b.statuses[-1] == "Cancelled Song"
+
+
 # ---- the probe's second chance ----------------------------------------------
 
 

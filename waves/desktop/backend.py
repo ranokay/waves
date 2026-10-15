@@ -13922,7 +13922,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # contract: the queue reads as if the download never started.
         self.downloadState.emit(media_id, "")
         if not self._withdraw_queue_row_for_hold(qid):
+            # A stop settled the row first: the download ends as that stop,
+            # with nothing held, so no recovery is announced.
             self._discard_pending_downloads([media_id])
+            self._bump_download_groups(media_id, None, "failed")
+            self._set_status(f"Cancelled {name}")
+            self._emit_queue()
+            return True
         self._emit_queue()
         if verdict in ("ok", "healed"):
             # Our own remount already brought the share back: replay immediately.
@@ -15983,8 +15989,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # Keep its retryable row; changing defaults never redirects it.
                 status = "cancelled" if job_abort.is_set() else "failed"
                 # A row a stop settled first keeps that stop's verdict.
-                failed = self._set_queue_status(qid, status, str(exc)) and status == "failed"
-                self.downloadState.emit(media_id, "failed" if failed else "")
+                if self._set_queue_status(qid, status, str(exc)):
+                    self.downloadState.emit(media_id, status if status == "failed" else "")
+                else:
+                    self.downloadState.emit(media_id, "")
+                    self._set_status(f"Cancelled {name}")
                 self._bump_download_groups(media_id, None, "failed")
                 self._jobs.aborts.pop(qid, None)
                 self._release_job_signals(qid)
@@ -16014,6 +16023,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # Drop the track-poll registration too, or the 500 ms per-track
                 # progress timer keeps polling this dead job forever.
                 self._jobs.dls.pop(qid, None)
+
+            def refused_before_it_started() -> None:
+                """The queue refused this job's first write: a stop settled
+                the row (or a clear took it) after the abort check."""
+                stopped_before_it_started()
+                self._set_status(f"Cancelled {name}")
 
             def stopped() -> None:
                 """A started run that ends as a stop, never as a success or
@@ -16046,11 +16061,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if verdict.kind is RefusalKind.UNAVAILABLE:
                         reason = verdict.message or "not available anymore"
                 logger.exception("Could not resolve the download target for %s", redaction.content(name))
-                self.downloadState.emit(media_id, "failed")
                 if not self._set_queue_status(qid, "failed", reason):
                     # A stop settled the row while the target resolved.
-                    stopped_before_it_started()
+                    refused_before_it_started()
                     return
+                self.downloadState.emit(media_id, "failed")
                 publish_event(
                     self,
                     provider_failure_event(
@@ -16155,7 +16170,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self._merge_plans.setdefault(media_id, merge_plan)
                 # Keep the plain ask if this active row enters recovery.
                 if not self._withdraw_queue_row_for_hold(qid):
+                    # A stop settled the row during the probe: nothing is
+                    # held, so nothing resumes by itself.
                     self._discard_pending_downloads([media_id])
+                    self._set_status(f"Cancelled {name}")
                 self._emit_queue()
                 return
             # The gate may have auto-healed the folder onto a remounted
@@ -16173,11 +16191,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # status line read "Downloading ..." again, until the whole
             # collection had been enumerated and the job noticed the abort. To
             # the user, STOP simply did not stick.
-            # A provider stop words the row cancelled before it sets this
-            # abort: the queue then refuses the start, and the job ends as
-            # that stop.
-            if job_abort.is_set() or not self._set_queue_status(qid, "running"):
+            if job_abort.is_set():
                 stopped_before_it_started()
+                return
+            if not self._set_queue_status(qid, "running"):
+                # A provider stop words the row cancelled before it sets this
+                # abort: the queue refuses the start, and the job ends as
+                # that stop.
+                refused_before_it_started()
                 return
             # 0% BEFORE running, the order the folder and discography rollups
             # already use: the button's readout is visible from the running
@@ -16263,33 +16284,36 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # Cancelled mid-download, don't report success.
                     stopped()
                 else:
-                    # Merge succeeded → the stashed plan (kept for a possible
-                    # retry) is no longer needed; drop it.
-                    if merge_plan is not None:
-                        self._merge_plans.pop(media_id, None)
-                    # A REDOWNLOAD mark is one job's force, not a standing
-                    # policy: once no sibling row still needs it, a later click
-                    # on the same item meets the normal owned gate again. Kept
-                    # on failure and cancel, so a retry stays forced. The
-                    # DOWNLOAD ANYWAY mark is the same kind of one-job force
-                    # (registerRedownload sets both together), so it goes too:
-                    # otherwise the album stayed exempt from the claim gate for
-                    # as long as its done row sat in Completed.
-                    # getattr: partial test stubs drive download success with
-                    # neither helper, and keep the previous unconditional drop.
-                    release = getattr(self, "_release_redownload_override", None)
-                    if callable(release):
-                        release(media_id, qid)
-                    else:
-                        self._redownload_overrides.discard(media_id)
-                        self._library_claim_overrides.discard(media_id)
-                    self.downloadProgress.emit(media_id, 100.0)
                     self._set_queue_progress(qid, 100.0)
-                    self.downloadState.emit(media_id, "done")
                     if not self._set_queue_status(qid, "done"):
-                        # A stop settled the row while the run finished.
+                        # A stop settled the row while the run finished. Its
+                        # Stopped row keeps the plan and the forces below:
+                        # its RETRY reads them back.
                         stopped()
                     else:
+                        # Merge succeeded → the stashed plan (kept for a
+                        # possible retry) is no longer needed; drop it.
+                        if merge_plan is not None:
+                            self._merge_plans.pop(media_id, None)
+                        # A REDOWNLOAD mark is one job's force, not a standing
+                        # policy: once no sibling row still needs it, a later
+                        # click on the same item meets the normal owned gate
+                        # again. Kept on failure and cancel, so a retry stays
+                        # forced. The DOWNLOAD ANYWAY mark is the same kind of
+                        # one-job force (registerRedownload sets both
+                        # together), so it goes too: otherwise the album stayed
+                        # exempt from the claim gate for as long as its done
+                        # row sat in Completed. getattr: partial test stubs
+                        # drive download success with neither helper, and keep
+                        # the previous unconditional drop.
+                        release = getattr(self, "_release_redownload_override", None)
+                        if callable(release):
+                            release(media_id, qid)
+                        else:
+                            self._redownload_overrides.discard(media_id)
+                            self._library_claim_overrides.discard(media_id)
+                        self.downloadProgress.emit(media_id, 100.0)
+                        self.downloadState.emit(media_id, "done")
                         self._bump_download_groups(media_id, 100.0, "done")
                         # The job finished; if TIDAL withheld part of it, the
                         # status line says so rather than leaving the user to
@@ -16338,11 +16362,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # delivered 499 songs and a run that delivered none read
                     # exactly alike.
                     reason = str(exc) if isinstance(exc, DownloadIncomplete) else ""
-                    self.downloadState.emit(media_id, "failed")
                     if not self._set_queue_status(qid, "failed", reason):
                         # A stop settled the row while the run failed.
                         stopped()
                         return
+                    self.downloadState.emit(media_id, "failed")
                     publish_event(
                         self,
                         provider_failure_event(
