@@ -78,15 +78,29 @@ class _Stub(BridgeStub, QueueMixin):
         self.downloadState = _Signal()
         self.downloadProgress = _Signal()
         self.statuses: list[str] = []
+        self.bumps: list[tuple] = []
+        self.released: list[str] = []
         self._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
         self.dl = _Download(self)
         arm_dispatch(self)
         self._jobs.aborts[1] = Event()
 
     def stop_if(self, *moments: str) -> None:
-        if self.stop_lands in moments:
-            with self._queue_lock:
+        if self.stop_lands not in moments:
+            return
+        with self._queue_lock:
+            if self.stop_lands == "probe holds, row cleared":
+                # A clear removes the row before it sets the job's abort.
+                self._queue.clear()
+                self._queue_index.clear()
+            else:
                 self._queue[0]["status"], self._queue[0]["reason"] = "cancelled", _WORDS
+
+    def _bump_download_groups(self, media_id, pct, status) -> None:
+        self.bumps.append((media_id, pct, status))
+
+    def _release_abandoned_hold(self, media_ids) -> None:
+        self.released.extend(media_ids)
 
     def _resolve(self, kind, raw_id):
         self.stop_if("resolve")
@@ -95,10 +109,10 @@ class _Stub(BridgeStub, QueueMixin):
         return SimpleNamespace(id="m1", name="Track", artist=SimpleNamespace(name="Artist"), artists=[], duration=200)
 
     def _gate_reachability(self, retry, media_id) -> bool:
-        self.stop_if("probe", "probe raises", "probe holds")
+        self.stop_if("probe", "probe raises", "probe holds", "probe holds, row cleared")
         if self.stop_lands == "probe raises":
             raise DownloadIncomplete("The original download folder is unavailable. Retry after reconnecting it.")
-        if self.stop_lands == "probe holds":
+        if self.stop_lands.startswith("probe holds"):
             # The folder is gone: the gate holds the download for its return.
             self._pending_downloads.append((media_id, retry))
             return False
@@ -154,6 +168,17 @@ def test_a_tidal_job_overtaken_by_a_provider_stop_ends_as_that_stop(stop_lands):
     assert not lit, "the button lit an outcome the stop overrode"
     assert stub.statuses[-1] == "Cancelled Track"
     assert stub._pending_downloads == [], "nothing is held to resume by itself"
+    assert stub.bumps[-1] == ("m1", None, "failed")
+    assert stub.released == [], "a Stopped row stays retryable: its hold rides the retry"
+
+
+def test_a_tidal_probe_hold_whose_row_a_clear_took_releases_its_hold():
+    stub = _run("probe holds, row cleared")
+
+    assert stub._queue == [] and stub._pending_downloads == []
+    assert stub.released == ["m1"], "the gone row's hold outlived it"
+    assert stub.bumps[-1] == ("m1", None, "failed")
+    assert stub.statuses[-1] == "Cancelled Track"
 
 
 @pytest.mark.parametrize("stop_lands", ["resolve", "probe", "probe raises", "probe holds"])

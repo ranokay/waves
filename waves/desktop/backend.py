@@ -13903,6 +13903,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         remounted = self._last_probe_remounted
         if verdict in ("ok", "healed") and not remounted:
             return False  # the folder answers fine: the track itself failed
+
+        def ended_as_a_stop() -> bool:
+            self.downloadState.emit(media_id, "")
+            self._set_queue_status(qid, "cancelled")
+            self._bump_download_groups(media_id, None, "failed")
+            self._set_status(f"Cancelled {name}")
+            return True  # claimed: the caller must not mark it failed
+
         # A press that landed while that probe ran (seconds, and up to twenty
         # more if the share had to be mounted back) ends this download for
         # good. The caller read the abort before calling, so without this the
@@ -13911,11 +13919,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # itself when the share did, with no record it was ever stopped. The
         # same reading, in the same place, as the reachability gate's own.
         if abort is not None and abort.is_set():
-            self.downloadState.emit(media_id, "")
-            self._set_queue_status(qid, "cancelled")
-            self._bump_download_groups(media_id, None, "failed")
-            self._set_status(f"Cancelled {name}")
-            return True  # claimed: the caller must not mark it failed
+            return ended_as_a_stop()
         logger.info("Download failed because the folder is gone; holding it for recovery instead of failing it")
         self._stash_pending_download(media_id, retry)
         # Withdraw the row and reset the button, matching the gate-block
@@ -13925,10 +13929,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # A stop settled the row first: the download ends as that stop,
             # with nothing held, so no recovery is announced.
             self._discard_pending_downloads([media_id])
-            self._bump_download_groups(media_id, None, "failed")
-            self._set_status(f"Cancelled {name}")
             self._emit_queue()
-            return True
+            return ended_as_a_stop()
         self._emit_queue()
         if verdict in ("ok", "healed"):
             # Our own remount already brought the share back: replay immediately.
@@ -16170,9 +16172,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self._merge_plans.setdefault(media_id, merge_plan)
                 # Keep the plain ask if this active row enters recovery.
                 if not self._withdraw_queue_row_for_hold(qid):
-                    # A stop settled the row during the probe: nothing is
-                    # held, so nothing resumes by itself.
+                    # A stop or a clear took the row during the probe, before
+                    # its abort: nothing is held, so nothing resumes by
+                    # itself, and the job ends as that stop.
                     self._discard_pending_downloads([media_id])
+                    if self._queue_item(qid) is None:
+                        self._release_abandoned_hold([media_id])
+                    self._bump_download_groups(media_id, None, "failed")
                     self._set_status(f"Cancelled {name}")
                 self._emit_queue()
                 return

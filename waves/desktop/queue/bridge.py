@@ -714,7 +714,8 @@ class QueueMixin:
     def _set_queue_status(self, qid: int, status: str, reason: str = "", *, expect: str = "") -> bool:
         """Move a row to its new status, optionally with the reason it got
         there, and answer whether the queue took the write: False for a gone
-        row, a row that no longer has ``expect``, or a cancelled row (below).
+        row, a row that no longer has ``expect``, or a cancelled row the
+        write would move (below); a cancel on a cancelled row answers True.
         A status that carries no reason clears the one the row had -- a row
         retried in place and finished cannot keep explaining a failure that
         no longer stands.

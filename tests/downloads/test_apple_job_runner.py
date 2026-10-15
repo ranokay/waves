@@ -2465,6 +2465,23 @@ def test_cancel_during_the_probe_keeps_the_stopped_rows_hold():
     assert setup.calls["released"] == [], "a Stopped row stays retryable: its force rides the retry"
 
 
+def test_a_probe_hold_whose_row_a_clear_took_ends_as_that_clear():
+    # The clear removed the row before it set the abort: the withdrawal is
+    # refused, so nothing stays held to resume, and the job settles stopped.
+    setup = _probe_gate_setup(abort_during_probe=False, row_present=False)
+    bumps: list[tuple] = []
+    lines: list[str] = []
+    setup.hooks.withdraw_row_for_hold = lambda qid: False
+    setup.hooks.bump_groups = lambda *args: bumps.append(args)
+    setup.hooks.status = lines.append
+    _run_probe_gated_body(setup)
+
+    assert setup.pending == []
+    assert setup.calls["released"] == ["apple:song-1"], "the gone row's hold outlived it"
+    assert bumps == [("apple:song-1", None, "failed")]
+    assert lines[-1] == "Cancelled Xtal"
+
+
 def test_probe_block_without_a_cancel_still_stashes_for_recovery():
     setup = _probe_gate_setup(abort_during_probe=False, row_present=True)
     _run_probe_gated_body(setup)
@@ -2496,6 +2513,31 @@ def test_abort_wakes_the_pause_wait():
     abort.set()
     hooks = runner.AppleJobHooks(pause_event=lambda: paused)
     assert runner.wait_while_paused(hooks, abort) is True
+
+
+def test_a_job_that_waited_out_a_pause_names_itself_again():
+    class _ResumesOnSecondLook:
+        def __init__(self):
+            self.looks = 0
+
+        def is_set(self):
+            self.looks += 1
+            return self.looks > 1
+
+        def wait(self, timeout):
+            pass
+
+    lines: list[str] = []
+    resumes = _ResumesOnSecondLook()
+    paused = runner.AppleJobHooks(pause_event=lambda: resumes, status=lines.append)
+    running = Event()
+    running.set()
+    never_paused = runner.AppleJobHooks(pause_event=lambda: running, status=lines.append)
+
+    assert runner.wait_while_paused(never_paused, Event(), line=_LINE) is False
+    assert lines == [], "a job that never waited rewrote the line"
+    assert runner.wait_while_paused(paused, Event(), line=_LINE) is False
+    assert lines == [_LINE], "the queue's resume line names no job"
 
 
 def test_pause_wait_blocks_until_resumed():

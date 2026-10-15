@@ -524,22 +524,30 @@ def _pause_event(hooks: AppleJobHooks):
         return None
 
 
-def wait_while_paused(hooks: AppleJobHooks, job_abort) -> bool:
+def wait_while_paused(hooks: AppleJobHooks, job_abort, *, line: str = "") -> bool:
     """Block while the queue is paused, staying responsive to abort.
 
     The engine's _wait_while_paused polling shape (short timeout so a
     resume or abort is picked up promptly): True means abort, False to
-    proceed. A hook without a pause event never waits.
+    proceed. A hook without a pause event never waits. A job that waited
+    out a pause says ``line`` again: the queue's own resume line names no
+    job.
     """
     event = _pause_event(hooks)
     if event is None:
         return False
+    waited = False
     while not event.is_set():
         if job_abort.is_set():
             return True
+        waited = True
         # Short timeout so a resume or abort is picked up promptly.
         event.wait(0.1)
-    return bool(job_abort.is_set())
+    if job_abort.is_set():
+        return True
+    if waited:
+        say(hooks, line)
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -1610,11 +1618,10 @@ def pace_if_due(hooks: AppleJobHooks, pos_1based: int, job_abort, qid: int = 0, 
     if not due:
         return True
     logger.info(pacing_message(seconds, every))
-    with contextlib.suppress(Exception):
-        hooks.status(f"Pausing Apple downloads for {float(seconds):g}s…")
+    say(hooks, f"Pausing Apple downloads for {float(seconds):g}s…")
     if not sleep_abortable(float(seconds), job_abort):
         return False
-    show_line(hooks, line)
+    say(hooks, line)
     return True
 
 
@@ -1647,8 +1654,7 @@ def throttle_wait(
     except (TypeError, ValueError):
         total = 0.0
     deadline = time.monotonic() + total
-    with contextlib.suppress(Exception):
-        hooks.status(throttled_message(total))
+    say(hooks, throttled_message(total))
     with contextlib.suppress(Exception):
         hooks.queue_status(int(qid), "running", throttled_message(total))
     _publish_job_failure(
@@ -1666,23 +1672,22 @@ def throttle_wait(
         if remaining <= 0:
             with contextlib.suppress(Exception):
                 hooks.queue_status(int(qid), "running", "")
-            show_line(hooks, line)
+            say(hooks, line)
             return True
         shown = round(remaining)
         if shown != last_shown and shown >= 0:
             last_shown = shown
-            with contextlib.suppress(Exception):
-                hooks.status(throttled_message(remaining))
+            say(hooks, throttled_message(remaining))
             with contextlib.suppress(Exception):
                 hooks.queue_status(int(qid), "running", throttled_message(remaining))
         time.sleep(min(0.25, remaining))
 
 
-def show_line(hooks: AppleJobHooks, line: str) -> None:
-    """Put the job's own status line back once a wait that replaced it ends.
+def say(hooks: AppleJobHooks, line: str) -> None:
+    """Show a wait's status line, or the job's own once the wait ends.
 
-    A paused queue keeps its "Downloads paused" line: the job parks before
-    its next track.
+    A paused queue keeps the line that says so: the waiting row carries
+    its own words, and the job parks before its next track.
     """
     paused = _pause_event(hooks)
     if not line or (paused is not None and not paused.is_set()):
@@ -1711,7 +1716,7 @@ def resume_held(hooks: AppleJobHooks, qid: int, *, line: str = "") -> None:
     """
     with contextlib.suppress(Exception):
         hooks.resume_held_row(int(qid))
-    show_line(hooks, line)
+    say(hooks, line)
 
 
 def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
@@ -1727,8 +1732,7 @@ def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
         message = "Held: the Apple runtime is not running. Waiting for it to return."
     with contextlib.suppress(Exception):
         hooks.queue_status(int(qid), "queued", message)
-    with contextlib.suppress(Exception):
-        hooks.status(message)
+    say(hooks, message)
     if not detail:
         _publish_job_failure(
             hooks,
@@ -2606,7 +2610,7 @@ def run_apple_job(
             break
         # Pause holds the loop between tracks; the wait answers abort with True.
         try:
-            should_abort = wait_while_paused(hooks, job_abort)
+            should_abort = wait_while_paused(hooks, job_abort, line=status_line)
         except Exception:
             should_abort = False
         if should_abort:
@@ -2798,11 +2802,10 @@ def run_apple_job(
                     except Exception:
                         # A countdown helper that cannot run keeps the
                         # previous abortable sleep there.
-                        with contextlib.suppress(Exception):
-                            hooks.status(f"Apple is rate-limiting; retrying in {int(wait)}s…")
+                        say(hooks, f"Apple is rate-limiting; retrying in {int(wait)}s…")
                         waited = sleep_abortable(wait, job_abort)
                         if waited:
-                            show_line(hooks, status_line)
+                            say(hooks, status_line)
                     if not waited:
                         raise _AppleAborted() from exc
         except AppleTrackUnavailable as exc:
@@ -2972,11 +2975,27 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
     except Exception:
         replay_row = {}
     replay_collection = replay_row if collection else None
-    if job_abort.is_set():
+
+    def stopped_before_it_started() -> None:
+        """Settle a job that never ran: a press or a stop took its row."""
         hooks.queue_status(qid, "cancelled")
         hooks.download_state(media_id, "")
         hooks.bump_groups(media_id, None, "failed")
         hooks.finish_job(qid)
+
+    def release_if_gone() -> None:
+        """Release the hold only when a press took the row with it: a
+        Stopped row stays retryable, and its force rides the retry."""
+        try:
+            row_gone = hooks.queue_item(qid) is None
+        except Exception:
+            row_gone = False
+        if row_gone:
+            with contextlib.suppress(Exception):
+                hooks.release_abandoned_hold([media_id])
+
+    if job_abort.is_set():
+        stopped_before_it_started()
         return
 
     def replay() -> bool:
@@ -3017,41 +3036,31 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         if job_abort.is_set():
             with contextlib.suppress(Exception):
                 hooks.discard_pending_downloads([media_id])
-            # Released only when the press took the row with it: a Stopped
-            # row stays retryable, and its force rides the retry.
-            try:
-                row_gone = hooks.queue_item(qid) is None
-            except Exception:
-                row_gone = False
-            if row_gone:
-                with contextlib.suppress(Exception):
-                    hooks.release_abandoned_hold([media_id])
-            hooks.queue_status(qid, "cancelled")
-            hooks.download_state(media_id, "")
-            hooks.bump_groups(media_id, None, "failed")
-            hooks.finish_job(qid)
+            release_if_gone()
+            stopped_before_it_started()
             return
         hooks.download_state(media_id, "")
         hooks.finish_job(qid)
         if hooks.withdraw_row_for_hold is None:
             hooks.remove_row(qid)
         elif not hooks.withdraw_row_for_hold(qid):
-            # A stop settled the row during the probe: nothing is held, so
-            # nothing resumes by itself.
+            # A stop or a clear took the row during the probe, before its
+            # abort: nothing is held, so nothing resumes by itself, and the
+            # job ends as that stop.
             hooks.discard_pending_downloads([media_id])
+            release_if_gone()
+            hooks.bump_groups(media_id, None, "failed")
             hooks.status(f"Cancelled {name}")
         hooks.emit_queue()
         return
-    # A provider stop words the row cancelled before it sets this abort:
-    # the queue then refuses the start, and the job ends as that stop.
-    refused = not job_abort.is_set() and not move_row(hooks, qid, "running")
-    if job_abort.is_set() or refused:
-        hooks.queue_status(qid, "cancelled")
-        hooks.download_state(media_id, "")
-        hooks.bump_groups(media_id, None, "failed")
-        if refused:
-            hooks.status(f"Cancelled {name}")
-        hooks.finish_job(qid)
+    if job_abort.is_set():
+        stopped_before_it_started()
+        return
+    if not move_row(hooks, qid, "running"):
+        # A provider stop words the row cancelled before it sets this
+        # abort: the queue refuses the start, and the job ends as that stop.
+        stopped_before_it_started()
+        hooks.status(f"Cancelled {name}")
         return
     status_line = f"Downloading {name}…"
     hooks.download_progress(media_id, 0.0)
