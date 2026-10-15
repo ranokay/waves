@@ -134,16 +134,14 @@ def _ffmpeg_identity(ffmpeg: str) -> tuple:
     return (ffmpeg, stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
 
-def _soxr_known_missing(ffmpeg: str) -> bool:
-    key = _ffmpeg_identity(ffmpeg)
+def _soxr_known_missing(binary: tuple) -> bool:
     with _SOXR_MISSING_LOCK:
-        return key in _SOXR_MISSING
+        return binary in _SOXR_MISSING
 
 
-def _note_soxr_missing(ffmpeg: str) -> None:
-    key = _ffmpeg_identity(ffmpeg)
+def _note_soxr_missing(binary: tuple) -> None:
     with _SOXR_MISSING_LOCK:
-        _SOXR_MISSING.add(key)
+        _SOXR_MISSING.add(binary)
 
 
 class UntaggableFile(OSError):
@@ -4949,9 +4947,12 @@ class Download:
         # resampler, which every build carries, and a binary found without
         # soxr goes straight there after.
         path_ffmpeg = str(self.settings.data.path_binary_ffmpeg)
+        # One identity for the check and the note: an update landing during
+        # the failed soxr spawn must not be marked without being asked.
+        binary = _ffmpeg_identity(path_ffmpeg)
         filter_swr = "aresample=" + ":".join(["resampler=swr", *filter_parts])
         filters = [filter_swr]
-        if not _soxr_known_missing(path_ffmpeg):
+        if not _soxr_known_missing(binary):
             filters.insert(0, "aresample=" + ":".join(["resampler=soxr", "precision=33", *filter_parts]))
 
         output_kwargs: dict = {
@@ -4989,7 +4990,7 @@ class Download:
                     )
                     if not soxr_missing:
                         raise
-                    _note_soxr_missing(path_ffmpeg)
+                    _note_soxr_missing(binary)
                     self.fn_logger.info("Downsample: this ffmpeg has no soxr resampler, using its built-in one.")
                     continue
                 break
