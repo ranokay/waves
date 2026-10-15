@@ -353,20 +353,31 @@ def test_folder_remounted_midflight_replays_immediately(monkeypatch):
     assert b._watch_requests == 0
 
 
+@pytest.mark.parametrize("row", ["stopped", "taken"])
 @pytest.mark.parametrize("verdict,remounted", [("dead", False), ("ok", True)])
-def test_folder_death_inside_a_stop_announces_no_recovery(monkeypatch, verdict, remounted):
-    # A stop worded the row cancelled before setting the abort: nothing is
-    # held, so nothing may promise to resume or replay.
+def test_folder_death_inside_a_stop_announces_no_recovery(monkeypatch, verdict, remounted, row):
+    # A stop worded the row cancelled, or a press took it, before the abort:
+    # nothing is held, so nothing may promise to resume or replay.
     b = _midflight_bridge(monkeypatch, verdict, remounted=remounted)
-    b._queue[0].update(status="cancelled", reason="Signed out of TIDAL")
+    if row == "stopped":
+        b._queue[0].update(status="cancelled", reason="Signed out of TIDAL")
+    else:
+        b._queue.clear()
+        b._queue_index.clear()
     b._bump_download_groups = lambda *args: None
+    released: list[str] = []
+    b._release_abandoned_hold = released.extend
 
     assert b._download_failed_with_folder(lambda: None, "m1", 7, "Song") is True
 
     assert b._pending_downloads == [], "the replay outlived the stop"
-    assert b._queue == [{"qid": 7, "status": "cancelled", "reason": "Signed out of TIDAL"}]
     assert (b._watch_requests, b._recovered) == (0, 0)
     assert b.statuses[-1] == "Cancelled Song"
+    if row == "stopped":
+        assert b._queue == [{"qid": 7, "status": "cancelled", "reason": "Signed out of TIDAL"}]
+        assert released == [], "a Stopped row stays retryable: its force rides the retry"
+    else:
+        assert released == ["m1"], "the taken row's plan and forces outlived it"
 
 
 # ---- the probe's second chance ----------------------------------------------

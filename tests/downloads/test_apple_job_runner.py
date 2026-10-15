@@ -2515,6 +2515,19 @@ def test_abort_wakes_the_pause_wait():
     assert runner.wait_while_paused(hooks, abort) is True
 
 
+def test_a_paused_queue_keeps_its_line_through_a_hold_and_its_resume():
+    paused = Event()  # cleared: the user paused the queue
+    row = _Row()
+    hooks = runner.AppleJobHooks(pause_event=lambda: paused)
+    row.bind(hooks)
+
+    runner.set_held(hooks, 1, "The wrapper tier has no port yet.")
+    assert row["status"] == "queued" and "no port yet" in row["reason"], "the held row carries its words"
+    runner.resume_held(hooks, 1, line=_LINE)
+
+    assert row.seen() == {"status": "running", "reason": "", "line": ""}, "a wait wrote over the paused line"
+
+
 def test_a_job_that_waited_out_a_pause_names_itself_again():
     class _ResumesOnSecondLook:
         def __init__(self):

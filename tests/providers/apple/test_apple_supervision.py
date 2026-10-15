@@ -638,7 +638,7 @@ def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("meanwhile", ["nothing", "stop", "pause"])
-def test_the_status_line_through_a_pacing_pause(monkeypatch, meanwhile):
+def test_a_pacing_pause_gives_the_line_back_unless_stopped_or_paused(monkeypatch, meanwhile):
     from waves.providers.apple import runner
 
     stub = _bridge_stub(apple_pacing_batch_size=25, apple_pacing_delay_sec=30.0)

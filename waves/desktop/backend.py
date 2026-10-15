@@ -13926,9 +13926,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # contract: the queue reads as if the download never started.
         self.downloadState.emit(media_id, "")
         if not self._withdraw_queue_row_for_hold(qid):
-            # A stop settled the row first: the download ends as that stop,
-            # with nothing held, so no recovery is announced.
+            # A stop settled the row (or a press took it) first: the download
+            # ends as that stop, with nothing held, so no recovery is
+            # announced.
             self._discard_pending_downloads([media_id])
+            self._release_hold_if_row_gone(qid, media_id)
             self._emit_queue()
             return ended_as_a_stop()
         self._emit_queue()
@@ -16134,8 +16136,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # and quietly did nothing, or wrote the identity edition
                     # over the tracks a merge had borrowed. A press that took
                     # the row released them through the withdrawal already.
-                    if self._queue_item(qid) is None:
-                        self._release_abandoned_hold([media_id])
+                    self._release_hold_if_row_gone(qid, media_id)
                     # Settled exactly as a press landing anywhere else in this
                     # body settles it, and the row is left where it is: the
                     # withdrawal below would have deleted the Stopped row, and
@@ -16154,7 +16155,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # its albums landed on disk. The credit for a hold that is
                 # abandoned rather than replayed is made where the abandoning
                 # happens, in dismissDownloadFolderNudge (stopAll drops the
-                # groups outright instead, so it credits nothing).
+                # groups outright instead, so it credits nothing), and where a
+                # refused withdrawal below ends the job as a stop.
                 self._jobs.aborts.pop(qid, None)
                 self._release_job_signals(qid)
                 self._jobs.dls.pop(qid, None)
@@ -16176,8 +16178,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # its abort: nothing is held, so nothing resumes by
                     # itself, and the job ends as that stop.
                     self._discard_pending_downloads([media_id])
-                    if self._queue_item(qid) is None:
-                        self._release_abandoned_hold([media_id])
+                    self._release_hold_if_row_gone(qid, media_id)
                     self._bump_download_groups(media_id, None, "failed")
                     self._set_status(f"Cancelled {name}")
                 self._emit_queue()
@@ -16533,6 +16534,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return True
         with self._pending_lock:
             return any(str(stashed) == mid for stashed, _fn in self._pending_downloads if stashed)
+
+    def _release_hold_if_row_gone(self, qid: int, media_id: str) -> None:
+        """Release a discarded hold's plan and forces only when a press took
+        its row: a Stopped row stays retryable, and its force rides the
+        retry."""
+        if self._queue_item(qid) is None:
+            self._release_abandoned_hold([media_id])
 
     def _release_redownload_override(self, media_id: str, qid: int) -> None:
         """Drop a REDOWNLOAD mark once no sibling row still needs it.
