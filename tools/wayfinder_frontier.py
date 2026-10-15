@@ -71,7 +71,7 @@ CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def readiness_sections(body: str) -> list[str]:
-    """Read declarations outside fenced examples, ending at the next peer heading."""
+    """Read declarations outside Markdown code, ending at the next peer heading."""
     sections: list[list[str]] = []
     current: list[str] | None = None
     fence_char = ""
@@ -82,6 +82,8 @@ def readiness_sections(body: str) -> list[str]:
         if fence_char:
             if marker and marker[1][0] == fence_char and len(marker[1]) >= fence_length and not marker[2].strip(" \t"):
                 fence_char = ""
+            continue
+        if raw_line.expandtabs(4).startswith("    "):
             continue
         if marker and not (marker[1][0] == "`" and "`" in marker[2]):
             fence_char = marker[1][0]

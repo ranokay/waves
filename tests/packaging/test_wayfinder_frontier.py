@@ -168,6 +168,22 @@ def test_a_tilde_fence_closes_only_on_a_long_enough_matching_run_without_text(in
     assert not any("Example artifact" in line or "readiness: unknown" in line for line in lines)
 
 
+@pytest.mark.parametrize("indentation", ["    ", "\t"])
+@pytest.mark.parametrize("fenced", [False, True], ids=["plain-code", "fenced-code"])
+def test_indented_code_examples_do_not_add_readiness_requirements(indentation, fenced):
+    module = _frontier_module()
+    example = _readiness(slice_inputs="- [ ] Example artifact")
+    if fenced:
+        example = "```markdown\n" + example + "```\n"
+    body = "\n".join(indentation + line for line in example.splitlines()) + "\n\n" + _readiness()
+
+    lines = _report(module, _node(11, body=body))
+
+    assert "  frontier: #11 Child 11" in lines
+    assert "    selected slice: Implement the runtime registry with synthetic fixtures." in lines
+    assert not any("Example artifact" in line or "readiness: unknown" in line for line in lines)
+
+
 def test_a_pending_slice_input_still_blocks_an_incomplete_declaration():
     module = _frontier_module()
     body = "## Agent readiness\n### Slice inputs\n- [ ] Approved artifact"

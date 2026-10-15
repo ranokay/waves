@@ -108,3 +108,7 @@ claiming a candidate, read the issue and confirm the selected slice, its
 acceptance condition and the availability of its required inputs. Put
 requirements for later qualification under completion inputs only when they
 are outside that slice.
+
+Discover available local artifacts, versions and records before asking the
+user to locate them. Ask for missing authorization or account choices after
+establishing the technical state.
