@@ -83,25 +83,48 @@ def markdown_code_fence(line: str, list_content_indent: int | None) -> re.Match[
     return marker
 
 
+@dataclass
+class MarkdownCodeFence:
+    character: str = ""
+    length: int = 0
+    content_indent: int = 0
+
+    def consume(self, line: str, list_content_indent: int | None) -> bool:
+        """Ignore fence contents only while their Markdown list container exists."""
+        indentation = len(line) - len(line.lstrip(" "))
+        if line.strip() and indentation < self.content_indent:
+            self.character = ""
+        marker = markdown_code_fence(line, list_content_indent)
+        if self.character:
+            if (
+                marker
+                and marker[1][0] == self.character
+                and len(marker[1]) >= self.length
+                and not marker[2].strip(" \t")
+            ):
+                self.character = ""
+            return True
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            self.character = marker[1][0]
+            self.length = len(marker[1])
+            self.content_indent = (
+                list_content_indent if list_content_indent and indentation >= list_content_indent else 0
+            )
+            return True
+        return False
+
+
 def readiness_sections(body: str) -> list[str]:
     """Read declarations outside Markdown code, ending at the next peer heading."""
     sections: list[list[str]] = []
     current: list[str] | None = None
-    fence_char = ""
-    fence_length = 0
+    fence = MarkdownCodeFence()
     list_content_indent: int | None = None
     for raw_line in body.splitlines():
         line = raw_line.strip()
-        marker = markdown_code_fence(raw_line, list_content_indent)
-        if fence_char:
-            if marker and marker[1][0] == fence_char and len(marker[1]) >= fence_length and not marker[2].strip(" \t"):
-                fence_char = ""
-            continue
-        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
-            fence_char = marker[1][0]
-            fence_length = len(marker[1])
-            continue
         expanded = raw_line.expandtabs(4)
+        if fence.consume(expanded, list_content_indent):
+            continue
         indentation = len(expanded) - len(expanded.lstrip(" "))
         if indentation >= 4:
             # Continuations within a Markdown list are not standalone code.

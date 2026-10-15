@@ -219,6 +219,19 @@ def test_fenced_examples_beneath_a_list_item_do_not_become_pending_inputs(indent
     assert not any("Example only" in line or "readiness: unknown" in line for line in lines)
 
 
+@pytest.mark.parametrize("indentation", ["    ", "\t"])
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_a_list_fence_ends_before_a_real_pending_sibling_input(indentation, fence):
+    module = _frontier_module()
+    inputs = f"- [x] Runtime downloaded\n{indentation}{fence}markdown\n{indentation}example\n- [ ] License grant"
+    body = _readiness(slice_inputs=inputs)
+
+    lines = _report(module, _node(11, body=body), _node(12, body=_readiness()))
+
+    assert "  frontier: #12 Child 12" in lines
+    assert any("#11 slice inputs pending: License grant" in line for line in lines)
+
+
 def test_indented_code_beneath_a_list_item_does_not_become_a_pending_input():
     module = _frontier_module()
     body = _readiness(slice_inputs="- [x] Runtime downloaded\n\n        - [ ] Example only")
