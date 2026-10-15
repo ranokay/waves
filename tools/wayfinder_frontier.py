@@ -75,6 +75,14 @@ def markdown_list_content_indent(line: str) -> int | None:
     return marker.end() if marker else None
 
 
+def markdown_code_fence(line: str, list_content_indent: int | None) -> re.Match[str] | None:
+    expanded = line.expandtabs(4)
+    marker = CODE_FENCE.fullmatch(expanded)
+    if marker is None and list_content_indent is not None and expanded.startswith(" " * list_content_indent):
+        marker = CODE_FENCE.fullmatch(expanded[list_content_indent:])
+    return marker
+
+
 def readiness_sections(body: str) -> list[str]:
     """Read declarations outside Markdown code, ending at the next peer heading."""
     sections: list[list[str]] = []
@@ -84,10 +92,14 @@ def readiness_sections(body: str) -> list[str]:
     list_content_indent: int | None = None
     for raw_line in body.splitlines():
         line = raw_line.strip()
-        marker = CODE_FENCE.fullmatch(raw_line)
+        marker = markdown_code_fence(raw_line, list_content_indent)
         if fence_char:
             if marker and marker[1][0] == fence_char and len(marker[1]) >= fence_length and not marker[2].strip(" \t"):
                 fence_char = ""
+            continue
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            fence_char = marker[1][0]
+            fence_length = len(marker[1])
             continue
         expanded = raw_line.expandtabs(4)
         indentation = len(expanded) - len(expanded.lstrip(" "))
@@ -98,10 +110,6 @@ def readiness_sections(body: str) -> list[str]:
             if current is not None and list_content_indent is not None and indentation < list_content_indent + 4:
                 current.append(expanded)
                 list_content_indent = markdown_list_content_indent(expanded) or list_content_indent
-            continue
-        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
-            fence_char = marker[1][0]
-            fence_length = len(marker[1])
             continue
         list_content_indent = markdown_list_content_indent(raw_line) if line else list_content_indent
         if line == "## Agent readiness":

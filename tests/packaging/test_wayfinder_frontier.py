@@ -206,6 +206,19 @@ def test_a_deeper_pending_nested_input_remains_a_holdup():
     assert any("slice inputs pending: License grant" in line for line in lines)
 
 
+@pytest.mark.parametrize("indentation", ["    ", "\t"])
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_fenced_examples_beneath_a_list_item_do_not_become_pending_inputs(indentation, fence):
+    module = _frontier_module()
+    example = "\n".join(indentation + line for line in [fence + "markdown", "- [ ] Example only", fence])
+    body = _readiness(slice_inputs="- [x] Runtime downloaded\n" + example)
+
+    lines = _report(module, _node(11, body=body))
+
+    assert "  frontier: #11 Child 11" in lines
+    assert not any("Example only" in line or "readiness: unknown" in line for line in lines)
+
+
 def test_indented_code_beneath_a_list_item_does_not_become_a_pending_input():
     module = _frontier_module()
     body = _readiness(slice_inputs="- [x] Runtime downloaded\n\n        - [ ] Example only")
