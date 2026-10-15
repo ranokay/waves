@@ -102,6 +102,7 @@ def arm_queue(stub) -> None:
         "_forget_held_queue_rows",
         "_discard_pending_downloads",
         "_release_abandoned_hold",
+        "_release_hold_if_row_gone",
     ):
         if not hasattr(stub, name):
             setattr(stub, name, getattr(WavesBridge, name).__get__(stub, type(stub)))

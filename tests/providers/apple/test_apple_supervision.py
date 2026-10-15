@@ -607,6 +607,7 @@ def _bridge_stub(**settings_overrides):
 
     def set_queue_status(qid, status, reason="", *, expect=""):
         row = stub._queue_index.setdefault(int(qid), {})
+        row.setdefault("history", []).append(reason)
         if not expect or row.get("status") == expect:
             row.update(status=status, reason=reason)
 
@@ -636,12 +637,51 @@ def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path, monkeypatch):
     assert slept == [30.0]
 
 
+@pytest.mark.parametrize("meanwhile", ["nothing", "stop", "pause"])
+def test_a_pacing_pause_gives_the_line_back_unless_stopped_or_paused(monkeypatch, meanwhile):
+    from waves.providers.apple import runner
+
+    stub = _bridge_stub(apple_pacing_batch_size=25, apple_pacing_delay_sec=30.0)
+    lines: list[str] = []
+    stub._set_status = lines.append
+    if meanwhile == "pause":
+        stub._event_run = Event()  # cleared: the user paused the queue
+    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: meanwhile != "stop")
+
+    resumed = runner.pace_if_due(stub._apple_job_hooks(), 26, Event(), 1, line="Downloading Album…")
+
+    assert resumed is (meanwhile != "stop")
+    # The job's line comes back when the pause ends; a STOP mid-pause leaves
+    # the line to the stop's own settle; a paused queue keeps the line that
+    # says so throughout, while the job parks at its next track.
+    expected = {
+        "nothing": ["Pausing Apple downloads for 30s…", "Downloading Album…"],
+        "stop": ["Pausing Apple downloads for 30s…"],
+        "pause": [],
+    }
+    assert lines == expected[meanwhile]
+
+
+def test_a_paused_queue_keeps_its_line_through_a_throttle_wait():
+    stub = _bridge_stub()
+    stub._event_run = Event()  # cleared: the user paused the queue
+    lines: list[str] = []
+    stub._set_status = lines.append
+
+    assert stub._apple_throttle_wait(7, 0.05, Event()) is True
+
+    row = stub._queue_index[7]
+    assert any("Throttled" in reason for reason in row["history"]), "the row still shows its countdown"
+    assert lines == [], "the countdown wrote over the paused queue's line"
+
+
 def test_backend_throttle_wait_counts_down_and_respects_stop():
     stub = _bridge_stub()
     abort = Event()
     assert stub._apple_throttle_wait(7, 0.05, abort) is True
     row = stub._queue_index[7]
-    assert row["status"] == "running" and "Throttled" in row["reason"]
+    assert any("Throttled" in reason for reason in row["history"]), "the countdown showed on the row"
+    assert (row["status"], row["reason"]) == ("running", ""), "the countdown outlived its wait"
     abort2 = Event()
     abort2.set()
     assert stub._apple_throttle_wait(8, 30.0, abort2) is False

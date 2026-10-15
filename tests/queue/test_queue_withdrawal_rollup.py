@@ -555,7 +555,7 @@ def _body_stub(fail=False):
     # this stub could not see the failure handler at all and the assertions
     # below passed on the never-entered success branch.
     s.statuses = []
-    s._set_queue_status = lambda qid, status, reason="": s.statuses.append((qid, status, reason))
+    s._set_queue_status = lambda qid, status, reason="": s.statuses.append((qid, status, reason)) or True
     s._set_queue_progress = lambda qid, pct: None
     s._set_status = lambda msg: None
     s._bump_download_groups = lambda media_id, pct, status: None

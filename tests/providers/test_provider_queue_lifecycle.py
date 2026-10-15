@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +16,7 @@ from waves.desktop.backend import WavesBridge
 from waves.desktop.providers.lifecycle import ProviderContexts
 from waves.desktop.queue.bridge import QueueMixin
 from waves.desktop.queue.runtime import JobRuntime
+from waves.providers.apple import runner
 
 
 def _row(qid: int, media_id: str, status: str = "queued", audio_type: str = "stereo") -> dict:
@@ -64,6 +65,7 @@ def test_revocation_resets_only_owned_rollups_without_queue_rows():
 
 class _Queue(BridgeStub, QueueMixin):
     _release_abandoned_hold = WavesBridge._release_abandoned_hold
+    _discard_pending_downloads = WavesBridge._discard_pending_downloads
     _media_work_outstanding = WavesBridge._media_work_outstanding
     _bump_download_groups = WavesBridge._bump_download_groups
     _bump_folder_group = WavesBridge._bump_folder_group
@@ -396,3 +398,152 @@ def test_a_held_row_resumes_only_while_it_is_still_held():
     assert queue._queue_index[1]["status"] == "cancelled"
     assert queue._queue_index[1]["reason"] == "Apple Music was turned off"
     assert (queue._queue_index[2]["status"], queue._queue_index[2]["reason"]) == ("running", "")
+
+
+def _stop_with_a_worker_inside(queue: _Queue, worker_write) -> None:
+    """Run an Apple provider stop with a worker write inside its window.
+
+    The stop words its rows under the queue lock, then cleans up before it
+    sets the jobs' aborts: a worker that read its abort clear writes there.
+    """
+    cleanup = queue._clear_retry_refetches
+
+    def inside_the_window(provider_id: str) -> None:
+        worker_write()
+        cleanup(provider_id)
+
+    queue._clear_retry_refetches = inside_the_window
+    assert queue._stop_provider_queue("apple", "Apple Music was turned off") == 1
+
+
+@pytest.mark.parametrize("write", ["held", "held for setup", "throttled"])
+def test_a_worker_write_inside_a_provider_stop_keeps_the_stops_words(write):
+    queue = _Queue([_row(1, "apple:17", "running")])
+    queue._jobs.specs = {1: SimpleNamespace(provider_id="apple")}
+    abort = queue._jobs.aborts[1] = Event()
+    hooks = WavesBridge._apple_job_hooks(queue)
+
+    def worker_write() -> None:
+        if write == "throttled":
+            runner.throttle_wait(hooks, 1, 0.0, abort)
+        else:
+            runner.set_held(hooks, 1, "The wrapper tier has no port yet." if write == "held for setup" else "")
+
+    _stop_with_a_worker_inside(queue, worker_write)
+    assert abort.is_set()
+    # The job body's own settle once its abort lands carries no words.
+    hooks.queue_status(1, "cancelled")
+
+    row = queue._queue_index[1]
+    assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
+
+
+class _AppleJob:
+    """One Apple job body on its own worker, with its folder gate and its
+    fetch scripted by ``outcome`` and its presentation recorded."""
+
+    def __init__(self, queue: _Queue, monkeypatch, outcome: str) -> None:
+        self.queue = queue
+        self.outcome = outcome
+        self.abort = queue._jobs.aborts[1] = Event()
+        self.hooks = WavesBridge._apple_job_hooks(queue)
+        self.hooks.gate_reachability = self.gate
+        self.hooks.download_failed_with_folder = lambda *args: False
+        self.hooks.finish_job = lambda qid: None
+        self.states: list[str] = []
+        self.bumps: list[tuple] = []
+        self.hooks.download_state = lambda media_id, state: self.states.append(state)
+        self.hooks.bump_groups = lambda *args: self.bumps.append(args)
+        self.fetching = Event()
+        self.ending = Event()
+        self.fetched: list[bool] = []
+        self.failures: list[BaseException] = []
+        monkeypatch.setattr(runner, "run_apple_job", self.run)
+        self.worker = Thread(target=self.body)
+
+    def gate(self, retry, media_id="") -> bool:
+        if self.outcome != "holds":
+            return True
+        # The folder is gone: the gate holds the download for its return.
+        self.queue._pending_downloads.append((media_id, retry))
+        return False
+
+    def run(self, *args, job_abort, **kwargs) -> str:
+        self.fetched.append(True)
+        self.fetching.set()
+        assert self.ending.wait(5)
+        if self.outcome == "fails":
+            raise RuntimeError("synthetic fetch failure")
+        return ""
+
+    def body(self) -> None:
+        spec = SimpleNamespace(kind="album", file_template="", collection=True, media_id="apple:17")
+        try:
+            runner.run_job_body(
+                self.hooks, 1, spec, None, signals=None, job_abort=self.abort, row_ask=None, name="Album"
+            )
+        except BaseException as exc:
+            self.failures.append(exc)
+
+
+@pytest.mark.parametrize("outcome", ["holds", "starts", "finishes", "fails"])
+def test_an_apple_job_inside_a_provider_stop_ends_as_that_stop(monkeypatch, outcome):
+    queue = _Queue([_row(1, "apple:17")])
+    queue._jobs.specs = {1: SimpleNamespace(provider_id="apple")}
+    # The REDOWNLOAD force a Stopped row's RETRY reads back.
+    queue._redownload_overrides = {"apple:17"}
+    job = _AppleJob(queue, monkeypatch, outcome)
+    before_the_fetch = outcome in ("holds", "starts")
+    if not before_the_fetch:
+        job.worker.start()
+        assert job.fetching.wait(5)
+
+    def the_job_moves() -> None:
+        # The worker read its abort clear: it starts (or holds), or its run
+        # ends, now.
+        if before_the_fetch:
+            job.worker.start()
+        job.ending.set()
+        job.worker.join(5)
+
+    _stop_with_a_worker_inside(queue, the_job_moves)
+
+    assert not job.worker.is_alive()
+    assert job.failures == []
+    row = queue._queue_index[1]
+    assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
+    assert job.states[-1] == "", "the button reads idle, as after any stop"
+    assert not {"done", "failed"} & set(job.states), "the button lit an outcome the stop overrode"
+    assert queue.statuses[-1] == "Cancelled Album"
+    assert queue._pending_downloads == [], "nothing is held to resume by itself"
+    assert queue._redownload_overrides == {"apple:17"}, "the Stopped row's RETRY lost its force"
+    if before_the_fetch:
+        assert job.fetched == [], "a job the stop settled before it ran never fetches"
+    else:
+        assert job.bumps[-1] == ("apple:17", None, "failed")
+
+
+@pytest.mark.parametrize(
+    "status,reason",
+    [
+        ("running", ""),
+        ("queued", "Held: the Apple runtime is not running."),
+        ("running", "Throttled: Apple is rate-limiting. Retrying now."),
+        ("done", ""),
+        ("failed", "1 of 3 tracks failed"),
+        ("cancelled", ""),
+        ("cancelled", "1 of 3 tracks downloaded"),
+    ],
+)
+def test_a_cancelled_row_keeps_its_words_against_any_later_write(status, reason):
+    queue = _Queue([_row(1, "apple:17", "running"), _row(2, "apple:18", "running")])
+    assert queue._set_queue_status(1, "cancelled", "Apple Music was turned off") is True
+
+    assert queue._set_queue_status(1, status, reason) is (status == "cancelled")
+
+    row = queue._queue_index[1]
+    assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
+    # A row no stop settled takes the same write, and a gone row takes none.
+    assert queue._set_queue_status(2, status, reason) is True
+    assert (queue._queue_index[2]["status"], queue._queue_index[2]["reason"]) == (status, reason)
+    assert queue._set_queue_status(99, status, reason) is False

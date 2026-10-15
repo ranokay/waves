@@ -399,14 +399,14 @@ def test_stop_marks_queued_and_running_rows_stopped_and_keeps_every_row():
 def test_the_aborted_workers_later_mark_is_the_same_status_and_emits_nothing():
     # stopAll marked the rows in one pass; each aborted Worker reaching its
     # own cancelled mark afterwards must not re-marshal the queue per row.
-    stub = _QueueStub(["running", "queued"])
+    stub = _QueueStub(["running", "queued", "failed"])
     stub.stopAll()
     before = stub.emits
     stub._set_queue_status(1, "cancelled")
     stub._set_queue_status(2, "cancelled")
     assert stub.emits == before
-    # A real change still emits.
-    stub._set_queue_status(2, "queued")
+    # A real change on a row STOP left alone still emits.
+    stub._set_queue_status(3, "done")
     assert stub.emits == before + 1
 
 

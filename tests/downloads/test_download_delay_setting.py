@@ -138,8 +138,8 @@ class _Stub(BridgeStub):
     def _gate_reachability(self, retry, media_id) -> bool:
         return True
 
-    def _set_queue_status(self, qid, status, reason: str = "") -> None:
-        pass
+    def _set_queue_status(self, qid, status, reason: str = "") -> bool:
+        return True
 
     def _set_queue_progress(self, qid, pct) -> None:
         pass

@@ -61,6 +61,48 @@ def _pending_provider(media_id: str) -> str:
     return provider_of_id(media_id)
 
 
+def _publish_status_events(bridge, qid: int, item: dict, status: str, reason: str) -> None:
+    """Raise or settle the download events a row's new status calls for,
+    each valid only while the row still has that status."""
+    media_id = str(item.get("media_id") or "")
+    refs = EventReferences(
+        provider_id=str(item.get("provider_id") or (provider_of_id(media_id) if media_id else "")),
+        job_id=qid,
+        media_id=media_id,
+    )
+
+    def current() -> bool:
+        row = bridge._queue_item(qid)
+        return row is not None and row.get("status") == status
+
+    if status == "failed":
+        report_failure(
+            bridge,
+            EventDomain.DOWNLOAD,
+            "Download failed. Open the logs for details.",
+            key=f"job:{qid}",
+            references=refs,
+            valid=current,
+            actions=(EventAction.RETRY_JOB, EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
+        )
+    elif status in {"queued", "done", "cancelled"} or (status == "running" and not reason):
+        resolve_events(bridge, EventDomain.DOWNLOAD, job_id=qid, valid=current)
+        if status == "done":
+            publish_event(
+                bridge,
+                application_event(
+                    EventDomain.DOWNLOAD,
+                    f"Finished {item.get('title') or item.get('name') or 'download'}",
+                    key=f"job:{qid}",
+                    code=EventCode.COMPLETED,
+                    severity=Severity.SUCCESS,
+                    references=refs,
+                    lifecycle=Lifecycle.RESOLVED,
+                ),
+                current,
+            )
+
+
 class QueueMixin:
     """Queue behavior for WavesBridge. See the module docstring."""
 
@@ -711,68 +753,38 @@ class QueueMixin:
     def _queue_item(self, qid: int) -> dict | None:
         return self._queue_index.get(qid)
 
-    def _set_queue_status(self, qid: int, status: str, reason: str = "", *, expect: str = "") -> None:
+    def _set_queue_status(self, qid: int, status: str, reason: str = "", *, expect: str = "") -> bool:
         """Move a row to its new status, optionally with the reason it got
-        there. A status that carries no reason clears the one the row had --
-        a row retried in place and finished cannot keep explaining a failure
-        that no longer stands -- except a wordless cancel settle on a row a
-        stop already worded: the provider-disable reason survives the
-        worker's own settle. With ``expect``, the row moves only while it
-        still has that status, checked and written under the queue lock a
-        provider stop rewrites rows under."""
+        there, and answer whether the queue took the write: False for a gone
+        row, a row that no longer has ``expect``, or a cancelled row the
+        write would move (below); a cancel on a cancelled row answers True.
+        A status that carries no reason clears the one the row had -- a row
+        retried in place and finished cannot keep explaining a failure that
+        no longer stands.
+
+        A cancelled row stands. A stop settles it, with its words when a
+        provider was turned off, while the job's worker may be past its last
+        abort check, so the worker can still start, hold, throttle, finish or
+        fail the row after the stop. None of those writes moves or rewords
+        it; the answer is False, and the worker ends as that stop. With
+        ``expect``, the row moves only while it still has that status. Rows
+        are checked and written under the queue lock every stop rewrites them
+        under."""
         reason = scrub_event_text(str(reason or ""))
-        with self._queue_lock if expect else contextlib.nullcontext():
+        with self._queue_lock:
             item = self._queue_item(qid)
             if item is None or (expect and item["status"] != expect):
-                return
+                return False
+            if item["status"] == "cancelled":
+                return status == "cancelled"
             if item["status"] == status and item.get("reason", "") == reason:
-                return
-            if status == "cancelled" and not reason and item["status"] == "cancelled" and item.get("reason", ""):
-                # A stop that already gave the row its words (the provider was
-                # disabled) is the one the user reads: the worker's wordless
-                # settle that follows must not erase them.
-                return
+                return True
             item["status"] = status
             item["reason"] = reason
-        media_id = str(item.get("media_id") or "")
-        refs = EventReferences(
-            provider_id=str(item.get("provider_id") or (provider_of_id(media_id) if media_id else "")),
-            job_id=qid,
-            media_id=media_id,
-        )
-
-        def current() -> bool:
-            row = self._queue_item(qid)
-            return row is not None and row.get("status") == status
-
-        if status == "failed":
-            report_failure(
-                self,
-                EventDomain.DOWNLOAD,
-                "Download failed. Open the logs for details.",
-                key=f"job:{qid}",
-                references=refs,
-                valid=current,
-                actions=(EventAction.RETRY_JOB, EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
-            )
-        elif status in {"queued", "done", "cancelled"} or (status == "running" and not reason):
-            resolve_events(self, EventDomain.DOWNLOAD, job_id=qid, valid=current)
-            if status == "done":
-                publish_event(
-                    self,
-                    application_event(
-                        EventDomain.DOWNLOAD,
-                        f"Finished {item.get('title') or item.get('name') or 'download'}",
-                        key=f"job:{qid}",
-                        code=EventCode.COMPLETED,
-                        severity=Severity.SUCCESS,
-                        references=refs,
-                        lifecycle=Lifecycle.RESOLVED,
-                    ),
-                    current,
-                )
+        _publish_status_events(self, qid, item, status, reason)
         self._queue_mark_changed(qid)
         self._emit_queue()
+        return True
 
     def _set_queue_progress(self, qid: int, pct: float) -> None:
         item = self._queue_item(qid)
