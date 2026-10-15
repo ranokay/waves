@@ -4,10 +4,14 @@
 A map is an open issue labelled `wayfinder:map` whose children are GitHub
 sub-issues, each also listed in the map body's checklist
 (docs/agents/issue-tracker.md). One GraphQL call per map returns every child
-with its live state, assignees, labels and native blockers. A child is ready
+with its body, live state, assignees, labels and native blockers. A child is ready
 for an agent when it is open, labelled `ready-for-agent` (and not
 `ready-for-human`), unassigned, and every issue blocking it is closed; the
-first ready child in map order is the frontier. When nothing is ready, the
+first ready child in map order is the frontier. A declared pending input for
+the selected slice also holds a child back. Missing or malformed readiness
+declarations keep the existing selection rules but require preflight; closed
+blockers do not establish qualification or external-input availability.
+When nothing is ready, the
 open children that nothing blocks name what the map waits on. The report ends
 with checklist entries that disagree with the tracker: a tick against the
 live state, a checklist child that is not linked as a sub-issue (and so
@@ -41,7 +45,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       number title body
       subIssues(first: 100) {
         nodes {
-          number title state
+          number title body state
           assignees(first: 10) { nodes { login } }
           labels(first: 100) { nodes { name } }
           blockedBy(first: 50) { nodes { number state } }
@@ -54,6 +58,149 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 # A checklist line names its child first: "- [x] #580: Ratify ...".
 CHECKBOX = re.compile(r"^\s*[-*] \[([ xX])\] #(\d+)\b", re.MULTILINE)
+READINESS = re.compile(
+    r"- Selected slice: (?P<slice>[^\n]+)\n"
+    r"- Acceptance condition: (?P<acceptance>[^\n]+)\n"
+    r"### Slice inputs\n(?P<slice_inputs>.*?)\n"
+    r"### Completion inputs\n(?P<completion_inputs>.+)",
+    re.DOTALL,
+)
+INPUT_ITEM = re.compile(r"- \[([ xX])\] (\S.*)")
+SLICE_INPUTS = re.compile(r"(?:\A|\n)### Slice inputs\n(.*?)(?=\n#+ |\Z)", re.DOTALL)
+CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def markdown_list_content_indent(line: str) -> int | None:
+    marker = re.match(r"^ *[-*+] +", line)
+    return marker.end() if marker else None
+
+
+def markdown_code_fence(line: str, list_content_indent: int | None) -> re.Match[str] | None:
+    expanded = line.expandtabs(4)
+    marker = CODE_FENCE.fullmatch(expanded)
+    if marker is None and list_content_indent is not None and expanded.startswith(" " * list_content_indent):
+        marker = CODE_FENCE.fullmatch(expanded[list_content_indent:])
+    return marker
+
+
+@dataclass
+class MarkdownCodeFence:
+    character: str = ""
+    length: int = 0
+    content_indent: int = 0
+
+    def consume(self, line: str, list_content_indent: int | None) -> bool:
+        """Ignore fence contents only while their Markdown list container exists."""
+        indentation = len(line) - len(line.lstrip(" "))
+        if line.strip() and indentation < self.content_indent:
+            self.character = ""
+        marker = markdown_code_fence(line, list_content_indent)
+        if self.character:
+            if (
+                marker
+                and marker[1][0] == self.character
+                and len(marker[1]) >= self.length
+                and not marker[2].strip(" \t")
+            ):
+                self.character = ""
+            return True
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            self.character = marker[1][0]
+            self.length = len(marker[1])
+            self.content_indent = (
+                list_content_indent if list_content_indent and indentation >= list_content_indent else 0
+            )
+            return True
+        return False
+
+
+def readiness_sections(body: str) -> list[str]:
+    """Read declarations outside Markdown code, ending at the next peer heading."""
+    sections: list[list[str]] = []
+    current: list[str] | None = None
+    fence = MarkdownCodeFence()
+    list_content_indent: int | None = None
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        expanded = raw_line.expandtabs(4)
+        if fence.consume(expanded, list_content_indent):
+            continue
+        indentation = len(expanded) - len(expanded.lstrip(" "))
+        if indentation >= 4:
+            # Continuations within a Markdown list are not standalone code.
+            # Preserve them as malformed contract text, including any pending
+            # checkbox, rather than claiming their parent input is sufficient.
+            if current is not None and list_content_indent is not None and indentation < list_content_indent + 4:
+                current.append(expanded)
+                list_content_indent = markdown_list_content_indent(expanded) or list_content_indent
+            continue
+        list_content_indent = markdown_list_content_indent(raw_line) if line else list_content_indent
+        if line == "## Agent readiness":
+            current = []
+            sections.append(current)
+        elif re.match(r"^#{1,2}(?:\s|$)", line):
+            current = None
+        elif current is not None and line:
+            current.append(line)
+    return ["\n".join(section) for section in sections]
+
+
+def input_requirements(block: str) -> tuple[tuple[str, ...], bool]:
+    """Return declared pending inputs and whether every entry uses the contract."""
+    if block == "- None.":
+        return (), True
+    items = [INPUT_ITEM.fullmatch(line) for line in block.splitlines()]
+    pending_items = [INPUT_ITEM.fullmatch(line.lstrip()) for line in block.splitlines()]
+    pending = tuple(item[2] for item in pending_items if item and item[1] == " ")
+    return pending, bool(items) and all(items)
+
+
+@dataclass(frozen=True)
+class AgentReadiness:
+    selected_slice: str = ""
+    acceptance: str = ""
+    pending_slice_inputs: tuple[str, ...] = ()
+    pending_completion_inputs: tuple[str, ...] = ()
+    valid: bool = False
+
+    @classmethod
+    def from_body(cls, body: str) -> AgentReadiness:
+        sections = readiness_sections(body)
+        # A partial or duplicate declaration can still name a required pending
+        # input. Preserve that holdup even though the declaration needs preflight.
+        pending_slice = tuple(
+            item
+            for section in sections
+            for block in SLICE_INPUTS.findall(section)
+            for item in input_requirements(block)[0]
+        )
+        match = READINESS.fullmatch(sections[0]) if len(sections) == 1 else None
+        if match is None:
+            return cls(pending_slice_inputs=pending_slice)
+        _, slice_valid = input_requirements(match["slice_inputs"])
+        pending_completion, completion_valid = input_requirements(match["completion_inputs"])
+        return cls(
+            selected_slice=match["slice"],
+            acceptance=match["acceptance"],
+            pending_slice_inputs=pending_slice,
+            pending_completion_inputs=pending_completion,
+            valid=slice_valid and completion_valid,
+        )
+
+    def report_lines(self) -> list[str]:
+        if not self.valid:
+            return ["    readiness: unknown; needs preflight (missing or malformed Agent readiness)"]
+        completion = (
+            "pending: " + "; ".join(self.pending_completion_inputs)
+            if self.pending_completion_inputs
+            else "no declared pending inputs"
+        )
+        return [
+            f"    selected slice: {self.selected_slice}",
+            f"    acceptance condition: {self.acceptance}",
+            "    slice inputs: declared available or none required",
+            f"    completion inputs: {completion}",
+        ]
 
 
 @dataclass(frozen=True)
@@ -64,6 +211,7 @@ class Child:
     assignees: tuple[str, ...]
     labels: frozenset[str]
     open_blockers: tuple[int, ...]
+    readiness: AgentReadiness
 
     @classmethod
     def from_node(cls, node: dict) -> Child:
@@ -74,6 +222,7 @@ class Child:
             assignees=tuple(a["login"] for a in node["assignees"]["nodes"]),
             labels=frozenset(label["name"] for label in node["labels"]["nodes"]),
             open_blockers=tuple(b["number"] for b in node["blockedBy"]["nodes"] if b["state"] == "OPEN"),
+            readiness=AgentReadiness.from_body(node.get("body") or ""),
         )
 
     def holdup(self) -> str | None:
@@ -87,6 +236,8 @@ class Child:
             return f"claimed{owner}"
         if AGENT_LABEL not in self.labels:
             return f"not labelled {AGENT_LABEL}"
+        if self.readiness.pending_slice_inputs:
+            return "slice inputs pending: " + "; ".join(self.readiness.pending_slice_inputs)
         return None
 
     @property
@@ -146,14 +297,23 @@ def frontier_lines(children: tuple[Child, ...]) -> list[str]:
     lines = [f"  {len(open_children)} open, {len(children) - len(open_children)} closed"]
     ready = [child for child in open_children if child.ready]
     if ready:
-        lines.append(f"  frontier: #{ready[0].number} {ready[0].title}")
-        lines.extend(f"  also ready: #{child.number} {child.title}" for child in ready[1:])
+        for index, child in enumerate(ready):
+            prefix = "frontier" if index == 0 else "also ready"
+            lines.append(f"  {prefix}: #{child.number} {child.title}")
+            lines.extend(child.readiness.report_lines())
     else:
         lines.append("  frontier: none ready for an agent")
-        unblocked = [child for child in open_children if not child.open_blockers]
-        if unblocked:
-            lines.append("  unblocked but not ready:")
-            lines.extend(child.report_line() for child in unblocked)
+    unblocked = [
+        child
+        for child in open_children
+        if not child.open_blockers and (not ready or child.readiness.pending_slice_inputs)
+    ]
+    if unblocked:
+        lines.append("  unblocked but not ready:")
+        for child in unblocked:
+            lines.append(child.report_line())
+            if child.readiness.pending_slice_inputs and not child.readiness.valid:
+                lines.extend("  " + line for line in child.readiness.report_lines())
     blocked = [child for child in open_children if child.open_blockers]
     if blocked:
         lines.append("  blocked:")
