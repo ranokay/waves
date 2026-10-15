@@ -611,7 +611,7 @@ def test_wrapper_album_end_to_end_one_stack_one_probe_per_track(tmp_path, monkey
         fixture.write_bytes(b"alac")
         fixtures[f"song-{n}"] = fixture
     _fakes(monkeypatch)
-    monkeypatch.setattr(runner, "ensure_sidecar", lambda hooks, qid, job_abort, *, need_wrapper: True)
+    monkeypatch.setattr(runner, "ensure_sidecar", lambda hooks, qid, job_abort, *, need_wrapper, line="": True)
 
     stack_builds, fetched, probes, decodes = [], [], [], []
 

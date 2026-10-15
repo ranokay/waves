@@ -87,9 +87,10 @@ class _Stub(BridgeStub):
         arm_dispatch(self)
 
     # The row's status, recorded rather than delivered.
-    def _set_queue_status(self, qid, status, reason: str = "") -> None:
+    def _set_queue_status(self, qid, status, reason: str = "") -> bool:
         self._queue[0]["status"] = status
         self.statuses.append(status)
+        return True
 
     def _set_queue_progress(self, qid, pct) -> None:
         pass

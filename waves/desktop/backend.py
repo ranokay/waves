@@ -15115,10 +15115,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             status=lambda text: self._set_status(text),
             event=deliver_event,
             queue_status=lambda qid, status, reason="": self._set_queue_status(qid, status, reason),
-            move_unsettled_row=lambda qid, status, reason="": self._set_queue_status(
-                qid, status, reason, expect=("queued", "running")
-            ),
-            resume_held_row=lambda qid: self._set_queue_status(qid, "running", "", expect=("queued",)),
+            resume_held_row=lambda qid: self._set_queue_status(qid, "running", "", expect="queued"),
             queue_progress=lambda qid, pct: self._set_queue_progress(qid, pct),
             queue_item=lambda qid: self._queue_item(qid),
             queue_mark_changed=lambda qid: self._queue_mark_changed(qid),
@@ -15985,8 +15982,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # A captured destination can become unavailable before dispatch.
                 # Keep its retryable row; changing defaults never redirects it.
                 status = "cancelled" if job_abort.is_set() else "failed"
-                self._set_queue_status(qid, status, str(exc))
-                self.downloadState.emit(media_id, "" if job_abort.is_set() else "failed")
+                # A row a stop settled first keeps that stop's verdict.
+                failed = self._set_queue_status(qid, status, str(exc)) and status == "failed"
+                self.downloadState.emit(media_id, "failed" if failed else "")
                 self._bump_download_groups(media_id, None, "failed")
                 self._jobs.aborts.pop(qid, None)
                 self._release_job_signals(qid)
@@ -16017,6 +16015,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # progress timer keeps polling this dead job forever.
                 self._jobs.dls.pop(qid, None)
 
+            def stopped() -> None:
+                """A started run that ends as a stop, never as a success or
+                a failure: STOP landed, or a stop settled the row first."""
+                self.downloadState.emit(media_id, "")
+                self._set_queue_status(qid, "cancelled")
+                self._bump_download_groups(media_id, None, "failed")
+                self._set_status(f"Cancelled {name}")
+
             # Cancelled between being handed to the pool and picked up (STOP
             # in that instant).
             if job_abort.is_set():
@@ -16041,7 +16047,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         reason = verdict.message or "not available anymore"
                 logger.exception("Could not resolve the download target for %s", redaction.content(name))
                 self.downloadState.emit(media_id, "failed")
-                self._set_queue_status(qid, "failed", reason)
+                if not self._set_queue_status(qid, "failed", reason):
+                    # A stop settled the row while the target resolved.
+                    stopped_before_it_started()
+                    return
                 publish_event(
                     self,
                     provider_failure_event(
@@ -16164,10 +16173,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # status line read "Downloading ..." again, until the whole
             # collection had been enumerated and the job noticed the abort. To
             # the user, STOP simply did not stick.
-            if job_abort.is_set():
+            # A provider stop words the row cancelled before it sets this
+            # abort: the queue then refuses the start, and the job ends as
+            # that stop.
+            if job_abort.is_set() or not self._set_queue_status(qid, "running"):
                 stopped_before_it_started()
                 return
-            self._set_queue_status(qid, "running")
             # 0% BEFORE running, the order the folder and discography rollups
             # already use: the button's readout is visible from the running
             # frame, and its first real tick can be seconds out (a collection
@@ -16250,10 +16261,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         )
                 if job_abort.is_set():
                     # Cancelled mid-download, don't report success.
-                    self.downloadState.emit(media_id, "")
-                    self._set_queue_status(qid, "cancelled")
-                    self._bump_download_groups(media_id, None, "failed")
-                    self._set_status(f"Cancelled {name}")
+                    stopped()
                 else:
                     # Merge succeeded → the stashed plan (kept for a possible
                     # retry) is no longer needed; drop it.
@@ -16278,19 +16286,20 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self.downloadProgress.emit(media_id, 100.0)
                     self._set_queue_progress(qid, 100.0)
                     self.downloadState.emit(media_id, "done")
-                    self._set_queue_status(qid, "done")
-                    self._bump_download_groups(media_id, 100.0, "done")
-                    # The job finished; if TIDAL withheld part of it, the status
-                    # line says so rather than leaving the user to count the
-                    # files. The queue's own track rows name which ones.
-                    self._set_status(f"Finished {name}{_unavailable_note(dl.unavailable_count)}")
-                    devlog.done("download", f"done {type_media} id={media_id}", devlog.clock() - t0)
+                    if not self._set_queue_status(qid, "done"):
+                        # A stop settled the row while the run finished.
+                        stopped()
+                    else:
+                        self._bump_download_groups(media_id, 100.0, "done")
+                        # The job finished; if TIDAL withheld part of it, the
+                        # status line says so rather than leaving the user to
+                        # count the files. The queue's own track rows name
+                        # which ones.
+                        self._set_status(f"Finished {name}{_unavailable_note(dl.unavailable_count)}")
+                        devlog.done("download", f"done {type_media} id={media_id}", devlog.clock() - t0)
             except Exception as exc:
                 if job_abort.is_set():
-                    self.downloadState.emit(media_id, "")
-                    self._set_queue_status(qid, "cancelled")
-                    self._bump_download_groups(media_id, None, "failed")
-                    self._set_status(f"Cancelled {name}")
+                    stopped()
                 elif self._download_failed_with_folder(
                     lambda: self._download(
                         obj,
@@ -16330,7 +16339,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # exactly alike.
                     reason = str(exc) if isinstance(exc, DownloadIncomplete) else ""
                     self.downloadState.emit(media_id, "failed")
-                    self._set_queue_status(qid, "failed", reason)
+                    if not self._set_queue_status(qid, "failed", reason):
+                        # A stop settled the row while the run failed.
+                        stopped()
+                        return
                     publish_event(
                         self,
                         provider_failure_event(

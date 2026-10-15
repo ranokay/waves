@@ -208,11 +208,13 @@ def test_a_running_presentation_is_cleared_by_a_cancel_settle():
     assert item["reason"] == ""
 
 
-def test_a_settle_that_carries_words_still_replaces_them():
+def test_a_settle_that_carries_words_cannot_replace_the_stop_words():
+    # A run that failed inside the stop's window ends as the stop: the
+    # queue refuses the failed settle and the user reads why it stopped.
     item = {"qid": 3, "status": "cancelled", "reason": _REASON}
     stub = _status_stub(item)
 
-    stub._set_queue_status(3, "failed", "3 of 4 tracks failed")
+    assert stub._set_queue_status(3, "failed", "3 of 4 tracks failed") is False
 
-    assert item["status"] == "failed"
-    assert item["reason"] == "3 of 4 tracks failed"
+    assert item["status"] == "cancelled"
+    assert item["reason"] == _REASON

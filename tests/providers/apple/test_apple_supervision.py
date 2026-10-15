@@ -605,9 +605,10 @@ def _bridge_stub(**settings_overrides):
     stub._queue_index = {}
     stub._queue_item = lambda qid: stub._queue_index.get(qid)
 
-    def set_queue_status(qid, status, reason="", *, expect=()):
+    def set_queue_status(qid, status, reason="", *, expect=""):
         row = stub._queue_index.setdefault(int(qid), {})
-        if not expect or row.get("status") in expect:
+        row.setdefault("history", []).append(reason)
+        if not expect or row.get("status") == expect:
             row.update(status=status, reason=reason)
 
     stub._set_queue_status = set_queue_status
@@ -636,13 +637,29 @@ def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path, monkeypatch):
     assert slept == [30.0]
 
 
+@pytest.mark.parametrize("stopped", [False, True])
+def test_a_pacing_pause_that_ends_puts_the_job_line_back(monkeypatch, stopped):
+    from waves.providers.apple import runner
+
+    stub = _bridge_stub(apple_pacing_batch_size=25, apple_pacing_delay_sec=30.0)
+    lines: list[str] = []
+    stub._set_status = lines.append
+    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: not stopped)
+
+    resumed = runner.pace_if_due(stub._apple_job_hooks(), 26, Event(), 1, line="Downloading Album…")
+
+    assert resumed is not stopped
+    # A STOP mid-pause leaves the line to the stop's own settle.
+    assert lines == ["Pausing Apple downloads for 30s…"] + ([] if stopped else ["Downloading Album…"])
+
+
 def test_backend_throttle_wait_counts_down_and_respects_stop():
     stub = _bridge_stub()
-    stub._queue_index[7] = {"status": "running", "reason": ""}
     abort = Event()
     assert stub._apple_throttle_wait(7, 0.05, abort) is True
     row = stub._queue_index[7]
-    assert row["status"] == "running" and "Throttled" in row["reason"]
+    assert any("Throttled" in reason for reason in row["history"]), "the countdown showed on the row"
+    assert (row["status"], row["reason"]) == ("running", ""), "the countdown outlived its wait"
     abort2 = Event()
     abort2.set()
     assert stub._apple_throttle_wait(8, 30.0, abort2) is False

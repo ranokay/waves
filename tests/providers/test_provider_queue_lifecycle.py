@@ -392,7 +392,7 @@ def test_a_held_row_resumes_only_while_it_is_still_held():
 
     assert queue._stop_provider_queue("apple", "Apple Music was turned off") == 1
     for qid in (1, 2):
-        queue._set_queue_status(qid, "running", "", expect=("queued",))
+        queue._set_queue_status(qid, "running", "", expect="queued")
 
     assert queue._queue_index[1]["status"] == "cancelled"
     assert queue._queue_index[1]["reason"] == "Apple Music was turned off"
@@ -437,23 +437,34 @@ def test_a_worker_write_inside_a_provider_stop_keeps_the_stops_words(write):
     assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
 
 
-def test_a_job_that_starts_inside_a_provider_stop_keeps_the_stops_words(monkeypatch):
+@pytest.mark.parametrize("outcome", ["starts", "finishes", "fails"])
+def test_an_apple_job_inside_a_provider_stop_ends_as_that_stop(monkeypatch, outcome):
     queue = _Queue([_row(1, "apple:17")])
     queue._jobs.specs = {1: SimpleNamespace(provider_id="apple")}
     abort = queue._jobs.aborts[1] = Event()
     hooks = WavesBridge._apple_job_hooks(queue)
     hooks.gate_reachability = lambda retry, media_id="": True
+    hooks.download_failed_with_folder = lambda *args: False
     hooks.finish_job = lambda qid: None
-    running = Event()
-    failures: list[BaseException] = []
+    states: list[str] = []
+    bumps: list[tuple] = []
+    hooks.download_state = lambda media_id, state: states.append(state)
+    hooks.bump_groups = lambda *args: bumps.append(args)
+    fetching = Event()
+    ending = Event()
+    fetched: list[bool] = []
 
-    def run_until_the_abort(*args, job_abort, **kwargs) -> str:
-        running.set()
-        assert job_abort.wait(5)
+    def run(*args, job_abort, **kwargs) -> str:
+        fetched.append(True)
+        fetching.set()
+        assert ending.wait(5)
+        if outcome == "fails":
+            raise RuntimeError("synthetic fetch failure")
         return ""
 
-    monkeypatch.setattr(runner, "run_apple_job", run_until_the_abort)
+    monkeypatch.setattr(runner, "run_apple_job", run)
     spec = SimpleNamespace(kind="album", file_template="", collection=True, media_id="apple:17")
+    failures: list[BaseException] = []
 
     def body() -> None:
         try:
@@ -462,15 +473,51 @@ def test_a_job_that_starts_inside_a_provider_stop_keeps_the_stops_words(monkeypa
             failures.append(exc)
 
     worker = Thread(target=body)
-
-    def start_the_job() -> None:
-        # The worker has read its abort clear and writes its start.
+    if outcome != "starts":
         worker.start()
-        assert running.wait(5)
+        assert fetching.wait(5)
 
-    _stop_with_a_worker_inside(queue, start_the_job)
-    worker.join(5)
+    def the_job_moves() -> None:
+        # The worker read its abort clear: it starts, or its run ends, now.
+        if outcome == "starts":
+            worker.start()
+        ending.set()
+        worker.join(5)
+
+    _stop_with_a_worker_inside(queue, the_job_moves)
 
     assert not worker.is_alive() and failures == []
     row = queue._queue_index[1]
     assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
+    assert states[-1] == "", "the button reads idle, as after any stop"
+    assert bumps[-1] == ("apple:17", None, "failed")
+    if outcome == "starts":
+        assert fetched == [], "a refused start never fetches"
+    else:
+        assert queue.statuses[-1] == "Cancelled Album"
+
+
+@pytest.mark.parametrize(
+    "status,reason",
+    [
+        ("running", ""),
+        ("queued", "Held: the Apple runtime is not running."),
+        ("running", "Throttled: Apple is rate-limiting. Retrying now."),
+        ("done", ""),
+        ("failed", "1 of 3 tracks failed"),
+        ("cancelled", ""),
+        ("cancelled", "1 of 3 tracks downloaded"),
+    ],
+)
+def test_a_cancelled_row_keeps_its_words_against_any_later_write(status, reason):
+    queue = _Queue([_row(1, "apple:17", "running"), _row(2, "apple:18", "running")])
+    assert queue._set_queue_status(1, "cancelled", "Apple Music was turned off") is True
+
+    assert queue._set_queue_status(1, status, reason) is (status == "cancelled")
+
+    row = queue._queue_index[1]
+    assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
+    # A row no stop settled takes the same write, and a gone row takes none.
+    assert queue._set_queue_status(2, status, reason) is True
+    assert (queue._queue_index[2]["status"], queue._queue_index[2]["reason"]) == (status, reason)
+    assert queue._set_queue_status(99, status, reason) is False
