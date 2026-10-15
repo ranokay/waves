@@ -22,37 +22,61 @@ _SOXR_STDERR = [
 ]
 
 
-class _Sequence:
-    """A side_effect callable that runs the next scripted step on each call."""
-
-    def __init__(self, steps: list) -> None:
-        self._steps = iter(steps)
-
-    def __call__(self, *args, **kwargs):
-        return next(self._steps)()
-
-
-def _ffmpeg_runs(ffmpeg_mock: MagicMock, runs: list) -> _Sequence:
+def _ffmpeg_runs(ffmpeg_mock: MagicMock, runs: list[list[str] | None]):
     """Side effects for a mocked FFmpeg's execute, one per run.
 
     Each entry is None (the run succeeds) or the stderr lines of a failed run:
     they are fed to the handler the code registered with ``on("stderr", ...)``
     and the raised error carries only the last one, as python-ffmpeg does.
     """
+    steps = iter(runs)
 
-    def run(lines: list[str] | None):
-        def execute() -> None:
-            if lines is None:
-                return
-            for call in ffmpeg_mock.on.call_args_list:
-                if call.args[0] == "stderr":
-                    for line in lines:
-                        call.args[1](line)
-            raise FFmpegError(lines[-1], ["ffmpeg"])
+    def execute(*args, **kwargs) -> None:
+        lines = next(steps)
+        if lines is None:
+            return
+        for call in ffmpeg_mock.on.call_args_list:
+            if call.args[0] == "stderr":
+                for line in lines:
+                    call.args[1](line)
+        raise FFmpegError(lines[-1], ["ffmpeg"])
 
-        return execute
+    return execute
 
-    return _Sequence([run(lines) for lines in runs])
+
+def _downsample_attempts(download_instance: Download, source_path: pathlib.Path, runs: list) -> list[str]:
+    """Downsample a mocked 24/96 source toward 16/48 and return each run's filter."""
+    flac_mock = MagicMock()
+    flac_mock.info.sample_rate = 96000
+    flac_mock.info.bits_per_sample = 24
+    ffmpeg_mock = MagicMock()
+    ffmpeg_mock.option.return_value = ffmpeg_mock
+    ffmpeg_mock.input.return_value = ffmpeg_mock
+    ffmpeg_mock.output.return_value = ffmpeg_mock
+    ffmpeg_mock.execute.side_effect = _ffmpeg_runs(ffmpeg_mock, runs)
+    with (
+        patch("waves.download.FLAC", return_value=flac_mock),
+        patch("waves.download.FFmpeg", return_value=ffmpeg_mock),
+        patch.object(download_instance, "_move_file", return_value=True),
+    ):
+        download_instance._downsample_audio(source_path)
+    for call in ffmpeg_mock.output.call_args_list:
+        # Only the resampler filter varies between attempts.
+        assert {key: value for key, value in call.kwargs.items() if key not in ("url", "af")} == {
+            "acodec": "flac",
+            "map_metadata": "0",
+            "loglevel": "error",
+        }
+    return [call.kwargs["af"] for call in ffmpeg_mock.output.call_args_list]
+
+
+def _downsample_settings(path_binary_ffmpeg: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        data=SimpleNamespace(downsample_target=DownsampleTarget.BIT16_48, path_binary_ffmpeg=path_binary_ffmpeg),
+    )
+
+
+_SWR_16_48 = "aresample=resampler=swr:osr=48000:osf=s16:dither_method=triangular"
 
 
 @pytest.fixture(autouse=True)
@@ -246,53 +270,36 @@ def test_downsample_audio_falls_back_to_swr_when_soxr_fails(
     """The soxr attempt failing makes exactly one more attempt, on swr."""
     source_path = tmp_path / "source.flac"
     source_path.write_text("audio", encoding="utf-8")
-    download_instance.settings = SimpleNamespace(
-        data=SimpleNamespace(downsample_target=DownsampleTarget.BIT16_48, path_binary_ffmpeg="ffmpeg"),
-    )
-    flac_mock = MagicMock()
-    flac_mock.info.sample_rate = 96000
-    flac_mock.info.bits_per_sample = 24
-    ffmpeg_mock = MagicMock()
-    ffmpeg_mock.option.return_value = ffmpeg_mock
-    ffmpeg_mock.input.return_value = ffmpeg_mock
-    ffmpeg_mock.output.return_value = ffmpeg_mock
-    ffmpeg_mock.execute.side_effect = _ffmpeg_runs(ffmpeg_mock, [_SOXR_STDERR, None])
+    download_instance.settings = _downsample_settings("ffmpeg")
 
-    with (
-        patch("waves.download.FLAC", return_value=flac_mock),
-        patch("waves.download.FFmpeg", return_value=ffmpeg_mock),
-        patch.object(download_instance, "_move_file", return_value=True),
-    ):
-        download_instance._downsample_audio(source_path)
-
-    filters = [call.kwargs["af"] for call in ffmpeg_mock.output.call_args_list]
+    filters = _downsample_attempts(download_instance, source_path, [_SOXR_STDERR, None])
     assert len(filters) == 2
     assert filters[0].startswith("aresample=resampler=soxr:precision=33:osr=48000")
-    assert filters[1] == "aresample=resampler=swr:osr=48000:osf=s16:dither_method=triangular"
+    assert filters[1] == _SWR_16_48
 
     # The binary is now known to lack soxr: the next track spawns once, on swr.
-    ffmpeg_mock.output.reset_mock()
-    ffmpeg_mock.execute.side_effect = _ffmpeg_runs(ffmpeg_mock, [None])
-    with (
-        patch("waves.download.FLAC", return_value=flac_mock),
-        patch("waves.download.FFmpeg", return_value=ffmpeg_mock),
-        patch.object(download_instance, "_move_file", return_value=True),
-    ):
-        download_instance._downsample_audio(source_path)
-    filters = [call.kwargs["af"] for call in ffmpeg_mock.output.call_args_list]
-    assert filters == ["aresample=resampler=swr:osr=48000:osf=s16:dither_method=triangular"]
+    assert _downsample_attempts(download_instance, source_path, [None]) == [_SWR_16_48]
 
     # A different binary is asked afresh.
-    download_instance.settings.data.path_binary_ffmpeg = "/other/ffmpeg"
-    ffmpeg_mock.output.reset_mock()
-    ffmpeg_mock.execute.side_effect = _ffmpeg_runs(ffmpeg_mock, [None])
-    with (
-        patch("waves.download.FLAC", return_value=flac_mock),
-        patch("waves.download.FFmpeg", return_value=ffmpeg_mock),
-        patch.object(download_instance, "_move_file", return_value=True),
-    ):
-        download_instance._downsample_audio(source_path)
-    assert ffmpeg_mock.output.call_args_list[0].kwargs["af"].startswith("aresample=resampler=soxr")
+    download_instance.settings = _downsample_settings("/other/ffmpeg")
+    assert _downsample_attempts(download_instance, source_path, [None])[0].startswith("aresample=resampler=soxr")
+
+
+def test_downsample_audio_asks_a_binary_updated_in_place_afresh(
+    download_instance: Download, tmp_path: pathlib.Path
+) -> None:
+    """An update that replaces the binary at the same path may bring soxr."""
+    source_path = tmp_path / "source.flac"
+    source_path.write_text("audio", encoding="utf-8")
+    binary = tmp_path / "ffmpeg"
+    binary.write_bytes(b"build without soxr")
+    download_instance.settings = _downsample_settings(str(binary))
+
+    assert len(_downsample_attempts(download_instance, source_path, [_SOXR_STDERR, None])) == 2
+    assert _downsample_attempts(download_instance, source_path, [None]) == [_SWR_16_48]
+
+    binary.write_bytes(b"updated build carrying soxr")
+    assert _downsample_attempts(download_instance, source_path, [None])[0].startswith("aresample=resampler=soxr")
 
 
 def test_downsample_audio_other_failure_raises_without_a_second_run(
@@ -301,29 +308,14 @@ def test_downsample_audio_other_failure_raises_without_a_second_run(
     """Only a missing soxr moves on to swr; any other ffmpeg failure is the real one."""
     source_path = tmp_path / "source.flac"
     source_path.write_text("audio", encoding="utf-8")
-    download_instance.settings = SimpleNamespace(
-        data=SimpleNamespace(downsample_target=DownsampleTarget.BIT16_48, path_binary_ffmpeg="ffmpeg"),
-    )
-    flac_mock = MagicMock()
-    flac_mock.info.sample_rate = 96000
-    flac_mock.info.bits_per_sample = 24
-    ffmpeg_mock = MagicMock()
-    ffmpeg_mock.option.return_value = ffmpeg_mock
-    ffmpeg_mock.input.return_value = ffmpeg_mock
-    ffmpeg_mock.output.return_value = ffmpeg_mock
+    download_instance.settings = _downsample_settings("ffmpeg")
     disk_full = ["Error writing trailer: No space left on device"]
-    ffmpeg_mock.execute.side_effect = _ffmpeg_runs(ffmpeg_mock, [disk_full, None])
 
-    with (
-        patch("waves.download.FLAC", return_value=flac_mock),
-        patch("waves.download.FFmpeg", return_value=ffmpeg_mock),
-        patch.object(download_instance, "_move_file", return_value=True),
-        pytest.raises(FFmpegError, match="No space left on device"),
-    ):
-        download_instance._downsample_audio(source_path)
+    with pytest.raises(FFmpegError, match="No space left on device"):
+        _downsample_attempts(download_instance, source_path, [disk_full, None])
 
-    assert ffmpeg_mock.output.call_count == 1
-    assert not download_mod._soxr_known_missing("ffmpeg")
+    # That failure taught nothing about soxr: the next track still asks for it.
+    assert _downsample_attempts(download_instance, source_path, [None])[0].startswith("aresample=resampler=soxr")
 
 
 @pytest.mark.ffmpeg
@@ -374,10 +366,6 @@ def test_downsample_audio_real_ffmpeg_writes_a_sound_flac(
     pcm = run("-i", str(src), "-f", fmt, "-")
     assert info.md5_signature == int.from_bytes(hashlib.md5(pcm).digest(), "big")  # noqa: S324
     assert info.total_samples == len(pcm) // (2 * (target.bit_depth // 8))
-
-    # A build without soxr was recognised by its own error and remembered.
-    has_soxr = b"libsoxr" in run("-hide_banner", "-buildconf")
-    assert download_mod._soxr_known_missing(ffmpeg) is not has_soxr
 
 
 def test_move_file_fresh_destination_is_atomic_and_clean(

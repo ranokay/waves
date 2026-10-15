@@ -116,20 +116,34 @@ _SOXR_MISSING_MARKER = "requested resampling engine is unavailable"
 
 # The ffmpeg binaries known to lack soxr, so after the first track of a run
 # every later one goes straight to the built-in resampler instead of paying a
-# failing spawn first. Keyed by the binary's path: a changed ffmpeg setting is
-# asked afresh. Tracks downsample on several worker threads at once.
-_SOXR_MISSING: set[str] = set()
+# failing spawn first. Keyed by the binary itself: a changed ffmpeg setting, or
+# a binary an update replaced at the same path, is asked afresh. Tracks
+# downsample on several worker threads at once.
+_SOXR_MISSING: set[tuple] = set()
 _SOXR_MISSING_LOCK = Lock()
 
 
+def _ffmpeg_identity(ffmpeg: str) -> tuple:
+    """The binary behind an ffmpeg setting: its path plus the file's stat
+    identity, so an update in place reads as a different binary. A bare name
+    resolved on PATH has no file here to stat and is keyed by the name alone."""
+    try:
+        stat = os.stat(ffmpeg)
+    except OSError:
+        return (ffmpeg,)
+    return (ffmpeg, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
 def _soxr_known_missing(ffmpeg: str) -> bool:
+    key = _ffmpeg_identity(ffmpeg)
     with _SOXR_MISSING_LOCK:
-        return ffmpeg in _SOXR_MISSING
+        return key in _SOXR_MISSING
 
 
 def _note_soxr_missing(ffmpeg: str) -> None:
+    key = _ffmpeg_identity(ffmpeg)
     with _SOXR_MISSING_LOCK:
-        _SOXR_MISSING.add(ffmpeg)
+        _SOXR_MISSING.add(key)
 
 
 class UntaggableFile(OSError):
@@ -4928,8 +4942,8 @@ class Download:
         if depth_changing:
             filter_parts.append(f"osf={sample_fmt}")
             filter_parts.append("dither_method=triangular")
-        # soxr is asked for first. It is a build option, and the builds Waves
-        # installs (martin-riedl 9.x on macOS and Linux, Homebrew's 9.x) leave
+        # soxr is asked for first. It is a build option: the martin-riedl 9.x
+        # builds Waves installs on macOS and Linux, and Homebrew's 9.x, leave
         # it out, where ffmpeg fails the whole conversion with "Error
         # reinitializing filters". Only that failure moves on to ffmpeg's own
         # resampler, which every build carries, and a binary found without
@@ -4955,7 +4969,7 @@ class Download:
 
             for af in filters:
                 ffmpeg = (
-                    FFmpeg(executable=self.settings.data.path_binary_ffmpeg)
+                    FFmpeg(executable=path_ffmpeg)
                     .option("y")
                     .option("hide_banner")
                     .option("nostdin")
