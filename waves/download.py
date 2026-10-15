@@ -119,27 +119,28 @@ _SOXR_MISSING_MARKER = "requested resampling engine is unavailable"
 # failing spawn first. Keyed by the binary itself: a changed ffmpeg setting, or
 # a binary an update replaced at the same path, is asked afresh. Tracks
 # downsample on several worker threads at once.
-_SOXR_MISSING: set[tuple] = set()
+_SOXR_MISSING: set[tuple[str, int, int, int]] = set()
 _SOXR_MISSING_LOCK = Lock()
 
 
-def _ffmpeg_identity(ffmpeg: str) -> tuple:
-    """The binary behind an ffmpeg setting: its path plus the file's stat
-    identity, so an update in place reads as a different binary. A bare name
-    resolved on PATH has no file here to stat and is keyed by the name alone."""
+def _ffmpeg_identity(ffmpeg: str) -> tuple[str, int, int, int]:
+    """The binary behind an ffmpeg setting: its path plus the file's inode,
+    size and mtime, so an update in place reads as a different binary. A bare
+    name resolved on PATH has no file here to stat and is keyed by the name
+    alone, with zeros no real binary's inode carries."""
     try:
         stat = os.stat(ffmpeg)
     except OSError:
-        return (ffmpeg,)
+        return (ffmpeg, 0, 0, 0)
     return (ffmpeg, stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
 
-def _soxr_known_missing(binary: tuple) -> bool:
+def _soxr_known_missing(binary: tuple[str, int, int, int]) -> bool:
     with _SOXR_MISSING_LOCK:
         return binary in _SOXR_MISSING
 
 
-def _note_soxr_missing(binary: tuple) -> None:
+def _note_soxr_missing(binary: tuple[str, int, int, int]) -> None:
     with _SOXR_MISSING_LOCK:
         _SOXR_MISSING.add(binary)
 
