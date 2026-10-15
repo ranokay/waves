@@ -40,6 +40,71 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
 - **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint), and listed in the map body's checklist as `- [ ] #<n>: <title>`. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
 - **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). A `Blocked by: #<n>` line in the child body is a readable copy of those edges, never a replacement. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: `mise run frontier [map]` (`tools/wayfinder_frontier.py`, one GraphQL call per map). It prints the first open, unassigned `ready-for-agent` child whose blockers are all closed, in map order; when none is ready, the unblocked children holding the map up; and the checklist entries that disagree with the tracker (a tick against the live state, a checklist child that is not a sub-issue, or a sub-issue with no checklist row).
+- **Frontier query**: `mise run frontier [map]` (`tools/wayfinder_frontier.py`, one GraphQL call per map including child bodies). It prints the first open, unassigned `ready-for-agent` child whose blockers are all closed, in map order, skipping any child with a declared pending input for its selected slice. It reports those input holdups, remaining completion inputs, and unknown readiness that needs preflight. When none is ready, it names the unblocked children holding the map up. It also reports checklist entries that disagree with the tracker (a tick against the live state, a checklist child that is not a sub-issue, or a sub-issue with no checklist row).
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+
+### Agent readiness declarations
+
+A child may include an `## Agent readiness` section to bound the next
+implementation slice separately from completing the issue. Selection names a
+candidate for preflight. Closed dependencies establish the native blocker
+gate; qualification and approval require their own evidence. The frontier
+reads this declaration without writing issues or applying labels.
+
+Use this template with the exact labels, headings and order. Keep each field
+and input on one line. Blank lines are optional. Under each input heading,
+use either `- None.` alone or checkbox entries. A checked entry declares
+availability; an unchecked entry declares a pending input. The report does
+not verify checked entries. The section ends at the next level-one or
+level-two heading. Fenced examples are ignored.
+
+```markdown
+## Agent readiness
+
+- Selected slice: Implement the runtime registry with synthetic fixtures.
+- Acceptance condition: Registry behavior tests pass without claiming native qualification.
+
+### Slice inputs
+
+- None.
+
+### Completion inputs
+
+- [ ] Windows host for native qualification
+- [ ] Approved runtime artifact
+```
+
+This example permits the bounded implementation slice while reporting the
+host and artifact as pending completion inputs. Record checked slice inputs
+when fixtures or other external inputs are already available, for example
+`- [x] Synthetic runtime fixtures`.
+
+For a slice that performs the native probe itself, declare those inputs as
+requirements of the slice:
+
+```markdown
+## Agent readiness
+
+- Selected slice: Run the Windows native qualification probe.
+- Acceptance condition: Record the probe result for the approved artifact on Windows.
+
+### Slice inputs
+
+- [ ] Windows qualification host
+- [ ] Approved runtime artifact
+
+### Completion inputs
+
+- None.
+```
+
+The frontier reports the pending slice inputs and skips this child, even if
+its native blockers are closed. A missing, incomplete, duplicate or malformed
+declaration reports `readiness: unknown; needs preflight` and preserves the
+existing label, assignment and blocker selection rules. Recognizable pending
+slice inputs still hold a child back in an incomplete declaration. Before
+claiming a candidate, read the issue and confirm the selected slice, its
+acceptance condition and the availability of its required inputs. Put
+requirements for later qualification under completion inputs only when they
+are outside that slice.

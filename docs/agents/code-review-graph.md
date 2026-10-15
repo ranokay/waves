@@ -6,7 +6,10 @@ graph analysis. Locating code goes faster with `rg` and source reads.
 
 ## Procedure
 
-1. Check `list_graph_stats_tool`. If `head_matches_build` is false, run
+1. Pass the active checkout's absolute Git root as `repo_root` to scoped
+   graph calls. Check `list_graph_stats_tool`: its `head_sha` must match
+   `git rev-parse HEAD` in that checkout. A fresh graph of another checkout
+   does not establish freshness here. If `head_matches_build` is false, run
    `mise run graph` and check freshness again. A server started with
    `--auto-watch` re-indexes files as they change; semantic search is
    keyword fallback until embeddings are intentionally generated.
