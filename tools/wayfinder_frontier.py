@@ -70,12 +70,18 @@ SLICE_INPUTS = re.compile(r"(?:\A|\n)### Slice inputs\n(.*?)(?=\n#+ |\Z)", re.DO
 CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
+def markdown_list_content_indent(line: str) -> int | None:
+    marker = re.match(r"^ *[-*+] +", line)
+    return marker.end() if marker else None
+
+
 def readiness_sections(body: str) -> list[str]:
     """Read declarations outside Markdown code, ending at the next peer heading."""
     sections: list[list[str]] = []
     current: list[str] | None = None
     fence_char = ""
     fence_length = 0
+    list_content_indent: int | None = None
     for raw_line in body.splitlines():
         line = raw_line.strip()
         marker = CODE_FENCE.fullmatch(raw_line)
@@ -83,12 +89,21 @@ def readiness_sections(body: str) -> list[str]:
             if marker and marker[1][0] == fence_char and len(marker[1]) >= fence_length and not marker[2].strip(" \t"):
                 fence_char = ""
             continue
-        if raw_line.expandtabs(4).startswith("    "):
+        expanded = raw_line.expandtabs(4)
+        indentation = len(expanded) - len(expanded.lstrip(" "))
+        if indentation >= 4:
+            # Continuations within a Markdown list are not standalone code.
+            # Preserve them as malformed contract text, including any pending
+            # checkbox, rather than claiming their parent input is sufficient.
+            if current is not None and list_content_indent is not None and indentation < list_content_indent + 4:
+                current.append(expanded)
+                list_content_indent = markdown_list_content_indent(expanded) or list_content_indent
             continue
         if marker and not (marker[1][0] == "`" and "`" in marker[2]):
             fence_char = marker[1][0]
             fence_length = len(marker[1])
             continue
+        list_content_indent = markdown_list_content_indent(raw_line) if line else list_content_indent
         if line == "## Agent readiness":
             current = []
             sections.append(current)
@@ -104,7 +119,8 @@ def input_requirements(block: str) -> tuple[tuple[str, ...], bool]:
     if block == "- None.":
         return (), True
     items = [INPUT_ITEM.fullmatch(line) for line in block.splitlines()]
-    pending = tuple(item[2] for item in items if item and item[1] == " ")
+    pending_items = [INPUT_ITEM.fullmatch(line.lstrip()) for line in block.splitlines()]
+    pending = tuple(item[2] for item in pending_items if item and item[1] == " ")
     return pending, bool(items) and all(items)
 
 

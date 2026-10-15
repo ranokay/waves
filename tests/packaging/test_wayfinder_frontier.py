@@ -184,6 +184,38 @@ def test_indented_code_examples_do_not_add_readiness_requirements(indentation, f
     assert not any("Example artifact" in line or "readiness: unknown" in line for line in lines)
 
 
+@pytest.mark.parametrize("indentation", ["    ", "\t"])
+def test_a_pending_nested_input_is_not_discarded_as_an_indented_code_example(indentation):
+    module = _frontier_module()
+    body = _readiness(slice_inputs=f"- [x] Runtime downloaded\n{indentation}- [ ] License grant for runtime use")
+
+    lines = _report(module, _node(11, body=body), _node(12, body=_readiness()))
+
+    assert "  frontier: #12 Child 12" in lines
+    assert any("#11 slice inputs pending: License grant for runtime use" in line for line in lines)
+    assert any("readiness: unknown; needs preflight" in line for line in lines)
+
+
+def test_a_deeper_pending_nested_input_remains_a_holdup():
+    module = _frontier_module()
+    body = _readiness(slice_inputs="- [x] Runtime downloaded\n    - [x] Account selected\n        - [ ] License grant")
+
+    lines = _report(module, _node(11, body=body))
+
+    assert "  frontier: none ready for an agent" in lines
+    assert any("slice inputs pending: License grant" in line for line in lines)
+
+
+def test_indented_code_beneath_a_list_item_does_not_become_a_pending_input():
+    module = _frontier_module()
+    body = _readiness(slice_inputs="- [x] Runtime downloaded\n\n        - [ ] Example only")
+
+    lines = _report(module, _node(11, body=body))
+
+    assert "  frontier: #11 Child 11" in lines
+    assert not any("Example only" in line or "readiness: unknown" in line for line in lines)
+
+
 def test_a_pending_slice_input_still_blocks_an_incomplete_declaration():
     module = _frontier_module()
     body = "## Agent readiness\n### Slice inputs\n- [ ] Approved artifact"
