@@ -143,6 +143,31 @@ def test_malformed_readiness_keeps_legacy_selection_with_explicit_preflight(body
     assert not any("declared available" in line for line in lines)
 
 
+def test_a_shorter_backtick_fence_keeps_nested_readiness_examples_out_of_selection():
+    module = _frontier_module()
+    example = _readiness(slice_inputs="- [ ] Example artifact")
+    body = "````markdown\n```markdown\n" + example + "```\n````\n" + _readiness()
+
+    lines = _report(module, _node(11, body=body))
+
+    assert "  frontier: #11 Child 11" in lines
+    assert "    selected slice: Implement the runtime registry with synthetic fixtures." in lines
+    assert not any("Example artifact" in line or "readiness: unknown" in line for line in lines)
+
+
+@pytest.mark.parametrize("inner_line", ["~~~", "````", "~~~~ trailing text"])
+def test_a_tilde_fence_closes_only_on_a_long_enough_matching_run_without_text(inner_line):
+    module = _frontier_module()
+    example = _readiness(slice_inputs="- [ ] Example artifact")
+    body = "~~~~markdown\n" + inner_line + "\n" + example + "~~~~~   \n" + _readiness()
+
+    lines = _report(module, _node(11, body=body))
+
+    assert "  frontier: #11 Child 11" in lines
+    assert "    selected slice: Implement the runtime registry with synthetic fixtures." in lines
+    assert not any("Example artifact" in line or "readiness: unknown" in line for line in lines)
+
+
 def test_a_pending_slice_input_still_blocks_an_incomplete_declaration():
     module = _frontier_module()
     body = "## Agent readiness\n### Slice inputs\n- [ ] Approved artifact"

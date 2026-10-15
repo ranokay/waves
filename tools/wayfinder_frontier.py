@@ -67,20 +67,25 @@ READINESS = re.compile(
 )
 INPUT_ITEM = re.compile(r"- \[([ xX])\] (\S.*)")
 SLICE_INPUTS = re.compile(r"(?:\A|\n)### Slice inputs\n(.*?)(?=\n#+ |\Z)", re.DOTALL)
+CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def readiness_sections(body: str) -> list[str]:
     """Read declarations outside fenced examples, ending at the next peer heading."""
     sections: list[list[str]] = []
     current: list[str] | None = None
-    fence = ""
+    fence_char = ""
+    fence_length = 0
     for raw_line in body.splitlines():
         line = raw_line.strip()
-        marker = line[:3]
-        if marker in ("```", "~~~") and (not fence or marker == fence):
-            fence = "" if fence else marker
+        marker = CODE_FENCE.fullmatch(raw_line)
+        if fence_char:
+            if marker and marker[1][0] == fence_char and len(marker[1]) >= fence_length and not marker[2].strip(" \t"):
+                fence_char = ""
             continue
-        if fence:
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            fence_char = marker[1][0]
+            fence_length = len(marker[1])
             continue
         if line == "## Agent readiness":
             current = []
