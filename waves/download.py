@@ -25,7 +25,7 @@ from uuid import uuid4
 
 import m3u8
 import requests
-from ffmpeg import FFmpeg
+from ffmpeg import FFmpeg, FFmpegError
 from mutagen import MutagenError
 from mutagen.flac import FLAC
 from requests.adapters import Retry
@@ -108,6 +108,28 @@ logger = logging.getLogger("waves.download")
 # defaults; limit() records each job's real cap when its pool is built.
 SEGMENT_GAUGE = PoolGauge(10)
 COLLECTION_GAUGE = PoolGauge(3)
+
+# What libswresample prints when a build was made without the resampler an
+# aresample filter asks for (soxr is a build option). Only this error sends a
+# downsample to the built-in resampler; any other failure is the real one.
+_SOXR_MISSING_MARKER = "requested resampling engine is unavailable"
+
+# The ffmpeg binaries known to lack soxr, so after the first track of a run
+# every later one goes straight to the built-in resampler instead of paying a
+# failing spawn first. Keyed by the binary's path: a changed ffmpeg setting is
+# asked afresh. Tracks downsample on several worker threads at once.
+_SOXR_MISSING: set[str] = set()
+_SOXR_MISSING_LOCK = Lock()
+
+
+def _soxr_known_missing(ffmpeg: str) -> bool:
+    with _SOXR_MISSING_LOCK:
+        return ffmpeg in _SOXR_MISSING
+
+
+def _note_soxr_missing(ffmpeg: str) -> None:
+    with _SOXR_MISSING_LOCK:
+        _SOXR_MISSING.add(ffmpeg)
 
 
 class UntaggableFile(OSError):
@@ -4900,16 +4922,25 @@ class Download:
         # mostly equivalent to the redacted sox command but no clipping protection
         # `sox -S input.flac -R -G -b 16 output.flac rate -v -L 48000 dither`
         # i dont really know much about dithering methods but i trust those guys
-        filter_parts = ["resampler=soxr", "precision=33"]
+        filter_parts = []
         if rate_changing:
             filter_parts.append(f"osr={out_rate}")
         if depth_changing:
             filter_parts.append(f"osf={sample_fmt}")
             filter_parts.append("dither_method=triangular")
-        af = "aresample=" + ":".join(filter_parts)
+        # soxr is asked for first. It is a build option, and the builds Waves
+        # installs (martin-riedl 9.x on macOS and Linux, Homebrew's 9.x) leave
+        # it out, where ffmpeg fails the whole conversion with "Error
+        # reinitializing filters". Only that failure moves on to ffmpeg's own
+        # resampler, which every build carries, and a binary found without
+        # soxr goes straight there after.
+        path_ffmpeg = str(self.settings.data.path_binary_ffmpeg)
+        filter_swr = "aresample=" + ":".join(["resampler=swr", *filter_parts])
+        filters = [filter_swr]
+        if not _soxr_known_missing(path_ffmpeg):
+            filters.insert(0, "aresample=" + ":".join(["resampler=soxr", "precision=33", *filter_parts]))
 
         output_kwargs: dict = {
-            "af": af,
             "acodec": "flac",
             "map_metadata": "0",
             "loglevel": "error",
@@ -4922,15 +4953,32 @@ class Download:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_path_dir:
             path_out = pathlib.Path(tmp_path_dir) / path_file.name
 
-            ffmpeg = (
-                FFmpeg(executable=self.settings.data.path_binary_ffmpeg)
-                .option("y")
-                .option("hide_banner")
-                .option("nostdin")
-                .input(url=path_file)
-                .output(url=path_out, **output_kwargs)
-            )
-            ffmpeg.execute()
+            for af in filters:
+                ffmpeg = (
+                    FFmpeg(executable=self.settings.data.path_binary_ffmpeg)
+                    .option("y")
+                    .option("hide_banner")
+                    .option("nostdin")
+                    .input(url=path_file)
+                    .output(url=path_out, af=af, **output_kwargs)
+                )
+                # The error ffmpeg raises carries only its last stderr line
+                # ("Nothing was written..."), so the cause is read off the
+                # whole stream.
+                stderr_lines: list[str] = []
+                ffmpeg.on("stderr", stderr_lines.append)
+                try:
+                    ffmpeg.execute()
+                except FFmpegError:
+                    soxr_missing = af != filter_swr and any(
+                        _SOXR_MISSING_MARKER in line.lower() for line in stderr_lines
+                    )
+                    if not soxr_missing:
+                        raise
+                    _note_soxr_missing(path_ffmpeg)
+                    self.fn_logger.info("Downsample: this ffmpeg has no soxr resampler, using its built-in one.")
+                    continue
+                break
 
             if not self._move_file(path_out, path_file, overwrite=True):
                 self.fn_logger.error(f"Unable to replace downsampled file: {log_content(path_file)}")

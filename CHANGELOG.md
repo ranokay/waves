@@ -50,6 +50,7 @@ issue. A test enforces it.
 - 💾 Starting downloads while Waves saves your settings can no longer switch FLAC extraction and video conversion off in the saved settings or store an FFmpeg location from your computer in them, and Apple Music downloads keep the FFmpeg and ffprobe Waves installed instead of falling back to the ones on your system ([issue #667](https://github.com/ranokay/waves/issues/667)).
 - 🧹 Stopping an Apple Music download, signing out or turning Apple Music off now stops its download tool at once, and so does Waves quitting, crashing or being force-quit; the next launch removes the partial files a crashed Waves left in the temporary folder ([issue #660](https://github.com/ranokay/waves/issues/660)).
 - 🪟 On Windows, Apple Music no longer flashes a console window over Waves for every track it checks, or when it installs its download tool or starts, checks and stops its Docker or Podman container ([issue #672](https://github.com/ranokay/waves/issues/672)).
+- 🎚️ Downsampling works with the FFmpeg builds Waves installs: they ship without the soxr resampler, so every downsample failed its track with "Error reinitializing filters". FFmpeg's built-in resampler now takes over when soxr is missing ([issue #692](https://github.com/ranokay/waves/issues/692)).
 
 ## 🗂️ v0.1.32 (2026-09-28)
 
