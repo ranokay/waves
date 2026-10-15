@@ -508,7 +508,8 @@ def test_an_apple_job_inside_a_provider_stop_ends_as_that_stop(monkeypatch, outc
 
     _stop_with_a_worker_inside(queue, the_job_moves)
 
-    assert not job.worker.is_alive() and job.failures == []
+    assert not job.worker.is_alive()
+    assert job.failures == []
     row = queue._queue_index[1]
     assert (row["status"], row["reason"]) == ("cancelled", "Apple Music was turned off")
     assert job.states[-1] == "", "the button reads idle, as after any stop"

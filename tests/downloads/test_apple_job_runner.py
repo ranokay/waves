@@ -1822,7 +1822,8 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the session returns"
     assert waited == [True]
-    assert row.held and "cookies export" in row.held[0]
+    assert row.held
+    assert "cookies export" in row.held[0]
     assert retried_on == [{"status": "running", "reason": "", "line": _LINE}], "the retry ran under a Held row"
     assert stub._apple_session_expired is False, "a landed track lifts the marker"
     assert emitted, "the light re-reads on the failure and the recovery"
@@ -2028,7 +2029,8 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the guest returns"
     assert started_ports == ([1234] if failure_kind == "runtime" else [])
-    assert row.held and ("wrapper session" if failure_kind == "credential" else "not running") in row.held[0]
+    assert row.held
+    assert ("wrapper session" if failure_kind == "credential" else "not running") in row.held[0]
     assert retried_on == [{"status": "running", "reason": "", "line": _LINE}], "the retry ran under a Held row"
     assert getattr(stub, "_apple_session_expired", False) is False, "a landed track lifts the marker"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
@@ -2522,7 +2524,8 @@ def test_a_paused_queue_keeps_its_line_through_a_hold_and_its_resume():
     row.bind(hooks)
 
     runner.set_held(hooks, 1, "The wrapper tier has no port yet.")
-    assert row["status"] == "queued" and "no port yet" in row["reason"], "the held row carries its words"
+    assert row["status"] == "queued"
+    assert "no port yet" in row["reason"], "the held row carries its words"
     runner.resume_held(hooks, 1, line=_LINE)
 
     assert row.seen() == {"status": "running", "reason": "", "line": ""}, "a wait wrote over the paused line"

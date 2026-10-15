@@ -61,6 +61,48 @@ def _pending_provider(media_id: str) -> str:
     return provider_of_id(media_id)
 
 
+def _publish_status_events(bridge, qid: int, item: dict, status: str, reason: str) -> None:
+    """Raise or settle the download events a row's new status calls for,
+    each valid only while the row still has that status."""
+    media_id = str(item.get("media_id") or "")
+    refs = EventReferences(
+        provider_id=str(item.get("provider_id") or (provider_of_id(media_id) if media_id else "")),
+        job_id=qid,
+        media_id=media_id,
+    )
+
+    def current() -> bool:
+        row = bridge._queue_item(qid)
+        return row is not None and row.get("status") == status
+
+    if status == "failed":
+        report_failure(
+            bridge,
+            EventDomain.DOWNLOAD,
+            "Download failed. Open the logs for details.",
+            key=f"job:{qid}",
+            references=refs,
+            valid=current,
+            actions=(EventAction.RETRY_JOB, EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
+        )
+    elif status in {"queued", "done", "cancelled"} or (status == "running" and not reason):
+        resolve_events(bridge, EventDomain.DOWNLOAD, job_id=qid, valid=current)
+        if status == "done":
+            publish_event(
+                bridge,
+                application_event(
+                    EventDomain.DOWNLOAD,
+                    f"Finished {item.get('title') or item.get('name') or 'download'}",
+                    key=f"job:{qid}",
+                    code=EventCode.COMPLETED,
+                    severity=Severity.SUCCESS,
+                    references=refs,
+                    lifecycle=Lifecycle.RESOLVED,
+                ),
+                current,
+            )
+
+
 class QueueMixin:
     """Queue behavior for WavesBridge. See the module docstring."""
 
@@ -739,43 +781,7 @@ class QueueMixin:
                 return True
             item["status"] = status
             item["reason"] = reason
-        media_id = str(item.get("media_id") or "")
-        refs = EventReferences(
-            provider_id=str(item.get("provider_id") or (provider_of_id(media_id) if media_id else "")),
-            job_id=qid,
-            media_id=media_id,
-        )
-
-        def current() -> bool:
-            row = self._queue_item(qid)
-            return row is not None and row.get("status") == status
-
-        if status == "failed":
-            report_failure(
-                self,
-                EventDomain.DOWNLOAD,
-                "Download failed. Open the logs for details.",
-                key=f"job:{qid}",
-                references=refs,
-                valid=current,
-                actions=(EventAction.RETRY_JOB, EventAction.OPEN_LOGS, EventAction.COPY_DIAGNOSTICS),
-            )
-        elif status in {"queued", "done", "cancelled"} or (status == "running" and not reason):
-            resolve_events(self, EventDomain.DOWNLOAD, job_id=qid, valid=current)
-            if status == "done":
-                publish_event(
-                    self,
-                    application_event(
-                        EventDomain.DOWNLOAD,
-                        f"Finished {item.get('title') or item.get('name') or 'download'}",
-                        key=f"job:{qid}",
-                        code=EventCode.COMPLETED,
-                        severity=Severity.SUCCESS,
-                        references=refs,
-                        lifecycle=Lifecycle.RESOLVED,
-                    ),
-                    current,
-                )
+        _publish_status_events(self, qid, item, status, reason)
         self._queue_mark_changed(qid)
         self._emit_queue()
         return True

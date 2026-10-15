@@ -149,7 +149,7 @@ class _Stub(BridgeStub, QueueMixin):
 def _run(stop_lands: str) -> _Stub:
     stub = _Stub(stop_lands)
     spec = _JobSpec("tidal", "track", "tidal:m1", "Track", "{title}", False, "m1", None)
-    with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
+    with patch.object(backend, "_ProgressSignals", return_value=object()):
         WavesBridge._start_job(stub, 1, spec)
     return stub
 
@@ -175,7 +175,8 @@ def test_a_tidal_job_overtaken_by_a_provider_stop_ends_as_that_stop(stop_lands):
 def test_a_tidal_probe_hold_whose_row_a_clear_took_releases_its_hold():
     stub = _run("probe holds, row cleared")
 
-    assert stub._queue == [] and stub._pending_downloads == []
+    assert stub._queue == []
+    assert stub._pending_downloads == []
     assert stub.released == ["m1"], "the gone row's hold outlived it"
     assert stub.bumps[-1] == ("m1", None, "failed")
     assert stub.statuses[-1] == "Cancelled Track"
