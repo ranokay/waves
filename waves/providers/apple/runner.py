@@ -2054,8 +2054,12 @@ def deliver_track(
         # the sibling's audio while its record goes stale.
         dest = pathlib.Path(owned_path) if owned_path else exact
         dest.parent.mkdir(parents=True, exist_ok=True)
-    elif skip_existing and exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
-        raise _AppleSkipped()
+    elif exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
+        if skip_existing:
+            raise _AppleSkipped()
+        # "Skip existing" off fetches again and replaces this track's own copy
+        # in place (the placement re-proves it), never a numbered duplicate.
+        dest = exact
     else:
         dest = pick_destination(base, relative, guess_ext_value)
     attempt = 0
@@ -2130,14 +2134,12 @@ def deliver_track(
                     # stream's own answer (known by now): a file of the OTHER
                     # Version, or of a different track, at this name is not this
                     # fetch's copy.
-                    if (
-                        not force
-                        and skip_existing
-                        and exact_true.exists()
-                        and occupant_is_own(exact_true, {track_id}, delivered_version)
-                    ):
-                        raise _AppleSkipped()  # noqa: TRY301
-                    dest = pick_destination(base, relative, want_ext)
+                    if not force and exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
+                        if skip_existing:
+                            raise _AppleSkipped()  # noqa: TRY301
+                        dest = exact_true
+                    else:
+                        dest = pick_destination(base, relative, want_ext)
             verify_staged(hooks, staged, expect_atmos=atmos, verified_probe=carried_probe)
             if job_abort.is_set():
                 raise _AppleAborted()  # noqa: TRY301

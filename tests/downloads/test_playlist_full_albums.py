@@ -171,6 +171,12 @@ class _Stub(BridgeStub):
     def _merge_pref_on(self):
         return False
 
+    def _skip_existing_on(self):
+
+        # "Skip existing" on, its default: the bulk claim applies when armed.
+
+        return True
+
     def _library_bulk_skip_on(self):
         return self._bulk_skip
 

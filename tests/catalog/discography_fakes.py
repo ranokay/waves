@@ -134,6 +134,12 @@ class DiscoStub(BridgeStub):
         # Edition handling off here: these stubs exercise the source toggles.
         return False
 
+    def _skip_existing_on(self):
+
+        # "Skip existing" on, its default: the bulk claim applies when armed.
+
+        return True
+
     def _library_bulk_skip_on(self):
         # The bulk claim gate is off here, like a library-less install; its
         # own filtering is covered by tests/library/test_library_bridge.py.

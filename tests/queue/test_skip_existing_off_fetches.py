@@ -17,7 +17,6 @@ while the queue works through.
 
 from __future__ import annotations
 
-import inspect
 from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -280,9 +279,15 @@ def test_the_run_and_the_expanded_row_answer_alike(pinned):
     assert bool(marks) is pinned, marks
 
 
-def test_neither_reader_consults_the_live_setting():
-    """Both readers go through the row's pin."""
-    for name in ("_predict_skips", "_start_job"):
-        src = inspect.getsource(getattr(WavesBridge, name))
-        assert "_job_skip_existing(qid)" in src, f"{name} stopped reading the row's pin"
-        assert "settings.data.skip_existing" not in src, f"{name} went back to the live setting"
+@pytest.mark.parametrize("setting_on", [True, False])
+def test_a_captured_request_carries_the_setting_it_was_made_with(setting_on):
+    """The click-time snapshot holds Skip existing, so a request's row pins the
+    setting as it stood when the person clicked."""
+    from waves.model.cfg import Settings
+    from waves.model.download_policy import capture_intent
+
+    data = Settings()
+    data.skip_existing = setting_on
+    intent = capture_intent(data, "tidal", "album", "tidal:1", tier="LOSSLESS", audio_type=None, toggles={})
+    data.skip_existing = not setting_on
+    assert intent.skip_existing is setting_on

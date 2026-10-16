@@ -1141,6 +1141,43 @@ def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch
         assert len(provider.fetched) == 1
 
 
+def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkeypatch):
+    """#693: fetching again into the folder that holds this track's own copy
+    replaces it in place, never a numbered duplicate beside it."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    def run(qid, skip_existing):
+        hooks = stub._apple_job_hooks()
+        hooks.job_skip_existing = lambda qid: skip_existing
+        return runner.run_apple_job(
+            hooks,
+            qid,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    assert run(1, True) == ""
+    first = sorted(p.relative_to(base) for p in base.rglob("*.m4a"))
+    assert run(2, False) == ""
+
+    assert sorted(p.relative_to(base) for p in base.rglob("*.m4a")) == first
+    assert len(provider.fetched) == 2, "the second run fetched again"
+
+
 def test_the_rows_pin_beats_the_live_setting_for_an_apple_job(tmp_path):
     provider = _FakeProvider(fixture=None)
     stub = _bind(_stub(tmp_path / "lib", provider))

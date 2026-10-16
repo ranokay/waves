@@ -18438,7 +18438,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # fully claimed drops with its plan: the user has the album, so
             # there is nothing to assemble.
             skipped = 0
-            if self._library_bulk_skip_on():
+            # "Skip existing" off leaves nothing out: every track is fetched.
+            if self._library_bulk_skip_on() and self._skip_existing_on():
                 # One probe for the whole set before the gate is asked about a
                 # single album. The per-album probe is keyed by artist, so a
                 # discography pays once whatever its length; a playlist's
@@ -18507,7 +18508,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # is explicit); a discography queueing them is a bulk
                     # action, so the claim is applied here instead.
                     tkey = str(getattr(t, "id", id(t)))
-                    if self._library_bulk_skip_on() and self._library_claim_media(t, album=grel.get(tkey)):
+                    if (
+                        self._library_bulk_skip_on()
+                        and self._skip_existing_on()
+                        and self._library_claim_media(t, album=grel.get(tkey))
+                    ):
                         skipped += 1
                         continue
                     self._remember("track", tkey, t)
@@ -19422,7 +19427,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 else:
                     deduped = self._collapse_editions(deduped, stop_check=stop_check)
             skipped = 0
-            if self._library_bulk_skip_on():
+            # "Skip existing" off leaves nothing out: every track is fetched.
+            if self._library_bulk_skip_on() and self._skip_existing_on():
                 # One probe for the whole set before the gate is asked about a
                 # single album. The per-album probe is keyed by artist, so a
                 # discography pays once whatever its length; a playlist's
@@ -19790,7 +19796,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             skipped = 0
             keys: list[str] = []
             for track in objects:
-                if self._library_bulk_skip_on() and self._library_claim_media(track):
+                if self._library_bulk_skip_on() and self._skip_existing_on() and self._library_claim_media(track):
                     skipped += 1
                     continue
                 key = str(getattr(track, "id", id(track)))
@@ -19860,7 +19866,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 else:
                     deduped = self._collapse_editions(deduped, stop_check=stop_check)
             skipped = 0
-            if self._library_bulk_skip_on():
+            # "Skip existing" off leaves nothing out: every track is fetched.
+            if self._library_bulk_skip_on() and self._skip_existing_on():
                 # getattr, like the per-album gate below: partial test stubs
                 # bind the gate without the probe family.
                 probe_all = getattr(self, "_library_probe_sync_many", None)

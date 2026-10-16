@@ -350,7 +350,7 @@ class Settings(_JsonModel):
 class HelpSettings:
     skip_existing: str = (
         "Skip a track you already have: a file already at its name, or one Waves downloaded earlier "
-        "into your download or library folder. Turn off to download every track again."
+        "into your download or library folder. Turn off to download every track again, replacing a same-named file."
     )
     confirm_category_download: str = (
         "Ask before DOWNLOAD ALL queues a whole Browse playlist category or every track in My Tidal. "
