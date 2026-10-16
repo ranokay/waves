@@ -1136,9 +1136,12 @@ def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch
         assert summary == " (already downloaded)"
         assert provider.fetched == []
     else:
+        # The ledger is read only for where the own copy sits: in another
+        # folder it stays, and this job lands its own beside nothing.
         assert summary == ""
-        assert asked == [], "with the setting off the ownership gate is not consulted"
+        assert asked == ["apple:song-1"]
         assert len(provider.fetched) == 1
+        assert not Path("/music/Album Folder/Xtal.m4a").exists()
 
 
 def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkeypatch):
@@ -1176,6 +1179,56 @@ def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkey
 
     assert sorted(p.relative_to(base) for p in base.rglob("*.m4a")) == first
     assert len(provider.fetched) == 2, "the second run fetched again"
+
+
+def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monkeypatch):
+    """#693: when another track holds the template name, this track's own copy
+    sits at a numbered name; fetching again replaces that copy, never _02."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    stub = _bind(_stub(base, provider))
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    owned: list = []
+
+    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None):
+        return ("skip", {"path": str(owned[0])}) if owned else (None, None)
+
+    monkeypatch.setattr(runner, "gate_track", ledger)
+
+    def run(qid, skip_existing):
+        hooks = stub._apple_job_hooks()
+        hooks.job_skip_existing = lambda qid: skip_existing
+        return runner.run_apple_job(
+            hooks,
+            qid,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert run(1, True) == ""
+    first = sorted(p.name for p in base.rglob("*.m4a"))
+    assert first == ["Xtal.m4a", "Xtal_01.m4a"]
+    owned.append(base / "Aphex Twin" / "Xtal_01.m4a")
+    assert run(2, False) == ""
+    assert run(3, False) == ""
+
+    assert sorted(p.name for p in base.rglob("*.m4a")) == first
+    assert len(provider.fetched) == 3
+    assert stranger.is_file(), "the stranger's file is never replaced"
 
 
 def test_the_rows_pin_beats_the_live_setting_for_an_apple_job(tmp_path):

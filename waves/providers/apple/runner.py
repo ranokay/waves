@@ -2047,7 +2047,17 @@ def deliver_track(
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
-    if force:
+    # "Skip existing" off fetches again: a copy the ledger says this track owns
+    # in the folder this job writes to is replaced in place, as REDOWNLOAD
+    # does, while one in another folder stays and the job lands its own.
+    owned_here = bool(
+        not force
+        and not skip_existing
+        and owned_path
+        and pathlib.Path(owned_path).parent == exact.parent
+        and pathlib.Path(owned_path).exists()
+    )
+    if force or owned_here:
         # Overwrite the copy THIS track owns, not the template path: two
         # distinct tracks can render to one relative name (the second owns
         # the _01 suffixed file), and the template path would overwrite
@@ -2124,7 +2134,7 @@ def deliver_track(
             # check both read it, exactly as the tag write does.
             delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
             if dest.suffix != want_ext:
-                if force and owned_path:
+                if (force or owned_here) and owned_path:
                     owned = pathlib.Path(owned_path)
                     dest = owned.with_suffix(want_ext) if owned.suffix != want_ext else owned
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -2170,7 +2180,9 @@ def deliver_track(
             # its overwrite right; every other placement replaces only a proven
             # own copy and otherwise steps aside to a numbered name.
             try:
-                placed = place_file(staged, dest, overwrite=force, occupant_is_own=_occupant_is_this_items_own)
+                placed = place_file(
+                    staged, dest, overwrite=force or owned_here, occupant_is_own=_occupant_is_this_items_own
+                )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
                     placed = place_file(staged, dest, occupant_is_own=_occupant_is_this_items_own)
@@ -2670,13 +2682,13 @@ def run_apple_job(
                 "expected": expected_word,
             }
         )
-        # With "Skip existing" off nothing owned skips: the track fetches
-        # whatever the ledger holds elsewhere (REDOWNLOAD still forces).
-        verdict, gate_rec = (
-            gate_track(hooks, provider, track_id, requested_rank, force, audio_type=job_atype)
-            if force or skip_existing
-            else (None, None)
-        )
+        verdict, gate_rec = gate_track(hooks, provider, track_id, requested_rank, force, audio_type=job_atype)
+        if not skip_existing and not force:
+            # With "Skip existing" off nothing owned skips: the track fetches
+            # whatever the ledger holds. The record still tells the placement
+            # where this track's own copy sits, so one in this job's folder is
+            # replaced instead of numbered beside.
+            verdict = None
         if verdict == "skip":
             skipped += 1
             signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
