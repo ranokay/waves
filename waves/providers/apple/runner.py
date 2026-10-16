@@ -2048,14 +2048,18 @@ def deliver_track(
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
     # "Skip existing" off fetches again: a copy the ledger says this track owns
-    # in the folder this job writes to is replaced in place, as REDOWNLOAD
-    # does, while one in another folder stays and the job lands its own.
+    # in the folder this job writes to is replaced in place, while one in
+    # another folder stays and the job lands its own. The ledger only proves
+    # the file exists, so the occupant must still read as this track's Version
+    # (an untagged own copy passes; another item or Version does not), and the
+    # swap re-proves it.
     owned_here = bool(
         not force
         and not skip_existing
         and owned_path
         and pathlib.Path(owned_path).parent == exact.parent
         and pathlib.Path(owned_path).exists()
+        and occupant_is_own(pathlib.Path(owned_path), {track_id}, version_hint)
     )
     if force or owned_here:
         # Overwrite the copy THIS track owns, not the template path: two
@@ -2134,7 +2138,7 @@ def deliver_track(
             # check both read it, exactly as the tag write does.
             delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
             if dest.suffix != want_ext:
-                if (force or owned_here) and owned_path:
+                if force and owned_path:
                     owned = pathlib.Path(owned_path)
                     dest = owned.with_suffix(want_ext) if owned.suffix != want_ext else owned
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -2174,6 +2178,12 @@ def deliver_track(
                     return False
                 return read_item_id(path_occupied) == track_id
 
+            def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
+                """The swap re-proof for the copy the ledger names in this folder:
+                the gate's rule, where an absent id passes (the copy whose tag
+                write failed) and another item or Version does not."""
+                return occupant_is_own(path_occupied, {track_id}, version)
+
             # The destination name was picked before the fetch, and the fetch
             # runs seconds to minutes: a same-named stranger written in that
             # window must not be replaced (DL-03). A forced re-download keeps
@@ -2181,7 +2191,16 @@ def deliver_track(
             # own copy and otherwise steps aside to a numbered name.
             try:
                 placed = place_file(
-                    staged, dest, overwrite=force or owned_here, occupant_is_own=_occupant_is_this_items_own
+                    staged,
+                    dest,
+                    overwrite=force,
+                    # The lenient re-proof covers only the ledger's own path; a
+                    # destination the extension moved elsewhere proves its id.
+                    occupant_is_own=(
+                        _occupant_is_owned_here
+                        if owned_here and dest == pathlib.Path(str(owned_path))
+                        else _occupant_is_this_items_own
+                    ),
                 )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
