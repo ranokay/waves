@@ -1098,6 +1098,60 @@ def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
     assert summary == ""
 
 
+@pytest.mark.parametrize("skip_existing", [True, False])
+def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch, skip_existing):
+    """#693: with the row's "Skip existing" off, a copy the ownership ledger
+    holds in another folder no longer skips the track; on, it still does."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    asked = []
+
+    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None):
+        asked.append(track_id)
+        return "skip", {"path": "/music/Album Folder/Xtal.m4a"}
+
+    monkeypatch.setattr(runner, "gate_track", owned_elsewhere)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: skip_existing
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    if skip_existing:
+        assert summary == " (already downloaded)"
+        assert provider.fetched == []
+    else:
+        assert summary == ""
+        assert asked == [], "with the setting off the ownership gate is not consulted"
+        assert len(provider.fetched) == 1
+
+
+def test_the_rows_pin_beats_the_live_setting_for_an_apple_job(tmp_path):
+    provider = _FakeProvider(fixture=None)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.settings().data.skip_existing = True
+    hooks.job_skip_existing = lambda qid: False
+    assert runner.job_skip_existing(hooks, 1) is False
+    hooks.job_skip_existing = None
+    assert runner.job_skip_existing(hooks, 1) is True
+
+
 def test_album_job_reports_a_partial_shortfall(tmp_path):
     provider = _FakeProvider(fixture=None)
 
@@ -1140,6 +1194,7 @@ def _entry_stub(base: Path, provider, cookies: Path | None):
     stub.statuses = []
     stub._set_status = stub.statuses.append
     stub._enqueue = lambda *a, **k: WavesBridge._enqueue(stub, *a, **k)
+    stub._skip_existing_on = lambda: True  # "Skip existing" on, its default
     stub._emit_queue = lambda: None
     stub._pump_queue = lambda: None
     stub._download_gate = lambda: "ok"

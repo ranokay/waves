@@ -538,6 +538,7 @@ def _body_stub(fail=False):
     s._download_gate = lambda: "ok"
     s._ffmpeg_gate_holds = lambda media_id, retry: False
     s._job_library_skip = lambda qid: False
+    s._job_skip_existing = lambda qid: True
     s._gate_reachability = lambda retry, media_id: True
     # The job's abort rides along now: the helper probes for seconds before it
     # takes its hold, and a press landing in there has to reach it.

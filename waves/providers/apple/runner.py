@@ -241,6 +241,8 @@ class AppleJobHooks:
     tag_write_flags: Callable[[], dict] = _empty_dict
     job_quality: Callable[[int], Any] = _quality_none
     job_audio_type: Callable[[int], Any] = _quality_none
+    # The row's pinned "Skip existing"; None reads the job's settings.
+    job_skip_existing: Callable[[int], bool] | None = None
     ownership: Callable[[], Any] = _none
     redownload_overrides: Callable[[], set] = _empty_set
     library_claim_overrides: Callable[[], set] = _empty_set
@@ -1719,6 +1721,19 @@ def resume_held(hooks: AppleJobHooks, qid: int, *, line: str = "") -> None:
     say(hooks, line)
 
 
+def job_skip_existing(hooks: AppleJobHooks, qid: int) -> bool:
+    """Whether this job skips what you already have, as its queue row pinned
+    it (the TIDAL job's own gate reads the same pin). Without the hook, or a
+    hook that fails, the job's settings answer."""
+    pinned = hooks.job_skip_existing
+    if pinned is not None:
+        try:
+            return bool(pinned(int(qid)))
+        except Exception:
+            logger.debug("Apple Skip existing pin unreadable; reading the setting", exc_info=True)
+    return bool(getattr(hooks.settings().data, "skip_existing", True))
+
+
 def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
     """Hold an Apple row with one clear message (presentation, not a state).
 
@@ -2016,6 +2031,7 @@ def deliver_track(
         facts_isrc=str(facts.get("isrc") or ""),
     )
     data = hooks.settings().data
+    skip_existing = job_skip_existing(hooks, qid)
     base = pathlib.Path(str(data.download_base_path)).expanduser()
     # Lossless stereo lands as FLAC; the true extension is
     # only known after the fetch, so guess here and correct per attempt
@@ -2038,7 +2054,7 @@ def deliver_track(
         # the sibling's audio while its record goes stale.
         dest = pathlib.Path(owned_path) if owned_path else exact
         dest.parent.mkdir(parents=True, exist_ok=True)
-    elif data.skip_existing and exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
+    elif skip_existing and exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
         raise _AppleSkipped()
     else:
         dest = pick_destination(base, relative, guess_ext_value)
@@ -2116,7 +2132,7 @@ def deliver_track(
                     # fetch's copy.
                     if (
                         not force
-                        and data.skip_existing
+                        and skip_existing
                         and exact_true.exists()
                         and occupant_is_own(exact_true, {track_id}, delivered_version)
                     ):
@@ -2516,6 +2532,7 @@ def run_apple_job(
     if job_version not in ("stereo", "atmos"):
         job_version = "stereo"
     ask_tier = hooks.job_quality(qid)
+    skip_existing = job_skip_existing(hooks, qid)
     requested_rank = target_rank(hooks, ask_tier)
     if ask_tier is None:
         # A row that pinned nothing (legacy or unreadable) fetches at the
@@ -2651,7 +2668,13 @@ def run_apple_job(
                 "expected": expected_word,
             }
         )
-        verdict, gate_rec = gate_track(hooks, provider, track_id, requested_rank, force, audio_type=job_atype)
+        # With "Skip existing" off nothing owned skips: the track fetches
+        # whatever the ledger holds elsewhere (REDOWNLOAD still forces).
+        verdict, gate_rec = (
+            gate_track(hooks, provider, track_id, requested_rank, force, audio_type=job_atype)
+            if force or skip_existing
+            else (None, None)
+        )
         if verdict == "skip":
             skipped += 1
             signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})

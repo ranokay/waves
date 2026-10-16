@@ -110,6 +110,12 @@ class _Stub(BridgeStub):
     def _download_gate(self) -> str:
         return "ok"
 
+    def _job_skip_existing(self, qid: int) -> bool:
+        return True
+
+    def _skip_existing_on(self) -> bool:
+        return True
+
     def _job_library_skip(self, qid: int) -> bool:
         # The claim gate this row pinned when it was queued. Off, so the delay
         # is all these tests are looking at.
