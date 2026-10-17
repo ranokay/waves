@@ -67,6 +67,7 @@ class _Stub(BridgeStub):
     _queue_item = WavesBridge._queue_item
     _set_queue_status = WavesBridge._set_queue_status
     _job_library_skip = WavesBridge._job_library_skip
+    _job_skip_existing = WavesBridge._job_skip_existing
     _job_quality = WavesBridge._job_quality
     _queued_quality_value = WavesBridge._queued_quality_value
     _target_tier = WavesBridge._target_tier
@@ -116,6 +117,10 @@ class _Stub(BridgeStub):
         self._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
         arm_dispatch(self)
         self.built: list[dict] = []
+
+    def _skip_existing_on(self) -> bool:
+        """ "Skip existing" on, its default."""
+        return True
 
     def _library_bulk_skip_on(self) -> bool:
         """The LIVE setting: the thing a queued row may consult exactly once,

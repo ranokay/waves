@@ -110,6 +110,7 @@ def _bridge(**over):
     b._download_gate = lambda: "ok"
     b._ffmpeg_gate_holds = lambda *a, **k: False
     b._library_bulk_skip_on = lambda: False
+    b._skip_existing_on = lambda: True  # "Skip existing" on, its default
     b._stash_pending_download = lambda mid, fn: None
     b._jobs.tracks = {}
     b._jobs.objs = {}

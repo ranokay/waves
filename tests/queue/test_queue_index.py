@@ -56,6 +56,7 @@ def _stub():
     # And likewise the library-skip gate a row pins for its job (see
     # test_queue_row_pins_the_library_skip.py).
     stub._library_bulk_skip_on = lambda: True
+    stub._skip_existing_on = lambda: True  # "Skip existing" on, its default
     stub._jobs.aborts = {}
     stub._merge_plans = {}
     stub._merge_plans_unbound = {}

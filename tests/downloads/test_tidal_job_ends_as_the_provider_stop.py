@@ -127,6 +127,10 @@ class _Stub(BridgeStub, QueueMixin):
     def _set_queue_progress(self, qid, pct) -> None:
         pass
 
+    # "Skip existing" on, its default: these jobs gate as before.
+    _job_skip_existing = staticmethod(lambda qid: True)
+    _skip_existing_on = staticmethod(lambda: True)
+
     def _job_library_skip(self, qid: int) -> bool:
         return False
 

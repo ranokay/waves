@@ -241,6 +241,8 @@ class AppleJobHooks:
     tag_write_flags: Callable[[], dict] = _empty_dict
     job_quality: Callable[[int], Any] = _quality_none
     job_audio_type: Callable[[int], Any] = _quality_none
+    # The row's pinned "Skip existing"; None reads the job's settings.
+    job_skip_existing: Callable[[int], bool] | None = None
     ownership: Callable[[], Any] = _none
     redownload_overrides: Callable[[], set] = _empty_set
     library_claim_overrides: Callable[[], set] = _empty_set
@@ -1719,6 +1721,38 @@ def resume_held(hooks: AppleJobHooks, qid: int, *, line: str = "") -> None:
     say(hooks, line)
 
 
+def _same_folder(first: pathlib.Path, second: pathlib.Path) -> bool:
+    """Whether two folder spellings name one folder: the ledger records absolute
+    paths, while the configured download root may be relative, a symlink or a
+    case variant."""
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _file_identity(path: pathlib.Path) -> tuple[int, int, int, int] | None:
+    """A file's stat identity (device, inode, size, mtime), or None when it is gone."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def job_skip_existing(hooks: AppleJobHooks, qid: int) -> bool:
+    """Whether this job skips what you already have, as its queue row pinned
+    it (the TIDAL job's own gate reads the same pin). Without the hook, or a
+    hook that fails, the job's settings answer."""
+    pinned = hooks.job_skip_existing
+    if pinned is not None:
+        try:
+            return bool(pinned(int(qid)))
+        except Exception:
+            logger.debug("Apple Skip existing pin unreadable; reading the setting", exc_info=True)
+    return bool(getattr(hooks.settings().data, "skip_existing", True))
+
+
 def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
     """Hold an Apple row with one clear message (presentation, not a state).
 
@@ -2016,6 +2050,7 @@ def deliver_track(
         facts_isrc=str(facts.get("isrc") or ""),
     )
     data = hooks.settings().data
+    skip_existing = job_skip_existing(hooks, qid)
     base = pathlib.Path(str(data.download_base_path)).expanduser()
     # Lossless stereo lands as FLAC; the true extension is
     # only known after the fetch, so guess here and correct per attempt
@@ -2031,15 +2066,36 @@ def deliver_track(
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
-    if force:
+    # "Skip existing" off fetches again: a copy the ledger says this track owns
+    # in the folder this job writes to is replaced in place, while one in
+    # another folder stays and the job lands its own. The ledger only proves
+    # the file exists, so the occupant must still read as this track's Version
+    # (an untagged own copy passes; another item or Version does not), and the
+    # swap re-proves it.
+    owned_here = bool(
+        not force
+        and not skip_existing
+        and owned_path
+        and pathlib.Path(owned_path).exists()
+        and _same_folder(pathlib.Path(owned_path).parent, exact.parent)
+        and occupant_is_own(pathlib.Path(owned_path), {track_id}, version_hint)
+    )
+    # What the swap compares an untagged occupant against: the very file
+    # checked here, so a song moved into the name meanwhile is not replaced.
+    owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here else None
+    if force or owned_here:
         # Overwrite the copy THIS track owns, not the template path: two
         # distinct tracks can render to one relative name (the second owns
         # the _01 suffixed file), and the template path would overwrite
         # the sibling's audio while its record goes stale.
         dest = pathlib.Path(owned_path) if owned_path else exact
         dest.parent.mkdir(parents=True, exist_ok=True)
-    elif data.skip_existing and exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
-        raise _AppleSkipped()
+    elif exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
+        if skip_existing:
+            raise _AppleSkipped()
+        # "Skip existing" off fetches again and replaces this track's own copy
+        # in place (the placement re-proves it), never a numbered duplicate.
+        dest = exact
     else:
         dest = pick_destination(base, relative, guess_ext_value)
     attempt = 0
@@ -2114,14 +2170,12 @@ def deliver_track(
                     # stream's own answer (known by now): a file of the OTHER
                     # Version, or of a different track, at this name is not this
                     # fetch's copy.
-                    if (
-                        not force
-                        and data.skip_existing
-                        and exact_true.exists()
-                        and occupant_is_own(exact_true, {track_id}, delivered_version)
-                    ):
-                        raise _AppleSkipped()  # noqa: TRY301
-                    dest = pick_destination(base, relative, want_ext)
+                    if not force and exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
+                        if skip_existing:
+                            raise _AppleSkipped()  # noqa: TRY301
+                        dest = exact_true
+                    else:
+                        dest = pick_destination(base, relative, want_ext)
             verify_staged(hooks, staged, expect_atmos=atmos, verified_probe=carried_probe)
             if job_abort.is_set():
                 raise _AppleAborted()  # noqa: TRY301
@@ -2146,13 +2200,36 @@ def deliver_track(
                     return False
                 return read_item_id(path_occupied) == track_id
 
+            def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
+                """The swap re-proof for the copy the ledger names in this folder:
+                a tagged occupant must be this track's delivered Version; an
+                untagged one (a copy whose tag write failed) only the very file
+                checked before the fetch, never another song moved into its name."""
+                if not occupant_is_version(path_occupied, version):
+                    return False
+                occupant_id = read_item_id(path_occupied)
+                if occupant_id:
+                    return occupant_id == track_id
+                return owned_identity is not None and _file_identity(path_occupied) == owned_identity
+
             # The destination name was picked before the fetch, and the fetch
             # runs seconds to minutes: a same-named stranger written in that
             # window must not be replaced (DL-03). A forced re-download keeps
             # its overwrite right; every other placement replaces only a proven
             # own copy and otherwise steps aside to a numbered name.
             try:
-                placed = place_file(staged, dest, overwrite=force, occupant_is_own=_occupant_is_this_items_own)
+                placed = place_file(
+                    staged,
+                    dest,
+                    overwrite=force,
+                    # The lenient re-proof covers only the ledger's own path; a
+                    # destination the extension moved elsewhere proves its id.
+                    occupant_is_own=(
+                        _occupant_is_owned_here
+                        if owned_here and dest == pathlib.Path(str(owned_path))
+                        else _occupant_is_this_items_own
+                    ),
+                )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
                     placed = place_file(staged, dest, occupant_is_own=_occupant_is_this_items_own)
@@ -2516,6 +2593,7 @@ def run_apple_job(
     if job_version not in ("stereo", "atmos"):
         job_version = "stereo"
     ask_tier = hooks.job_quality(qid)
+    skip_existing = job_skip_existing(hooks, qid)
     requested_rank = target_rank(hooks, ask_tier)
     if ask_tier is None:
         # A row that pinned nothing (legacy or unreadable) fetches at the
@@ -2652,6 +2730,12 @@ def run_apple_job(
             }
         )
         verdict, gate_rec = gate_track(hooks, provider, track_id, requested_rank, force, audio_type=job_atype)
+        if not skip_existing and not force:
+            # With "Skip existing" off nothing owned skips: the track fetches
+            # whatever the ledger holds. The record still tells the placement
+            # where this track's own copy sits, so one in this job's folder is
+            # replaced instead of numbered beside.
+            verdict = None
         if verdict == "skip":
             skipped += 1
             signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
