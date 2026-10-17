@@ -2032,16 +2032,12 @@ def deliver_track(
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
     # The copy a forced placement (an upgrade, or a copy whose tag write
-    # failed) replaces: the one its ownership record names. An explicit
-    # REDOWNLOAD reads no record (gate_track) and replaces the template name.
+    # failed) replaces: the one its ownership record names, picked per
+    # attempt below. An explicit REDOWNLOAD reads no record (gate_track) and
+    # replaces the template name.
     recorded = pathlib.Path(owned_path) if force and owned_path else None
     if force:
-        # Overwrite the copy THIS track owns, not the template path: two
-        # distinct tracks can render to one relative name (the second owns
-        # the _01 suffixed file), and the template path would overwrite
-        # the sibling's audio while its record goes stale.
-        dest = recorded if recorded is not None else exact
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest = exact
     elif data.skip_existing and exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
         raise _AppleSkipped()
     else:
@@ -2107,10 +2103,51 @@ def deliver_track(
             # by now): the extension gate below and the place-time ownership
             # check both read it, exactly as the tag write does.
             delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
-            # A forced placement with a record picks its destination below,
-            # once the stream has answered.
-            if recorded is None and dest.suffix != want_ext:
-                exact_true = base / f"{relative}{want_ext}"
+
+            def _occupant_is_this_items_own(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
+                """Whether the occupant is this track's delivered Version.
+
+                The skip gate's two readers (item id + Version) with the move's
+                rule on an unreadable id: unknown is a stranger here, because a
+                Finder copy is untagged and may not be replaced. The TIDAL move
+                asks the same positive question
+                (waves.download.Download._already_landed_here). The ``version``
+                default binds this attempt's delivered Version.
+
+                The one exception is the copy a forced placement's ownership
+                record names, which answers the skip gate's rule: an absent id
+                passes there (this track wrote it and its tag write failed),
+                while another item's id or the other Version still fails. The
+                record cannot settle it alone: it proves a file exists at its
+                path, not that the file is still this track's.
+                """
+                if path_occupied == recorded:
+                    return occupant_is_own(path_occupied, {track_id}, version)
+                if not occupant_is_version(path_occupied, version):
+                    return False
+                return read_item_id(path_occupied) == track_id
+
+            exact_true = base / f"{relative}{want_ext}"
+            if recorded is not None:
+                # Overwrite the copy THIS track owns, not the template path: two
+                # distinct tracks can render to one relative name (the second
+                # owns the _01 suffixed file), and the template path would
+                # overwrite the sibling's audio while its record goes stale.
+                # The recorded name is taken at the delivered extension (FLAC
+                # moves it) while it is free or holds this track's delivered
+                # Version (an Atmos ask on a stereo-only track delivers stereo).
+                # Failing that, this track's own copy at the template name is
+                # replaced; otherwise the placement steps aside to a numbered
+                # name.
+                recorded_dest = recorded.with_suffix(want_ext)
+                if not recorded_dest.exists() or _occupant_is_this_items_own(recorded_dest):
+                    dest = recorded_dest
+                elif exact_true.exists() and _occupant_is_this_items_own(exact_true):
+                    dest = exact_true
+                else:
+                    dest = pick_destination(base, relative, want_ext)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+            elif dest.suffix != want_ext:
                 # Same Version-and-id gate as the pre-stream skip, with the
                 # stream's own answer (known by now): a file of the OTHER
                 # Version, or of a different track, at this name is not this
@@ -2132,44 +2169,6 @@ def deliver_track(
                 # The converted file lands outside the provider's workdir,
                 # which discard_delivery removes below.
                 staged, flac_tmpdir = extract_flac(hooks, staged)
-
-            def _occupant_is_this_items_own(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
-                """Whether the occupant PROVES it is this track's delivered Version.
-
-                The skip gate's two readers (item id + Version) with the move's
-                rule on an unreadable id: unknown is a stranger here, because a
-                Finder copy is untagged and may not be replaced. The TIDAL move
-                asks the same positive question
-                (waves.download.Download._already_landed_here). The ``version``
-                default binds this attempt's delivered Version.
-
-                The copy a forced placement's ownership record names is the one
-                exception: the record vouches for it, so it answers the skip
-                gate's rule, where an absent id passes (its tag write failed)
-                and another item's id or the other Version does not. The record
-                only proves that a file exists at its path, not whose it is now.
-                """
-                if path_occupied == recorded:
-                    return occupant_is_own(path_occupied, {track_id}, version)
-                if not occupant_is_version(path_occupied, version):
-                    return False
-                return read_item_id(path_occupied) == track_id
-
-            if recorded is not None:
-                # Picked with the Version and extension these bytes are: an
-                # Atmos ask on a stereo-only track delivers stereo, and FLAC
-                # moves the copy to the recorded name's .flac twin. Failing
-                # that, this track's own copy at the template name is replaced,
-                # and anything else steps aside to a numbered name.
-                twin = recorded.with_suffix(want_ext)
-                exact_true = base / f"{relative}{want_ext}"
-                if not twin.exists() or _occupant_is_this_items_own(twin):
-                    dest = twin
-                elif exact_true.exists() and _occupant_is_this_items_own(exact_true):
-                    dest = exact_true
-                else:
-                    dest = pick_destination(base, relative, want_ext)
-                dest.parent.mkdir(parents=True, exist_ok=True)
 
             # The destination name was picked before the fetch, and the fetch
             # runs seconds to minutes: a same-named stranger written in that

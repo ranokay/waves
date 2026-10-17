@@ -1611,11 +1611,16 @@ def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
     assert done["path"] == str(owned)
 
 
-def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path, provider_cls=None, **settings):
+def _run_forced_upgrade(
+    tmp_path,
+    monkeypatch,
+    recorded: Path,
+    provider_cls: type[_FakeProvider] = _FakeProvider,
+    default_audio_type: str = "stereo",
+):
     """Run the one-track job as an upgrade of the copy the ownership record
     names at ``recorded``: the gate answers "force" with that record, and
-    "Skip existing" is on. ``settings`` override the job's settings.
-    Returns (summary, relay)."""
+    "Skip existing" is on. Returns (summary, relay)."""
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
@@ -1623,12 +1628,11 @@ def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path, provider_cls=None
     )
     staged = tmp_path / "staged.m4a"
     _tone(staged)
-    provider = (provider_cls or _FakeProvider)(fixture=staged)
+    provider = provider_cls(fixture=staged)
     monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(recorded)}))
     stub = _bind(_stub(tmp_path / "lib", provider))
     stub.settings.data.skip_existing = True
-    for key, value in settings.items():
-        setattr(stub.settings.data, key, value)
+    stub.settings.data.default_audio_type = default_audio_type
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
@@ -1722,17 +1726,34 @@ def test_a_forced_upgrade_asked_as_atmos_replaces_the_stereo_only_tracks_own_cop
 
 
 @pytest.mark.ffmpeg
-def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
-    """An own .m4a whose forced re-fetch lands as FLAC does not take the
-    .flac name a sibling already holds."""
+def test_a_forced_upgrade_never_replaces_the_other_versions_copy_at_the_recorded_name(tmp_path, monkeypatch):
+    """A legacy stereo row whose whole-track record names the Dolby Atmos copy
+    leaves that copy alone and lands its stereo copy beside it."""
+    import mutagen.mp4
+
+    from waves.metadata.tags import read_file_audio_type
+
+    atmos = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    atmos.parent.mkdir(parents=True)
+    _tone(atmos)
+    _write_item_id(atmos, "apple:song-1")
+    handle = mutagen.mp4.MP4(str(atmos))
+    handle["----:com.apple.iTunes:WAVES_AUDIO_TYPE"] = [b"atmos"]
+    handle.save()
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=atmos)
+
+    assert summary == ""
+    assert read_file_audio_type(atmos) == "atmos"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(atmos.with_name("Xtal_01.m4a"))
+
+
+def _deliver_as_flac(tmp_path, monkeypatch) -> None:
+    """Every fetch lands as FLAC: lossless mode, with the extraction a real
+    ffmpeg transcode of the staged file."""
     import tempfile
 
-    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
-    own.parent.mkdir(parents=True)
-    _tone(own)
-    _write_item_id(own, "apple:song-1")
-    sibling = own.with_suffix(".flac")
-    sibling.write_bytes(b"SIBLING-FLAC-BYTES")
     monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
     monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
     monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
@@ -1744,6 +1765,36 @@ def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tm
         return out, workdir
 
     monkeypatch.setattr(runner, "extract_flac", extract)
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_that_lands_as_flac_takes_the_recorded_name(tmp_path, monkeypatch):
+    """An own .m4a whose forced re-fetch lands as FLAC takes the recorded
+    name at .flac while that name is free."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    _deliver_as_flac(tmp_path, monkeypatch)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_suffix(".flac"))
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
+    """An own .m4a whose forced re-fetch lands as FLAC does not take the
+    .flac name a sibling already holds."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = own.with_suffix(".flac")
+    sibling.write_bytes(b"SIBLING-FLAC-BYTES")
+    _deliver_as_flac(tmp_path, monkeypatch)
 
     summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
 
