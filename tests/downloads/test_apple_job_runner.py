@@ -1611,6 +1611,174 @@ def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
     assert done["path"] == str(owned)
 
 
+def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path):
+    """Run the one-track job as an upgrade of the copy the ledger records at
+    ``recorded``: the gate answers "force" with that record, and "Skip
+    existing" is on. Returns (summary, relay)."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(recorded)}))
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    stub.settings.data.skip_existing = True
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, relay
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_path, monkeypatch):
+    """#704: the ledger proves only that its path exists. A sibling that took
+    the recorded name after this track's copy went keeps its file."""
+    from waves.metadata.tags import read_item_id
+
+    sibling = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    _tone(sibling)
+    _write_item_id(sibling, "apple:other-song")
+    before = sibling.read_bytes()
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=sibling)
+
+    assert summary == ""
+    assert sibling.read_bytes() == before
+    landed = sibling.with_name("Xtal_01.m4a")
+    assert read_item_id(landed) == "apple:song-1"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(landed)
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_with_a_stale_record_replaces_the_own_copy_at_the_template_name(tmp_path, monkeypatch):
+    """#704: when a sibling holds the recorded name, this track's own copy at
+    the template name is the one the upgrade replaces, never a third file."""
+    base = tmp_path / "lib"
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = own.with_name("Xtal_01.m4a")
+    _tone(sibling)
+    _write_item_id(sibling, "apple:other-song")
+    before = sibling.read_bytes()
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=sibling)
+
+    assert summary == ""
+    assert sibling.read_bytes() == before
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
+    """#704: an own .m4a whose forced re-fetch lands as FLAC does not take the
+    .flac name a sibling already holds."""
+    import tempfile
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = own.with_suffix(".flac")
+    sibling.write_bytes(b"SIBLING-FLAC-BYTES")
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
+    monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
+    monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
+
+    def extract(hooks, staged):
+        workdir = tempfile.mkdtemp(dir=tmp_path)
+        out = Path(workdir) / "x.flac"
+        subprocess.run([_ffmpeg(), "-y", "-v", "error", "-i", str(staged), "-c:a", "flac", str(out)], check=True)  # noqa: S603 (fixed argv: local fixture)
+        return out, workdir
+
+    monkeypatch.setattr(runner, "extract_flac", extract)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sibling.read_bytes() == b"SIBLING-FLAC-BYTES"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_name("Xtal_01.flac"))
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_reproves_the_recorded_copy_at_the_swap(tmp_path, monkeypatch):
+    """#704: the recorded copy passes the gate, then a sibling takes the name
+    during the fetch. The swap asks again and leaves the sibling's file."""
+    from waves.metadata.tags import read_item_id
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(own)}))
+
+    def sibling_takes_the_name(dest: Path, call: int) -> None:
+        if call == 0:
+            _write_item_id(dest, "apple:other-song")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, sibling_takes_the_name)
+
+    assert summary == ""
+    assert read_item_id(own) == "apple:other-song"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+
+
+@pytest.mark.ffmpeg
+def test_redownload_still_replaces_the_copy_at_the_template_name(tmp_path, monkeypatch):
+    """#704: an explicit REDOWNLOAD reads no ledger record and keeps its right
+    to replace the copy at the template name in place."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"stale-copy")
+    stub = _bind(_stub(base, provider, _redownload_overrides={"apple:song-1"}))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert own.stat().st_size != len(b"stale-copy")
+    assert not own.with_name("Xtal_01.m4a").exists()
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
 def _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, on_place):
     """Run the one-track job while a writer strikes the picked destination.
 

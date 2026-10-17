@@ -2031,13 +2031,34 @@ def deliver_track(
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
-    if force:
+
+    def _forced_destination(recorded: pathlib.Path, ext: str, version: str | None) -> pathlib.Path:
+        """Where a forced placement off the ledger's record lands.
+
+        The ledger only proves a file exists at the recorded path, not whose
+        it is now: that file is the destination only while it still reads as
+        this track's Version (an untagged own copy passes; another item or
+        Version does not). Otherwise this track's own copy at the template
+        name is, and anything else steps aside to a numbered name.
+        """
+        if not recorded.exists() or occupant_is_own(recorded, {track_id}, version):
+            return recorded
+        exact_ext = base / f"{relative}{ext}"
+        if exact_ext.exists() and occupant_is_own(exact_ext, {track_id}, version):
+            return exact_ext
+        return pick_destination(base, relative, ext)
+
+    if force and owned_path:
         # Overwrite the copy THIS track owns, not the template path: two
         # distinct tracks can render to one relative name (the second owns
         # the _01 suffixed file), and the template path would overwrite
         # the sibling's audio while its record goes stale.
-        dest = pathlib.Path(owned_path) if owned_path else exact
+        dest = _forced_destination(pathlib.Path(owned_path), guess_ext_value, version_hint)
         dest.parent.mkdir(parents=True, exist_ok=True)
+    elif force:
+        # An explicit REDOWNLOAD reads no ledger record (gate_track) and
+        # replaces the copy at the template name.
+        dest = exact
     elif data.skip_existing and exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
         raise _AppleSkipped()
     else:
@@ -2105,8 +2126,9 @@ def deliver_track(
             delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
             if dest.suffix != want_ext:
                 if force and owned_path:
-                    owned = pathlib.Path(owned_path)
-                    dest = owned.with_suffix(want_ext) if owned.suffix != want_ext else owned
+                    dest = _forced_destination(
+                        pathlib.Path(owned_path).with_suffix(want_ext), want_ext, delivered_version
+                    )
                     dest.parent.mkdir(parents=True, exist_ok=True)
                 else:
                     exact_true = base / f"{relative}{want_ext}"
@@ -2146,13 +2168,32 @@ def deliver_track(
                     return False
                 return read_item_id(path_occupied) == track_id
 
+            def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
+                """The swap re-proof for the copy the ledger records: the
+                destination gate's rule, where an absent id passes (the copy
+                whose tag write failed) and another item or Version does not."""
+                return occupant_is_own(path_occupied, {track_id}, version)
+
             # The destination name was picked before the fetch, and the fetch
             # runs seconds to minutes: a same-named stranger written in that
-            # window must not be replaced (DL-03). A forced re-download keeps
-            # its overwrite right; every other placement replaces only a proven
-            # own copy and otherwise steps aside to a numbered name.
+            # window must not be replaced (DL-03). An explicit REDOWNLOAD keeps
+            # its overwrite right; the ledger's recorded copy is replaced only
+            # while it still reads as this track's; every other placement
+            # replaces only a proven own copy. Each steps aside to a numbered
+            # name otherwise.
             try:
-                placed = place_file(staged, dest, overwrite=force, occupant_is_own=_occupant_is_this_items_own)
+                placed = place_file(
+                    staged,
+                    dest,
+                    overwrite=force and not owned_path,
+                    # The lenient re-proof covers only the ledger's own path; a
+                    # destination the extension moved elsewhere proves its id.
+                    occupant_is_own=(
+                        _occupant_is_owned_here
+                        if force and owned_path and dest == pathlib.Path(owned_path)
+                        else _occupant_is_this_items_own
+                    ),
+                )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
                     placed = place_file(staged, dest, occupant_is_own=_occupant_is_this_items_own)
