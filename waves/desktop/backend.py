@@ -2747,6 +2747,12 @@ def _bulk_gate_artist_names(albums, plans) -> list[str]:
     return out
 
 
+def _bulk_claim_on(bridge) -> bool:
+    """Whether a bulk download may leave out what the library scan claims: its
+    own preference on, and "Skip existing" on (off fetches every track)."""
+    return bridge._library_bulk_skip_on() and bridge._skip_existing_on()
+
+
 def _credit_fav_artist(bridge, artist_id: str, pct, state) -> None:
     """Settle one artist inside the fav:artists rollup: progress while its
     discography runs, done/failed when its group does (a discography that
@@ -18438,8 +18444,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # fully claimed drops with its plan: the user has the album, so
             # there is nothing to assemble.
             skipped = 0
-            # "Skip existing" off leaves nothing out: every track is fetched.
-            if self._library_bulk_skip_on() and self._skip_existing_on():
+            if _bulk_claim_on(self):
                 # One probe for the whole set before the gate is asked about a
                 # single album. The per-album probe is keyed by artist, so a
                 # discography pays once whatever its length; a playlist's
@@ -18508,11 +18513,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # is explicit); a discography queueing them is a bulk
                     # action, so the claim is applied here instead.
                     tkey = str(getattr(t, "id", id(t)))
-                    if (
-                        self._library_bulk_skip_on()
-                        and self._skip_existing_on()
-                        and self._library_claim_media(t, album=grel.get(tkey))
-                    ):
+                    if _bulk_claim_on(self) and self._library_claim_media(t, album=grel.get(tkey)):
                         skipped += 1
                         continue
                     self._remember("track", tkey, t)
@@ -19427,8 +19428,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 else:
                     deduped = self._collapse_editions(deduped, stop_check=stop_check)
             skipped = 0
-            # "Skip existing" off leaves nothing out: every track is fetched.
-            if self._library_bulk_skip_on() and self._skip_existing_on():
+            if _bulk_claim_on(self):
                 # One probe for the whole set before the gate is asked about a
                 # single album. The per-album probe is keyed by artist, so a
                 # discography pays once whatever its length; a playlist's
@@ -19796,7 +19796,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             skipped = 0
             keys: list[str] = []
             for track in objects:
-                if self._library_bulk_skip_on() and self._skip_existing_on() and self._library_claim_media(track):
+                if _bulk_claim_on(self) and self._library_claim_media(track):
                     skipped += 1
                     continue
                 key = str(getattr(track, "id", id(track)))
@@ -19866,8 +19866,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 else:
                     deduped = self._collapse_editions(deduped, stop_check=stop_check)
             skipped = 0
-            # "Skip existing" off leaves nothing out: every track is fetched.
-            if self._library_bulk_skip_on() and self._skip_existing_on():
+            if _bulk_claim_on(self):
                 # getattr, like the per-album gate below: partial test stubs
                 # bind the gate without the probe family.
                 probe_all = getattr(self, "_library_probe_sync_many", None)

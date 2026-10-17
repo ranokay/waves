@@ -1300,6 +1300,46 @@ def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monk
     assert len(provider.fetched) == 1
 
 
+def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path, monkeypatch):
+    """A copy whose tag write failed is still this track's: unchanged since the
+    check, it is replaced in place rather than numbered beside."""
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a"]
+    assert len(provider.fetched) == 1
+
+
+def test_skip_existing_off_never_replaces_a_song_moved_in_during_the_fetch(tmp_path, monkeypatch):
+    """The untagged copy checked before the fetch is gone by the swap: another
+    untagged song took its name meanwhile, and keeps it."""
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    other = tmp_path / "other.m4a"
+    _tone(other)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+    deliver = provider.resolve_stream
+
+    def swap_in_another_song(raw, tier, audio_type):
+        own.unlink()
+        shutil.copy(other, own)
+        return deliver(raw, tier, audio_type)
+
+    provider.resolve_stream = swap_in_another_song
+
+    assert _skip_off_run(stub) == ""
+
+    assert own.read_bytes() == other.read_bytes(), "the song moved in keeps its name"
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+
+
 @pytest.mark.ffmpeg
 def test_skip_existing_off_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
     """An own .m4a whose re-fetch lands as FLAC does not take the .flac name a

@@ -215,11 +215,9 @@ class _JobStub(BridgeStub):
     def _set_status(self, msg) -> None:
         pass
 
-    def _job_skip_existing(self, qid: int) -> bool:
-        return True
-
-    def _skip_existing_on(self) -> bool:
-        return True
+    # "Skip existing" on, its default: these jobs gate as before.
+    _job_skip_existing = staticmethod(lambda qid: True)
+    _skip_existing_on = staticmethod(lambda: True)
 
     def _job_library_skip(self, qid: int) -> bool:
         return False

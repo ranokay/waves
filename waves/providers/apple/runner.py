@@ -1721,6 +1721,15 @@ def resume_held(hooks: AppleJobHooks, qid: int, *, line: str = "") -> None:
     say(hooks, line)
 
 
+def _file_identity(path: pathlib.Path) -> tuple[int, int, int, int] | None:
+    """A file's stat identity (device, inode, size, mtime), or None when it is gone."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
 def job_skip_existing(hooks: AppleJobHooks, qid: int) -> bool:
     """Whether this job skips what you already have, as its queue row pinned
     it (the TIDAL job's own gate reads the same pin). Without the hook, or a
@@ -2061,6 +2070,9 @@ def deliver_track(
         and pathlib.Path(owned_path).exists()
         and occupant_is_own(pathlib.Path(owned_path), {track_id}, version_hint)
     )
+    # What the swap compares an untagged occupant against: the very file
+    # checked here, so a song moved into the name meanwhile is not replaced.
+    owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here else None
     if force or owned_here:
         # Overwrite the copy THIS track owns, not the template path: two
         # distinct tracks can render to one relative name (the second owns
@@ -2180,9 +2192,15 @@ def deliver_track(
 
             def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
                 """The swap re-proof for the copy the ledger names in this folder:
-                the gate's rule, where an absent id passes (the copy whose tag
-                write failed) and another item or Version does not."""
-                return occupant_is_own(path_occupied, {track_id}, version)
+                a tagged occupant must be this track's delivered Version; an
+                untagged one (a copy whose tag write failed) only the very file
+                checked before the fetch, never another song moved into its name."""
+                if not occupant_is_version(path_occupied, version):
+                    return False
+                occupant_id = read_item_id(path_occupied)
+                if occupant_id:
+                    return occupant_id == track_id
+                return owned_identity is not None and _file_identity(path_occupied) == owned_identity
 
             # The destination name was picked before the fetch, and the fetch
             # runs seconds to minutes: a same-named stranger written in that
