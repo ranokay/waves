@@ -1721,6 +1721,16 @@ def resume_held(hooks: AppleJobHooks, qid: int, *, line: str = "") -> None:
     say(hooks, line)
 
 
+def _same_folder(first: pathlib.Path, second: pathlib.Path) -> bool:
+    """Whether two folder spellings name one folder: the ledger records absolute
+    paths, while the configured download root may be relative, a symlink or a
+    case variant."""
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
 def _file_identity(path: pathlib.Path) -> tuple[int, int, int, int] | None:
     """A file's stat identity (device, inode, size, mtime), or None when it is gone."""
     try:
@@ -2066,8 +2076,8 @@ def deliver_track(
         not force
         and not skip_existing
         and owned_path
-        and pathlib.Path(owned_path).parent == exact.parent
         and pathlib.Path(owned_path).exists()
+        and _same_folder(pathlib.Path(owned_path).parent, exact.parent)
         and occupant_is_own(pathlib.Path(owned_path), {track_id}, version_hint)
     )
     # What the swap compares an untagged occupant against: the very file

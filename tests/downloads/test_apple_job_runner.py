@@ -1300,6 +1300,35 @@ def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monk
     assert len(provider.fetched) == 1
 
 
+def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp_path, monkeypatch):
+    """The ledger records the real path; a download root reached through a
+    symlink still names the same folder, so the own copy is replaced."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    real = tmp_path / "real"
+    (real / "Aphex Twin").mkdir(parents=True)
+    base = tmp_path / "lib"
+    base.symlink_to(real, target_is_directory=True)
+    stranger = real / "Aphex Twin" / "Xtal.m4a"
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    own = real / "Aphex Twin" / "Xtal_01.m4a"
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own.resolve())}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert sorted(p.name for p in real.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+
+
 def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path, monkeypatch):
     """A copy whose tag write failed is still this track's: unchanged since the
     check, it is replaced in place rather than numbered beside."""
