@@ -1611,10 +1611,11 @@ def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
     assert done["path"] == str(owned)
 
 
-def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path):
-    """Run the one-track job as an upgrade of the copy the ledger records at
-    ``recorded``: the gate answers "force" with that record, and "Skip
-    existing" is on. Returns (summary, relay)."""
+def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path, provider_cls=None, **settings):
+    """Run the one-track job as an upgrade of the copy the ownership record
+    names at ``recorded``: the gate answers "force" with that record, and
+    "Skip existing" is on. ``settings`` override the job's settings.
+    Returns (summary, relay)."""
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
@@ -1622,10 +1623,12 @@ def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path):
     )
     staged = tmp_path / "staged.m4a"
     _tone(staged)
-    provider = _FakeProvider(fixture=staged)
+    provider = (provider_cls or _FakeProvider)(fixture=staged)
     monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(recorded)}))
     stub = _bind(_stub(tmp_path / "lib", provider))
     stub.settings.data.skip_existing = True
+    for key, value in settings.items():
+        setattr(stub.settings.data, key, value)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
@@ -1643,8 +1646,8 @@ def _run_forced_upgrade(tmp_path, monkeypatch, recorded: Path):
 
 @pytest.mark.ffmpeg
 def test_a_forced_upgrade_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_path, monkeypatch):
-    """#704: the ledger proves only that its path exists. A sibling that took
-    the recorded name after this track's copy went keeps its file."""
+    """The ownership record proves only that its path exists. A sibling that
+    took the recorded name after this track's copy went keeps its file."""
     from waves.metadata.tags import read_item_id
 
     sibling = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
@@ -1665,7 +1668,7 @@ def test_a_forced_upgrade_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_
 
 @pytest.mark.ffmpeg
 def test_a_forced_upgrade_with_a_stale_record_replaces_the_own_copy_at_the_template_name(tmp_path, monkeypatch):
-    """#704: when a sibling holds the recorded name, this track's own copy at
+    """When a sibling holds the recorded name, this track's own copy at
     the template name is the one the upgrade replaces, never a third file."""
     base = tmp_path / "lib"
     own = base / "Aphex Twin" / "Xtal.m4a"
@@ -1686,9 +1689,41 @@ def test_a_forced_upgrade_with_a_stale_record_replaces_the_own_copy_at_the_templ
     assert done["path"] == str(own)
 
 
+class _StereoOnlyProvider(_FakeProvider):
+    """A track with no Dolby Atmos: every fetch delivers stereo."""
+
+    def has_atmos(self, item):
+        return False
+
+    def resolve_stream(self, raw, tier, audio_type):
+        info = super().resolve_stream(raw, tier, audio_type)
+        info.delivered["audio_type"] = str(AudioType.STEREO)
+        return info
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_asked_as_atmos_replaces_the_stereo_only_tracks_own_copy(tmp_path, monkeypatch):
+    """An unpinned row with Dolby Atmos on asks for Atmos, but a stereo-only
+    track delivers stereo: its own stereo copy is the one replaced in place,
+    never a numbered duplicate beside it."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_forced_upgrade(
+        tmp_path, monkeypatch, recorded=own, provider_cls=_StereoOnlyProvider, default_audio_type="both"
+    )
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
 @pytest.mark.ffmpeg
 def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
-    """#704: an own .m4a whose forced re-fetch lands as FLAC does not take the
+    """An own .m4a whose forced re-fetch lands as FLAC does not take the
     .flac name a sibling already holds."""
     import tempfile
 
@@ -1719,9 +1754,9 @@ def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tm
 
 
 @pytest.mark.ffmpeg
-def test_a_forced_upgrade_reproves_the_recorded_copy_at_the_swap(tmp_path, monkeypatch):
-    """#704: the recorded copy passes the gate, then a sibling takes the name
-    during the fetch. The swap asks again and leaves the sibling's file."""
+def test_a_sibling_written_during_a_forced_upgrades_fetch_keeps_its_file(tmp_path, monkeypatch):
+    """The recorded copy is this track's when the job starts, and a sibling
+    takes the name during the fetch: the placement leaves the sibling's file."""
     from waves.metadata.tags import read_item_id
 
     own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
@@ -1743,9 +1778,9 @@ def test_a_forced_upgrade_reproves_the_recorded_copy_at_the_swap(tmp_path, monke
 
 
 @pytest.mark.ffmpeg
-def test_redownload_still_replaces_the_copy_at_the_template_name(tmp_path, monkeypatch):
-    """#704: an explicit REDOWNLOAD reads no ledger record and keeps its right
-    to replace the copy at the template name in place."""
+def test_redownload_replaces_the_copy_at_the_template_name(tmp_path, monkeypatch):
+    """An explicit REDOWNLOAD reads no ownership record and replaces the copy
+    at the template name in place, whoever wrote it."""
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
