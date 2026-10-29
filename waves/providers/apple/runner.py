@@ -1525,9 +1525,10 @@ def gate_track(
 ) -> tuple[str | None, dict | None]:
     """Ownership verdict plus the record it was read from. Without ``force``:
     'skip' when an owned copy is current, 'force' when owned but stale or
-    left untagged by a failed tag write, (None, None) when nothing is owned. Ranked on the servable ceiling:
-    cookies tier HIGH settles whatever was asked; wrapper tier uses the
-    track's own ceiling (an AAC-only master caps at HIGH, never HI_RES).
+    left untagged by a failed tag write, (None, None) when nothing is owned.
+    Ranked on the servable ceiling: cookies tier HIGH settles whatever was
+    asked; wrapper tier uses the track's own ceiling (an AAC-only master caps
+    at HIGH, never HI_RES).
 
     An explicit REDOWNLOAD (``force``) is 'force' whatever is owned, with
     the record when there is one, so its placement can find this track's
