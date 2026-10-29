@@ -171,14 +171,23 @@ def _visible_chip_count(q) -> int:
 
 
 def _logo_marks(q) -> list:
-    """[visible, has width, has height] for each result item drawing the third provider's logo."""
+    """[visible, has width, has height] for each logo drawn in the third provider's own row marks.
+
+    Apple's descriptor names the same logo file, so only a mark whose source
+    is the third provider counts.
+    """
     return json.loads(
         q(
             _walk_expression(
                 "searchResultsView",
-                "for (var i = 0; i < all.length; i++)"
-                " if (all[i].source !== undefined && ('' + all[i].source).indexOf('" + _LOGO + "') !== -1)"
-                "  out.push([all[i].visible, all[i].width > 0, all[i].height > 0]);",
+                "for (var i = 0; i < all.length; i++) {"
+                " var mark = all[i];"
+                " if (mark.objectName !== 'searchSourceMark' || !mark.modelData"
+                "  || ('' + mark.modelData.provider) !== 'fake') continue;"
+                " var kids = mark.children || [];"
+                " for (var j = 0; j < kids.length; j++)"
+                "  if (kids[j].source !== undefined && ('' + kids[j].source).indexOf('" + _LOGO + "') !== -1)"
+                "   out.push([kids[j].visible, kids[j].width > 0, kids[j].height > 0]); }",
             )
         )
     )
