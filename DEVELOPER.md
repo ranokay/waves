@@ -83,12 +83,19 @@ For an album-card action:
    `Text.PlainText`.
 4. Add behavior tests in `tests/catalog/`, including provider-contract tests
    in `tests/providers/` if that surface changes. Use the existing subprocess
-   QML harness for rendered behavior, then the final strict gate.
+   QML harness for rendered behavior, then the gate for the change class in
+   [the implementation workflow](docs/agents/implementation-workflow.md#gate-matrix).
 
 Extract a cohesive state owner when a feature needs one; avoid appending pure
 rules to the bridge or adding a forwarding module for a single call.
 
 ## Testing and verification
+
+The gate matrix is in
+[the implementation workflow](docs/agents/implementation-workflow.md#gate-matrix).
+Test design, evidence layers and source-pin policy are in
+[testing guidance](docs/agents/testing.md). This section owns the commands,
+test groups and targets.
 
 ```bash
 mise run test                         # default suite, excludes live accounts
@@ -155,7 +162,7 @@ summary for current counts; they change as coverage grows.
 | fast (excludes qml, ffmpeg, slow, integration, account markers) | `mise run test-fast`                       | < 1 min           |
 | quick QML (excludes slow and integration scenarios)             | `mise run test-qml`                        | < 5 min           |
 | default (all but live accounts)                                 | `mise run test` or `mise run test-default` | < 10 min          |
-| strict (default plus required Qt)                               | `mise run test-strict`                     | < 10 min          |
+| strict (comprehensive group, required Qt)                       | `mise run test-strict`                     | < 10 min          |
 | FFmpeg                                                          | `mise run test-ffmpeg`                     | < 1 min           |
 | live accounts (opt-in credentials, never CI)                    | `mise run test-account`                    | service-dependent |
 
@@ -247,19 +254,10 @@ writes `waves.json` in `__init__`, so an unsandboxed test overwrites the real
 settings of whoever runs the suite. Patching a loader to return defaults is not
 enough while the writer still knows the real path.
 
-### Source pins are wiring, not behavior coverage
+### Source pins
 
-A retained source pin kept as wiring — a test that asserts on source or QML
-text (`inspect.getsource`, or reading a source/QML file to assert on its text)
-instead of driving the behavior — is named `test_wiring_*` and carries a
-comment naming the fenced behavior plus why no behavioral seam exists
-(usually: driving the real call site needs the full bridge session or an
-offscreen render). Absence guards, whose point is that something stays gone,
-cite the reason no behavioral test exists instead. Prefer a behavioral test
-wherever a seam exists; retain a wiring pin only where none does. Wiring pins
-are never the only test for a user-facing feature: the behavior they fence is
-proved by a behavioral test the comment cites, except absence guards with no
-behavior to prove.
+The source-pin policy and examples live in
+[testing guidance](docs/agents/testing.md#source-pins-are-wiring-not-behavior-coverage).
 
 ## Releases and the publication model
 

@@ -30,9 +30,18 @@ global standards and take precedence where they differ.
 - Preserve serialized settings and payload keys during internal cleanup.
 - Moves must update source imports, QML imports and assets, test harnesses,
   resource recipes, dynamic module names, CI and tool imports, and documentation.
-- The per-path house rules in [`.opencodereview/rule.json`](.opencodereview/rule.json)
-  (QML, bridge Python, tests, Markdown, BRIDGE.md, the architecture map) bind
-  every review, whichever tool runs it.
+- Every settings-schema field has a reader and a writer in the same change.
+- Comments state invariants and decisions, not history. A comment the code
+  contradicts is a finding.
+- A QML `Text` whose content can be dynamic or remote sets
+  `textFormat: Text.PlainText`.
+- QML colors use the root palette tokens. A self-contained component may keep
+  a local palette block only under the `SettingsPage.qml` self-contained
+  exception, and its values must match Main.qml's static literals. A
+  9-character hex value is alpha-first.
+- The house rules here, in [BRIDGE.md](waves/desktop/BRIDGE.md), in
+  [the architecture map](docs/architecture.md), and in
+  [testing guidance](docs/agents/testing.md) bind every review.
 
 ## Correctness
 
@@ -60,8 +69,8 @@ concrete failure: the state or input, and the wrong result it produces.
   suite because pytest's current import mode requires them.
 - Put fixtures beside their domain. Only widely used harnesses belong in
   `tests/support/`.
-- Before choosing markers, source-wiring guards, test groups, or validation
-  commands, read [the developer guide](DEVELOPER.md#testing-and-verification).
-  It owns test execution requirements and the source-pin policy.
+- Before choosing markers, source-wiring guards or test groups, read
+  [testing guidance](docs/agents/testing.md) for design and evidence and
+  [the developer guide](DEVELOPER.md#testing-and-verification) for commands.
 - For issue delivery, follow [the implementation workflow](docs/agents/implementation-workflow.md)
-  for review order, test scope, and frozen-SHA evidence.
+  for the gate class, reviewer count and merge evidence.

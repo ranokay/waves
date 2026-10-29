@@ -97,23 +97,17 @@ in [the domain map](docs/architecture.md).
 mise run check
 ```
 
-7. Before raising a pull request, run the merge gate — the strict group,
-   everything but the live account tests:
+7. Before raising a pull request, run the gate for your change class in
+   [the gate matrix](docs/agents/implementation-workflow.md#gate-matrix). It
+   defines the prose, isolated-logic and full-gate checks.
 
-```bash
-mise run test-strict
-```
-
-The merge stands on that local run: there is no per-push test gate —
-`master.yml` is manual-only (`workflow_dispatch`). The checks a PR does show
-come from automatic scanners (CodeQL, SonarCloud) and review bots. None of them
-runs the tests or gates the merge. Record the gate in
-the PR body with the tested short SHA (the strict result, run alone, plus
-`mise run check` and the `/code-review` run). Record exact commands, the tested SHA, exit statuses, result counts and review
-dispositions, as in [the PR template](.github/pull_request_template.md).
-The manual workflow covers the same group across Python 3.12, 3.13 and
-3.14. To run another version locally, re-sync the venv onto it
-first (uv keeps the existing interpreter otherwise):
+The merge stands on the local gate. There is no per-push test gate:
+`master.yml` is manual-only (`workflow_dispatch`). Automatic scanners (CodeQL,
+SonarCloud) are advisory. Record the commands, tested head, exits, counts and
+review dispositions in the PR body, as in
+[the PR template](.github/pull_request_template.md). The manual workflow covers
+the strict group across Python 3.12, 3.13 and 3.14. To run another version
+locally, re-sync the venv onto it first:
 `uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
 
 8. Commit your changes and push your branch to GitHub:
@@ -126,16 +120,17 @@ git push origin name-of-your-bugfix-or-feature
 
 9. Submit a pull request through the GitHub website.
 
-The full branch, check, review, and merge loop lives in
-`docs/agents/implementation-workflow.md` — follow it; the steps above are
-its contributor-facing minimum.
+The full branch, check, review and merge loop lives in
+[the implementation workflow](docs/agents/implementation-workflow.md). Follow
+it; the steps above are its contributor-facing minimum.
 
 # Pull Request Guidelines
 
 Before you submit a pull request, check that it meets these guidelines:
 
-1. Include focused behavior tests for changed functionality; prose-only changes
-   need the checks described in the implementation workflow.
+1. Include focused behavior tests for changed functionality. Test design and
+   evidence guidance is in [testing guidance](docs/agents/testing.md).
+   Prose-only changes need the checks described in the implementation workflow.
 
 2. If the pull request adds functionality, the docs should be updated.
    Put your new functionality into a function with a docstring, and add the feature to the "What Waves can do" section in `README.md`.

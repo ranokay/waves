@@ -135,9 +135,11 @@ record the results in the owning issue or PR.
 
 ## Reviewing a Dependabot PR
 
-- The test workflow is manual-only, so no check on the PR runs the tests; its
-  checks come from scanners and review bots. Run `mise run check` and the full
-  suite locally (or dispatch `master.yml`) before merging.
+- The test workflow is manual-only, so no check on the PR runs the tests. A
+  dependency change is full-gate: run `mise run check` and
+  `mise run test-strict` locally (or dispatch `master.yml`) before merging.
+  The gate matrix is in
+  [the implementation workflow](agents/implementation-workflow.md#gate-matrix).
 - `uv.lock` is what users get. If the grouped PR touches something with
   a platform floor or a live-service surface, review it as an engine bump.
 - The ignored names (gamdl, yt-dlp, Nuitka, PySide6) are deliberate;
