@@ -1950,13 +1950,14 @@ def _run_forced_upgrade(
     provider = provider_cls(fixture=staged)
     monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(recorded)}))
     stub = _bind(_stub(tmp_path / "lib", provider))
-    stub.settings.data.skip_existing = True
     stub.settings.data.default_audio_type = default_audio_type
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: True
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     summary = runner.run_apple_job(
-        stub._apple_job_hooks(),
+        hooks,
         1,
         spec,
         _song_resource(),
