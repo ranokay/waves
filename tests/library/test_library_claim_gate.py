@@ -42,6 +42,7 @@ def _media(identity: str | None = None):
 
 def _gate(*, claim, ownership_of=None, target_rank=3, identity=None):
     dl = _TrackedDownload.__new__(_TrackedDownload)
+    dl._skip_existing_base = True  # "Skip existing" on, its default: the gate is armed
     dl._ownership_of = ownership_of
     dl._target_rank = target_rank
     dl._library_claim = claim

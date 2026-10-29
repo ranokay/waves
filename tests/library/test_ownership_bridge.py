@@ -155,7 +155,7 @@ def _new_tracked():
     td._ownership_of = None
     td._target_rank = 2  # LOSSLESS
     td._tls = local()
-    td._skip_existing_base = False
+    td._skip_existing_base = True  # the setting's default: the gate is armed
     # The gate asks whether THIS job would fetch Dolby Atmos for the track, so
     # it can rank the owned copy on the scale that copy was delivered on.
     td.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo", download_dolby_atmos=False))

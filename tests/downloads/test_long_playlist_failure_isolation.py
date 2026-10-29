@@ -271,6 +271,10 @@ class _QueueCarcass(BridgeStub):
     def _queued_quality_value(self) -> str:
         return ""
 
+    def _skip_existing_on(self) -> bool:
+        """ "Skip existing" on, its default."""
+        return True
+
     def _library_bulk_skip_on(self) -> bool:
         return False
 

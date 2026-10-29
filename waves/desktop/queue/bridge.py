@@ -649,6 +649,7 @@ class QueueMixin:
         ask_engine: str = "",
         engine_preferences: tuple[str, ...] = (),
         library_skip: bool | None = None,
+        skip_existing: bool | None = None,
     ) -> int:
         # A per-item quality choice arrives as both halves of the ask (the
         # Waves tier string the job pins, the word the drawer states); without
@@ -703,6 +704,9 @@ class QueueMixin:
             # flipped while a long queue works through it would otherwise move
             # one of them and not the other. See _job_library_skip.
             "askLibrarySkip": self._library_bulk_skip_on() if library_skip is None else library_skip,
+            # "Skip existing", pinned the same way: off means the job fetches
+            # every track, and the prediction must agree. See _job_skip_existing.
+            "askSkipExisting": self._skip_existing_on() if skip_existing is None else skip_existing,
             # The catalog's advertised ceiling for this release ("" when it has
             # none: playlists and mixes have no tier of their own). The drawer
             # states the LOWER of this and the request, so a lossless-only

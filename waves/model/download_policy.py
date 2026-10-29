@@ -236,6 +236,11 @@ class DownloadIntent:
 
         return Settings.from_json(self.settings_json)
 
+    @property
+    def skip_existing(self) -> bool:
+        """The "Skip existing" setting this request was captured with."""
+        return bool(json.loads(self.settings_json).get("skip_existing", True))
+
 
 # Setup is deliberately read live, never retained in a queue snapshot.
 _LIVE_FIELDS = frozenset(

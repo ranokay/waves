@@ -106,6 +106,9 @@ class _Stub(BridgeStub):
         dl.settings = self.settings
         return dl
 
+    def _job_skip_existing(self, qid):
+        return True
+
     def _job_quality(self, qid):
         # The real bridge pins the row's queued audio quality onto its job;
         # this stub keeps no rows, so it answers "no pin".

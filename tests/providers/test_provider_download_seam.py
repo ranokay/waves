@@ -734,6 +734,7 @@ class TestJobSpecDispatch:
         stub._set_queue_progress = lambda qid, pct: None
         stub._set_status = lambda msg: None
         stub._job_library_skip = lambda qid: skip
+        stub._job_skip_existing = lambda qid: True
         stub._job_quality = lambda qid: None
         stub._queue_item = lambda qid: stub._queue_index.get(qid)
         stub._row_ask = lambda qid: None

@@ -87,8 +87,16 @@ def _bridge(*, recs=None, claim=None, quality=Quality.hi_res_lossless, atmos=Fal
     # (see _job_library_skip). Wired to fail the test so a reader that went back
     # to the live setting is caught here rather than in the drawer.
     b._library_bulk_skip_on = lambda: pytest.fail("the prediction read the live pref instead of the row's pin")
+    b._skip_existing_on = lambda: True  # "Skip existing" on, its default
     b._library_claim_media = claim if claim is not None else (lambda media, album=None: False)
-    for name in ("_predict_skips", "_target_quality_rank", "_job_quality", "_job_library_skip", "_queue_item"):
+    for name in (
+        "_predict_skips",
+        "_target_quality_rank",
+        "_job_quality",
+        "_job_library_skip",
+        "_job_skip_existing",
+        "_queue_item",
+    ):
         setattr(b, name, getattr(backend.WavesBridge, name).__get__(b, backend.WavesBridge))
     return b
 
