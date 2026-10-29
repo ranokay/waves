@@ -2087,7 +2087,8 @@ def deliver_track(
     )
     # What the swap compares an untagged occupant against: the very file
     # checked here, so a song moved into the name meanwhile is not replaced.
-    owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here else None
+    # A forced placement's recorded copy is checked the same way.
+    owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here or recorded is not None else None
     # That copy under the template's spelling of the folder, so every file this
     # job lands shares one spelling (the collection playlist groups by folder).
     owned_dest = exact.parent / pathlib.Path(str(owned_path)).name if owned_here else None
@@ -2166,7 +2167,7 @@ def deliver_track(
             delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
 
             def _occupant_is_this_items_own(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
-                """Whether the occupant is this track's delivered Version.
+                """Whether the occupant PROVES it is this track's delivered Version.
 
                 The skip gate's two readers (item id + Version) with the move's
                 rule on an unreadable id: unknown is a stranger here, because a
@@ -2174,23 +2175,28 @@ def deliver_track(
                 asks the same positive question
                 (waves.download.Download._already_landed_here). The ``version``
                 default binds this attempt's delivered Version.
-
-                The one exception is the copy a forced placement's ownership
-                record names, which answers the skip gate's rule: an absent id
-                passes there (this track wrote it and its tag write failed),
-                while another item's id or the other Version still fails. The
-                record cannot settle it alone: it proves a file exists at its
-                path, not that the file is still this track's.
                 """
-                if path_occupied == recorded:
-                    return occupant_is_own(path_occupied, {track_id}, version)
                 if not occupant_is_version(path_occupied, version):
                     return False
                 return read_item_id(path_occupied) == track_id
 
+            def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
+                """The re-proof for the copy the ownership record names (in this
+                job's folder with "Skip existing" off; wherever it sits for a
+                forced placement): a tagged occupant must be this track's
+                delivered Version; an untagged one (a copy whose tag write
+                failed) only the very file checked before the fetch, never
+                another song moved into its name."""
+                if not occupant_is_version(path_occupied, version):
+                    return False
+                occupant_id = read_item_id(path_occupied)
+                if occupant_id:
+                    return occupant_id == track_id
+                return owned_identity is not None and _file_identity(path_occupied) == owned_identity
+
             exact_true = base / f"{relative}{want_ext}"
             if recorded is not None:
-                # Overwrite the copy THIS track owns, not whatever holds the
+                # Replace the copy THIS track owns, not whatever holds the
                 # template path: two distinct tracks can render to one relative
                 # name (the second owns the _01 suffixed file), and the template
                 # path would overwrite the sibling's audio while its record goes
@@ -2198,11 +2204,13 @@ def deliver_track(
                 # The recorded name is taken at the delivered extension (FLAC
                 # moves it) while it is free or holds this track's delivered
                 # Version (an Atmos ask on a stereo-only track delivers stereo).
-                # Failing that, this track's own copy at the template name is
-                # replaced; otherwise the placement steps aside to a numbered
-                # name.
+                # The record vouches for its own name only; its .flac twin needs
+                # a proven id. Failing that, this track's own copy at the
+                # template name is replaced; otherwise the placement steps aside
+                # to a numbered name.
                 recorded_dest = recorded.with_suffix(want_ext)
-                if not recorded_dest.exists() or _occupant_is_this_items_own(recorded_dest):
+                prove = _occupant_is_owned_here if recorded_dest == recorded else _occupant_is_this_items_own
+                if not recorded_dest.exists() or prove(recorded_dest):
                     dest = recorded_dest
                 elif exact_true.exists() and _occupant_is_this_items_own(exact_true):
                     dest = exact_true
@@ -2230,18 +2238,6 @@ def deliver_track(
                 # which discard_delivery removes below.
                 staged, flac_tmpdir = extract_flac(hooks, staged)
 
-            def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
-                """The swap re-proof for the copy the ledger names in this folder:
-                a tagged occupant must be this track's delivered Version; an
-                untagged one (a copy whose tag write failed) only the very file
-                checked before the fetch, never another song moved into its name."""
-                if not occupant_is_version(path_occupied, version):
-                    return False
-                occupant_id = read_item_id(path_occupied)
-                if occupant_id:
-                    return occupant_id == track_id
-                return owned_identity is not None and _file_identity(path_occupied) == owned_identity
-
             # The destination name was picked before the fetch, or before the
             # verification and FLAC extraction that follow it, which run
             # seconds to minutes: a same-named stranger written in that window
@@ -2254,10 +2250,12 @@ def deliver_track(
                     staged,
                     dest,
                     overwrite=force and recorded is None,
-                    # The "Skip existing" off copy in this folder is re-proven
-                    # against the file checked before the fetch; every other
-                    # destination answers _occupant_is_this_items_own.
-                    occupant_is_own=(_occupant_is_owned_here if dest == owned_dest else _occupant_is_this_items_own),
+                    # The copy the ownership record names is re-proven against
+                    # the file checked before the fetch; every other destination
+                    # proves its id.
+                    occupant_is_own=(
+                        _occupant_is_owned_here if dest in (owned_dest, recorded) else _occupant_is_this_items_own
+                    ),
                 )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)

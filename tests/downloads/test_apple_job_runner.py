@@ -2134,18 +2134,47 @@ def test_a_sibling_written_during_a_forced_upgrades_fetch_keeps_its_file(tmp_pat
     own.parent.mkdir(parents=True)
     _tone(own)
     _write_item_id(own, "apple:song-1")
-    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(own)}))
+    real_place = runner.place_file
+    calls: list[Path] = []
 
-    def sibling_takes_the_name(dest: Path, call: int) -> None:
-        if call == 0:
+    def sibling_takes_the_name(staged_file, dest, **kwargs):
+        if not calls:
             _write_item_id(dest, "apple:other-song")
+        calls.append(dest)
+        return real_place(staged_file, dest, **kwargs)
 
-    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, sibling_takes_the_name)
+    monkeypatch.setattr(runner, "place_file", sibling_takes_the_name)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
 
     assert summary == ""
     assert read_item_id(own) == "apple:other-song"
     done = next(ev for ev in relay.events if ev.get("status") == "done")
-    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+    assert done["path"] == str(own.with_name("Xtal_01.m4a"))
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_retry_never_replaces_a_song_moved_in_during_the_fetch(tmp_path, monkeypatch):
+    """The recorded copy is untagged (its tag write failed) and is gone by the
+    pick: another untagged song took its name during the fetch, and keeps it."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    other = tmp_path / "other.m4a"
+    _tone(other)
+
+    class _SongMovesIn(_FakeProvider):
+        def resolve_stream(self, raw, tier, audio_type):
+            own.unlink()
+            shutil.copy(other, own)
+            return super().resolve_stream(raw, tier, audio_type)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own, provider_cls=_SongMovesIn)
+
+    assert summary == ""
+    assert own.read_bytes() == other.read_bytes(), "the song moved in keeps its name"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_name("Xtal_01.m4a"))
 
 
 @pytest.mark.ffmpeg
