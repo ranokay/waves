@@ -170,11 +170,13 @@ def _visible_chip_count(q) -> int:
     )
 
 
-def _logo_marks(q) -> list:
-    """[visible, has width, has height] for each logo drawn in the third provider's own row marks.
+def _third_provider_marks(q) -> list:
+    """[visible, has width, has height, loaded] for each logo in the third provider's own row marks.
 
-    Apple's descriptor names the same logo file, so only a mark whose source
-    is the third provider counts.
+    Apple's descriptor names the same logo file, so a mark counts only when
+    its row source is the third provider and it reads as that provider. The
+    size comes from the mark's fixed box, so `loaded` is what proves the
+    logo drew.
     """
     return json.loads(
         q(
@@ -183,11 +185,13 @@ def _logo_marks(q) -> list:
                 "for (var i = 0; i < all.length; i++) {"
                 " var mark = all[i];"
                 " if (mark.objectName !== 'searchSourceMark' || !mark.modelData"
-                "  || ('' + mark.modelData.provider) !== 'fake') continue;"
+                "  || ('' + mark.modelData.provider) !== 'fake'"
+                "  || ('' + mark.Accessible.name) !== 'Available on Fake Music') continue;"
                 " var kids = mark.children || [];"
                 " for (var j = 0; j < kids.length; j++)"
                 "  if (kids[j].source !== undefined && ('' + kids[j].source).indexOf('" + _LOGO + "') !== -1)"
-                "   out.push([kids[j].visible, kids[j].width > 0, kids[j].height > 0]); }",
+                "   out.push([kids[j].visible, kids[j].width > 0, kids[j].height > 0,"
+                "    kids[j].status === Image.Ready]); }",
             )
         )
     )
@@ -271,11 +275,12 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # the third provider's own mark renders from its descriptor. Both are
     # painted state that can trail the landed payload: from Browse, the
     # search tier slides in on a height animation and stays invisible until
-    # that animation starts. Each read waits, bounded, for the state it asserts.
+    # its first tick lifts the height above zero. Each read waits, bounded,
+    # for the state it asserts.
     if not _settle_until(q, settle, lambda: _visible_chip_count(q) == 4):
         failures.append(f"the source chips did not list All plus three sources ({_visible_chip_count(q)})")
-    if not _settle_until(q, settle, lambda: any(all(mark) for mark in _logo_marks(q))):
-        failures.append(f"the third provider's rows did not render its descriptor's mark ({_logo_marks(q)})")
+    if not _settle_until(q, settle, lambda: any(all(mark) for mark in _third_provider_marks(q))):
+        failures.append(f"the third provider's rows did not render its descriptor's mark ({_third_provider_marks(q)})")
 
     # A type filter narrows the sections without touching the sources: only
     # the third provider answers tracks.
