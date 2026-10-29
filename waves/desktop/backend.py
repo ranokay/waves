@@ -15627,6 +15627,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         signals=None,
         options: _JobOptions | None = None,
         qid: int = 0,
+        redownload: bool = False,
     ) -> dict:
         """Fetch, verify, place, tag and sidecar one Apple track (runner policy)."""
         return runner.deliver_track(
@@ -15650,6 +15651,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             signals=signals,
             options=options,
             qid=qid,
+            redownload=redownload,
         )
 
     def _cover_convert_ffmpeg(self) -> str:

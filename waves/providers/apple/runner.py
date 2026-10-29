@@ -1504,16 +1504,14 @@ def _owned_record(hooks: AppleJobHooks, track_id: str, want_type: str | None) ->
     if store is None:
         return None
     try:
-        if want_type in ("stereo", "atmos"):
-            rec = store.ownership_of(str(track_id), audio_type=want_type)
+        if want_type is None:
+            rec = store.ownership_of(str(track_id))
         else:
-            rec = store.ownership_of(str(track_id))
-    except TypeError:
-        try:
-            rec = store.ownership_of(str(track_id))
-        except Exception:
-            logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
-            return None
+            try:
+                rec = store.ownership_of(str(track_id), audio_type=want_type)
+            except TypeError:
+                # A store without per-Version lookups answers for the whole track.
+                rec = store.ownership_of(str(track_id))
     except Exception:
         logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
         return None
@@ -1525,15 +1523,15 @@ def _owned_record(hooks: AppleJobHooks, track_id: str, want_type: str | None) ->
 def gate_track(
     hooks: AppleJobHooks, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
 ) -> tuple[str | None, dict | None]:
-    """Ownership verdict plus the record it was read from: 'skip' when an
-    owned copy is current, 'force' when owned but stale, (None, None)
-    when nothing is owned. Ranked on the servable ceiling: cookies tier
-    HIGH settles whatever was asked; wrapper tier uses the track's own
-    ceiling (an AAC-only master caps at HIGH, never HI_RES).
+    """Ownership verdict plus the record it was read from. Without ``force``:
+    'skip' when an owned copy is current, 'force' when owned but stale,
+    (None, None) when nothing is owned. Ranked on the servable ceiling:
+    cookies tier HIGH settles whatever was asked; wrapper tier uses the
+    track's own ceiling (an AAC-only master caps at HIGH, never HI_RES).
 
     An explicit REDOWNLOAD (``force``) is 'force' whatever is owned, with
-    the record when there is one: its placement replaces the copy the
-    record names, never whatever holds the template name.
+    the record when there is one, so its placement can find this track's
+    own copy.
 
     Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
     so owning stereo leaves the Atmos half fetching and vice versa.
@@ -2027,6 +2025,7 @@ def deliver_track(
     signals=None,
     options: _JobOptions | None = None,
     qid: int = 0,
+    redownload: bool = False,
 ) -> dict:
     """Fetch, verify, place, tag and sidecar one Apple track.
 
@@ -2076,11 +2075,18 @@ def deliver_track(
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
-    # The copy a forced placement (an upgrade, a copy whose tag write failed,
-    # or an explicit REDOWNLOAD) replaces: the one its ownership record names,
-    # picked per attempt below. A REDOWNLOAD the store has no record for
-    # replaces only a copy at the template name that proves it is this track's.
+    # The copy a forced placement replaces: the one its ownership record names,
+    # picked per attempt below. An upgrade, or a copy whose tag write failed,
+    # replaces the very copy the gate judged, wherever it sits. An explicit
+    # REDOWNLOAD (``redownload``) fetches this job's copy again, so it reads the
+    # record only in the folder this job writes to: ownership_of answers the
+    # best copy in any folder, and following it there would leave this folder
+    # without the file and its collection playlist pointing elsewhere. Without
+    # such a record, a REDOWNLOAD replaces only a copy at the template name that
+    # proves it is this track's.
     recorded = pathlib.Path(owned_path) if force and owned_path else None
+    if recorded is not None and redownload and not _same_folder(recorded.parent, exact.parent):
+        recorded = None
     # "Skip existing" off fetches again: a copy the ledger says this track owns
     # in the folder this job writes to is replaced in place, while one in
     # another folder stays and the job lands its own. The ledger only proves
@@ -2840,6 +2846,7 @@ def run_apple_job(
                         signals=signals,
                         options=options,
                         qid=qid,
+                        redownload=force,
                     )
                     break
                 except Exception as exc:

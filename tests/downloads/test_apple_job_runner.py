@@ -714,9 +714,9 @@ def test_gate_force_returns_the_record_it_can_read(path, names_a_copy):
     rec = {"path": path}
     stub = _bind(_stub(Path("/tmp"), provider, _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec)))
 
-    verdict = runner.gate_track(stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), True)
+    answer = runner.gate_track(stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), True)
 
-    assert verdict == ("force", rec if names_a_copy else None)
+    assert answer == ("force", rec if names_a_copy else None)
 
 
 def test_gate_without_a_store_never_gates():
@@ -2294,6 +2294,25 @@ def test_redownload_replaces_the_recorded_copy_never_a_siblings_at_the_template_
 
 
 @pytest.mark.ffmpeg
+def test_redownload_never_follows_the_record_into_another_folder(tmp_path, monkeypatch):
+    """The store answers the best copy in any folder. A REDOWNLOAD whose record
+    names a copy in a playlist folder lands at this job's template name and
+    leaves that copy alone."""
+    elsewhere = tmp_path / "lib" / "Playlists" / "Mix" / "Xtal.m4a"
+    elsewhere.parent.mkdir(parents=True)
+    _tone(elsewhere)
+    _write_item_id(elsewhere, "apple:song-1")
+    before = elsewhere.read_bytes()
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=elsewhere)
+
+    assert summary == ""
+    assert elsewhere.read_bytes() == before
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a")
+
+
+@pytest.mark.ffmpeg
 @pytest.mark.parametrize("guess", [".m4a", ".flac"], ids=["guess-m4a", "guess-flac"])
 @pytest.mark.parametrize("occupant_id", ["", "apple:song-2"], ids=["untagged", "another-song"])
 def test_redownload_without_a_record_lands_beside_a_file_it_cannot_prove_is_its_own(
@@ -2361,6 +2380,35 @@ def test_a_sibling_written_during_a_redownloads_fetch_keeps_its_file(tmp_path, m
 
     assert summary == ""
     assert read_item_id(own) == "apple:other-song"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+
+
+@pytest.mark.ffmpeg
+def test_an_untagged_file_moved_onto_the_recorded_name_during_a_redownload_keeps_its_bytes(tmp_path, monkeypatch):
+    """The record names an untagged copy (its tag write failed), and another
+    untagged file takes its name during the fetch: the absent id passes only
+    for the very file the record named, so the newcomer keeps its bytes."""
+    recorded = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    recorded.parent.mkdir(parents=True)
+    recorded.write_bytes(b"stale-copy")
+    rec = {"path": str(recorded)}
+
+    def finder_copy_takes_the_name(dest: Path, call: int) -> None:
+        if call == 0:
+            dest.unlink()
+            dest.write_bytes(b"finder-copy")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(
+        tmp_path,
+        monkeypatch,
+        finder_copy_takes_the_name,
+        _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec),
+        _redownload_overrides={"apple:song-1"},
+    )
+
+    assert summary == ""
+    assert recorded.read_bytes() == b"finder-copy"
     done = next(ev for ev in relay.events if ev.get("status") == "done")
     assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
 
