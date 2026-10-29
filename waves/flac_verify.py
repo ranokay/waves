@@ -520,7 +520,7 @@ def decode_md5(
         "-",
     ]
     limit = decode_time_limit(os.path.getsize(path))
-    digest = hashlib.md5()  # noqa: S324 (the FLAC format mandates MD5)
+    digest = hashlib.md5(usedforsecurity=False)  # the FLAC format mandates MD5; nothing here is a security claim
     n_bytes = 0
     # argv is the configured ffmpeg path plus one file under the user's folders.
     proc: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603
