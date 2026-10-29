@@ -39,6 +39,7 @@ from tidalapi.media import (
     VideoExtensions,
 )
 
+from waves import flac_verify
 from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for, tidal_quality_for_tier
 from waves.constants import (
     CHUNK_SIZE,
@@ -59,6 +60,7 @@ from waves.constants import (
     wants_atmos_delivery,
 )
 from waves.errors import MediaMissing
+from waves.flac_verify import seal_file
 from waves.http import pooled_session
 from waves.ids import credited_artist_ids, download_identity_id, owned_item_ids
 from waves.metadata.camelot import format_initial_key
@@ -2910,7 +2912,13 @@ class Download:
                 # Lossless arrives as FLAC-in-MP4 (stream copy); scope "all"
                 # re-encodes lossy sources instead.
                 transcode = str(stream_info.codecs or "").upper() != Codec.FLAC
-                tmp_path_file = self._extract_flac(tmp_path_file, transcode=transcode)
+                tmp_path_file = self._extract_flac(tmp_path_file, transcode=transcode, event_stop=event_stop)
+
+                # A stop during the seal leaves the header unsealed (MD5 unset,
+                # and a DASH copy's sample count 0). Such a file must not land:
+                # bail out like every other stop, and the temp dir goes with it.
+                if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
+                    return False, path_media_dst
 
             self._note_stage(media, cum["extract"])
 
@@ -4805,16 +4813,26 @@ class Download:
 
         return path_file_out
 
-    def _extract_flac(self, path_media_src: pathlib.Path, transcode: bool = False) -> pathlib.Path:
+    def _extract_flac(
+        self, path_media_src: pathlib.Path, transcode: bool = False, event_stop: Event | None = None
+    ) -> pathlib.Path:
         """Extract FLAC audio from a media file using ffmpeg.
 
         Lossless sources move containers with a stream copy (no re-encode);
         scope "all" re-encodes lossy sources instead, keeping
         their rate and channels (``-c:a flac`` with no resample flags).
 
+        The copied-out file is sealed (see _flac_seal_streaminfo) unless the
+        downsample stage is about to re-encode it, or the transcode above
+        already went through ffmpeg's FLAC encoder: both write their own
+        correct signature and sample count, so a seal there would be a full
+        decode thrown away.
+
         Args:
             path_media_src (pathlib.Path): Path to the source media file.
             transcode (bool): Re-encode into FLAC instead of copying the stream.
+            event_stop (Event | None, optional): The item's stop event; a stop
+                cuts the seal's decode short. Defaults to None.
 
         Returns:
             pathlib.Path: Path to the extracted FLAC file.
@@ -4837,8 +4855,99 @@ class Download:
         )
 
         ffmpeg.execute()
+        if transcode:
+            self.fn_logger.debug("FLAC seal skipped: the transcode wrote the file through ffmpeg's FLAC encoder.")
+        elif self._downsample_will_reencode(path_media_out):
+            self.fn_logger.debug("FLAC seal skipped: the downsample stage re-encodes this file.")
+        else:
+            self._flac_seal_streaminfo(path_media_out, event_stop)
 
         return path_media_out
+
+    def _downsample_will_reencode(self, path_file: pathlib.Path) -> bool:
+        """Whether the downsample stage will re-encode this FLAC (rate or depth drops).
+
+        False when downsampling is off, already at or below the target, or the
+        header cannot be read (the seal then runs, which is always safe).
+        """
+        if not getattr(self.settings.data, "downsample_enabled", False):
+            return False
+        try:
+            src_rate, src_depth, out_rate, out_depth = self._downsample_formats(path_file)
+        except Exception:
+            return False
+        return (out_rate, out_depth) != (src_rate, src_depth)
+
+    def _downsample_formats(self, path_file: pathlib.Path) -> tuple[int, int, int, int]:
+        """The source rate and depth and what the downsample target makes of them.
+
+        Each dimension is reduced independently and never raised.
+
+        Returns:
+            tuple[int, int, int, int]: (source rate, source depth, output rate, output depth).
+        """
+        target = DownsampleTarget(self.settings.data.downsample_target)
+        info = FLAC(path_file).info
+        src_rate = info.sample_rate
+        src_depth = info.bits_per_sample
+
+        return src_rate, src_depth, min(src_rate, target.sample_rate), min(src_depth, target.bit_depth)
+
+    def _flac_seal_streaminfo(self, path_file: pathlib.Path, event_stop: Event | None = None) -> None:
+        """Write the real audio MD5 and sample count into a copied-out FLAC's STREAMINFO.
+
+        TIDAL packages FLAC inside fragmented MP4. The ``-acodec copy``
+        extraction keeps the audio frames bit for bit, but ffmpeg's FLAC muxer
+        writes the STREAMINFO from the ``dfLa`` box verbatim, so the file
+        carries whatever signature TIDAL's packager put there. The current
+        catalog ships a correct one (checked live across both lossless tiers),
+        but a header without a signature (all zeros, as older packaging and
+        upstream reports had it) leaves ``flac -t`` and every checker built on
+        libFLAC reporting the file as unverifiable, and strict players treat
+        it as corrupt even though the audio is intact.
+
+        The work is :func:`waves.flac_verify.seal_file`, shared with the
+        library check: decode once through ffmpeg (about a second for a long
+        hi-res track), hash the PCM the way libFLAC defines it, fill in an
+        unset signature and a wrong sample count in place (34 header bytes,
+        nothing else), leave a matching one alone, and report a set signature
+        that does not match rather than paper over it. A failure of this step
+        only logs: the file is still the same playable file it was.
+
+        A stop (the item's own, or the whole run's abort) cuts the decode short
+        and leaves the header as delivered, quietly: stopping is not a fault.
+
+        Args:
+            path_file (pathlib.Path): The extracted ``.flac`` file.
+            event_stop (Event | None, optional): The item's stop event. Defaults to None.
+        """
+
+        def should_continue() -> bool:
+            return not (self.event_abort.is_set() or (event_stop and event_stop.is_set()))
+
+        try:
+            row = seal_file(
+                path_file,
+                str(self.settings.data.path_binary_ffmpeg),
+                fill_sample_count=True,
+                should_continue=should_continue,
+            )
+        except Exception:
+            self.fn_logger.exception(f"FLAC STREAMINFO seal failed; file kept as extracted: {log_content(path_file)}")
+            return
+        if row.status == flac_verify.CANCELLED:
+            self.fn_logger.debug("FLAC STREAMINFO seal stopped with the download; header left as delivered.")
+        elif row.status == flac_verify.SEALED:
+            self.fn_logger.info(f"Sealed FLAC STREAMINFO ({row.detail}): {log_content(path_file)}")
+        elif row.status == flac_verify.MISMATCH:
+            self.fn_logger.warning(
+                f"FLAC audio does not match its MD5 signature; header kept as delivered: {log_content(path_file)}"
+            )
+        elif row.status != flac_verify.OK:
+            self.fn_logger.warning(
+                f"FLAC verify {flac_verify.STATUS_LABELS.get(row.status, row.status)}; "
+                f"header left as delivered: {log_content(path_file)}"
+            )
 
     def _faststart_remux(self, path_file: pathlib.Path, container_ext: str) -> pathlib.Path:
         """Rebuild an MP4/M4A container so its moov/mvhd carries the real duration.
@@ -4905,12 +5014,7 @@ class Download:
         target_rate = target.sample_rate
         target_depth = target.bit_depth
 
-        info = FLAC(path_file).info
-        src_rate = info.sample_rate
-        src_depth = info.bits_per_sample
-
-        out_rate = min(src_rate, target_rate)
-        out_depth = min(src_depth, target_depth)
+        src_rate, src_depth, out_rate, out_depth = self._downsample_formats(path_file)
 
         if out_rate == src_rate and out_depth == src_depth:
             self.fn_logger.info(
