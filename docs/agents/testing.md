@@ -33,7 +33,8 @@ Assert what the layer exposes to its consumer: a bridge signal or payload, a pro
 
 - Name tests for the behavior.
 - Give each test a simple expected outcome. Keep product rules in product code; helpers may arrange, wait and measure.
-- QML scenarios select the visible instance, wait on the state they assert, and name their checkpoints. Interactive controls they drive expose a stable `objectName`. They do not sleep where a settle helper exists.
+- QML scenarios select the visible instance, wait on the state they assert, and name their checkpoints. Interactive controls they drive expose a stable `objectName`. Synthetic clicks re-measure the target after layout, park scroll dressing and reset onboarding flags at scenario start. They do not sleep where a settle helper exists.
+- The non-account suite never touches a real account, network or user library. `tests/conftest.py` sandboxes the config; live work uses the account marker.
 - A source pin is wiring, not behavior coverage. See the source-pin section below.
 
 ## Source pins are wiring, not behavior coverage

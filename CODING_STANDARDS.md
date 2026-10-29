@@ -27,6 +27,13 @@ global standards and take precedence where they differ.
   coordination intentionally; their exception is documented in the architecture map.
 - For public desktop slots, signals, or payload changes, read and update
   [BRIDGE.md](waves/desktop/BRIDGE.md).
+- Only plain dicts, lists, strings and numbers cross to QML. Engine objects stay
+  behind the provider or bridge seam.
+- Provider-facing QML renders from bridge descriptors and capabilities. Shared
+  surfaces do not branch on a provider id or hardcode a provider list.
+- Reuse the shared QML helper or component rather than copying a cascade.
+- New ADRs use the existing record shape, and GLOSSARY stays a glossary rather
+  than implementation notes.
 - Preserve serialized settings and payload keys during internal cleanup.
 - Moves must update source imports, QML imports and assets, test harnesses,
   resource recipes, dynamic module names, CI and tool imports, and documentation.
