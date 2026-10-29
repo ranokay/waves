@@ -1098,6 +1098,324 @@ def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
     assert summary == ""
 
 
+@pytest.mark.parametrize("skip_existing", [True, False])
+def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch, skip_existing):
+    """#693: with the row's "Skip existing" off, a copy the ownership ledger
+    holds in another folder no longer skips the track; on, it still does."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    asked = []
+
+    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None):
+        asked.append(track_id)
+        return "skip", {"path": "/music/Album Folder/Xtal.m4a"}
+
+    monkeypatch.setattr(runner, "gate_track", owned_elsewhere)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: skip_existing
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    if skip_existing:
+        assert summary == " (already downloaded)"
+        assert provider.fetched == []
+    else:
+        # The ledger is read only for where the own copy sits: in another
+        # folder it stays, and this job lands its own beside nothing.
+        assert summary == ""
+        assert asked == ["apple:song-1"]
+        assert len(provider.fetched) == 1
+        assert not Path("/music/Album Folder/Xtal.m4a").exists()
+
+
+def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkeypatch):
+    """#693: fetching again into the folder that holds this track's own copy
+    replaces it in place, never a numbered duplicate beside it."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    def run(qid, skip_existing):
+        hooks = stub._apple_job_hooks()
+        hooks.job_skip_existing = lambda qid: skip_existing
+        return runner.run_apple_job(
+            hooks,
+            qid,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    assert run(1, True) == ""
+    first = sorted(p.relative_to(base) for p in base.rglob("*.m4a"))
+    assert run(2, False) == ""
+
+    assert sorted(p.relative_to(base) for p in base.rglob("*.m4a")) == first
+    assert len(provider.fetched) == 2, "the second run fetched again"
+
+
+def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monkeypatch):
+    """#693: when another track holds the template name, this track's own copy
+    sits at a numbered name; fetching again replaces that copy, never _02."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    stub = _bind(_stub(base, provider))
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    owned: list = []
+
+    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None):
+        return ("skip", {"path": str(owned[0])}) if owned else (None, None)
+
+    monkeypatch.setattr(runner, "gate_track", ledger)
+
+    def run(qid, skip_existing):
+        hooks = stub._apple_job_hooks()
+        hooks.job_skip_existing = lambda qid: skip_existing
+        return runner.run_apple_job(
+            hooks,
+            qid,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert run(1, True) == ""
+    first = sorted(p.name for p in base.rglob("*.m4a"))
+    assert first == ["Xtal.m4a", "Xtal_01.m4a"]
+    owned.append(base / "Aphex Twin" / "Xtal_01.m4a")
+    assert run(2, False) == ""
+    assert run(3, False) == ""
+
+    assert sorted(p.name for p in base.rglob("*.m4a")) == first
+    assert len(provider.fetched) == 3
+    assert stranger.is_file(), "the stranger's file is never replaced"
+
+
+def _skip_off_run(stub, qid=1, signals=None):
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: False
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    return runner.run_apple_job(
+        hooks,
+        qid,
+        spec,
+        _song_resource(),
+        signals=signals or _Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+
+def _skip_off_setup(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    return provider, base, _bind(_stub(base, provider))
+
+
+def test_skip_existing_off_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_path, monkeypatch):
+    """The ledger proves only that its path exists: a sibling that took the
+    recorded name after this track's copy went keeps its file."""
+    from waves.metadata.tags import read_item_id
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    sibling = base / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    _tone(sibling)
+    _write_item_id(sibling, "apple:other-song")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(sibling)}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert read_item_id(sibling) == "apple:other-song"
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+
+
+def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monkeypatch):
+    """A legacy stereo row whose whole-track query answers the Dolby Atmos
+    record leaves that copy alone."""
+    import mutagen.mp4
+
+    from waves.metadata.tags import read_file_audio_type
+
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    atmos = base / "Aphex Twin" / "Xtal_01.m4a"
+    atmos.parent.mkdir(parents=True)
+    _tone(atmos)
+    _write_item_id(atmos, "apple:song-1")
+    handle = mutagen.mp4.MP4(str(atmos))
+    handle["----:com.apple.iTunes:WAVES_AUDIO_TYPE"] = [b"atmos"]
+    handle.save()
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(atmos), "audio_type": "atmos"}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert read_file_audio_type(atmos) == "atmos"
+    assert len(provider.fetched) == 1
+
+
+def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp_path, monkeypatch):
+    """The ledger records the real path; a download root reached through a
+    symlink still names the same folder, so the own copy is replaced, under the
+    root's own spelling like every other file the job lands."""
+    from waves.metadata.tags import read_item_id
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    real = tmp_path / "real"
+    (real / "Aphex Twin").mkdir(parents=True)
+    base = tmp_path / "lib"
+    base.symlink_to(real, target_is_directory=True)
+    stranger = real / "Aphex Twin" / "Xtal.m4a"
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    own = real / "Aphex Twin" / "Xtal_01.m4a"
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own.resolve())}))
+    relay = _Relay()
+
+    assert _skip_off_run(stub, signals=relay) == ""
+
+    assert sorted(p.name for p in real.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+    assert read_item_id(stranger) == "apple:other-song"
+    assert [e["path"] for e in relay.events if e["status"] == "done"] == [str(base / "Aphex Twin" / "Xtal_01.m4a")]
+
+
+def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path, monkeypatch):
+    """A copy whose tag write failed is still this track's: unchanged since the
+    check, it is replaced in place rather than numbered beside."""
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a"]
+    assert len(provider.fetched) == 1
+
+
+def test_skip_existing_off_never_replaces_a_song_moved_in_during_the_fetch(tmp_path, monkeypatch):
+    """The untagged copy checked before the fetch is gone by the swap: another
+    untagged song took its name meanwhile, and keeps it."""
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    other = tmp_path / "other.m4a"
+    _tone(other)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+    deliver = provider.resolve_stream
+
+    def swap_in_another_song(raw, tier, audio_type):
+        own.unlink()
+        shutil.copy(other, own)
+        return deliver(raw, tier, audio_type)
+
+    provider.resolve_stream = swap_in_another_song
+
+    assert _skip_off_run(stub) == ""
+
+    assert own.read_bytes() == other.read_bytes(), "the song moved in keeps its name"
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
+    """An own .m4a whose re-fetch lands as FLAC does not take the .flac name a
+    sibling already holds."""
+    import tempfile
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = base / "Aphex Twin" / "Xtal.flac"
+    sibling.write_bytes(b"SIBLING-FLAC-BYTES")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
+    monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
+    monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
+
+    def extract(hooks, staged):
+        workdir = tempfile.mkdtemp(dir=tmp_path)
+        out = Path(workdir) / "x.flac"
+        subprocess.run([_ffmpeg(), "-y", "-v", "error", "-i", str(staged), "-c:a", "flac", str(out)], check=True)  # noqa: S603 (fixed argv: local fixture)
+        return out, workdir
+
+    monkeypatch.setattr(runner, "extract_flac", extract)
+
+    assert _skip_off_run(stub) == ""
+
+    assert sibling.read_bytes() == b"SIBLING-FLAC-BYTES"
+
+
+def test_the_rows_pin_beats_the_live_setting_for_an_apple_job(tmp_path):
+    provider = _FakeProvider(fixture=None)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.settings().data.skip_existing = True
+    hooks.job_skip_existing = lambda qid: False
+    assert runner.job_skip_existing(hooks, 1) is False
+    hooks.job_skip_existing = None
+    assert runner.job_skip_existing(hooks, 1) is True
+
+
 def test_album_job_reports_a_partial_shortfall(tmp_path):
     provider = _FakeProvider(fixture=None)
 
@@ -1140,6 +1458,7 @@ def _entry_stub(base: Path, provider, cookies: Path | None):
     stub.statuses = []
     stub._set_status = stub.statuses.append
     stub._enqueue = lambda *a, **k: WavesBridge._enqueue(stub, *a, **k)
+    stub._skip_existing_on = lambda: True  # "Skip existing" on, its default
     stub._emit_queue = lambda: None
     stub._pump_queue = lambda: None
     stub._download_gate = lambda: "ok"

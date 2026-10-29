@@ -180,7 +180,9 @@ class _Stub(BridgeStub):
     _bump_artist_group = WavesBridge._bump_artist_group
     _reap_stranded_groups = WavesBridge._reap_stranded_groups
 
-    def __init__(self, provider, gate: str = "ok", claim_on: bool = False, claimed: set | None = None):
+    def __init__(
+        self, provider, gate: str = "ok", claim_on: bool = False, claimed: set | None = None, skip_existing: bool = True
+    ):
         self._dl = object()
         self._logged_in = True
         self._tracked_sessions = (SOURCE,)
@@ -228,6 +230,7 @@ class _Stub(BridgeStub):
         self._gate = gate
         self._claim_on = claim_on
         self._claimed = claimed or set()
+        self._skip_on = skip_existing
 
     def _download_gate(self):
         return self._gate
@@ -255,6 +258,9 @@ class _Stub(BridgeStub):
 
     def _library_bulk_skip_on(self):
         return self._claim_on
+
+    def _skip_existing_on(self):
+        return self._skip_on
 
     def _library_claim_media(self, media, album=None):
         return str(media.id) in self._claimed
@@ -387,6 +393,19 @@ def test_tracks_the_library_claim_skips_only_what_it_owns():
     assert stub._tracksQueued.emits[0][1] == ["t0", "t2"]
     assert stub._folder_groups[_FAV_TRACKS_GROUP_ID]["total"] == 2
     assert "1 already in your library" in stub.statuses[-1]
+
+
+def test_tracks_skip_existing_off_queues_what_the_library_claims():
+    """#693: with Skip existing off a bulk download leaves nothing out."""
+    stub = _Stub(_FavProvider(tracks=_tracks(3)), claim_on=True, claimed={"t1"}, skip_existing=False)
+    stub.downloadFavoriteTracks(SOURCE)
+    assert stub._tracksQueued.emits[0][1] == ["t0", "t1", "t2"]
+
+
+def test_albums_skip_existing_off_queues_what_the_library_owns():
+    stub = _Stub(_FavProvider(albums=_albums(3)), claim_on=True, claimed={"a1"}, skip_existing=False)
+    stub.downloadFavoriteAlbums(SOURCE)
+    assert stub._albumsQueued.emits[0][1] == ["a0", "a1", "a2"]
 
 
 def test_albums_page_the_whole_list_into_one_batch_under_the_rollup():

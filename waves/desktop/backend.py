@@ -1526,9 +1526,18 @@ class _TrackedDownload(Download):
         the ownership ledger) or "claim" (the library scan's tag match), and
         ``tier`` (its quality word, "" when unknown). The ledger row states
         both, so IN LIBRARY keeps its quality column and speaks in the same
-        two voices as the download button (green fact, gold guess)."""
+        two voices as the download button (green fact, gold guess).
+
+        With "Skip existing" off nothing gates at all: the job downloads every
+        item, whatever the ownership ledger or the library scan says you hold
+        elsewhere (a playlist saved into a new folder must not lose the tracks
+        an album download already fetched). That covers merge members and
+        videos too. The base value is read, not the per-thread upgrade
+        override."""
         if self._force_redownload:
             return "force", {}
+        if not self._skip_existing_base:
+            return None, {}
         verdict, rec = self._ownership_decision(media, file_template, placement)
         if verdict == "skip":
             # Dual rows state their own Version's word (ATMOS for Atmos rows,
@@ -2736,6 +2745,12 @@ def _bulk_gate_artist_names(albums, plans) -> list[str]:
         if name:
             out.append(name)
     return out
+
+
+def _bulk_claim_on(bridge) -> bool:
+    """Whether a bulk download may leave out what the library scan claims: its
+    own preference on, and "Skip existing" on (off fetches every track)."""
+    return bridge._library_bulk_skip_on() and bridge._skip_existing_on()
 
 
 def _credit_fav_artist(bridge, artist_id: str, pct, state) -> None:
@@ -10419,6 +10434,25 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         queue claims nothing."""
         return bool((self._queue_item(qid) or {}).get("askLibrarySkip"))
 
+    def _job_skip_existing(self, qid: int) -> bool:
+        """Whether this queue row's job skips what you already have ("Skip
+        existing"), as pinned when the row was created. Held for the row's
+        whole life like askLibrarySkip, and for the same reason: the run's
+        gates and the expanded row's prediction all read it, so flipping the
+        setting while a long queue works through cannot make the drawer
+        promise IN LIBRARY for tracks the run downloads anyway. A row from
+        before the field reads the setting."""
+        row = self._queue_item(qid) or {}
+        if "askSkipExisting" in row:
+            return bool(row.get("askSkipExisting"))
+        return self._skip_existing_on()
+
+    def _skip_existing_on(self) -> bool:
+        """The live "Skip existing" setting: what a row without a captured
+        request pins when it is created, and what a row from before the pin
+        answers with."""
+        return bool(self.settings.data.skip_existing)
+
     def _job_audio_type(self, qid: int) -> str | None:
         """Which Version a queue row downloads (§5.2): "stereo" / "atmos" for
         dual-download rows, None for legacy single rows (toggle off). Pinned
@@ -12209,6 +12243,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         media_id = str(item.get("media_id", "") or "")
         if media_id in self._redownload_overrides or media_id in self._merge_plans:
             return marks
+        if not self._job_skip_existing(qid):
+            return marks
         target = self._target_quality_rank(self._job_quality(qid))
         atmos_on = wants_both_default(self.settings)
         # Dual-download rows predict only their own Version (§5.2-5.3, worker
@@ -13470,6 +13506,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         base_template: str | None = None,
         chooser_toggles: dict | None = None,
         request_intent: DownloadIntent | None = None,
+        skip_existing: bool | None = None,
     ) -> Download:
         data = request_intent.settings_data() if request_intent else self.settings.data
         progress_gui = ProgressBars(
@@ -13488,7 +13525,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 tidal_obj=self.tidal,
                 path_base=data.download_base_path,
                 fn_logger=logger,
-                skip_existing=data.skip_existing,
+                skip_existing=data.skip_existing if skip_existing is None else skip_existing,
                 progress=Progress(),
                 progress_gui=progress_gui,
                 event_abort=event_abort or self._event_abort,
@@ -14528,7 +14565,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_quality=ask,
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
-                **({"library_skip": intent.library_bulk_skip} if intent else {}),
+                **({"library_skip": intent.library_bulk_skip, "skip_existing": intent.skip_existing} if intent else {}),
                 ask_toggles=asset_pins,
             )
             queued_any = True
@@ -14954,7 +14991,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_quality=ask,
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
-                **({"library_skip": intent.library_bulk_skip} if intent else {}),
+                **({"library_skip": intent.library_bulk_skip, "skip_existing": intent.skip_existing} if intent else {}),
                 ask_toggles=asset_pins,
                 ask_engine=engine_policy.pin or "auto",
                 engine_preferences=engine_policy.preferences,
@@ -15117,6 +15154,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             else lambda: self._tag_write_flags(),
             job_quality=lambda qid: self._job_quality(qid) if hasattr(self, "_job_quality") else None,
             job_audio_type=lambda qid: self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else None,
+            job_skip_existing=self._job_skip_existing if hasattr(self, "_job_skip_existing") else None,
             ownership=lambda: getattr(self, "_ownership", None),
             redownload_overrides=lambda: self._redownload_overrides,
             library_claim_overrides=lambda: self._library_claim_overrides,
@@ -15974,6 +16012,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 library_claim=library_claim,
                 force_redownload=media_id in self._redownload_overrides,
                 pinned_quality=self._job_quality(qid),
+                skip_existing=self._job_skip_existing(qid),
                 audio_type=getattr(spec, "audio_type", None),
                 base_template=getattr(spec, "base_template", None) or None,
                 chooser_toggles=getattr(spec, "chooser_toggles", None),
@@ -18405,7 +18444,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # fully claimed drops with its plan: the user has the album, so
             # there is nothing to assemble.
             skipped = 0
-            if self._library_bulk_skip_on():
+            if _bulk_claim_on(self):
                 # One probe for the whole set before the gate is asked about a
                 # single album. The per-album probe is keyed by artist, so a
                 # discography pays once whatever its length; a playlist's
@@ -18474,7 +18513,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # is explicit); a discography queueing them is a bulk
                     # action, so the claim is applied here instead.
                     tkey = str(getattr(t, "id", id(t)))
-                    if self._library_bulk_skip_on() and self._library_claim_media(t, album=grel.get(tkey)):
+                    if _bulk_claim_on(self) and self._library_claim_media(t, album=grel.get(tkey)):
                         skipped += 1
                         continue
                     self._remember("track", tkey, t)
@@ -19389,7 +19428,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 else:
                     deduped = self._collapse_editions(deduped, stop_check=stop_check)
             skipped = 0
-            if self._library_bulk_skip_on():
+            if _bulk_claim_on(self):
                 # One probe for the whole set before the gate is asked about a
                 # single album. The per-album probe is keyed by artist, so a
                 # discography pays once whatever its length; a playlist's
@@ -19757,7 +19796,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             skipped = 0
             keys: list[str] = []
             for track in objects:
-                if self._library_bulk_skip_on() and self._library_claim_media(track):
+                if _bulk_claim_on(self) and self._library_claim_media(track):
                     skipped += 1
                     continue
                 key = str(getattr(track, "id", id(track)))
@@ -19827,7 +19866,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 else:
                     deduped = self._collapse_editions(deduped, stop_check=stop_check)
             skipped = 0
-            if self._library_bulk_skip_on():
+            if _bulk_claim_on(self):
                 # getattr, like the per-album gate below: partial test stubs
                 # bind the gate without the probe family.
                 probe_all = getattr(self, "_library_probe_sync_many", None)

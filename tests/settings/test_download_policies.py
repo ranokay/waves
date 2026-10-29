@@ -214,6 +214,7 @@ def test_real_enqueue_and_retry_keep_original_single_audio_row_and_full_intent(m
     preferences = {"library_enabled": False, "library_bulk_skip": True}
     bridge._waves_pref_bool = lambda key: preferences.get(key, False)
     bridge._library_bulk_skip_on = LibraryMixin._library_bulk_skip_on.__get__(bridge)
+    bridge._skip_existing_on = lambda: True  # "Skip existing" on, its default
     obj = _track()
     assert bridge._download(obj, "track", "Song", "Original/{track_title}", False, "t1")
     original = bridge._queue[-1]

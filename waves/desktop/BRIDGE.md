@@ -449,6 +449,10 @@ reason that says why.
 
 Queue rows carry `askEngine` (`auto`, an engine ID, or empty for a provider
 without engine selection) and `enginePreferences`, captured when queued.
+They also pin `askLibrarySkip` (the library claim may skip tracks) and
+`askSkipExisting` ("Skip existing": off fetches every track, owned or not),
+taken from the captured request when there is one; the run and the expanded
+row's prediction both read the pin.
 Retry preserves both and the private immutable request intent: origin identity,
 shared/provider rules, quality/type/codec/video requirements, lyrics/art mirrors,
 metadata/organization/duplicate preferences and recovery permissions. Changes

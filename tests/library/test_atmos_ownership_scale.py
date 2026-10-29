@@ -93,6 +93,7 @@ def _gate(store, *, target, atmos_on):
     """The real ownership gate, on a _TrackedDownload built without the engine's
     network-touching __init__."""
     dl = _TrackedDownload.__new__(_TrackedDownload)
+    dl._skip_existing_base = True  # "Skip existing" on, its default: the gate is armed
     dl._ownership_of = store.ownership_of
     dl._target_rank = quality_rank(target)
     dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both" if atmos_on else "stereo"))
@@ -355,10 +356,21 @@ def _predictor(store, *, quality, atmos_on):
     b._objs = {"album": {}}
     b._queue_index = {}
     b.settings = SimpleNamespace(
-        data=SimpleNamespace(tidal_quality_audio=quality.value, default_audio_type="both" if atmos_on else "stereo")
+        data=SimpleNamespace(
+            tidal_quality_audio=quality.value,
+            default_audio_type="both" if atmos_on else "stereo",
+            skip_existing=True,
+        )
     )
     b._library_claim_media = lambda media, album=None: False
-    for name in ("_predict_skips", "_target_quality_rank", "_job_quality", "_job_library_skip", "_queue_item"):
+    for name in (
+        "_predict_skips",
+        "_target_quality_rank",
+        "_job_quality",
+        "_job_library_skip",
+        "_job_skip_existing",
+        "_queue_item",
+    ):
         setattr(b, name, getattr(WavesBridge, name).__get__(b, WavesBridge))
     return b
 
