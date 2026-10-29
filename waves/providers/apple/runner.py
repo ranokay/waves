@@ -2129,10 +2129,11 @@ def deliver_track(
 
             exact_true = base / f"{relative}{want_ext}"
             if recorded is not None:
-                # Overwrite the copy THIS track owns, not the template path: two
-                # distinct tracks can render to one relative name (the second
-                # owns the _01 suffixed file), and the template path would
-                # overwrite the sibling's audio while its record goes stale.
+                # Overwrite the copy THIS track owns, not whatever holds the
+                # template path: two distinct tracks can render to one relative
+                # name (the second owns the _01 suffixed file), and the template
+                # path would overwrite the sibling's audio while its record goes
+                # stale.
                 # The recorded name is taken at the delivered extension (FLAC
                 # moves it) while it is free or holds this track's delivered
                 # Version (an Atmos ask on a stereo-only track delivers stereo).
@@ -2170,9 +2171,10 @@ def deliver_track(
                 # which discard_delivery removes below.
                 staged, flac_tmpdir = extract_flac(hooks, staged)
 
-            # The destination name was picked before the fetch, and the fetch
-            # runs seconds to minutes: a same-named stranger written in that
-            # window must not be replaced (DL-03). An explicit REDOWNLOAD keeps
+            # The destination name was picked before the fetch, or before the
+            # verification and FLAC extraction that follow it, which run
+            # seconds to minutes: a same-named stranger written in that window
+            # must not be replaced (DL-03). An explicit REDOWNLOAD keeps
             # its overwrite right; every other placement replaces only an own
             # copy proven at the swap and otherwise steps aside to a numbered
             # name.
