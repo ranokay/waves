@@ -170,8 +170,9 @@ cython_debug/
 # Local design mockups (not part of the shipped app)
 mockups/
 
-# Local scratch / working files (not part of the shipped app). `.scratch/`
-# holds agent plans and handoffs (see docs/agents/implementation-workflow.md).
+# Legacy local scratch. Do not create routine artifacts: session state belongs
+# in the agent's private context, and evidence worth keeping belongs in the
+# owning issue or PR. The ignore rule stays so old files cannot be committed.
 scratchpad/
 /.scratch/
 

@@ -8,19 +8,21 @@ Closes #<n>.
 
 ## Evidence
 
-<!-- No raw logs, no linked logs: counts and exits are the whole record. Delete lines that do not apply. -->
+<!-- No raw logs, no linked logs: commands, exits and counts are the whole record. Delete lines that do not apply. -->
 
-Tests: <what was added; red/green proof in one clause>
+Change class: <prose | isolated logic | full gate | release or native>
 
-Gate (frozen SHA `<sha>`, no writes since):
+Tests: <what was added; red on base and green at head, or the stated limitation>
 
-- `mise run check` — exit <n>
-- `mise run test-strict` — <passed> passed[, <failed> failed (<one-line disposition>)]
-- /code-review (standards, spec, correctness) — <n> fixed, <n> refuted
-- PR checks — <all green | pending at merge | each failed check with its fix or refutation>
-- Bot reviews (advisory) — CodeRabbit, requested: <n fixed, n refuted | no findings | out of quota, skipped, failed or no answer at merge>; each other bot that posted: <same>
+Gate (head `<sha>`, no writes since):
 
-Merge stands on the local gate; checks and bot reviews were read, and none gates it.
+- `mise run check`: exit <n>
+- <test command>: <passed> passed[, <failed> failed (<one-line disposition>)]
+- Independent review: <one reviewer for substantive code, two for data loss/security/auth/updater, or none for prose>; second reviewer and risk: <name and risk, or none>; <n> fixed, <n> refuted
+- PR checks: <all green | pending at merge | each failed check with its fix or refutation>
+- Qualification gaps: <platform, native, live account or pending case; "none" when none>
+
+Merge path: <full gate and merge_preflight, or light path with head/base/mergeability verified>
 
 ## Merge Danger
 
