@@ -2066,6 +2066,11 @@ def deliver_track(
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
+    # The copy a forced placement (an upgrade, or a copy whose tag write
+    # failed) replaces: the one its ownership record names, picked per
+    # attempt below. An explicit REDOWNLOAD reads no record (gate_track) and
+    # replaces the template name.
+    recorded = pathlib.Path(owned_path) if force and owned_path else None
     # "Skip existing" off fetches again: a copy the ledger says this track owns
     # in the folder this job writes to is replaced in place, while one in
     # another folder stays and the job lands its own. The ledger only proves
@@ -2082,17 +2087,16 @@ def deliver_track(
     )
     # What the swap compares an untagged occupant against: the very file
     # checked here, so a song moved into the name meanwhile is not replaced.
-    owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here else None
+    # A forced placement's recorded copy is captured here too, and its pick
+    # checks it against this once the stream answers.
+    owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here or recorded is not None else None
     # That copy under the template's spelling of the folder, so every file this
     # job lands shares one spelling (the collection playlist groups by folder).
     owned_dest = exact.parent / pathlib.Path(str(owned_path)).name if owned_here else None
-    if force or owned_dest is not None:
-        # Overwrite the copy THIS track owns, not the template path: two
-        # distinct tracks can render to one relative name (the second owns
-        # the _01 suffixed file), and the template path would overwrite
-        # the sibling's audio while its record goes stale.
-        dest = owned_dest or (pathlib.Path(owned_path) if owned_path else exact)
-        dest.parent.mkdir(parents=True, exist_ok=True)
+    if force:
+        dest = exact
+    elif owned_dest is not None:
+        dest = owned_dest
     elif exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
         if skip_existing:
             raise _AppleSkipped()
@@ -2162,32 +2166,6 @@ def deliver_track(
             # by now): the extension gate below and the place-time ownership
             # check both read it, exactly as the tag write does.
             delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
-            if dest.suffix != want_ext:
-                if force and owned_path:
-                    owned = pathlib.Path(owned_path)
-                    dest = owned.with_suffix(want_ext) if owned.suffix != want_ext else owned
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                else:
-                    exact_true = base / f"{relative}{want_ext}"
-                    # Same Version-and-id gate as the pre-stream skip, with the
-                    # stream's own answer (known by now): a file of the OTHER
-                    # Version, or of a different track, at this name is not this
-                    # fetch's copy.
-                    if not force and exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
-                        if skip_existing:
-                            raise _AppleSkipped()  # noqa: TRY301
-                        dest = exact_true
-                    else:
-                        dest = pick_destination(base, relative, want_ext)
-            verify_staged(hooks, staged, expect_atmos=atmos, verified_probe=carried_probe)
-            if job_abort.is_set():
-                raise _AppleAborted()  # noqa: TRY301
-            if mode:
-                # Verified above, so conversion runs on known-good bytes
-                # (spec §6: no conversion before verification passes).
-                # The converted file lands outside the provider's workdir,
-                # which discard_delivery removes below.
-                staged, flac_tmpdir = extract_flac(hooks, staged)
 
             def _occupant_is_this_items_own(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
                 """Whether the occupant PROVES it is this track's delivered Version.
@@ -2204,10 +2182,12 @@ def deliver_track(
                 return read_item_id(path_occupied) == track_id
 
             def _occupant_is_owned_here(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
-                """The swap re-proof for the copy the ledger names in this folder:
-                a tagged occupant must be this track's delivered Version; an
-                untagged one (a copy whose tag write failed) only the very file
-                checked before the fetch, never another song moved into its name."""
+                """The re-proof for the copy the ownership record names (in this
+                job's folder with "Skip existing" off; wherever it sits for a
+                forced placement): a tagged occupant must be this track's
+                delivered Version; an untagged one (a copy whose tag write
+                failed) only the very file checked before the fetch, never
+                another song moved into its name."""
                 if not occupant_is_version(path_occupied, version):
                     return False
                 occupant_id = read_item_id(path_occupied)
@@ -2215,19 +2195,68 @@ def deliver_track(
                     return occupant_id == track_id
                 return owned_identity is not None and _file_identity(path_occupied) == owned_identity
 
-            # The destination name was picked before the fetch, and the fetch
-            # runs seconds to minutes: a same-named stranger written in that
-            # window must not be replaced (DL-03). A forced re-download keeps
-            # its overwrite right; every other placement replaces only a proven
-            # own copy and otherwise steps aside to a numbered name.
+            exact_true = base / f"{relative}{want_ext}"
+            if recorded is not None:
+                # Replace the copy THIS track owns, not whatever holds the
+                # template path: two distinct tracks can render to one relative
+                # name (the second owns the _01 suffixed file), and the template
+                # path would overwrite the sibling's audio while its record goes
+                # stale.
+                # The recorded name is taken at the delivered extension (FLAC
+                # moves it) while it is free or holds this track's delivered
+                # Version (an Atmos ask on a stereo-only track delivers stereo).
+                # The record vouches for its own name only; its .flac twin needs
+                # a proven id. Failing that, this track's own copy at the
+                # template name is replaced; otherwise the placement steps aside
+                # to a numbered name.
+                recorded_dest = recorded.with_suffix(want_ext)
+                prove = _occupant_is_owned_here if recorded_dest == recorded else _occupant_is_this_items_own
+                if not recorded_dest.exists() or prove(recorded_dest):
+                    dest = recorded_dest
+                elif exact_true.exists() and _occupant_is_this_items_own(exact_true):
+                    dest = exact_true
+                else:
+                    dest = pick_destination(base, relative, want_ext)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+            elif dest.suffix != want_ext:
+                # Same Version-and-id gate as the pre-stream skip, with the
+                # stream's own answer (known by now): a file of the OTHER
+                # Version, or of a different track, at this name is not this
+                # fetch's copy.
+                if not force and exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
+                    if skip_existing:
+                        raise _AppleSkipped()  # noqa: TRY301
+                    dest = exact_true
+                else:
+                    dest = pick_destination(base, relative, want_ext)
+            verify_staged(hooks, staged, expect_atmos=atmos, verified_probe=carried_probe)
+            if job_abort.is_set():
+                raise _AppleAborted()  # noqa: TRY301
+            if mode:
+                # Verified above, so conversion runs on known-good bytes
+                # (spec §6: no conversion before verification passes).
+                # The converted file lands outside the provider's workdir,
+                # which discard_delivery removes below.
+                staged, flac_tmpdir = extract_flac(hooks, staged)
+
+            # The destination name was picked before the fetch, or before the
+            # verification and FLAC extraction that follow it, which run
+            # seconds to minutes: a same-named stranger written in that window
+            # must not be replaced (DL-03). An explicit REDOWNLOAD keeps
+            # its overwrite right; every other placement replaces only an own
+            # copy proven at the swap and otherwise steps aside to a numbered
+            # name.
             try:
                 placed = place_file(
                     staged,
                     dest,
-                    overwrite=force,
-                    # The lenient re-proof covers only the ledger's own copy; a
-                    # destination the extension moved elsewhere proves its id.
-                    occupant_is_own=(_occupant_is_owned_here if dest == owned_dest else _occupant_is_this_items_own),
+                    overwrite=force and recorded is None,
+                    # The copy the ownership record names is re-proven against
+                    # the file checked before the fetch; every other destination
+                    # proves its id.
+                    occupant_is_own=(
+                        _occupant_is_owned_here if dest in (owned_dest, recorded) else _occupant_is_this_items_own
+                    ),
                 )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
