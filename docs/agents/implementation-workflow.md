@@ -42,7 +42,7 @@ Dependency changes are full-gate. A docs or config policy cleanup is prose class
 
 This section owns the reviewer count.
 
-- **One independent reviewer** for every substantive code change, including isolated logic. The review covers standards, requirements and correctness as one checklist.
+- **One independent reviewer** for every substantive code change, including isolated logic. The review covers standards, the issue requirements (the spec), and correctness as one checklist.
 - **Two independent reviewers** for data loss, security, authentication and updater changes. The second review targets the named risk.
 - **No independent code reviewer** for prose or docs and config policy cleanup. Supervisor or maintainer review is enough.
 - Automated CodeQL and SonarCloud remain advisory security and quality scans. They are not reviewers.
@@ -54,7 +54,7 @@ This section owns the reviewer count.
 
 The full-gate and light paths are deliberately different. Do not fabricate a receipt or use the full-gate tool for a light change.
 
-**Full gate.** Collect a `mise run check` receipt and a `mise run test-strict` receipt on the same head, plus one review receipt with standards, requirements and correctness complete and no unresolved findings. Use the existing `merge_preflight.py` only with those receipts. It hardcodes both gate commands and all three review topics.
+**Full gate.** Collect a `mise run check` receipt and a `mise run test-strict` receipt on the same head, plus one review receipt with standards, spec and correctness complete and no unresolved findings. Use the existing `merge_preflight.py` only with those receipts. It hardcodes both gate commands and all three review topics.
 
 **Light path.** For prose and isolated-logic changes, record the `mise run check` exit, the `test-fast` and focused-test exits where they apply, and the reviewer where the change is substantive code. Verify the PR head, base, mergeability and check rollup with `gh pr view --json headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup`, then merge with `gh pr merge --squash --match-head-commit <head>`. Do not create a strict receipt and do not call `merge_preflight.py`.
 
