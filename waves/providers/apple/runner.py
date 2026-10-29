@@ -841,7 +841,6 @@ def place_file(
     staged: pathlib.Path,
     dest: pathlib.Path,
     *,
-    overwrite: bool = False,
     occupant_is_own: Callable[[pathlib.Path], bool] | None = None,
 ) -> bool:
     """Land one staged file on its final path, atomically.
@@ -850,24 +849,21 @@ def place_file(
     network share), so a direct move copies into the final name and a
     mid-copy failure (full disk, dropped share) leaves a partial .m4a that
     skip_existing would then treat as complete. Copy beside the target and
-    rename over it instead: readers never see a half file, and forced
-    overwrites never delete the good copy before its replacement is whole.
+    rename over it instead: readers never see a half file, and a replaced own
+    copy is never deleted before its replacement is whole.
 
-    An occupied destination is replaced only when the caller owns it:
-    ``overwrite`` (a forced re-download) or an ``occupant_is_own`` answer that
-    proves the file is this download's own copy. Both are asked after the
+    An occupied destination is replaced only when an ``occupant_is_own``
+    answer proves the file is this download's own copy. It is asked after the
     copy, one syscall before the swap, so a same-named stranger written
     between the destination pick and the placement is left alone.
 
     Args:
         staged (pathlib.Path): Source file, in the provider's staging area.
         dest (pathlib.Path): Final path under the library.
-        overwrite (bool): Whether an existing destination may be replaced
-            regardless of who wrote it.
         occupant_is_own (Callable[[pathlib.Path], bool] | None): Asked, when
-            the destination is occupied and ``overwrite`` is off, whether the
-            file sitting there is this download's own copy after all. Defaults
-            to None, which reads every occupant as a stranger.
+            the destination is occupied, whether the file sitting there is
+            this download's own copy after all. Defaults to None, which reads
+            every occupant as a stranger.
 
     Returns:
         bool: True when the file landed; False when the destination was
@@ -876,7 +872,7 @@ def place_file(
     tmp = dest.with_name(f"{dest.name}.part-{uuid4().hex[:8]}")
     try:
         shutil.copyfile(staged, tmp)
-        if not overwrite and dest.exists() and not (occupant_is_own is not None and occupant_is_own(dest)):
+        if dest.exists() and not (occupant_is_own is not None and occupant_is_own(dest)):
             with contextlib.suppress(OSError):
                 tmp.unlink()
             return False
@@ -1500,27 +1496,13 @@ def write_sidecars(
 # --------------------------------------------------------------------------
 
 
-def gate_track(
-    hooks: AppleJobHooks, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
-) -> tuple[str | None, dict | None]:
-    """Ownership verdict plus the record it was read from: 'skip' when an
-    owned copy is current, 'force' when owned but stale, (None, None)
-    when nothing is owned. Ranked on the servable ceiling: cookies tier
-    HIGH settles whatever was asked; wrapper tier uses the track's own
-    ceiling (an AAC-only master caps at HIGH, never HI_RES).
-
-    Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
-    so owning stereo leaves the Atmos half fetching and vice versa.
-    Legacy single rows (None) keep the whole-track query.
-    """
-    if force:
-        return "force", None
+def _owned_record(hooks: AppleJobHooks, track_id: str, want_type: str | None) -> dict | None:
+    """The ownership record of this track's Version (``want_type`` stereo or
+    atmos; None asks for the whole track), or None when the store has none,
+    cannot answer, or names a spelling the formatter never produces."""
     store = hooks.ownership()
     if store is None:
-        return None, None
-    want_type = str(audio_type or "").strip().lower() or None
-    if want_type not in ("stereo", "atmos"):
-        want_type = None
+        return None
     try:
         if want_type in ("stereo", "atmos"):
             rec = store.ownership_of(str(track_id), audio_type=want_type)
@@ -1531,11 +1513,39 @@ def gate_track(
             rec = store.ownership_of(str(track_id))
         except Exception:
             logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
-            return None, None
+            return None
     except Exception:
         logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
-        return None, None
+        return None
     if not rec or record_names_a_broken_copy(rec):
+        return None
+    return rec
+
+
+def gate_track(
+    hooks: AppleJobHooks, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
+) -> tuple[str | None, dict | None]:
+    """Ownership verdict plus the record it was read from: 'skip' when an
+    owned copy is current, 'force' when owned but stale, (None, None)
+    when nothing is owned. Ranked on the servable ceiling: cookies tier
+    HIGH settles whatever was asked; wrapper tier uses the track's own
+    ceiling (an AAC-only master caps at HIGH, never HI_RES).
+
+    An explicit REDOWNLOAD (``force``) is 'force' whatever is owned, with
+    the record when there is one: its placement replaces the copy the
+    record names, never whatever holds the template name.
+
+    Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
+    so owning stereo leaves the Atmos half fetching and vice versa.
+    Legacy single rows (None) keep the whole-track query.
+    """
+    want_type = str(audio_type or "").strip().lower() or None
+    if want_type not in ("stereo", "atmos"):
+        want_type = None
+    rec = _owned_record(hooks, track_id, want_type)
+    if force:
+        return "force", rec
+    if rec is None:
         return None, None
     if want_type == "stereo":
         wants = False
@@ -2066,10 +2076,10 @@ def deliver_track(
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
     version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
-    # The copy a forced placement (an upgrade, or a copy whose tag write
-    # failed) replaces: the one its ownership record names, picked per
-    # attempt below. An explicit REDOWNLOAD reads no record (gate_track) and
-    # replaces the template name.
+    # The copy a forced placement (an upgrade, a copy whose tag write failed,
+    # or an explicit REDOWNLOAD) replaces: the one its ownership record names,
+    # picked per attempt below. A REDOWNLOAD the store has no record for
+    # replaces only a copy at the template name that proves it is this track's.
     recorded = pathlib.Path(owned_path) if force and owned_path else None
     # "Skip existing" off fetches again: a copy the ledger says this track owns
     # in the folder this job writes to is replaced in place, while one in
@@ -2196,7 +2206,7 @@ def deliver_track(
                 return owned_identity is not None and _file_identity(path_occupied) == owned_identity
 
             exact_true = base / f"{relative}{want_ext}"
-            if recorded is not None:
+            if force:
                 # Replace the copy THIS track owns, not whatever holds the
                 # template path: two distinct tracks can render to one relative
                 # name (the second owns the _01 suffixed file), and the template
@@ -2206,12 +2216,13 @@ def deliver_track(
                 # moves it) while it is free or holds this track's delivered
                 # Version (an Atmos ask on a stereo-only track delivers stereo).
                 # The record vouches for its own name only; its .flac twin needs
-                # a proven id. Failing that, this track's own copy at the
-                # template name is replaced; otherwise the placement steps aside
-                # to a numbered name.
-                recorded_dest = recorded.with_suffix(want_ext)
+                # a proven id. Failing that, or with no record, this track's own
+                # copy at the template name, read at the delivered extension (the
+                # guess can miss it), is replaced; otherwise the placement steps
+                # aside to a numbered name.
+                recorded_dest = recorded.with_suffix(want_ext) if recorded is not None else None
                 prove = _occupant_is_owned_here if recorded_dest == recorded else _occupant_is_this_items_own
-                if not recorded_dest.exists() or prove(recorded_dest):
+                if recorded_dest is not None and (not recorded_dest.exists() or prove(recorded_dest)):
                     dest = recorded_dest
                 elif exact_true.exists() and _occupant_is_this_items_own(exact_true):
                     dest = exact_true
@@ -2223,7 +2234,7 @@ def deliver_track(
                 # stream's own answer (known by now): a file of the OTHER
                 # Version, or of a different track, at this name is not this
                 # fetch's copy.
-                if not force and exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
+                if exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
                     if skip_existing:
                         raise _AppleSkipped()  # noqa: TRY301
                     dest = exact_true
@@ -2242,15 +2253,13 @@ def deliver_track(
             # The destination name was picked before the fetch, or before the
             # verification and FLAC extraction that follow it, which run
             # seconds to minutes: a same-named stranger written in that window
-            # must not be replaced (DL-03). An explicit REDOWNLOAD keeps
-            # its overwrite right; every other placement replaces only an own
-            # copy proven at the swap and otherwise steps aside to a numbered
-            # name.
+            # must not be replaced (DL-03). Every placement, an explicit
+            # REDOWNLOAD's included, replaces only an own copy proven at the
+            # swap and otherwise steps aside to a numbered name.
             try:
                 placed = place_file(
                     staged,
                     dest,
-                    overwrite=force and recorded is None,
                     # The copy the ownership record names is re-proven against
                     # the file checked before the fetch; every other destination
                     # proves its id.
