@@ -1524,8 +1524,8 @@ def gate_track(
     hooks: AppleJobHooks, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
 ) -> tuple[str | None, dict | None]:
     """Ownership verdict plus the record it was read from. Without ``force``:
-    'skip' when an owned copy is current, 'force' when owned but stale,
-    (None, None) when nothing is owned. Ranked on the servable ceiling:
+    'skip' when an owned copy is current, 'force' when owned but stale or
+    left untagged by a failed tag write, (None, None) when nothing is owned. Ranked on the servable ceiling:
     cookies tier HIGH settles whatever was asked; wrapper tier uses the
     track's own ceiling (an AAC-only master caps at HIGH, never HI_RES).
 
@@ -2078,15 +2078,16 @@ def deliver_track(
     # The copy a forced placement replaces: the one its ownership record names,
     # picked per attempt below. An upgrade, or a copy whose tag write failed,
     # replaces the very copy the gate judged, wherever it sits. An explicit
-    # REDOWNLOAD (``redownload``) fetches this job's copy again, so it reads the
-    # record only in the folder this job writes to: ownership_of answers the
-    # best copy in any folder, and following it there would leave this folder
-    # without the file and its collection playlist pointing elsewhere. Without
-    # such a record, a REDOWNLOAD replaces only a copy at the template name that
+    # REDOWNLOAD (``redownload``) fetches this job's copy again, so it uses the
+    # record only when it names a copy in the folder this job writes to, under
+    # the template's spelling of that folder (the collection playlist groups by
+    # folder). ownership_of answers the best copy in any folder, and following
+    # it elsewhere would leave this folder without the file. Without such a
+    # record, a REDOWNLOAD replaces only a copy at the template name that
     # proves it is this track's.
     recorded = pathlib.Path(owned_path) if force and owned_path else None
-    if recorded is not None and redownload and not _same_folder(recorded.parent, exact.parent):
-        recorded = None
+    if recorded is not None and redownload:
+        recorded = exact.parent / recorded.name if _same_folder(recorded.parent, exact.parent) else None
     # "Skip existing" off fetches again: a copy the ledger says this track owns
     # in the folder this job writes to is replaced in place, while one in
     # another folder stays and the job lands its own. The ledger only proves

@@ -2313,6 +2313,26 @@ def test_redownload_never_follows_the_record_into_another_folder(tmp_path, monke
 
 
 @pytest.mark.ffmpeg
+def test_redownload_lands_under_the_templates_spelling_of_the_recorded_folder(tmp_path, monkeypatch):
+    """The ledger records absolute paths, while the download root may be a
+    symlink: the recorded copy is replaced in place, under the template's
+    spelling, so every file the job lands shares one folder spelling."""
+    real = tmp_path / "real"
+    (real / "Aphex Twin").mkdir(parents=True)
+    (tmp_path / "lib").symlink_to(real, target_is_directory=True)
+    own = real / "Aphex Twin" / "Xtal.m4a"
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a")
+
+
+@pytest.mark.ffmpeg
 @pytest.mark.parametrize("guess", [".m4a", ".flac"], ids=["guess-m4a", "guess-flac"])
 @pytest.mark.parametrize("occupant_id", ["", "apple:song-2"], ids=["untagged", "another-song"])
 def test_redownload_without_a_record_lands_beside_a_file_it_cannot_prove_is_its_own(
