@@ -2087,7 +2087,8 @@ def deliver_track(
     )
     # What the swap compares an untagged occupant against: the very file
     # checked here, so a song moved into the name meanwhile is not replaced.
-    # A forced placement's recorded copy is checked the same way.
+    # A forced placement's recorded copy is captured here too, and its pick
+    # checks it against this once the stream answers.
     owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here or recorded is not None else None
     # That copy under the template's spelling of the folder, so every file this
     # job lands shares one spelling (the collection playlist groups by folder).
