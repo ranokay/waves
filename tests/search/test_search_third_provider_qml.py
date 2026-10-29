@@ -157,6 +157,33 @@ def _ids(q, model: str) -> list:
     return [q(f"{ref}.get({i}).id") for i in range(int(q(f"{ref}.count")))]
 
 
+def _visible_chip_count(q) -> int:
+    return json.loads(
+        q(
+            "(function(){ var all = [];"
+            " function walk(o) { if (!o) return;"
+            "  if (o.objectName === 'searchSourceChip' && o.visible) all.push(true);"
+            "  if (o.contentItem) walk(o.contentItem); if (o.item) walk(o.item);"
+            "  var k = o.children || []; for (var i = 0; i < k.length; i++) walk(k[i]); }"
+            " walk(root); return JSON.stringify(all.length); })()"
+        )
+    )
+
+
+def _logo_marks(q) -> list:
+    """[visible, has width, has height] for each result item drawing the third provider's logo."""
+    return json.loads(
+        q(
+            _walk_expression(
+                "searchResultsView",
+                "for (var i = 0; i < all.length; i++)"
+                " if (all[i].source !== undefined && ('' + all[i].source).indexOf('" + _LOGO + "') !== -1)"
+                "  out.push([all[i].visible, all[i].width > 0, all[i].height > 0]);",
+            )
+        )
+    )
+
+
 def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     booted = boot_main_qml()
     if isinstance(booted, int):
@@ -232,31 +259,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         failures.append(f"the third provider's row did not carry its own source ({row_sources})")
 
     # The source chips row names every source (All + three providers), and
-    # the third provider's own mark renders from its descriptor.
-    chip_count = json.loads(
-        q(
-            "(function(){ var all = [];"
-            " function walk(o) { if (!o) return;"
-            "  if (o.objectName === 'searchSourceChip' && o.visible) all.push(true);"
-            "  if (o.contentItem) walk(o.contentItem); if (o.item) walk(o.item);"
-            "  var k = o.children || []; for (var i = 0; i < k.length; i++) walk(k[i]); }"
-            " walk(root); return JSON.stringify(all.length); })()"
-        )
-    )
-    if chip_count != 4:
-        failures.append(f"the source chips did not list All plus three sources ({chip_count})")
-    marks = json.loads(
-        q(
-            _walk_expression(
-                "searchResultsView",
-                "for (var i = 0; i < all.length; i++)"
-                " if (all[i].source !== undefined && ('' + all[i].source).indexOf('" + _LOGO + "') !== -1)"
-                "  out.push([all[i].visible, all[i].width > 0, all[i].height > 0]);",
-            )
-        )
-    )
-    if not marks or not any(m[0] and m[1] and m[2] for m in marks):
-        failures.append(f"the third provider's rows did not render its descriptor's mark ({marks})")
+    # the third provider's own mark renders from its descriptor. Both are
+    # painted state that can trail the landed payload: from Browse, the
+    # search tier slides in on a height animation and stays invisible until
+    # that animation starts. Each read waits, bounded, for the state it asserts.
+    if not _settle_until(q, settle, lambda: _visible_chip_count(q) == 4):
+        failures.append(f"the source chips did not list All plus three sources ({_visible_chip_count(q)})")
+    if not _settle_until(q, settle, lambda: any(all(mark) for mark in _logo_marks(q))):
+        failures.append(f"the third provider's rows did not render its descriptor's mark ({_logo_marks(q)})")
 
     # A type filter narrows the sections without touching the sources: only
     # the third provider answers tracks.
