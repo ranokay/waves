@@ -701,6 +701,24 @@ def test_gate_force_and_miss():
     )
 
 
+@pytest.mark.parametrize(
+    ("path", "names_a_copy"),
+    [("/lib/Aphex Twin/Xtal_01.m4a", True), ("/lib/Aphex Twin/[None]/Xtal.m4a", False)],
+    ids=["record", "broken-record"],
+)
+def test_gate_force_returns_the_record_it_can_read(path, names_a_copy):
+    """A REDOWNLOAD never skips, and it still reads the ownership record so its
+    placement replaces the copy the record names; a record of a spelling the
+    formatter never produces names no copy."""
+    provider = _FakeProvider()
+    rec = {"path": path}
+    stub = _bind(_stub(Path("/tmp"), provider, _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec)))
+
+    answer = runner.gate_track(stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), True)
+
+    assert answer == ("force", rec if names_a_copy else None)
+
+
 def test_gate_without_a_store_never_gates():
     provider = _FakeProvider()
     stub = _bind(_stub(Path("/tmp"), provider, _ownership=None))
@@ -2177,10 +2195,10 @@ def test_a_forced_retry_never_replaces_a_song_moved_in_during_the_fetch(tmp_path
     assert done["path"] == str(own.with_name("Xtal_01.m4a"))
 
 
-@pytest.mark.ffmpeg
-def test_redownload_replaces_the_copy_at_the_template_name(tmp_path, monkeypatch):
-    """An explicit REDOWNLOAD reads no ownership record and replaces the copy
-    at the template name in place, whoever wrote it."""
+def _run_redownload(tmp_path, monkeypatch, recorded: Path | None = None):
+    """Run the one-track job as an explicit REDOWNLOAD of song-1, through the
+    real ownership gate: the store names ``recorded`` as song-1's copy, or
+    nothing when it is None. "Skip existing" is on. Returns (summary, relay)."""
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
@@ -2189,16 +2207,22 @@ def test_redownload_replaces_the_copy_at_the_template_name(tmp_path, monkeypatch
     staged = tmp_path / "staged.m4a"
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
-    base = tmp_path / "lib"
-    own = base / "Aphex Twin" / "Xtal.m4a"
-    own.parent.mkdir(parents=True)
-    own.write_bytes(b"stale-copy")
-    stub = _bind(_stub(base, provider, _redownload_overrides={"apple:song-1"}))
+    rec = None if recorded is None else {"path": str(recorded)}
+    stub = _bind(
+        _stub(
+            tmp_path / "lib",
+            provider,
+            _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec),
+            _redownload_overrides={"apple:song-1"},
+        )
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: True
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     summary = runner.run_apple_job(
-        stub._apple_job_hooks(),
+        hooks,
         1,
         spec,
         _song_resource(),
@@ -2206,21 +2230,217 @@ def test_redownload_replaces_the_copy_at_the_template_name(tmp_path, monkeypatch
         job_abort=Event(),
         file_template="{artist_name}/{track_title}",
     )
+    return summary, relay
+
+
+@pytest.mark.ffmpeg
+def test_redownload_replaces_the_untagged_copy_its_record_names(tmp_path, monkeypatch):
+    """A copy whose tag write failed carries no item id; the ownership record
+    is what names it as this track's, so a REDOWNLOAD replaces it in place."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"stale-copy")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
 
     assert summary == ""
     assert own.stat().st_size != len(b"stale-copy")
-    assert not own.with_name("Xtal_01.m4a").exists()
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
     done = next(ev for ev in relay.events if ev.get("status") == "done")
     assert done["path"] == str(own)
 
 
-def _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, on_place):
+@pytest.mark.ffmpeg
+def test_redownload_replaces_the_own_copy_at_the_template_name(tmp_path, monkeypatch):
+    """With no ownership record, the copy at the template name that carries
+    this track's item id in the delivered Version is replaced in place."""
+    import mutagen.mp4
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    assert mutagen.mp4.MP4(str(own)).tags["\xa9nam"] == ["Xtal"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_redownload_replaces_the_recorded_copy_never_a_siblings_at_the_template_name(tmp_path, monkeypatch):
+    """Two tracks render to one name: song-2 owns Xtal.m4a, so song-1's own
+    copy is Xtal_01.m4a. A REDOWNLOAD of song-1 replaces Xtal_01.m4a and
+    leaves song-2's audio alone."""
+    sibling = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    _tone(sibling)
+    _write_item_id(sibling, "apple:song-2")
+    before = sibling.read_bytes()
+    own = sibling.with_name("Xtal_01.m4a")
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sibling.read_bytes() == before
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a", "Xtal_01.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_redownload_never_follows_the_record_into_another_folder(tmp_path, monkeypatch):
+    """The store answers the best copy in any folder. A REDOWNLOAD whose record
+    names a copy in a playlist folder lands at this job's template name and
+    leaves that copy alone."""
+    elsewhere = tmp_path / "lib" / "Playlists" / "Mix" / "Xtal.m4a"
+    elsewhere.parent.mkdir(parents=True)
+    _tone(elsewhere)
+    _write_item_id(elsewhere, "apple:song-1")
+    before = elsewhere.read_bytes()
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=elsewhere)
+
+    assert summary == ""
+    assert elsewhere.read_bytes() == before
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a")
+
+
+@pytest.mark.ffmpeg
+def test_redownload_lands_under_the_templates_spelling_of_the_recorded_folder(tmp_path, monkeypatch):
+    """The ledger records absolute paths, while the download root may be a
+    symlink: the recorded copy is replaced in place, under the template's
+    spelling, so every file the job lands shares one folder spelling."""
+    real = tmp_path / "real"
+    (real / "Aphex Twin").mkdir(parents=True)
+    (tmp_path / "lib").symlink_to(real, target_is_directory=True)
+    own = real / "Aphex Twin" / "Xtal.m4a"
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a")
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("guess", [".m4a", ".flac"], ids=["guess-m4a", "guess-flac"])
+@pytest.mark.parametrize("occupant_id", ["", "apple:song-2"], ids=["untagged", "another-song"])
+def test_redownload_without_a_record_lands_beside_a_file_it_cannot_prove_is_its_own(
+    tmp_path, monkeypatch, guess, occupant_id
+):
+    """With no ownership record, a file at the template name is replaced only
+    when it proves it is this track's. An untagged one cannot be told from the
+    user's own (a Finder copy carries no item id) and another song's never is,
+    so the REDOWNLOAD lands beside either, whatever the extension guess (a
+    .flac guess the delivery keeps as .m4a aims at the same name)."""
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: guess)
+    occupant = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    occupant.parent.mkdir(parents=True)
+    _tone(occupant)
+    if occupant_id:
+        _write_item_id(occupant, occupant_id)
+    before = occupant.read_bytes()
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch)
+
+    assert summary == ""
+    assert occupant.read_bytes() == before
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(occupant.with_name("Xtal_01.m4a"))
+
+
+@pytest.mark.ffmpeg
+def test_redownload_with_a_wrong_extension_guess_replaces_the_own_copy_in_place(tmp_path, monkeypatch):
+    """The ask reads as FLAC but the delivery stays .m4a (an AAC-only master,
+    or no FFmpeg after "Continue anyway"): the track's own .m4a at the template
+    name is replaced in place, never numbered beside it."""
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_a_sibling_written_during_a_redownloads_fetch_keeps_its_file(tmp_path, monkeypatch):
+    """The copy at the template name is this track's when the REDOWNLOAD picks
+    it, and a sibling takes the name during the fetch: the placement leaves the
+    sibling's file."""
+    from waves.metadata.tags import read_item_id
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    def sibling_takes_the_name(dest: Path, call: int) -> None:
+        if call == 0:
+            _write_item_id(dest, "apple:other-song")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(
+        tmp_path, monkeypatch, sibling_takes_the_name, _redownload_overrides={"apple:song-1"}
+    )
+
+    assert summary == ""
+    assert read_item_id(own) == "apple:other-song"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+
+
+@pytest.mark.ffmpeg
+def test_an_untagged_file_moved_onto_the_recorded_name_during_a_redownload_keeps_its_bytes(tmp_path, monkeypatch):
+    """The record names an untagged copy (its tag write failed), and another
+    untagged file takes its name during the fetch: the absent id passes only
+    for the very file the record named, so the newcomer keeps its bytes."""
+    recorded = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    recorded.parent.mkdir(parents=True)
+    recorded.write_bytes(b"stale-copy")
+    rec = {"path": str(recorded)}
+
+    def finder_copy_takes_the_name(dest: Path, call: int) -> None:
+        if call == 0:
+            dest.unlink()
+            dest.write_bytes(b"finder-copy")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(
+        tmp_path,
+        monkeypatch,
+        finder_copy_takes_the_name,
+        _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec),
+        _redownload_overrides={"apple:song-1"},
+    )
+
+    assert summary == ""
+    assert recorded.read_bytes() == b"finder-copy"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+
+
+def _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, on_place, **stub_overrides):
     """Run the one-track job while a writer strikes the picked destination.
 
     ``on_place(dest, call)`` runs right before each real placement (``call`` is
     0 for the picked name, 1 for the step-aside) and writes the file the race
     is about there: the fetch window DL-03 names, simulated at its last
-    moment. Returns (summary, relay, base).
+    moment. ``stub_overrides`` reach the bridge stub. Returns (summary, relay,
+    base).
     """
     from waves.providers.apple import engine as apple_engine
 
@@ -2240,7 +2460,7 @@ def _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, on_place):
         return real_place(staged_file, dest, **kwargs)
 
     monkeypatch.setattr(runner, "place_file", racing_place)
-    stub = _bind(_stub(base, provider))
+    stub = _bind(_stub(base, provider, **stub_overrides))
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
