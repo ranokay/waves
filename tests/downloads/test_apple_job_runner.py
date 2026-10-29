@@ -1231,7 +1231,7 @@ def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monke
     assert stranger.is_file(), "the stranger's file is never replaced"
 
 
-def _skip_off_run(stub, qid=1):
+def _skip_off_run(stub, qid=1, signals=None):
     hooks = stub._apple_job_hooks()
     hooks.job_skip_existing = lambda qid: False
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
@@ -1240,7 +1240,7 @@ def _skip_off_run(stub, qid=1):
         qid,
         spec,
         _song_resource(),
-        signals=_Relay(),
+        signals=signals or _Relay(),
         job_abort=Event(),
         file_template="{artist_name}/{track_title}",
     )
@@ -1302,7 +1302,9 @@ def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monk
 
 def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp_path, monkeypatch):
     """The ledger records the real path; a download root reached through a
-    symlink still names the same folder, so the own copy is replaced."""
+    symlink still names the same folder, so the own copy is replaced, under the
+    root's own spelling like every other file the job lands."""
+    from waves.metadata.tags import read_item_id
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
@@ -1323,10 +1325,13 @@ def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp
     _write_item_id(own, "apple:song-1")
     stub = _bind(_stub(base, provider))
     monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own.resolve())}))
+    relay = _Relay()
 
-    assert _skip_off_run(stub) == ""
+    assert _skip_off_run(stub, signals=relay) == ""
 
     assert sorted(p.name for p in real.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+    assert read_item_id(stranger) == "apple:other-song"
+    assert [e["path"] for e in relay.events if e["status"] == "done"] == [str(base / "Aphex Twin" / "Xtal_01.m4a")]
 
 
 def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path, monkeypatch):

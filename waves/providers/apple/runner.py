@@ -2083,12 +2083,15 @@ def deliver_track(
     # What the swap compares an untagged occupant against: the very file
     # checked here, so a song moved into the name meanwhile is not replaced.
     owned_identity = _file_identity(pathlib.Path(str(owned_path))) if owned_here else None
-    if force or owned_here:
+    # That copy under the template's spelling of the folder, so every file this
+    # job lands shares one spelling (the collection playlist groups by folder).
+    owned_dest = exact.parent / pathlib.Path(str(owned_path)).name if owned_here else None
+    if force or owned_dest is not None:
         # Overwrite the copy THIS track owns, not the template path: two
         # distinct tracks can render to one relative name (the second owns
         # the _01 suffixed file), and the template path would overwrite
         # the sibling's audio while its record goes stale.
-        dest = pathlib.Path(owned_path) if owned_path else exact
+        dest = owned_dest or (pathlib.Path(owned_path) if owned_path else exact)
         dest.parent.mkdir(parents=True, exist_ok=True)
     elif exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
         if skip_existing:
@@ -2222,13 +2225,9 @@ def deliver_track(
                     staged,
                     dest,
                     overwrite=force,
-                    # The lenient re-proof covers only the ledger's own path; a
+                    # The lenient re-proof covers only the ledger's own copy; a
                     # destination the extension moved elsewhere proves its id.
-                    occupant_is_own=(
-                        _occupant_is_owned_here
-                        if owned_here and dest == pathlib.Path(str(owned_path))
-                        else _occupant_is_this_items_own
-                    ),
+                    occupant_is_own=(_occupant_is_owned_here if dest == owned_dest else _occupant_is_this_items_own),
                 )
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
