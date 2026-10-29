@@ -39,6 +39,7 @@ flowchart TD
   universal engine, and Apple uses its own adapter.
 - Infrastructure modules have specific contracts: `ids.py` for identity,
   `http.py` for pooled sessions, `file_integrity.py` for streaming SHA-256,
+  `flac_verify.py` for FLAC STREAMINFO reads and the in-place signature seal,
   `file_locks.py` for locks the OS drops with their process,
   `redaction.py` for privacy, and `events.py` for typed redacted application events. Do not borrow another domain's private
   helpers for these operations.

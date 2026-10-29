@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from support.bridge_stub import BridgeStub
@@ -263,14 +264,22 @@ def test_tidal_extract_copies_lossless_and_reencodes_lossy(monkeypatch):
     monkeypatch.setattr(download_mod, "FFmpeg", _FakeFFmpeg)
     dl = download_mod.Download.__new__(download_mod.Download)
     dl.settings = SimpleNamespace(data=SimpleNamespace(path_binary_ffmpeg="ffmpeg"))
+    dl.event_abort = Event()
+    dl.fn_logger = MagicMock()
+    # The seal is not this test's subject, and it must never read a shared
+    # path: record the calls instead.
+    sealed: list[Path] = []
+    dl._flac_seal_streaminfo = lambda path, event_stop=None: sealed.append(path)
 
     dl._extract_flac(Path("/tmp/x.m4a"))
     assert seen.get("acodec") == "copy"
+    assert sealed == [Path("/tmp/x.flac")], "the stream copy is sealed"
 
     seen.clear()
     dl._extract_flac(Path("/tmp/x.m4a"), transcode=True)
     assert seen.get("acodec") == "flac"
     assert "sample_rate" not in seen and "audio_bitrate" not in seen and "ar" not in seen
+    assert len(sealed) == 1, "ffmpeg's FLAC encoder already wrote the header"
 
 
 # ---------------------------------------------------------- Apple guess + mode
