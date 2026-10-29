@@ -29,21 +29,23 @@ The branch guard is commit-only. A conflicted upstream synchronization merge con
 
 This section owns the gate policy. Other docs link here instead of repeating it.
 
-| Change class      | Examples                                                                                   | Before the PR                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| Prose             | Docs, comments, docstrings without code                                                    | `mise run check`, plus the packaging guard when one covers the file |
-| Isolated logic    | Pure domain rules with no UI, process, persistence or provider surface                     | `mise run check`, `mise run test-fast`, and focused tests           |
-| Full gate         | UI, public contracts, persistence, providers, downloads, dependencies, or uncertain impact | `mise run check` and `mise run test-strict` on the final SHA        |
-| Release or native | Build, packaging, signing, updater, wrapper, platform claims                               | Full gate plus the build, native or live evidence the claim needs   |
+| Change class      | Examples                                                                                   | Before the PR                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| Prose             | Docs, comments, docstrings without code                                                    | `mise run check` plus the prose checks below                      |
+| Isolated logic    | Pure domain rules with no UI, process, persistence or provider surface                     | `mise run check`, `mise run test-fast`, and focused tests         |
+| Full gate         | UI, public contracts, persistence, providers, downloads, dependencies, or uncertain impact | `mise run check` and `mise run test-strict` on the final SHA      |
+| Release or native | Build, packaging, signing, updater, wrapper, platform claims                               | Full gate plus the build, native or live evidence the claim needs |
 
-Dependency changes are full-gate. A docs or config policy cleanup is prose class unless it changes runtime behavior.
+Prose checks: run the packaging guard when one covers the file; run the source-pin test when it reads the edited function or file (for example the wipe guards in `tests/ui/test_factory_reset.py` and the source assertions in `tests/downloads/test_login_token_persist_listener.py`); run the applicable doctest command when the edit adds or edits `>>>`. The normal suite tasks do not collect doctests.
+
+Dependency changes are full-gate. The light exception covers documentation and the removal of a non-executable obsolete tool's metadata or schema, including its schema-only guard test. Executable CI, build, test-collection, gate or security configuration is full-gate, even when it looks like cleanup. Uncertain impact is full-gate.
 
 ## Review
 
 This section owns the reviewer count.
 
 - **One independent reviewer** for every substantive code change, including isolated logic. The review covers standards, the issue requirements (the spec), and correctness as one checklist.
-- **Two independent reviewers** for data loss, security, authentication and updater changes. The second review targets the named risk.
+- **Two independent reviewers** for data loss, security, authentication and updater changes. The second review targets the named risk, and the PR body names that reviewer and the risk. The full-gate helper validates the three review topics, not the reviewer count.
 - **No independent code reviewer** for prose or docs and config policy cleanup. Supervisor or maintainer review is enough.
 - Automated CodeQL and SonarCloud remain advisory security and quality scans. They are not reviewers.
 - Do not request CodeRabbit routinely. A high-risk change may use one additional reviewer, bot or human, when the named risk justifies it.
@@ -52,11 +54,13 @@ This section owns the reviewer count.
 
 ## Merge verification
 
+Both paths verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `develop`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. A failed advisory check needs a written disposition. A pending, skipped or empty review is recorded as incomplete, never claimed as coverage. Do not request routine bot reviews and do not wait for a bot quota.
+
 The full-gate and light paths are deliberately different. Do not fabricate a receipt or use the full-gate tool for a light change.
 
-**Full gate.** Collect a `mise run check` receipt and a `mise run test-strict` receipt on the same head, plus one review receipt with standards, spec and correctness complete and no unresolved findings. Use the existing `merge_preflight.py` only with those receipts. It hardcodes both gate commands and all three review topics.
+**Full gate.** Collect a `mise run check` receipt and a `mise run test-strict` receipt on the same head, plus one review receipt with standards, spec and correctness complete and no unresolved findings. Use the existing `merge_preflight.py` only with those receipts. It hardcodes both gate commands and all three review topics, and it checks the live PR head, base and mergeability. For a high-risk change, the PR body names the second reviewer and the named risk; the helper does not validate that count.
 
-**Light path.** For prose and isolated-logic changes, record the `mise run check` exit, the `test-fast` and focused-test exits where they apply, and the reviewer where the change is substantive code. Verify the PR head, base, mergeability and check rollup with `gh pr view --json headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup`, then merge with `gh pr merge --squash --match-head-commit <head>`. Do not create a strict receipt and do not call `merge_preflight.py`.
+**Light path.** For prose and isolated-logic changes, record the `mise run check` exit, the `test-fast` and focused-test exits where they apply, and the reviewer where the change is substantive code. Verify with `gh pr view <pr> --repo ranokay/waves --json state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup`. Require `OPEN`, `isDraft: false`, base `develop`, head equal to the reviewed and tested head, `mergeable: MERGEABLE`, and `mergeStateStatus` in `CLEAN`, `UNSTABLE` or `HAS_HOOKS`. Then merge with `gh pr merge <pr> --repo ranokay/waves --squash --match-head-commit <head>`. Do not create a strict receipt and do not call `merge_preflight.py`.
 
 A docs or config policy cleanup uses the light path with supervisor review. It does not claim independent code review.
 

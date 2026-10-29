@@ -18,7 +18,7 @@ Gate (head `<sha>`, no writes since):
 
 - `mise run check`: exit <n>
 - <test command>: <passed> passed[, <failed> failed (<one-line disposition>)]
-- Independent review: <one reviewer for substantive code, two for data loss/security/auth/updater, or none for prose>; <n> fixed, <n> refuted
+- Independent review: <one reviewer for substantive code, two for data loss/security/auth/updater, or none for prose>; second reviewer and risk: <name and risk, or none>; <n> fixed, <n> refuted
 - PR checks: <all green | pending at merge | each failed check with its fix or refutation>
 - Qualification gaps: <platform, native, live account or pending case; "none" when none>
 
