@@ -1130,6 +1130,25 @@ def test_resume_selects_the_chosen_folder_it_was_writing_in_again(tmp_path, monk
     assert b._waves_prefs["flac_check_resume"] == ""
 
 
+def test_a_fix_over_a_partial_scan_keeps_the_resume_marker(tmp_path):
+    """A cancelled scan leaves rows for only part of the library; a fix over
+    those rows must not claim the unfinished fix is done."""
+    b = _bridge(tmp_path, ffmpeg="/usr/bin/true")
+    key = b.flacCheckSources()["key"]
+    b._waves_prefs["flac_check_resume"] = key
+    b._flac_check._unreadable = []
+    b._flac_check._state.update({"phase": "done", "last": "fix", "fixable": 0, "scope": key})
+    b._flac_check._scan_complete = False
+    b._flac_check._fix_complete_scan = False
+
+    b._flac_check._settled(True)
+    assert b._waves_prefs["flac_check_resume"] == key, "a partial scan's fix cleared the marker"
+
+    b._flac_check._fix_complete_scan = True
+    b._flac_check._settled(True)
+    assert b._waves_prefs["flac_check_resume"] == ""
+
+
 def test_a_resume_that_finds_nothing_left_clears_the_marker_and_writes_nothing(tmp_path):
     b = _bridge(tmp_path, ffmpeg="/usr/bin/true")
     _fake_flac(tmp_path / "Downloads" / "set.flac", b"\x05" * 16)

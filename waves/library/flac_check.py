@@ -32,16 +32,40 @@ import os
 import pathlib
 import re
 import sqlite3
+import sys
 import time
+import unicodedata
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 from waves import flac_verify as fv
-from waves.library.ownership import path_under
 
 logger = logging.getLogger("waves.flac")
+
+
+def path_under(path: str, root: str) -> bool:
+    """Does ``path`` lie at or under ``root``, preserving both spellings?
+
+    The ownership helper strips surrounding whitespace, which turns a
+    selected folder named ``Music `` into ``Music``: a link from the first
+    would then look contained in the second. This check keeps the exact
+    spelling (a trailing space is part of a POSIX folder name) and still
+    folds case on macOS, where the default volumes do."""
+    try:
+        p = os.path.abspath(os.path.expanduser(path or ""))
+        r = os.path.abspath(os.path.expanduser(root or ""))
+    except Exception:
+        return False
+    if sys.platform == "darwin":
+        p = unicodedata.normalize("NFC", p).casefold()
+        r = unicodedata.normalize("NFC", r).casefold()
+    try:
+        return os.path.commonpath((p, r)) == r
+    except ValueError:
+        return False
+
 
 # A file written more recently than this is left for the next run: it may
 # still be arriving (a copy in progress has a complete header long before it
@@ -631,6 +655,7 @@ def fix_rows(
     out: list[Verdict] = []
     for verdict in rows:
         row = verdict.row
+        cached = verdict.cached
         if row.status != fv.UNSET or row.info is None:
             out.append(verdict)
             continue
@@ -655,9 +680,10 @@ def fix_rows(
                         row = replace(row, detail="not reached, the run was canceled")
                     else:
                         row = sealed
-        out.append(Verdict(row, verdict.cached))
+                        cached = False  # seal_file reread and decoded it
+        out.append(Verdict(row, cached))
         if on_row is not None:
-            on_row(Verdict(row, verdict.cached))
+            on_row(Verdict(row, cached))
     return out
 
 

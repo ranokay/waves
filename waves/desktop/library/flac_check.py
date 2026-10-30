@@ -235,6 +235,12 @@ class FlacCheck:
         self._result: tuple[int, list[core.Verdict], list[str]] = (0, [], [])
         self._state = idle_state()
         self._resuming = False  # a RESUME's scan is on; its outcome starts the fix
+        # Whether the last scan walked every file it set out to (a cancel or
+        # a failed root leaves it False), and whether the running fix was
+        # based on such a complete scan. A partial scan's fix must not clear
+        # an unfinished fix's marker: the files it never read may still need it.
+        self._scan_complete = False
+        self._fix_complete_scan = False
         # The running fix inherits an unfinished fix's marker: finishing it
         # does not finish what the other left in a folder this one missed.
         self._keep_resume = False
@@ -378,6 +384,7 @@ class FlacCheck:
         )
         self._rows = []
         self._unreadable = []
+        self._scan_complete = False
         logger.info(
             "FLAC check: %s scan of %d folder(s) started (%s%s)",
             "deep" if deep else "header",
@@ -415,6 +422,7 @@ class FlacCheck:
             self._fail("Writing signatures needs FFmpeg (see the Processing section).")
             return
         candidates = sum(v.status == fv.UNSET for v in rows)
+        self._fix_complete_scan = self._scan_complete
         unreadable = list(self._unreadable)
         # fixable stays the candidate count while the fix runs; the outcome
         # replaces it with what is left. total is what "Writing N of M" reads.
@@ -531,6 +539,8 @@ class FlacCheck:
                     with contextlib.suppress(OSError):
                         os.rmdir(self._report_dir())
                     report = ""
+        if kind == "scan" and gen == self._gen:
+            self._scan_complete = not cancelled
         counts = core.summarize(rows)
         total = counts.pop("files", 0)
         self._result = (gen, rows, unreadable)
@@ -716,8 +726,12 @@ class FlacCheck:
         marker = str(self._prefs.get("flac_check_resume") or "")
         scope = str(st.get("scope") or "")
         missed = self._missed(scope)
-        # A fix inherits only what it missed; a scan also needs nothing left.
-        finished = not (inherited and missed) if st.get("last") == "fix" else not (st.get("fixable") or missed)
+        # A fix inherits only what it missed, and only a complete scan's fix
+        # may clear the marker; a scan also needs nothing left to fix.
+        if st.get("last") == "fix":
+            finished = self._fix_complete_scan and not (inherited and missed)
+        else:
+            finished = not (st.get("fixable") or missed)
         if marker and marker == scope and finished:
             self._resume_unread = None
             self._set_pref("flac_check_resume", "")

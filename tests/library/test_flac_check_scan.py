@@ -107,6 +107,23 @@ def test_iter_flac_files_scope(tmp_path):
     assert unreadable == []
 
 
+def test_a_link_out_of_a_folder_whose_name_ends_in_a_space_is_skipped(tmp_path):
+    """The selected folder is ``Music ``; ``Music`` beside it is a different
+    folder, so a link from the first into the second must not be walked (and
+    must never be written by a fix)."""
+    root = tmp_path / "Music "
+    outside = tmp_path / "Music"
+    root.mkdir()
+    outside.mkdir()
+    _fake_flac(root / "own.flac", b"\x05" * 16)
+    (outside / "track.flac").write_bytes(b"x")
+    os.symlink(outside / "track.flac", root / "link.flac")
+
+    found = list(fc.iter_flac_files([str(root)]))
+
+    assert found == [str(root / "own.flac")]
+
+
 def test_iter_flac_files_reports_every_folder_it_could_not_read(tmp_path):
     """A missing root, a root that is a file, and a subfolder the system will
     not list are named, never taken for empty; what could be read is still

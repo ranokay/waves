@@ -408,6 +408,7 @@ def test_a_fix_over_remembered_rows_still_proves_each_file(tmp_path):
     out = {os.path.basename(v.path): v for v in fc.fix_rows(rows, ffmpeg_path(), settle_seconds=0.0)}
 
     assert out["a.flac"].status == fv.SEALED
+    assert out["a.flac"].cached is False, "a fresh seal is not an earlier verdict"
     assert fv.read_streaminfo(root / "a.flac").md5 == md5
     assert out["b.flac"].status == fv.CHANGED, "the header on disk is not the one remembered: left alone"
     assert fv.read_streaminfo(b).md5 == b"\x07" * 16
