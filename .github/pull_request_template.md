@@ -22,8 +22,6 @@ Gate (head `<sha>`, no writes since):
 - PR checks: <all green | pending at merge | each failed check with its fix or refutation>
 - Qualification gaps: <platform, native, live account or pending case; "none" when none>
 
-Merge path: <full gate and merge_preflight, or light path with head/base/mergeability verified>
-
 ## Merge Danger
 
 <!-- Door: one-way or two-way. Blast Radius: one word; add a line when the impact is not obvious. -->

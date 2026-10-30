@@ -79,10 +79,6 @@ run = "bash tools/build_waves.sh"
 description = "Fail fast on stale installs and missing hooks (versions, waves/tidaler, lock, hooks, QML smoke)"
 run = "bash tools/doctor.sh"
 
-[tasks.frontier]
-description = "Report each open wayfinder map's next agent-ready issue, live blockers and checklist drift (pass map numbers to narrow)"
-run = "uv run --locked --all-extras python tools/wayfinder_frontier.py"
-
 [tasks.graph]
 description = "Refresh the code-review-graph index (run when list_graph_stats reports head_matches_build false; semantic search stays keyword until embeddings are generated)"
 run = "uvx code-review-graph update"
