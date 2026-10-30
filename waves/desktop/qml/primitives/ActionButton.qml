@@ -29,8 +29,8 @@ Rectangle {
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
   property string label: ""
   property bool primary: false
-  // GateAction's red recipe (red on redCont, translucent red border) on
-  // the hugging shape, for the destructive half of a button pair.
+  // The dialog gates' red recipe (red on redCont, translucent red border)
+  // on the hugging shape, for the destructive half of a button pair.
   property bool danger: false
   // The same recipe in the palette's gold, for an action that interrupts
   // without discarding anything (pausing the queue). Not danger: nothing
@@ -55,7 +55,10 @@ Rectangle {
   // same clicked() the pointer does, so every dialog action (queue
   // PAUSE/STOP/RETRY ALL/CLEAR, gate cards) works keyboard-only. The
   // focus ring is the accent border, since a custom Rectangle draws none.
-  activeFocusOnTab: visible
+  // A disabled action is no tab stop and no pointer target; its key and
+  // accessibility handlers below check enabled, so none of the three paths
+  // can fire it.
+  activeFocusOnTab: visible && enabled
   Accessible.role: Accessible.Button
   Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel : (sb.label !== "" ? sb.label : (sb.icon !== "" ? sb.icon.charAt(0).toUpperCase() + sb.icon.slice(1) : "Button"))
   Accessible.onPressAction: function () {
@@ -96,8 +99,12 @@ Rectangle {
     id: sbTxt
     anchors.centerIn: parent
     // Kept loaded while icon-only (empty, invisible): its line height is
-    // what makes the square square, so it has to keep measuring.
+    // what makes the square square, so it has to keep measuring. Width stays
+    // the natural hug unless the host caps the button, and then the label
+    // elides inside it rather than drawing past the rectangle.
     visible: !sb.iconOnly
+    width: Math.min(implicitWidth, Math.max(0, sb.width - (sb.compact ? 9 : sb.btnPadH) * 2))
+    elide: Text.ElideRight
     textFormat: Text.PlainText
     text: sb.label
     color: sb.danger ? red : sb.warn ? gold : (sb.primary ? accent : (sbMa.containsMouse ? textHi : textLo))
@@ -117,8 +124,9 @@ Rectangle {
   MouseArea {
     id: sbMa
     anchors.fill: parent
+    enabled: sb.enabled
     hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
+    cursorShape: sb.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     onClicked: sb.clicked()
   }
   // The keyboard focus ring (a custom Rectangle draws none): an overlay

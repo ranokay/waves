@@ -188,7 +188,7 @@ def _run_scenario() -> int:
         print("could not locate the Settings nav tab", file=sys.stderr)
         return _EXIT_PRECONDITION
     # The offscreen window needs a mouse move plus a warm-up click before
-    # a GateAction reacts; the delayed press/release then lands.
+    # a dialog action reacts; the delayed press/release then lands.
     QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
     settle(60)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
@@ -214,7 +214,7 @@ def _run_scenario() -> int:
         print("the TIDAL card exposes no sign-in action", file=sys.stderr)
         return _EXIT_PRECONDITION
     # The offscreen window needs a mouse move plus a warm-up click before
-    # a GateAction reacts; the delayed press/release then lands.
+    # a dialog action reacts; the delayed press/release then lands.
     QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
     settle(60)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
@@ -375,7 +375,7 @@ def _run_signout_scenario() -> int:
     q("root.requestActivate()")
     settle(100)
     # The offscreen window needs a mouse move plus a warm-up click before
-    # a GateAction reacts; the delayed press/release then lands.
+    # a dialog action reacts; the delayed press/release then lands.
     QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
     settle(60)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))

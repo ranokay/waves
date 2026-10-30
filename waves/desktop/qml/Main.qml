@@ -8274,9 +8274,11 @@ ApplicationWindow {
                 color: root.textHi
                 font.pixelSize: 22
               }
-              GateAction {
+              ActionButton {
                 objectName: "browseSignInAction"
-                width: parent.width
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width, implicitWidth)
+                primary: true
                 label: String(root.browseNav.action_label || "")
                 visible: String(root.browseNav.action || "") !== ""
                 onClicked: waves.providerAction(String(root.browseNav.provider || ""), String(root.browseNav.action || ""))
@@ -9162,10 +9164,12 @@ ApplicationWindow {
             spacing: 10
             Repeater {
               model: root.searchOpportunities
-              delegate: GateAction {
+              delegate: ActionButton {
                 required property var modelData
                 objectName: "emptyProviderCta_" + String(modelData.provider)
-                width: emptyCtaCol.width
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width, implicitWidth)
+                primary: true
                 label: String(modelData.action_label || "")
                 onClicked: waves.providerAction(String(modelData.provider), String(modelData.action))
               }
@@ -9835,9 +9839,11 @@ ApplicationWindow {
               color: root.textLo
               font.pixelSize: 13
             }
-            GateAction {
+            ActionButton {
               objectName: "libSignInAction"
-              width: parent.width
+              anchors.horizontalCenter: parent.horizontalCenter
+              width: Math.min(parent.width, implicitWidth)
+              primary: true
               label: String(root.myMusicEmpty.action_label || "")
               onClicked: root.runMyMusicEmptyAction()
             }
@@ -10747,7 +10753,10 @@ ApplicationWindow {
           lineHeight: 1.3
           text: "Waves doesn't have a folder to save downloads to yet. Pick where your music should go, then start the download again."
         }
-        GateAction {
+        ActionButton {
+          Layout.alignment: Qt.AlignHCenter
+          Layout.maximumWidth: parent.width
+          primary: true
           label: "Open download settings"
           onClicked: {
             root.folderGateBlocking = false
@@ -10829,11 +10838,11 @@ ApplicationWindow {
           }
         }
         RowLayout {
-          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          GateAction {
-            showArrow: false
+          ActionButton {
+            primary: true
             label: "Choose a new location"
             onClicked: {
               root.folderNudge = false
@@ -10841,9 +10850,7 @@ ApplicationWindow {
               root.openDownloadSetting()
             }
           }
-          GateAction {
-            showArrow: false
-            neutral: true
+          ActionButton {
             label: "Keep the default location"
             onClicked: {
               root.folderNudge = false
@@ -10923,11 +10930,11 @@ ApplicationWindow {
           }
         }
         RowLayout {
-          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          GateAction {
-            showArrow: false
+          ActionButton {
+            primary: true
             label: "Download all"
             onClicked: {
               var p = root.catDlPrompt
@@ -10953,9 +10960,7 @@ ApplicationWindow {
                 waves.downloadPlaylistCategory(p.path, p.provider || root.legacyBrowseProvider)
             }
           }
-          GateAction {
-            showArrow: false
-            neutral: true
+          ActionButton {
             label: "Cancel"
             onClicked: root.catDlDismiss()
           }
@@ -11011,11 +11016,11 @@ ApplicationWindow {
           text: "Every option in Settings goes back to its factory value, including your download folder and quality choices. You stay signed in, and your downloaded music is not touched."
         }
         RowLayout {
-          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          GateAction {
-            showArrow: false
+          ActionButton {
+            primary: true
             label: "Reset settings"
             onClicked: {
               root.confirmSettingsReset = false
@@ -11023,9 +11028,7 @@ ApplicationWindow {
               settingsPage.externalReset()
             }
           }
-          GateAction {
-            showArrow: false
-            neutral: true
+          ActionButton {
             label: "Cancel"
             onClicked: root.confirmSettingsReset = false
           }
@@ -11178,11 +11181,10 @@ ApplicationWindow {
           text: "This signs you out and permanently erases everything Waves has saved on this computer: all settings, the record of which tracks you own, caches and logs. Your downloaded music files are not touched. Waves closes when it finishes, and the next launch starts like a brand-new install."
         }
         RowLayout {
-          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          GateAction {
-            showArrow: false
+          ActionButton {
             danger: true
             label: "Erase everything and close"
             onClicked: {
@@ -11191,9 +11193,7 @@ ApplicationWindow {
               Qt.quit()
             }
           }
-          GateAction {
-            showArrow: false
-            neutral: true
+          ActionButton {
             label: "Cancel"
             onClicked: root.confirmFactoryReset = false
           }
@@ -11267,20 +11267,18 @@ ApplicationWindow {
           text: "The folder is set, but writing to it failed just now. If it lives on a network drive or NAS, it may have disconnected while the computer slept. Reconnect it, or choose a different folder. The download is held: Waves keeps checking and resumes on its own the moment the folder is back."
         }
         RowLayout {
-          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          GateAction {
-            showArrow: false
+          ActionButton {
+            primary: true
             label: "Try again"
             onClicked: {
               root.folderUnreachable = false
               waves.retryDownloadFolder()
             }
           }
-          GateAction {
-            showArrow: false
-            neutral: true
+          ActionButton {
             label: "Choose a new location"
             onClicked: {
               root.folderUnreachable = false
@@ -11477,7 +11475,9 @@ ApplicationWindow {
         }
 
         // Cancel (while installing)
-        GateAction {
+        ActionButton {
+          Layout.alignment: Qt.AlignHCenter
+          Layout.maximumWidth: parent.width
           visible: appFfmpeg.busy
           label: "CANCEL"
           danger: true
@@ -11485,8 +11485,11 @@ ApplicationWindow {
         }
 
         // Managed: continue past the gate.
-        GateAction {
+        ActionButton {
+          Layout.alignment: Qt.AlignHCenter
+          Layout.maximumWidth: parent.width
           visible: appFfmpeg.stateKey === "managed" && !appFfmpeg.busy
+          primary: true
           label: "CONTINUE"
           onClicked: {
             setupSettings.ffmpegSetupDone = true
@@ -11854,11 +11857,11 @@ ApplicationWindow {
           text: "FFmpeg isn't set up, so files would save degraded: FLAC stays wrapped in its stream container, videos aren't converted, and track lengths aren't repaired (strict players can show 0:00). Set it up in Settings with one click, then start the download again, or continue anyway with these limitations."
         }
         RowLayout {
-          Layout.fillWidth: true
+          Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          GateAction {
-            showArrow: false
+          ActionButton {
+            primary: true
             label: "Set up FFmpeg"
             onClicked: {
               root.ffmpegBlocked = false
@@ -11866,10 +11869,8 @@ ApplicationWindow {
               root.openFfmpegSetting()
             }
           }
-          GateAction {
+          ActionButton {
             objectName: "ffmpegGateContinue"
-            showArrow: false
-            neutral: true
             label: "Continue anyway"
             onClicked: {
               root.ffmpegBlocked = false
@@ -12050,8 +12051,11 @@ ApplicationWindow {
             }
           }
         }
-        GateAction {
+        ActionButton {
           objectName: "termsAckAction"
+          Layout.alignment: Qt.AlignHCenter
+          Layout.maximumWidth: parent.width
+          primary: true
           label: "ACKNOWLEDGE & AGREE"
           enabled: ackChk.checked
           opacity: ackChk.checked ? 1 : 0.4

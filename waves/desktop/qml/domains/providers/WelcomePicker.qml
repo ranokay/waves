@@ -3,6 +3,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "StatusLight.js" as StatusLight
 import "../../primitives" as Primitives
+import "../../primitives"
 import "../../components"
 import "../search"
 
@@ -151,8 +152,11 @@ Rectangle {
               // one-time setup, never a sign-in (the
               // onboarding spec). A provider that
               // states none keeps the neutral invite.
-              GateAction {
+              ActionButton {
                 objectName: "welcomeProviderAction"
+                Layout.alignment: Qt.AlignHCenter
+                Layout.maximumWidth: parent.width
+                primary: true
                 label: String(modelData.action || "") !== "" ? String(modelData.action).toUpperCase() : ("CONTINUE WITH " + String(modelData.name).toUpperCase())
                 onClicked: pickCard.picked(String(modelData.id))
               }
@@ -170,7 +174,7 @@ Rectangle {
         font.underline: true
         // A reader's press answers the same skipped() the click calls.
         // Tab-reachable like every other primary control: the same
-        // Return/Enter/Space acceptance GateAction carries, plus a focus
+        // Return/Enter/Space acceptance ActionButton carries, plus a focus
         // ring (a Text draws none itself).
         activeFocusOnTab: visible
         Accessible.role: Accessible.Button
@@ -252,8 +256,11 @@ Rectangle {
           font.pixelSize: 13
         }
       }
-      GateAction {
+      ActionButton {
         objectName: "welcomeSignInOpen"
+        Layout.alignment: Qt.AlignHCenter
+        Layout.maximumWidth: parent.width
+        primary: true
         label: host.setupUrlOpened ? "REOPEN BROWSER LOGIN" : "OPEN BROWSER LOGIN"
         onClicked: waves.beginProviderLogin(host.setupProviderId)
       }
@@ -349,9 +356,12 @@ Rectangle {
           }
         }
       }
-      GateAction {
+      ActionButton {
         objectName: "welcomeSignInComplete"
+        Layout.alignment: Qt.AlignHCenter
+        Layout.maximumWidth: parent.width
         visible: host.setupUrlOpened
+        primary: true
         label: "COMPLETE SIGN-IN"
         // Same hold as the field's Enter: a click inside the decode
         // window would submit the scrambled glyphs (a spurious "that
@@ -374,11 +384,11 @@ Rectangle {
         font.pixelSize: 12
       }
       // The keyboard exit is the same: the Esc Shortcut above.
-      GateAction {
+      ActionButton {
         objectName: "welcomeSignInCancel"
+        Layout.alignment: Qt.AlignHCenter
+        Layout.maximumWidth: parent.width
         label: "CANCEL"
-        neutral: true
-        showArrow: false
         onClicked: host.cancelSetupSignIn()
       }
     }

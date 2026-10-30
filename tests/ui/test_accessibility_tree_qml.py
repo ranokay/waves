@@ -24,7 +24,7 @@ the metadata and focus reachability that make them usable keyboard-only:
   popover leaves no tab stop inside it;
 - the Settings commit actions (CANCEL, SAVE CHANGES) and the update toast's
   actions are named tab stops that answer the keyboard with the commit or the
-  branch the pointer takes, and the gate actions (a ``GateAction`` and a
+  branch the pointer takes, and the gate actions (an ``ActionButton`` and a
   gate's raw tap target) do the same;
 - a real Tab walk (QtTest key delivery) never lands on a control that is not
   on screen: thousands of controls inside closed surfaces (mostly Qt's own
@@ -182,7 +182,7 @@ def _adopted(q, object_name: str):
     """The adopted tap area the named host owns, or None.
 
     The host is the control itself for a direct adoption, or the component
-    instance (a ``GateAction``/``GateCard``/``Check``) whose inner tap area
+    instance (an ``ActionButton``/``GateCard``/``Check``) whose inner tap area
     carries the contract. Reached by objectName under the scene root and, as
     a fallback, under the window overlay (the full-screen gates live there,
     above any open Drawer), so a hidden copy of the same control on another
@@ -359,7 +359,6 @@ def test_wiring_primary_control_keyboard_handlers():
     )
     qml += (QML_DIR / "domains/queue/QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "primitives/ActionButton.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "components/GateAction.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "domains/providers/DecodeController.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "shell/NavTab.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "shell/NavCrumbTrail.qml").read_text(encoding="utf-8")
@@ -383,7 +382,6 @@ def test_wiring_primary_control_keyboard_handlers():
         "domains/downloads/DownloadButton.qml",
         "domains/queue/QueueDrawer.qml",
         "primitives/ActionButton.qml",
-        "components/GateAction.qml",
         "domains/providers/DecodeController.qml",
         "shell/NavTab.qml",
         "shell/NavCrumbTrail.qml",
@@ -421,7 +419,7 @@ def test_wiring_primary_control_keyboard_handlers():
         'accessibleLabel: updateToast.face === "ready" ? "LATER" : "Dismiss"',
         'accessibleLabel: "Not now"',
         'accessibleLabel: "I don\'t need FFmpeg. Stop showing this at launch."',
-        "accessibleLabel: ga.label",
+        "Accessible.name: sb.accessibleLabel",
         # The gate card's spoken name carries its chip.
         'accessibleLabel: gcard.title + (gcard.chip !== ""',
         # The queue's repeated actions name their own section.
@@ -1188,7 +1186,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     bridge._app_update_inflight = False
     settle(200)
 
-    # --- The gate actions: a GateAction, a GateCard and a gate's raw tap
+    # --- The gate actions: an ActionButton, a GateCard and a gate's raw tap
     # target are named tab stops, and their key presses take the gate's own
     # path. The GateCard's own action starts a real install, so only its
     # metadata is read. The FFmpeg state is forced missing (and the gate up)
@@ -1239,7 +1237,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         problems,
         _buttons(
             q,
-            "function (o) { return o.accessibleLabel === 'Continue anyway'; }",
+            "function (o) { return o.label === 'Continue anyway' && o.clicked !== undefined; }",
             scope="[root.contentItem, Overlay.overlay]",
         ),
         "the FFmpeg block gate's CONTINUE action",

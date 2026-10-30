@@ -310,7 +310,7 @@ def _run_journey(reverse: bool = False) -> int:
         settle(80)
         pos = QPoint(int(point.x()), int(point.y()))
         # The offscreen window needs a mouse move plus a warm-up click before
-        # a GateAction reacts; the delayed press/release then lands. Plain
+        # a dialog action reacts; the delayed press/release then lands. Plain
         # toggles must use tap(): a second press flips them back.
         QTest.mouseMove(root, pos)
         settle(60)
