@@ -2,13 +2,12 @@
 
 A folder named "AC#DC" or "What?" must open the dialog in that folder, not
 its parent: ``pathUrl`` percent-encodes the path (a URL reads ``#`` as a
-fragment and ``?`` as a query), and ``urlToPath`` decodes it back. The two
-functions are evaluated in a bare JS engine, not by reading their source.
+fragment and ``?`` as a query), and ``urlToPath`` decodes it back. The test
+extracts the two functions once and runs them in a bare JS engine; it asserts
+their behaviour, not their source text.
 """
 
 from __future__ import annotations
-
-import re
 
 import pytest
 from support.paths import QML_DIR
@@ -60,10 +59,3 @@ def test_the_folder_dialog_url_keeps_every_character_of_the_path():
         if url:
             back = engine.evaluate(f"urlToPath({url!r})").toString()
             assert back == path.replace("\\\\", "//").replace("\\", "/"), (url, back)
-
-
-def test_the_functions_are_the_settings_pages_own():
-    """The card uses page.pathUrl/urlToPath; this test reads the same file."""
-    source = SETTINGS.read_text(encoding="utf-8")
-    assert re.search(r"function pathUrl\(p\)", source)
-    assert re.search(r"function urlToPath\(u\)", source)

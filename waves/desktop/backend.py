@@ -533,10 +533,7 @@ _FACTORY_WIPE_FILES = (
     # a path per file it ever scanned. Opened only for the length of a scan,
     # never once a reset began; the reset waits for a running scan to close it
     # (FlacCheck.cache_busy_event, _FLAC_CACHE_RELEASE_WAIT_S).
-    "flac-check.sqlite3",
-    "flac-check.sqlite3-journal",
-    "flac-check.sqlite3-wal",
-    "flac-check.sqlite3-shm",
+    *_FLAC_CACHE_FILES,
     "app.log",
     "crash.log",
     "waves_dev.log",

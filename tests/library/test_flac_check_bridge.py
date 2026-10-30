@@ -997,6 +997,8 @@ def test_progress_posts_the_walk_then_the_total_and_weighs_a_fix_by_size(monkeyp
     clock[0] = 200.0
     fix = bridge_flac._Progress(posts.append, 2, {"/a.flac": 100, "/b.flac": 900})
     clock[0] = 210.0
+    fix.on_row(core.Verdict(fv.Row("/signed.flac", fv.SET)))  # not a candidate: not "written"
+    assert posts == []
     fix.on_row(core.Verdict(fv.Row("/a.flac", fv.SEALED)))
     # 100 of 1000 bytes in 10 s: 90 s left, though half the files are done.
     assert posts == [{"files": 1, "counts": {fv.SEALED: 1}, "eta": 90}]

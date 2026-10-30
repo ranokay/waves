@@ -54,6 +54,7 @@ from collections.abc import Callable
 from waves import flac_verify as fv
 from waves import redaction
 from waves.library import flac_check as core
+from waves.library.ownership import path_under
 
 logger = logging.getLogger("waves.flac")
 
@@ -113,12 +114,9 @@ def _scope_roots(key: str) -> list[str]:
 
 
 def _under_any(folder: str, parents: list[str]) -> bool:
-    folder = os.path.normpath(folder)
-    for parent in parents:
-        parent = os.path.normpath(parent)
-        if folder == parent or folder.startswith(parent.rstrip(os.sep) + os.sep):
-            return True
-    return False
+    """Whether a folder lies under any of ``parents``, by the ownership
+    domain's one path rule (case folding included)."""
+    return any(path_under(folder, parent) for parent in parents)
 
 
 def _unopened(chosen: bool, roots: int) -> str:
@@ -166,6 +164,10 @@ class _Progress:
             self._post({"found": found})
 
     def on_row(self, verdict: core.Verdict) -> None:
+        # A fix hands every row back (the report names them all); only its
+        # candidates are the "N of M" the card shows.
+        if self._sizes is not None and verdict.path not in self._sizes:
+            return
         self._seen += 1
         self._counts[verdict.status] = self._counts.get(verdict.status, 0) + 1
         self._done += self._sizes.get(verdict.path, 0) if self._sizes else 1
@@ -605,9 +607,9 @@ class FlacCheck:
 
     def delete_cache(self) -> None:
         """Remove the remembered verdicts and sqlite's sidecars, best effort."""
-        for suffix in ("", "-journal", "-wal", "-shm"):
+        for name in core.CACHE_FILES:
             with contextlib.suppress(OSError):
-                os.remove(self._cache_path() + suffix)
+                os.remove(os.path.join(self._config_dir, name))
 
     def _scan_job(
         self, gen: int, roots: list[str], ffmpeg: str, deep: bool, chosen: bool = False, recheck: bool = False

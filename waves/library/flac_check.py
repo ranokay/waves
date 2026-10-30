@@ -89,14 +89,20 @@ class Verdict:
     cached: bool = False
 
     def __getattr__(self, name: str):
-        # The row's fields are read everywhere a Row used to be (path, status,
-        # detail, info, size, mtime_ns, md5_audio, samples_decoded).
+        # A verdict IS its row plus the cache flag: forwarding the row's
+        # fields keeps one shape for every reader (path, status, detail,
+        # info, size, mtime_ns, md5_audio, samples_decoded).
         return getattr(self.row, name)
 
 
 def _stat(path: str) -> tuple[int, int]:
     st = os.stat(path)
     return st.st_size, st.st_mtime_ns
+
+
+def _settled(mtime_ns: int, now: float, settle_seconds: float) -> bool:
+    """Whether a file's modification time is old enough to trust complete."""
+    return now - mtime_ns / 1e9 >= settle_seconds
 
 
 # ---- the walk -----------------------------------------------------------------
@@ -339,20 +345,6 @@ class VerdictCache:
                 self._conn.close()
         self._conn = None
 
-    def lookup(self, path: str, deep: bool, reuse: bool = True) -> tuple[Verdict | None, tuple[int, int] | None]:
-        """The remembered verdict for the file as it is now, or None, plus
-        the stat it was judged by (None when the file cannot be stat'ed);
-        that stat is what :meth:`store` keys a fresh verdict on. Without
-        ``reuse`` only the stat is taken: the file is read again, and what
-        that read finds replaces what was remembered."""
-        try:
-            stamp = _stat(path)
-        except OSError:
-            return None, None
-        if self._conn is None or not reuse:
-            return None, stamp
-        return self.remembered(path, deep, stamp), stamp
-
     def remembered(self, path: str, deep: bool, stamp: tuple[int, int]) -> Verdict | None:
         """The verdict remembered for ``path`` at exactly ``stamp`` (its size
         and modification time), or None."""
@@ -407,7 +399,7 @@ class VerdictCache:
         row = verdict.row
         if self._conn is None or stamp is None or (row.size, row.mtime_ns) != stamp:
             return
-        if self._now() - stamp[1] / 1e9 < SETTLE_SECONDS:
+        if not _settled(stamp[1], self._now(), SETTLE_SECONDS):
             return
         info = row.info
         if info is None:
@@ -651,7 +643,7 @@ def fix_rows(
             else:
                 if (size, mtime_ns) != (row.size, row.mtime_ns):
                     row = replace(row, status=fv.CHANGED)
-                elif now() - mtime_ns / 1e9 < settle_seconds:
+                elif not _settled(mtime_ns, now(), settle_seconds):
                     row = replace(row, status=BUSY)
                 else:
                     sealed = fv.seal_file(row.path, ffmpeg, expected=row.info, should_continue=should_continue)

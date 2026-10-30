@@ -351,10 +351,14 @@ Item {
     var st = page.flacState
     return !st.running && (st.scope || "") !== (page.flacSources.key || "")
   }
+  // The folders a Waves library run writes in, for the confirmation dialogs.
+  function flacFoldersText(folders) {
+    return "Your Waves library: " + (folders || []).join(", ")
+  }
   // Where a fix would write, for the confirmation dialog.
   function flacWhere() {
     var src = page.flacSources
-    return src.source === "folder" ? (src.folder || "") : "Your Waves library: " + (src.waves || []).join(", ")
+    return src.source === "folder" ? (src.folder || "") : page.flacFoldersText(src.waves)
   }
   function flacCount(key) {
     var c = page.flacState.counts || {}
@@ -375,7 +379,7 @@ Item {
   function flacResumeWhere() {
     var st = page.flacState
     var folders = st.resume_folders || []
-    return st.resume_source === "folder" ? (folders[0] || "") : "Your Waves library: " + folders.join(", ")
+    return st.resume_source === "folder" ? (folders[0] || "") : page.flacFoldersText(folders)
   }
   // The time left beside the progress bar ("" until the backend has a pace to go by).
   function flacTimeLeft() {

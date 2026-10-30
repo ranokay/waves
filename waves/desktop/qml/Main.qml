@@ -3882,7 +3882,9 @@ ApplicationWindow {
   }
   // Deep-link to the download-folder setting (from the folder gate/nudge), the
   // same instant jump the update notice uses, no scroll animation.
-  function openDownloadSetting() {
+  // Open Settings on one card. Every deep link below is this one cascade;
+  // the card id is the only thing that differs.
+  function openSettingsCard(cardId) {
     navPush()
     markNav("settings")
     setupOpen = false
@@ -3891,48 +3893,24 @@ ApplicationWindow {
     libraryOpen = false
     browseOpen = false
     Qt.callLater(function () {
-      settingsPage.jumpToCard("downloads")
+      settingsPage.jumpToCard(cardId)
     })
+  }
+  function openDownloadSetting() {
+    openSettingsCard("downloads")
   }
   // Deep-link to the FFmpeg card (from the pre-download gate).
   function openFfmpegSetting() {
-    navPush()
-    markNav("settings")
-    setupOpen = false
-    settingsOpen = true
-    artistOpen = false
-    libraryOpen = false
-    browseOpen = false
-    Qt.callLater(function () {
-      settingsPage.jumpToCard("ffmpeg")
-    })
+    openSettingsCard("ffmpeg")
   }
   // Deep-link to the FLAC signatures card (from the FLAC notice).
   function openFlacSetting() {
-    navPush()
-    markNav("settings")
-    setupOpen = false
-    settingsOpen = true
-    artistOpen = false
-    libraryOpen = false
-    browseOpen = false
-    Qt.callLater(function () {
-      settingsPage.jumpToCard("flac")
-    })
+    openSettingsCard("flac")
   }
   // Deep-link to the Music library card (from the Library section's
   // configure CTA): the one place that owns the scanned folder.
   function openLibrarySetting() {
-    navPush()
-    markNav("settings")
-    setupOpen = false
-    settingsOpen = true
-    artistOpen = false
-    libraryOpen = false
-    browseOpen = false
-    Qt.callLater(function () {
-      settingsPage.jumpToCard("library")
-    })
+    openSettingsCard("library")
   }
   // The chip's ✕ and its test both come through here.
   function dismissSetupChip() {
