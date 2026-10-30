@@ -320,6 +320,11 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
     settle(200)
     _check_surface(problems, "library sign-in CTA", _measure(q, "libCtaCol"), 1)
 
+    long_library = "SIGN IN WITH THE PROVIDER WHOSE DISPLAY NAME DOES NOT FIT THE EMPTY STATE"
+    q(f"root.myMusicEmpty = {{message: 'Sign in to listen', detail: 'Provider copy.', action_label: '{long_library}'}}")
+    settle(250)
+    _check_long_label(problems, "library sign-in CTA long label", _measure(q, "libCtaCol"))
+
     q(
         "root.providerCards = [{id: 'tidal', name: 'TIDAL', summary: 'Hi-res streaming.', "
         "action: 'Continue with TIDAL', state: 'signed_out'}]"
@@ -375,26 +380,30 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
     # --- Hover, the focus ring and the three keys on a converted action --
     q("root.ffmpegBlocked = true")
     settle(300)
-    find_primary = (
-        "findFirst(ffmpegBlockGate, function (o) { return o.label === 'Set up FFmpeg' && o.clicked !== undefined; })"
-    )
     find_continue = (
         "findFirst(ffmpegBlockGate, function (o) {"
         " return o.objectName === 'ffmpegGateContinue' && o.visible === true; })"
     )
-    setup_button = q(scene_js(f"return {find_primary};"))
-    if setup_button is None:
-        problems.append("the FFmpeg block gate's primary action is not in the tree")
+    hover_button = q(scene_js(f"return {find_continue};"))
+    if hover_button is None:
+        problems.append("the FFmpeg block gate's continue action is not in the tree")
     else:
-        QTest.mouseMove(root, QPoint(2, 2))
-        settle(180)
-        idle = setup_button.property("color").name()
-        point = q(scene_js(f"var b = {find_primary}; return b.mapToItem(null, b.width / 2, b.height / 2);"))
-        QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
-        settle(200)
-        hovered = setup_button.property("color").name()
-        if hovered == idle:
-            problems.append("hovering a converted primary action drew no hover feedback")
+        label = next(
+            (child for child in hover_button.childItems() if child.property("text") == "Continue anyway"),
+            None,
+        )
+        if label is None:
+            problems.append("the FFmpeg continue action lost its label")
+        else:
+            QTest.mouseMove(root, QPoint(2, 2))
+            settle(180)
+            idle = label.property("color").name()
+            point = q(scene_js(f"var b = {find_continue}; return b.mapToItem(null, b.width / 2, b.height / 2);"))
+            QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
+            settle(200)
+            hovered = label.property("color").name()
+            if hovered == idle:
+                problems.append("hovering a converted action drew no hover feedback")
 
     root.requestActivate()
     settle(80)
@@ -444,12 +453,13 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
         if bool(q("legalSettings.termsAccepted")) != accepted:
             problems.append("a pointer click fired the disabled terms action")
 
-        ack.forceActiveFocus()
-        settle(80)
-        QTest.keyClick(root, Qt.Key_Return)
-        settle(200)
-        if bool(q("legalSettings.termsAccepted")) != accepted:
-            problems.append("Return fired the disabled terms action")
+        for key, word in ((Qt.Key_Return, "Return"), (Qt.Key_Enter, "Enter"), (Qt.Key_Space, "Space")):
+            ack.forceActiveFocus()
+            settle(80)
+            QTest.keyClick(root, key)
+            settle(200)
+            if bool(q("legalSettings.termsAccepted")) != accepted:
+                problems.append(f"{word} fired the disabled terms action")
 
         iface = QAccessible.queryAccessibleInterface(ack)
         actions = iface.actionInterface() if iface is not None and iface.isValid() else None
