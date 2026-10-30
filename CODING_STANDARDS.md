@@ -52,7 +52,7 @@ global standards and take precedence where they differ.
 
 ## Correctness
 
-The correctness review hunts these defect classes. Each finding names a
+The `/code-review` Standards review hunts these defect classes. Each finding names a
 concrete failure: the state or input, and the wrong result it produces.
 
 - **Provider identity travels with the data.** When a change lets a path
@@ -80,4 +80,4 @@ concrete failure: the state or input, and the wrong result it produces.
   [testing guidance](docs/agents/testing.md) for design and evidence and
   [the developer guide](DEVELOPER.md#testing-and-verification) for commands.
 - For issue delivery, follow [the implementation workflow](docs/agents/implementation-workflow.md)
-  for the gate class, reviewer count and merge evidence.
+  for the gate class, review and merge evidence.
