@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,9 +31,7 @@ from support.qml import (
 )
 from support.qml_probe import scene_js
 
-pytestmark = pytest.mark.qml
-
-_FFMPEG = shutil.which("ffmpeg")
+pytestmark = [pytest.mark.qml, pytest.mark.ffmpeg]
 
 
 def test_the_flac_card_drives_scan_fix_and_resume():
@@ -82,9 +79,6 @@ def _flac(path: Path, *, unset: bool) -> bytes:
 
 
 def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
-    if _FFMPEG is None:
-        print("ffmpeg unavailable", file=sys.stderr)
-        return EXIT_OK
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted

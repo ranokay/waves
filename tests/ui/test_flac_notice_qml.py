@@ -77,7 +77,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, four checks)
 
     from PySide6.QtCore import QSettings
 
-    stored = QSettings().value("setup/flacNoticeSeen")
+    # QML Settings flushes to QSettings on the event loop, so give the write
+    # a beat instead of reading the old value in the same tick.
+    stored = None
+    for _ in range(40):
+        stored = QSettings().value("setup/flacNoticeSeen")
+        if stored in (True, "true", 1, "1"):
+            break
+        settle(50)
     if stored not in (True, "true", 1, "1"):
         problems.append(f"flacNoticeSeen did not reach QSettings: {stored!r}")
 
