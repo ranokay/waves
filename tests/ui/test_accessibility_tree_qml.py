@@ -179,17 +179,17 @@ _QUEUE_ROW_NAMES = [
 
 
 def _adopted(q, object_name: str):
-    """The adopted tap area the named host owns, or None.
+    """The control that carries the accessibility contract, or None.
 
-    The host is the control itself for a direct adoption, or the component
-    instance (an ``ActionButton``/``GateCard``/``Check``) whose inner tap area
-    carries the contract. Reached by objectName under the scene root and, as
-    a fallback, under the window overlay (the full-screen gates live there,
-    above any open Drawer), so a hidden copy of the same control on another
-    surface can never answer for it. The host counts only
-    when it carries an accessible role itself: a component like ``Check``
-    declares ``accessibleLabel`` without adopting the primitive, so returning
-    the host there would read the wrong object.
+    A direct adoption is the control itself: ``ActionButton`` carries
+    ``accessibleLabel`` and the Button role, so it answers here without an
+    inner tap area. A component whose own label is decoration (``GateCard``,
+    ``Check``) hands the contract to the adopted tap area inside it; the
+    host's own role says which shape it is. Reached by objectName under the
+    scene root and, as a fallback, under the window overlay (the full-screen
+    gates live there, above any open Drawer), so a hidden copy of the same
+    control on another surface can never answer for it. The host counts only
+    when it carries an accessible role itself.
     """
     return q(
         scene_js(
@@ -1275,10 +1275,10 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         if bool(q("root.folderGateBlocking")):
             problems.append("Space on the folder gate's Not now never closed the gate")
 
-    # A disabled host disables its tap area: the terms gate's ACKNOWLEDGE is
-    # inert until its checkbox is ticked, so while disabled it is no tab stop,
-    # and ticking the box makes it one again. Without the host binding the
-    # tap area keeps the MouseArea's own enabled=true and stays reachable.
+    # A disabled action stays inert until its checkbox is ticked: ActionButton
+    # binds activeFocusOnTab to visible && enabled, and its pointer, key and
+    # accessibility paths all check enabled, so while disabled it is no tab
+    # stop, and ticking the box makes it one again.
     q("termsGate.visible = true")
     settle(300)
     ack = _adopted(q, "termsAckAction")
@@ -1286,7 +1286,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         problems.append("the terms gate's ACKNOWLEDGE action is not in the tree")
     else:
         if bool(ack.property("enabled")):
-            problems.append("a disabled gate action's tap area still reads enabled")
+            problems.append("a disabled gate action still reads enabled")
         if bool(ack.property("activeFocusOnTab")):
             problems.append("a disabled gate action is still a tab stop")
         # The gate's checkbox answers the keyboard too: its tap area is a
