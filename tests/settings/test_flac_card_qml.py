@@ -166,6 +166,25 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
     ):
         problems.append("FIX does not carry the file count")
 
+    checkpoint("deep check and recheck all reach the run")
+    trigger("flacDeepToggle")
+    click("flacScanBtn")
+    if not wait_until_true(q, "waves.flacCheckState().phase === 'done'", "deep scan finished", 30000):
+        problems.append("the deep scan never finished")
+    deep = state()
+    if deep.get("mode") != "deep":
+        problems.append(f"Deep check did not reach the run (mode={deep.get('mode')})")
+    if deep.get("counts", {}).get("ok") != 1:
+        problems.append(f"the deep scan did not verify the signed file: {deep.get('counts')}")
+    trigger("flacDeepToggle")
+    trigger("flacRecheckToggle")
+    click("flacScanBtn")
+    if not wait_until_true(q, "waves.flacCheckState().phase === 'done'", "recheck scan finished", 30000):
+        problems.append("the recheck scan never finished")
+    if state().get("cached") != 0:
+        problems.append("Recheck all reused remembered verdicts")
+    trigger("flacRecheckToggle")
+
     checkpoint("fix asks before writing")
     click("flacFixBtn")
     settle(100)
@@ -248,6 +267,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
     other = Path(tempfile.mkdtemp(prefix="waves-flac-card-other-"))
     q(f"waves.flacCheckSetFolder({json.dumps(str(other))})")
     settle(150)
+    if not visible("flacBrowseBtn"):
+        problems.append("BROWSE is hidden after choosing a folder")
     if visible("flacFixBtn"):
         problems.append("FIX is still offered after the selection moved to another folder")
     if text("flacNote") != "Not checked yet.":

@@ -12082,13 +12082,12 @@ ApplicationWindow {
             // whose stored version is older.
             legalSettings.termsAcceptedVersion = root.termsVersion
             legalSettings.termsAcceptedDate = new Date().toISOString().slice(0, 10)
+            setupSettings.updatePromptFresh = true
             // A fresh install never needs the FLAC notice: only files saved
             // by an earlier version can lack a signature. A terms-revision
             // re-accept is not a first run, so it leaves the notice due.
-            if (!legalSettings.termsAccepted) {
-              setupSettings.updatePromptFresh = true
+            if (!legalSettings.termsAccepted)
               setupSettings.flacNoticeSeen = true
-            }
             legalSettings.termsAccepted = true
           }
         }
