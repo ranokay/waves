@@ -368,12 +368,26 @@ Item {
   function flacNum(n) {
     return Number(n || 0).toLocaleString(Qt.locale(), "f", 0)
   }
+  // The scope key of the fix the backend remembers, in the same shape as
+  // flacSources.key.
+  function flacResumeKey() {
+    var st = page.flacState
+    var folders = st.resume_folders || []
+    if (st.resume_source === "folder")
+      return "folder:" + (folders[0] || "")
+    if (st.resume_source === "waves")
+      return "waves:" + folders.join("\n")
+    return ""
+  }
   // A fix stopped before it finished (the app quit or crashed, or it was
   // cancelled) and the backend remembers its folders: RESUME LAST FIX is
-  // offered, unless FIX already offers the same files from this session's scan.
+  // offered, unless FIX already offers the same files from this session's
+  // scan. A different folder selection must still offer RESUME: FIX would
+  // only write the folders the card shows now.
   function flacResumable() {
     var st = page.flacState
-    return !st.running && (st.resume_source || "") !== "" && (page.flacStale() || !(st.fixable > 0))
+    var resumeKey = page.flacResumeKey()
+    return !st.running && resumeKey !== "" && (resumeKey !== (page.flacSources.key || "") || page.flacStale() || !(st.fixable > 0))
   }
   // Where a resume writes, for the confirmation dialog.
   function flacResumeWhere() {

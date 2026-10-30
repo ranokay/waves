@@ -520,6 +520,17 @@ class FlacCheck:
                 report = core.write_new_report(self._report_dir(), kind, rows, unreadable)
             except Exception:
                 logger.exception("FLAC check: the report could not be written")
+            else:
+                # The reset latch can flip between the check above and the
+                # write; that write would recreate reports/ after the wipe.
+                # Remove it (the reset's own wipe handles a later flip).
+                if self._factory_reset():
+                    logger.info("FLAC check: %s report removed, a factory reset began during the write", kind)
+                    with contextlib.suppress(OSError):
+                        os.remove(report)
+                    with contextlib.suppress(OSError):
+                        os.rmdir(self._report_dir())
+                    report = ""
         counts = core.summarize(rows)
         total = counts.pop("files", 0)
         self._result = (gen, rows, unreadable)

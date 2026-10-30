@@ -268,6 +268,26 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
     if text("flacNote") != "Not checked yet.":
         problems.append(f"a stale card reads {text('flacNote')!r}, not 'Not checked yet.'")
 
+    checkpoint("resume survives a different folder selection")
+    resume_dir = Path(tempfile.mkdtemp(prefix="waves-flac-card-resume-"))
+    _flac(resume_dir / "resume.flac", unset=True)
+    q(f"waves.flacCheckSetFolder({json.dumps(str(resume_dir))})")
+    click("flacScanBtn")
+    if not wait_until_true(q, "waves.flacCheckState().phase === 'done'", "resume scan finished", 30000):
+        problems.append("the resume scan never finished")
+    if state().get("fixable") != 1:
+        problems.append(f"the resume scan found {state().get('fixable')} fixable files, not 1")
+    bridge._waves_prefs["flac_check_resume"] = f"folder:{music}"
+    bridge.flacCheckChanged.emit()
+    settle(150)
+    if not visible("flacResumeBtn"):
+        problems.append("RESUME is hidden for a fix in another folder than the current FIX")
+    bridge._waves_prefs["flac_check_resume"] = f"folder:{resume_dir}"
+    bridge.flacCheckChanged.emit()
+    settle(150)
+    if visible("flacResumeBtn"):
+        problems.append("RESUME is offered beside a FIX that covers the same folder")
+
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)

@@ -957,6 +957,29 @@ def test_a_run_cut_short_by_a_factory_reset_writes_no_report(tmp_path):
     assert b.flacCheckState()["running"] is True, "the superseded run's outcome is dropped at the handler"
 
 
+def test_a_report_written_as_a_factory_reset_begins_is_removed(tmp_path, monkeypatch):
+    """The reset latch can flip after the pre-write check; a report created in
+    that window must not survive the wipe with absolute music paths in it."""
+    b = _bridge(tmp_path)
+    _fake_flac(tmp_path / "Downloads" / "a.flac")
+    rows = core.scan([str(tmp_path / "Downloads")])
+    b._flac_check._gen = 7
+    reports = tmp_path / "config" / bridge_flac.REPORTS_DIR
+    real = core.write_new_report
+
+    def write_then_reset(*args, **kwargs):
+        path = real(*args, **kwargs)
+        b._factory_reset = True
+        return path
+
+    monkeypatch.setattr(core, "write_new_report", write_then_reset)
+
+    b._flac_check._finish(7, "scan", rows, cancelled=False)
+
+    assert not reports.exists(), "a report recreated after the reset began survived"
+    assert b.flacCheckState()["report"] == ""
+
+
 def test_a_superseded_run_writes_no_report_either(tmp_path):
     b = _bridge(tmp_path)
     _fake_flac(tmp_path / "Downloads" / "a.flac")
