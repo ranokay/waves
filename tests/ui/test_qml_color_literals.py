@@ -70,9 +70,9 @@ def test_the_modal_scrims_actually_dim():
     main = (QML_DIR / "Main.qml").read_text(encoding="utf-8")
 
     scrims = re.findall(r'"#([0-9a-fA-F]{2})06070e"', main)
-    # 12 modal scrims plus the first-run welcome gate, which reuses the login
-    # panel's scrim recipe.
-    assert len(scrims) == 13, f"expected the 13 modal scrims, found {len(scrims)}"
+    # 14 modal scrims (the FLAC fix gate and notice included) plus the
+    # first-run welcome gate, which reuses the login panel's scrim recipe.
+    assert len(scrims) == 15, f"expected the 15 modal scrims, found {len(scrims)}"
     for alpha_hex in scrims:
         alpha = int(alpha_hex, 16)
         assert alpha >= 178, f"scrim alpha {alpha} (<70%) no longer dims the interface behind it"
