@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest
 from support.paths import QML_DIR
 
+pytestmark = pytest.mark.qml
+
 SETTINGS = QML_DIR / "domains/settings/SettingsPage.qml"
 
 
