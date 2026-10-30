@@ -182,7 +182,8 @@ def test_a_file_that_changed_between_the_stat_and_the_read_is_not_remembered(tmp
     path = tmp_path / "a.flac"
     _fake_flac(path)
     cache = _cache(tmp_path)
-    stamp = fc._stat(str(path))
+    st = path.stat()
+    stamp = (st.st_size, st.st_mtime_ns)
     assert cache.remembered(str(path), False, stamp) is None
     fresh = fc.Verdict(fv.check_file(str(path)))
 

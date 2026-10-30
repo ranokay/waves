@@ -3974,18 +3974,9 @@ ApplicationWindow {
   // "" / "setup" for the top of the wizard, so the click lands on the
   // affordance that would have let it work.
   function openAppleSetup(reason) {
-    navPush()
-    markNav("settings")
-    setupOpen = false
-    settingsOpen = true
-    artistOpen = false
-    libraryOpen = false
-    browseOpen = false
     var step = String(reason || "")
     settingsPage.appleFocusStep = (step === "setup") ? "" : step
-    Qt.callLater(function () {
-      settingsPage.jumpToCard("providers_apple")
-    })
+    openSettingsCard("providers_apple")
   }
   // Browse: open the tab (fetching the landing page once per session) and
   // drill into an editorial page. Target-first flag order, same as above.
@@ -10095,17 +10086,7 @@ ApplicationWindow {
               // (already auto-expanded while an update waits);
               // callLater so the jump lands after the page's
               // onActiveChanged refresh has run.
-              onTriggered: {
-                root.navPush()
-                root.markNav("settings")
-                root.setupOpen = false
-                settingsOpen = true
-                root.artistOpen = false
-                root.libraryOpen = false
-                Qt.callLater(function () {
-                  settingsPage.jumpToCard("updates")
-                })
-              }
+              onTriggered: root.openSettingsCard("updates")
             }
           }
         }
