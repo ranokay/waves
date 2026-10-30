@@ -16,6 +16,7 @@ Rectangle {
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property int btnPadH: 12   // label padding, left/right
+  readonly property int padH: compact ? 9 : btnPadH   // the padding at the current scale
   readonly property int btnPadV: 7   // label padding, top/bottom
   readonly property int btnRad: 8   // button corner radius
   readonly property real btnTrack: 0   // label letter-spacing
@@ -29,8 +30,8 @@ Rectangle {
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
   property string label: ""
   property bool primary: false
-  // GateAction's red recipe (red on redCont, translucent red border) on
-  // the hugging shape, for the destructive half of a button pair.
+  // The dialog gates' red recipe (red on redCont, translucent red border)
+  // on the hugging shape, for the destructive half of a button pair.
   property bool danger: false
   // The same recipe in the palette's gold, for an action that interrupts
   // without discarding anything (pausing the queue). Not danger: nothing
@@ -55,7 +56,10 @@ Rectangle {
   // same clicked() the pointer does, so every dialog action (queue
   // PAUSE/STOP/RETRY ALL/CLEAR, gate cards) works keyboard-only. The
   // focus ring is the accent border, since a custom Rectangle draws none.
-  activeFocusOnTab: visible
+  // A disabled action is no tab stop and no pointer target; its key and
+  // accessibility handlers below check enabled, so none of the three paths
+  // can fire it.
+  activeFocusOnTab: visible && enabled
   Accessible.role: Accessible.Button
   Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel : (sb.label !== "" ? sb.label : (sb.icon !== "" ? sb.icon.charAt(0).toUpperCase() + sb.icon.slice(1) : "Button"))
   Accessible.onPressAction: function () {
@@ -81,7 +85,7 @@ Rectangle {
     }
   }
   readonly property color bg: danger ? redCont : warn ? goldCont : (primary ? accentCont : "transparent")
-  implicitWidth: iconOnly ? implicitHeight : sbTxt.implicitWidth + (compact ? 9 : btnPadH) * 2
+  implicitWidth: iconOnly ? implicitHeight : sbTxt.implicitWidth + padH * 2
   implicitHeight: sbTxt.implicitHeight + (compact ? 3 : btnPadV) * 2
   radius: compact ? 5 : btnRad
   color: (sbMa.containsMouse && (sb.primary || sb.danger || sb.warn)) ? Qt.lighter(sb.bg, 1.35) : sb.bg
@@ -96,8 +100,12 @@ Rectangle {
     id: sbTxt
     anchors.centerIn: parent
     // Kept loaded while icon-only (empty, invisible): its line height is
-    // what makes the square square, so it has to keep measuring.
+    // what makes the square square, so it has to keep measuring. Width stays
+    // the natural hug unless the host caps the button, and then the label
+    // elides inside it rather than drawing past the rectangle.
     visible: !sb.iconOnly
+    width: Math.min(implicitWidth, Math.max(0, sb.width - sb.padH * 2))
+    elide: Text.ElideRight
     textFormat: Text.PlainText
     text: sb.label
     color: sb.danger ? red : sb.warn ? gold : (sb.primary ? accent : (sbMa.containsMouse ? textHi : textLo))
@@ -117,8 +125,9 @@ Rectangle {
   MouseArea {
     id: sbMa
     anchors.fill: parent
+    enabled: sb.enabled
     hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
+    cursorShape: sb.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     onClicked: sb.clicked()
   }
   // The keyboard focus ring (a custom Rectangle draws none): an overlay

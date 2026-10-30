@@ -24,7 +24,7 @@ the metadata and focus reachability that make them usable keyboard-only:
   popover leaves no tab stop inside it;
 - the Settings commit actions (CANCEL, SAVE CHANGES) and the update toast's
   actions are named tab stops that answer the keyboard with the commit or the
-  branch the pointer takes, and the gate actions (a ``GateAction`` and a
+  branch the pointer takes, and the gate actions (an ``ActionButton`` and a
   gate's raw tap target) do the same;
 - a real Tab walk (QtTest key delivery) never lands on a control that is not
   on screen: thousands of controls inside closed surfaces (mostly Qt's own
@@ -179,17 +179,17 @@ _QUEUE_ROW_NAMES = [
 
 
 def _adopted(q, object_name: str):
-    """The adopted tap area the named host owns, or None.
+    """The control that carries the accessibility contract, or None.
 
-    The host is the control itself for a direct adoption, or the component
-    instance (a ``GateAction``/``GateCard``/``Check``) whose inner tap area
-    carries the contract. Reached by objectName under the scene root and, as
-    a fallback, under the window overlay (the full-screen gates live there,
-    above any open Drawer), so a hidden copy of the same control on another
-    surface can never answer for it. The host counts only
-    when it carries an accessible role itself: a component like ``Check``
-    declares ``accessibleLabel`` without adopting the primitive, so returning
-    the host there would read the wrong object.
+    A direct adoption is the control itself: ``ActionButton`` carries
+    ``accessibleLabel`` and the Button role, so it answers here without an
+    inner tap area. A component whose own label is decoration (``GateCard``,
+    ``Check``) hands the contract to the adopted tap area inside it; the
+    host's own role says which shape it is. Reached by objectName under the
+    scene root and, as a fallback, under the window overlay (the full-screen
+    gates live there, above any open Drawer), so a hidden copy of the same
+    control on another surface can never answer for it. The host counts only
+    when it carries an accessible role itself.
     """
     return q(
         scene_js(
@@ -359,7 +359,6 @@ def test_wiring_primary_control_keyboard_handlers():
     )
     qml += (QML_DIR / "domains/queue/QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "primitives/ActionButton.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "components/GateAction.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "domains/providers/DecodeController.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "shell/NavTab.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "shell/NavCrumbTrail.qml").read_text(encoding="utf-8")
@@ -383,7 +382,6 @@ def test_wiring_primary_control_keyboard_handlers():
         "domains/downloads/DownloadButton.qml",
         "domains/queue/QueueDrawer.qml",
         "primitives/ActionButton.qml",
-        "components/GateAction.qml",
         "domains/providers/DecodeController.qml",
         "shell/NavTab.qml",
         "shell/NavCrumbTrail.qml",
@@ -421,7 +419,7 @@ def test_wiring_primary_control_keyboard_handlers():
         'accessibleLabel: updateToast.face === "ready" ? "LATER" : "Dismiss"',
         'accessibleLabel: "Not now"',
         'accessibleLabel: "I don\'t need FFmpeg. Stop showing this at launch."',
-        "accessibleLabel: ga.label",
+        "Accessible.name: sb.accessibleLabel",
         # The gate card's spoken name carries its chip.
         'accessibleLabel: gcard.title + (gcard.chip !== ""',
         # The queue's repeated actions name their own section.
@@ -1188,7 +1186,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     bridge._app_update_inflight = False
     settle(200)
 
-    # --- The gate actions: a GateAction, a GateCard and a gate's raw tap
+    # --- The gate actions: an ActionButton, a GateCard and a gate's raw tap
     # target are named tab stops, and their key presses take the gate's own
     # path. The GateCard's own action starts a real install, so only its
     # metadata is read. The FFmpeg state is forced missing (and the gate up)
@@ -1239,7 +1237,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         problems,
         _buttons(
             q,
-            "function (o) { return o.accessibleLabel === 'Continue anyway'; }",
+            "function (o) { return o.label === 'Continue anyway' && o.clicked !== undefined; }",
             scope="[root.contentItem, Overlay.overlay]",
         ),
         "the FFmpeg block gate's CONTINUE action",
@@ -1277,10 +1275,10 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         if bool(q("root.folderGateBlocking")):
             problems.append("Space on the folder gate's Not now never closed the gate")
 
-    # A disabled host disables its tap area: the terms gate's ACKNOWLEDGE is
-    # inert until its checkbox is ticked, so while disabled it is no tab stop,
-    # and ticking the box makes it one again. Without the host binding the
-    # tap area keeps the MouseArea's own enabled=true and stays reachable.
+    # A disabled action stays inert until its checkbox is ticked: ActionButton
+    # binds activeFocusOnTab to visible && enabled, and its pointer, key and
+    # accessibility paths all check enabled, so while disabled it is no tab
+    # stop, and ticking the box makes it one again.
     q("termsGate.visible = true")
     settle(300)
     ack = _adopted(q, "termsAckAction")
@@ -1288,7 +1286,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         problems.append("the terms gate's ACKNOWLEDGE action is not in the tree")
     else:
         if bool(ack.property("enabled")):
-            problems.append("a disabled gate action's tap area still reads enabled")
+            problems.append("a disabled gate action still reads enabled")
         if bool(ack.property("activeFocusOnTab")):
             problems.append("a disabled gate action is still a tab stop")
         # The gate's checkbox answers the keyboard too: its tap area is a

@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
-import "../../components"
+import "../../primitives"
 import "../catalog"
 
 // The Library section (ADR 0007): the files the folder scan
@@ -323,9 +323,11 @@ ColumnLayout {
           color: textLo
           font.pixelSize: 13
         }
-        GateAction {
+        ActionButton {
           objectName: "libConfigureAction"
-          width: parent.width
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Math.min(parent.width, implicitWidth)
+          primary: true
           label: "Choose a music folder"
           onClicked: host.openLibrarySetting()
         }
@@ -363,9 +365,11 @@ ColumnLayout {
           font.pixelSize: 13
           visible: text !== ""
         }
-        GateAction {
+        ActionButton {
           objectName: "libRetryAction"
-          width: parent.width
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Math.min(parent.width, implicitWidth)
+          primary: true
           label: "RETRY"
           visible: libSection.statusText() === "Could not read your music folder"
           onClicked: libSection.reload()
