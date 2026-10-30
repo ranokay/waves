@@ -158,7 +158,6 @@ and `dropSearchSource` refolds the displayed page when a provider leaves.
 
 ## Working and validation
 
-For code exploration and impact analysis, follow [the graph workflow](agents/code-review-graph.md).
 For commands, markers, and execution constraints, read [the developer guide](../DEVELOPER.md#testing-and-verification).
 For issue delivery and review gates, follow [the implementation workflow](agents/implementation-workflow.md).
 
