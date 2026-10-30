@@ -68,6 +68,9 @@ def test_effective_roots_drops_blanks_duplicates_and_nested_folders(tmp_path):
     assert fc.effective_roots([lib, dl]) == [lib]
     assert fc.effective_roots(["", " ", lib, lib, other]) == [lib, other]
     assert fc.effective_roots([]) == []
+    # A folder name may end in a space; the walk must use the exact spelling.
+    spaced = str(tmp_path / "Albums ")
+    assert fc.effective_roots([spaced]) == [spaced]
 
 
 def test_iter_flac_files_scope(tmp_path):

@@ -114,8 +114,10 @@ def effective_roots(roots: Iterable[str]) -> list[str]:
     walk, not two). Spelling is kept as given; nothing is stat'ed here."""
     out: list[str] = []
     for root in roots:
-        r = (root or "").strip()
-        if not r or any(path_under(r, kept) for kept in out):
+        r = root or ""
+        # Keep the spelling exactly: a folder name may legally end in a
+        # space, and stripping it would point the walk at another folder.
+        if not r.strip() or any(path_under(r, kept) for kept in out):
             continue
         out = [kept for kept in out if not path_under(kept, r)]
         out.append(r)

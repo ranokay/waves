@@ -829,6 +829,26 @@ def test_the_choice_cannot_change_while_a_run_is_on(tmp_path):
     assert b.saves == []
 
 
+def test_a_chosen_folder_keeps_a_trailing_space(tmp_path):
+    """A folder name can legally end in a space; the dialog's exact path is
+    what the scan must walk, not a stripped spelling of it."""
+    chosen = tmp_path / "Albums "
+    chosen.mkdir()
+    _fake_flac(chosen / "pick.flac")
+    b = _bridge(tmp_path)
+    _choose(b, chosen)
+
+    assert b._waves_prefs["flac_check_folder"] == str(chosen)
+    assert b.flacCheckSources()["folder"] == str(chosen)
+    assert b.flacCheckSources()["key"] == f"folder:{chosen}"
+
+    b.flacCheckScan(False)
+
+    st = b.flacCheckState()
+    assert (st["phase"], st["files"], st["scope"]) == ("done", 1, f"folder:{chosen}")
+    assert [r["file"] for r in _report_rows(st["report"])] == [str(chosen / "pick.flac")]
+
+
 def test_a_chosen_folder_scan_walks_that_folder_only(tmp_path):
     lib = tmp_path / "Library"
     b = _bridge(tmp_path, library=str(lib))

@@ -270,8 +270,8 @@ class FlacCheck:
         the selection later; ``error`` is set (and roots empty) when there is
         nothing to walk. Nothing is stat'ed here (GUI thread)."""
         if self._prefs.get("flac_check_source") == SOURCE_FOLDER:
-            folder = str(self._prefs.get("flac_check_folder") or "").strip()
-            if not folder or not os.path.isabs(folder):
+            folder = str(self._prefs.get("flac_check_folder") or "")
+            if not folder.strip() or not os.path.isabs(folder):
                 return SOURCE_FOLDER, "", [], "Choose a folder first."
             return SOURCE_FOLDER, f"{SOURCE_FOLDER}:{folder}", [folder], ""
         roots = self._waves_roots()
@@ -339,8 +339,8 @@ class FlacCheck:
         """Remember the folder the system dialog returned and select it. Only
         an absolute path is taken; ignored while a run is on. Returns whether
         anything moved."""
-        folder = (folder or "").strip()
-        if self._state.get("running") or not folder or not os.path.isabs(folder):
+        folder = folder or ""
+        if self._state.get("running") or not folder.strip() or not os.path.isabs(folder):
             return False
         moved = self._set_pref("flac_check_folder", folder)
         return self._set_pref("flac_check_source", SOURCE_FOLDER) or moved
