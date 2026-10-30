@@ -98,6 +98,7 @@ from waves.events import (
 from waves.http import pooled_session
 from waves.ids import provider_of_id
 from waves.library import netmount
+from waves.library.flac_check import CACHE_FILES as _FLAC_CACHE_FILES
 from waves.library.index import (
     FILES_VIEWS,
     POLL_GAUGE,
@@ -220,6 +221,7 @@ from .library.bridge import (
     _LIBRARY_WATCH_DEBOUNCE_MS,
     LibraryMixin,
 )
+from .library.flac_check import REPORTS_DIR, FlacCheck
 from .library.scan_process import LibraryWorker
 from .providers.auth import (
     LoginEvent,
@@ -480,6 +482,10 @@ _IS_MACOS = sys.platform == "darwin"
 # fresh install of the same channel would have it too.
 
 
+# How long a factory reset waits for a running FLAC scan to close its
+# remembered verdicts (it stops after the file it is on).
+_FLAC_CACHE_RELEASE_WAIT_S = 5.0
+
 _FACTORY_WIPE_FILES = (
     "settings.json",
     "settings.json.bak",
@@ -523,6 +529,11 @@ _FACTORY_WIPE_FILES = (
     "mbarbiter.sqlite3",
     "mbarbiter.sqlite3-wal",
     "mbarbiter.sqlite3-shm",
+    # The FLAC check's remembered verdicts (waves.library.flac_check.VerdictCache):
+    # a path per file it ever scanned. Opened only for the length of a scan,
+    # never once a reset began; the reset waits for a running scan to close it
+    # (FlacCheck.cache_busy_event, _FLAC_CACHE_RELEASE_WAIT_S).
+    *_FLAC_CACHE_FILES,
     "app.log",
     "crash.log",
     "waves_dev.log",
@@ -617,6 +628,10 @@ _FACTORY_WIPE_SUBDIRS = (
     # named by its byte size and staged through a uuid tmp sibling, both parts
     # Waves writes, so both patterns stay anchored end to end.
     (_MOTION_CACHE_DIR, (), _MOTION_CACHE_NAMES),
+    # The FLAC check's CSV reports (desktop/library/flac_check): named by kind
+    # and time stamp, plus a counter for a second report in the same second,
+    # all parts Waves writes, anchored end to end.
+    (REPORTS_DIR, (), (re.compile(r"flac-check-(scan|fix)-\d{8}-\d{6}(-[2-9]|-[1-9]\d{1,2})?\.csv\Z"),)),
 )
 
 
@@ -3910,6 +3925,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     sessionResolvedChanged = Signal()
     statusChanged = Signal()
     busyChanged = Signal()
+    # The FLAC signature check's state moved (started, progressed, finished);
+    # Settings re-reads flacCheckState(). The worker's own hop to the GUI
+    # thread carries (generation, state fields).
+    flacCheckChanged = Signal()
+    _flacCheckEvent = Signal(int, dict)
     loginUrlReady = Signal(str)
     searchResults = Signal("QVariant")
     albumTracksLoaded = Signal(str, "QVariantList")
@@ -5134,6 +5154,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._libraryPollDone.connect(self._on_library_poll_done)
         self._downloadRecorded.connect(self._on_download_recorded)
         self._revealResolved.connect(self._on_reveal_resolved)
+        # The FLAC signature check (Settings, Advanced): see library/flac_check.
+        self._flac_check_init()
         self._library_dl_debounce = QtCore.QTimer(self)
         self._library_dl_debounce.setSingleShot(True)
         self._library_dl_debounce.setInterval(_LIBRARY_DL_DEBOUNCE_MS)
@@ -12468,6 +12490,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # terms to musicbrainz.org, and no-data-by-default is the
             # promise). Inert while library_enabled is off.
             "library_mb_arbiter": False,
+            # The FLAC signatures card (Settings, Advanced): what a scan walks.
+            # "waves" is the Waves library (the download folder plus the
+            # library folder when the library scan is on); "folder" is the one
+            # folder in flac_check_folder, set only from the card's Browse
+            # dialog. Written straight away by the card.
+            "flac_check_source": "waves",
+            "flac_check_folder": "",
+            # The scope key of a fix that has not finished ("" = none): set
+            # when one starts, cleared when it finishes, so a quit or a crash
+            # part way leaves RESUME on the card. Housekeeping, not in
+            # settingsSchema.
+            "flac_check_resume": "",
             # Updates: opt-in, off by default (preserves the no-phone-home-by-
             # default promise). update_last_check is housekeeping state, not a
             # user-facing setting, so it isn't in settingsSchema.
@@ -20170,6 +20204,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # writes a fabricated freeze into crash.log on every quit mid-download.
         with contextlib.suppress(Exception):
             diagnostics.stop_freeze_watchdog()
+        # A running FLAC check unwinds after the file it is on (a header write
+        # is one call, so nothing is left half-done).
+        with contextlib.suppress(Exception):
+            self._flac_check.cancel()
         # Flush the background config writer FIRST: a pref set moments before
         # quit is still queued there, and everything below may take seconds.
         with contextlib.suppress(Exception):
@@ -20224,6 +20262,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self.dl_pool.waitForDone(4000)
         self._scan_pool.waitForDone(1000)
         self.threadpool.waitForDone(1000)
+        # A factory reset that outlived its cache wait left the open store to
+        # the scan's close path; the pools are drained now, so take it here if
+        # the scan never got to it.
+        if getattr(self, "_factory_reset", False):
+            with contextlib.suppress(Exception):
+                self._flac_check.delete_cache()
         # Drain the ownership pool BEFORE closing its store: its workers write
         # sqlite, and closing underneath them turns an orderly quit into
         # "database is closed" tracebacks right before os._exit. Deliberately
@@ -23867,6 +23911,94 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         values[key] = getattr(default, "name", default)
         return values
 
+    # ---- FLAC signature check (Settings, Advanced) -----------------------
+
+    def _flac_check_init(self) -> None:
+        """Build the FLAC check's run-state owner with explicit callbacks."""
+        self._flac_check = FlacCheck(
+            os.path.dirname(self.settings.file_path),
+            waves_roots=lambda: [
+                (self.settings.data.download_base_path or "").strip(),
+                self._library_root(),
+            ],
+            ffmpeg=self._flac_check_ffmpeg,
+            post=lambda gen, fields: self._emit_from_worker("_flacCheckEvent", gen, fields),
+            start=lambda fn, *args: self.threadpool.start(Worker(fn, *args)),
+            reveal=LibraryMixin._reveal_in_file_manager,
+            factory_reset=lambda: getattr(self, "_factory_reset", False),
+            prefs=self._waves_prefs,
+            save_prefs=self._save_waves_prefs,
+        )
+        self._flacCheckEvent.connect(self._on_flac_check_event)
+
+    def _flac_check_ffmpeg(self) -> str:
+        """The decoder the fix and the deep check use: the configured or
+        managed ffmpeg, else one on PATH; "" when there is none."""
+        with contextlib.suppress(Exception):
+            self._resolve_ffmpeg()
+        path = (getattr(self.settings.data, "path_binary_ffmpeg", "") or "").strip() or shutil.which("ffmpeg") or ""
+        return path if path and os.path.isfile(path) else ""
+
+    @Slot(result="QVariant")
+    def flacCheckState(self) -> dict:
+        """The check's current state, a plain dict (see FlacCheck.state)."""
+        return self._flac_check.state()
+
+    @Slot(result="QVariant")
+    def flacCheckSources(self) -> dict:
+        """What the card's folder row shows (see FlacCheck.sources)."""
+        return self._flac_check.sources()
+
+    @Slot(str)
+    def flacCheckSetSource(self, source: str) -> None:
+        """Choose what the next scan walks: "waves" or "folder"."""
+        if self._flac_check.set_source(source):
+            self.flacCheckChanged.emit()
+
+    @Slot(str)
+    def flacCheckSetFolder(self, folder: str) -> None:
+        """Remember the folder the system dialog returned and select it."""
+        if self._flac_check.set_folder(folder):
+            self.flacCheckChanged.emit()
+
+    @Slot(bool)
+    @Slot(bool, bool)
+    def flacCheckScan(self, deep: bool = False, recheck: bool = False) -> None:
+        """Scan the selected folders (deep decodes too; recheck rereads every
+        file). Reads only; writes one CSV report when done."""
+        self._flac_check.scan(deep, recheck)
+        self.flacCheckChanged.emit()
+
+    @Slot()
+    def flacCheckFix(self) -> None:
+        """Write the signature into the files the last scan found without one.
+        Only Main.qml's confirmation gate calls this."""
+        self._flac_check.fix()
+        self.flacCheckChanged.emit()
+
+    @Slot()
+    def flacCheckResume(self) -> None:
+        """Pick up the fix that stopped before it finished. Only Main.qml's
+        confirmation gate calls this."""
+        self._flac_check.resume()
+        self.flacCheckChanged.emit()
+
+    @Slot()
+    def flacCheckCancel(self) -> None:
+        """Stop the running scan or fix after the file it is on."""
+        self._flac_check.cancel()
+
+    @Slot()
+    def flacCheckRevealReports(self) -> None:
+        """Show the reports folder in the file manager."""
+        self._flac_check.reveal_reports()
+
+    @Slot(int, dict)
+    def _on_flac_check_event(self, gen: int, fields: dict) -> None:
+        """(GUI thread) Merge a worker's fields; a stale run's are dropped."""
+        self._flac_check.on_event(gen, fields)
+        self.flacCheckChanged.emit()
+
     @Slot()
     def resetSettingsDefaults(self) -> None:
         """Put every user-facing setting back to its factory default (Advanced
@@ -23955,6 +24087,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # between the wipe and the quit. getattr: partial test stubs drive this
         # slot without the library family.
         self._library_gen = getattr(self, "_library_gen", 0) + 1  # discard any in-flight scan's publish
+        # A running FLAC check stops after the file it is on, and its outcome
+        # (a CSV naming every file it saw) is dropped rather than written back
+        # into the folder wiped below (see FlacCheck._finish).
+        with contextlib.suppress(Exception):
+            self._flac_check.supersede()
+        # The scan holds its remembered verdicts open on a worker; it stops
+        # after the file it is on and closes them, and Windows deletes no
+        # open file. A share that stopped answering cannot hold the reset up
+        # past the wait: if it expires, the open store is left to the scan's
+        # close path (which deletes it because the reset latch is set) rather
+        # than unlinked underneath it.
+        cache_free = True
+        with contextlib.suppress(Exception):
+            cache_free = self._flac_check.cache_busy_event().wait(_FLAC_CACHE_RELEASE_WAIT_S)
+        skip_flac_cache = not cache_free
         with contextlib.suppress(Exception):
             self._library.close()
         with contextlib.suppress(Exception):
@@ -23980,6 +24127,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def wipe_named_files() -> None:
             for name in _FACTORY_WIPE_FILES:
+                if skip_flac_cache and name in _FLAC_CACHE_FILES:
+                    # Never unlink a store a scan still holds open: its close
+                    # path deletes it (the reset latch is set), and shutdown
+                    # makes a final attempt once the pools drain.
+                    continue
                 unlink(os.path.join(base, name))
 
         try:

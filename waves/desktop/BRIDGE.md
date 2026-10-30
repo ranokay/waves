@@ -674,6 +674,66 @@ state instead of offering a restart (see `pvActive` in Main.qml).
 TIDAL previews stream the full track; Apple previews play Apple's
 documented 30-second clip URL directly (no remux).
 
+## FLAC signature check (Settings, Advanced)
+
+The family is a composed run-state owner in `library/flac_check.py`
+(`FlacCheck`); `waves/library/flac_check.py` does the walk, verdict store,
+reports and fix loop on `waves.flac_verify`'s read/seal primitives. It walks
+the folders the card selects: the Waves library (the download folder, and the
+library folder when the library scan is on and configured), or one folder the
+user picked with Browse. The choice is remembered in the `flac_check_source`
+and `flac_check_folder` prefs. It reads every FLAC header there and can fill in
+a missing audio signature. The scan reads only; the fix writes exactly the
+34-byte STREAMINFO block of a file whose signature was unset, after decoding
+it cleanly to the length its header states, and never a file that already
+carries one (a cut-off or damaged file is reported and left alone). A fix
+acts only while the selection still names the folders the last scan walked;
+otherwise it fails visibly ("The folders changed since the scan") so the card
+never offers a fix that does nothing. Every run writes a CSV report under the
+config folder's `reports/` (`flac-check-<scan|fix>-YYYYMMDD-HHMMSS.csv`, with
+`-2`, `-3` and so on for another report in the same second, so no report
+replaces another), except a run cut short by a factory reset, whose outcome is
+dropped so nothing lands in the wiped folder.
+
+A folder that cannot be opened or listed (a share not mounted, a drive
+unplugged, a folder the system will not let Waves read) is never taken for an
+empty one. When none of the selected folders opens, the scan fails ("The
+chosen folder could not be opened.", or "The Waves library folder(s) could
+not be opened."); otherwise it finishes over what it could read, and
+`folders_unreadable` in the state counts the folders it could not (the report
+lists them as `folder_unreadable` lines).
+
+A fix that stops part way leaves the `flac_check_resume` pref set to its
+scope key; RESUME (`flacCheckResume()`, through Main.qml's confirmation) scans
+those folders again and fixes what is left. The marker is cleared by a fix
+that finishes, or by a scan of the same folders that finds nothing left to
+fix, but never while the run could not read a folder the unfinished fix could
+have written in.
+
+A factory reset supersedes the running check and waits
+(`_FLAC_CACHE_RELEASE_WAIT_S`) for its verdict store to close. If the wait
+expires, the wipe leaves the open store alone; the scan's close path deletes
+it because the reset latch is set, and shutdown makes a final attempt after
+the pools drain.
+
+| Signal             | Fires when                                                                                   |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| `flacCheckChanged` | A scan or fix started, progressed or finished; the Settings card re-reads `flacCheckState()` |
+
+Slots: `flacCheckState()` (the state dict: phase, counts per status, the
+fixable count, the report path, the scope the last scan walked,
+`folders_unreadable`, `cached`, `resume_source` / `resume_folders` for RESUME,
+and `reports`: whether any report is on disk), `flacCheckSources()` (the
+selected source, the chosen folder, the scope key the selection names, the
+Waves library folders), `flacCheckSetSource(source)` ("waves" or "folder"),
+`flacCheckSetFolder(path)` (an absolute path from the card's folder dialog;
+selects it), `flacCheckScan(deep, recheck)` (header scan, or decode every file
+too; `recheck` reads files an earlier scan already judged), `flacCheckFix()`
+and `flacCheckResume()` (called by Main.qml's confirmation gate only, never by
+the card), `flacCheckCancel()`, `flacCheckRevealReports()` (the reports folder
+in the file manager, with the newest report selected on macOS, also during a
+run). One run at a time; any other slot called during a run is a no-op.
+
 ## FFmpeg manager and self-updater
 
 | Signal                                                                                                              | Fires when                                                                                                                                                                            |
@@ -698,6 +758,7 @@ event objects stay inside Python; only the public signals carry QML payloads.
 | Signal                                                                                     | Payload and delivery                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `_providerLoginEvent(event)`                                                               | `LoginEvent(token, phase, url, ok, resume)`; publish committed account truth while its provider epoch is current; apply login-form effects only while its attempt is current                                                                             |
+| `_flacCheckEvent(generation, fields)`                                                      | A FLAC scan or fix worker's progress/outcome fields; merge only while that run is still current, then re-read `flacCheckState()`                                                                                                                         |
 | `_catalogEvent(event)`                                                                     | `_CatalogEvent(token, deliver)`; invoke the GUI callback only while its provider context is current                                                                                                                                                      |
 | `_searchEvent(event)`                                                                      | `_SearchEvent(generation, tokens, payload, status, failures)`; carries one provider group (or that provider's own failure words) per arrival; discard superseded generations, drop revoked sources and publish classified failure events before delivery |
 | `_albumsQueued(token, rows)` / `_tracksQueued(token, rows)` / `_videosQueued(token, rows)` | Batch enqueue a resolved discography, guest tracks or music videos, only while the provider context is current                                                                                                                                           |

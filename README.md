@@ -39,6 +39,7 @@ Waves is a from‑scratch, native desktop app for macOS, Windows, and Linux (Int
 - Keep your TIDAL favorites close, however large your library grows.
 - Follow everything in flight in a live, grouped queue that says what each one will actually sound like.
 - Point Waves at your existing music library and see what you already own, badged right in the search results (new, experimental).
+- **FLAC files you can trust**: every FLAC is checked against its audio signature after download, and a file that arrived without one gets it written, so `flac -t` and strict players accept it. Advanced settings has a FLAC signatures check for files you already have: Scan reads every FLAC in your library or any folder you choose (Deep check also decodes the audio), saves a CSV report, and Fix writes the missing signatures. The audio is never changed.
 - Write Plex‑friendly tags (ReplayGain volume leveling included), and choose the explicit or clean version.
 - Set up FFmpeg with one click, and optionally update Waves from inside the app.
 - Keep provider-specific settings together. Apple Music search works without account setup; a cookies export unlocks AAC 256 and Atmos downloads, the setup wizard walks the full tier, and each provider card offers sign-out so you can switch accounts in place.
