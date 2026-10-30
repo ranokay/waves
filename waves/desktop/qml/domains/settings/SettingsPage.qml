@@ -23,6 +23,10 @@ Item {
   // reset) tells the page to re-read the freshly-defaulted schema.
   signal resetSettingsRequested
   signal factoryResetRequested
+  // The FLAC check's fix (Advanced section). Same shape as the resets: the
+  // page asks, Main.qml confirms with the count and calls the backend.
+  signal flacFixRequested(int count, string where)
+  signal flacResumeRequested(string where)
   // The Apple wizard's "skip for now": the host decides where skipping
   // lands (the step is deferred, never undone; Apple stays enabled).
   signal appleSetupSkipped
@@ -41,6 +45,7 @@ Item {
     dirty = false
     refreshSchema()
     syncLibraryMirrors()
+    flacRefresh()
   }
   // Escape for StyledText interpolations: attribution values are app-composed
   // local data, but escaping at the composition site keeps a future disk- or
@@ -174,6 +179,7 @@ Item {
     librarySourceLive = waves.librarySource()
     libraryFolderLive = waves.wavesPref("library_folder") || ""
     downloadFolderLive = waves.libraryDownloadFolder()
+    flacRefresh()
   }
   Connections {
     target: waves
@@ -184,6 +190,7 @@ Item {
       page.libraryListingReconciled = waves.libraryListingReconciled()
       page.libraryListingShape = waves.libraryListingShape()
       page.downloadFolderLive = waves.libraryDownloadFolder()
+      page.flacRefresh()
     }
     function onLibrarySourceChanged() {
       // Fired for the master switch and the source alike (any committed
@@ -193,6 +200,7 @@ Item {
       page.libraryMbArbiterLive = waves.wavesPref("library_mb_arbiter") === true
       page.librarySourceLive = waves.librarySource()
       page.libraryFolderLive = waves.wavesPref("library_folder") || ""
+      page.flacRefresh()
     }
   }
   // The scanning note's text: real progress, not a bare spinner. During the
@@ -319,6 +327,123 @@ Item {
   property bool diagBusy: false        // an export is being written
   property string diagPath: ""         // last exported bundle path ("" = none yet)
   property bool diagFailed: false
+
+  // ---- FLAC signature check state (Advanced card) ----
+  // A plain copy of waves.flacCheckState(); re-read on open and on every
+  // flacCheckChanged. Nothing on this page writes to it.
+  property var flacState: waves.flacCheckState()
+  // The folder choice (waves.flacCheckSources()): which source is selected,
+  // the folder picked with Browse, the scope key the selection names and the
+  // Waves library folders. The backend remembers the choice; this is a copy.
+  property var flacSources: waves.flacCheckSources()
+  // Whether the next scan also decodes every file (slow, finds damaged ones).
+  property bool flacDeep: false
+  // Read every file again instead of reusing an earlier scan's verdicts.
+  property bool flacRecheck: false
+  function flacRefresh() {
+    page.flacState = waves.flacCheckState()
+    page.flacSources = waves.flacCheckSources()
+  }
+  // The last run's counts describe other folders than the ones selected now:
+  // the card then reads "Not checked yet" and offers no FIX (the backend
+  // refuses that fix too) until the selection is scanned.
+  function flacStale() {
+    var st = page.flacState
+    return !st.running && (st.scope || "") !== (page.flacSources.key || "")
+  }
+  // Where a fix would write, for the confirmation dialog.
+  function flacWhere() {
+    var src = page.flacSources
+    return src.source === "folder" ? (src.folder || "") : "Your Waves library: " + (src.waves || []).join(", ")
+  }
+  function flacCount(key) {
+    var c = page.flacState.counts || {}
+    return c[key] || 0
+  }
+  // A count with the locale's thousands separator (a library can hold tens of thousands).
+  function flacNum(n) {
+    return Number(n || 0).toLocaleString(Qt.locale(), "f", 0)
+  }
+  // A fix stopped before it finished (the app quit or crashed, or it was
+  // cancelled) and the backend remembers its folders: RESUME LAST FIX is
+  // offered, unless FIX already offers the same files from this session's scan.
+  function flacResumable() {
+    var st = page.flacState
+    return !st.running && (st.resume_source || "") !== "" && (page.flacStale() || !(st.fixable > 0))
+  }
+  // Where a resume writes, for the confirmation dialog.
+  function flacResumeWhere() {
+    var st = page.flacState
+    var folders = st.resume_folders || []
+    return st.resume_source === "folder" ? (folders[0] || "") : "Your Waves library: " + folders.join(", ")
+  }
+  // The time left beside the progress bar ("" until the backend has a pace to go by).
+  function flacTimeLeft() {
+    var s = page.flacState.eta
+    if (s === undefined || s < 0)
+      return ""
+    if (s < 60)
+      return "less than a minute left"
+    var m = Math.round(s / 60)
+    if (m < 60)
+      return "about " + m + " min left"
+    var h = Math.floor(m / 60), r = m % 60
+    return "about " + h + " h" + (r > 0 ? " " + r + " min" : "") + " left"
+  }
+  // The one-line status under the card's title, for every phase.
+  function flacNote() {
+    var st = page.flacState
+    var n = st.files || 0, total = st.total || 0
+    if (st.phase === "scanning") {
+      if (total === 0)
+        return "Looking for FLAC files… " + page.flacNum(st.found) + " found"
+      return (st.mode === "deep" ? "Checking " : "Scanning ") + page.flacNum(n) + " of " + page.flacNum(total) + "…"
+    }
+    if (st.phase === "fixing")
+      return "Writing " + page.flacNum(n) + " of " + page.flacNum(total || n) + "…"
+    if (st.phase === "failed")
+      return st.error || "The check failed."
+    if (page.flacResumable() && (st.phase === "idle" || page.flacStale()))
+      return "The last fix stopped before it finished."
+    if ((st.phase !== "done" && st.phase !== "cancelled") || page.flacStale())
+      return "Not checked yet."
+    var unset = page.flacCount("unset"), bad = page.flacCount("mismatch"), sealed = page.flacCount("sealed")
+    var head = st.phase === "cancelled" ? "Stopped after " : (st.last === "fix" ? "Done: " : "Checked ")
+    var parts = []
+    if (st.last === "fix") {
+      parts.push(page.flacNum(sealed) + (sealed === 1 ? " signature written" : " signatures written"))
+      if (unset > 0)
+        parts.push(page.flacNum(unset) + " left")
+    } else {
+      parts.push(page.flacNum(n) + (n === 1 ? " file" : " files"))
+      parts.push(unset === 0 ? "none without a signature" : page.flacNum(unset) + " without a signature")
+      // Files an earlier scan already read, unchanged since: their verdict
+      // was reused rather than read (or decoded) again.
+      var kept = st.cached || 0
+      if (kept > 0)
+        parts.push(page.flacNum(kept) + " unchanged since an earlier check")
+    }
+    if (bad > 0)
+      parts.push(page.flacNum(bad) + (bad === 1 ? " does not match its signature" : " do not match their signature"))
+    var other = page.flacCount("unreadable") + page.flacCount("decode_failed") + page.flacCount("unsupported") + page.flacCount("length_differs") + page.flacCount("changed") + page.flacCount("busy") + page.flacCount("write_failed")
+    if (other > 0)
+      parts.push(page.flacNum(other) + " skipped")
+    // Folders the walk could not open or list: their files went unchecked,
+    // so a run that missed some never reads as a clean one.
+    var missed = page.flacMissed()
+    if (missed > 0)
+      parts.push(page.flacNum(missed) + (missed === 1 ? " folder could not be opened" : " folders could not be opened"))
+    if (other > 0 || missed > 0)
+      parts[parts.length - 1] += " (see the report)"
+    return head + parts.join(", ") + "."
+  }
+  // How many folders the last finished run could not open (0 while stale).
+  function flacMissed() {
+    var st = page.flacState
+    if (st.running || page.flacStale() || (st.phase !== "done" && st.phase !== "cancelled"))
+      return 0
+    return st.folders_unreadable || 0
+  }
   function auCheck() {
     if (page.auBusy || page.auChecking)
       return
@@ -335,6 +460,14 @@ Item {
   // with every section starting collapsed, a deep link to a shut card
   // would otherwise land on a bare header.
   function jumpToCard(cardId) {
+    // The FLAC signatures card sits inside Advanced: open that section, then
+    // land on the card itself once its loader has built it.
+    if (cardId === "flac") {
+      jumpToCard("advanced")
+      if (page.jumpCard)
+        page.jumpFlac = true
+      return
+    }
     var providerId = cardId.indexOf("providers_") === 0 ? cardId : ""
     if (providerId !== "")
       cardId = "providers"
@@ -362,11 +495,16 @@ Item {
   // Real pointer, scrolling or keyboard focus takes ownership of the view.
   property var jumpCard: null
   property string jumpProvider: ""
+  // The FLAC card's item once Advanced has built it, and whether the current
+  // jump still has to land on it.
+  property var flacCardItem: null
+  property bool jumpFlac: false
   function cancelJump() {
     if (jumpCard)
       jumpCard.instantOpen = false
     jumpCard = null
     jumpProvider = ""
+    jumpFlac = false
   }
   function takeScrollOwnership() {
     pendingY = -1
@@ -375,6 +513,14 @@ Item {
   function _positionJump() {
     if (!jumpCard || !active || settingsFlick.height <= 0)
       return false
+    if (jumpFlac) {
+      if (!page.flacCardItem)
+        return false
+      var cardY = page.flacCardItem.mapToItem(settingsFlick.contentItem, 0, 0).y
+      settingsFlick.contentY = Math.max(0, Math.min(cardY - 16, settingsFlick.contentHeight - settingsFlick.height))
+      page.cancelJump()
+      return true
+    }
     var bandY = jumpProvider !== "" ? jumpCard.providerBandY(jumpProvider) : -1
     var targetY = bandY >= 0 ? bandY - 10 : jumpCard.y
     settingsFlick.contentY = Math.max(0, Math.min(targetY, settingsFlick.contentHeight - settingsFlick.height))
@@ -696,9 +842,20 @@ Item {
     // authority (file://nas/…).
     if (/^\\\\/.test(s))
       s = "//" + s.substring(2).replace(/\\/g, "/")
+    var drive = /^[A-Za-z]:/.test(s)
+    if (drive)
+      s = s.replace(/\\/g, "/")
+    // Percent-encode the path so a folder named "AC#DC" or "What?" is not
+    // cut at the "#" or "?" (a URL reads those as fragment and query);
+    // urlToPath decodes it back.
+    try {
+      s = encodeURI(s).replace(/#/g, "%23").replace(/\?/g, "%3F")
+    } catch (e) {
+      return ""
+    }
     if (/^\/\//.test(s))
       return "file:" + s
-    return (/^[A-Za-z]:/.test(s) ? "file:///" : "file://") + s
+    return (drive ? "file:///" : "file://") + s
   }
   function dirUrlOf(p) {
     var s = String(p || "").trim()
@@ -854,6 +1011,9 @@ Item {
       page.diagBusy = false
       page.diagPath = path
       page.diagFailed = (path === "")
+    }
+    function onFlacCheckChanged() {
+      page.flacRefresh()
     }
   }
 
@@ -1545,6 +1705,9 @@ Item {
               page.needsRefresh = true
               page.savedFlash = true
               flashTimer.restart()
+              // A saved download folder moves the FLAC card's "Waves library",
+              // so its last scan may no longer describe what it shows.
+              page.flacRefresh()
             }
           }
         }
@@ -2414,6 +2577,295 @@ Item {
               width: (parent.width - 10) / 2
               autoField: auCard.afAuto
               cadField: auCard.afCad
+            }
+          }
+        }
+
+        // FLAC signature check (Advanced section, above the reset row).
+        // The folder row picks what SCAN walks: the Waves library (the
+        // download and library folders) or a folder chosen with Browse,
+        // remembered by the backend. SCAN reads every FLAC header there
+        // (reads only); FIX writes the missing signature into the files the
+        // scan found without one, after Main.qml's confirmation; every run
+        // writes a CSV report, and VIEW REPORTS shows them. The card renders
+        // page.flacState and never decides anything itself.
+        Component {
+          id: flacCardComp
+          Rectangle {
+            id: flacCard
+            objectName: "flacCard"
+            width: parent ? parent.width : 0
+            radius: 10
+            color: page.surface
+            border.color: page.border1
+            implicitHeight: flacCol.implicitHeight + 24
+            readonly property var st: page.flacState
+            readonly property bool running: st.running === true
+            readonly property var src: page.flacSources
+            readonly property bool chosen: src.source === "folder"
+            readonly property int fixable: running || page.flacStale() ? 0 : (st.fixable || 0)
+            readonly property real fraction: (st.total || 0) > 0 ? Math.min(1, (st.files || 0) / st.total) : 0
+            ColumnLayout {
+              id: flacCol
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.topMargin: 12
+              anchors.leftMargin: 14
+              anchors.rightMargin: 14
+              spacing: 6
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Rectangle {
+                  width: 7
+                  height: 7
+                  radius: 4
+                  color: flacCard.running ? page.gold : flacCard.st.phase === "failed" ? page.red : page.flacMissed() > 0 ? page.gold : (flacCard.st.phase === "done" || flacCard.st.phase === "cancelled") && !page.flacStale() ? page.green : page.textDim
+                }
+                Text {
+                  text: "FLAC signatures"
+                  color: page.textHi
+                  font.pixelSize: 14
+                  font.weight: Font.Medium
+                }
+                // Wraps rather than elides: the end of the line can be the
+                // part that matters (folders a scan could not open).
+                Text {
+                  objectName: "flacNote"
+                  textFormat: Text.PlainText
+                  Layout.fillWidth: true
+                  wrapMode: Text.WordWrap
+                  color: flacCard.st.phase === "failed" ? page.red : (flacCard.fixable > 0 || (!page.flacStale() && page.flacCount("mismatch") > 0) || page.flacMissed() > 0 || page.flacResumable()) ? page.gold : page.textDim
+                  font.pixelSize: 12
+                  text: page.flacNote()
+                }
+              }
+              // While a run is on: the share of files worked through and,
+              // once the backend has a pace to go by, the time left.
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                visible: flacCard.running
+                Rectangle {
+                  Layout.fillWidth: true
+                  Layout.preferredHeight: 4
+                  radius: 2
+                  color: page.border1
+                  Rectangle {
+                    objectName: "flacBarFill"
+                    height: parent.height
+                    radius: 2
+                    width: parent.width * flacCard.fraction
+                    color: flacCard.st.phase === "fixing" ? page.gold : page.accent
+                  }
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  visible: text !== ""
+                  color: page.textDim
+                  font.pixelSize: 12
+                  text: page.flacTimeLeft()
+                }
+              }
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: "A FLAC file saved without its audio signature plays fine but fails strict checks (flac -t, Music Assistant). Scan reads the headers in your Waves library or a custom location below and writes a report. Fix adds the missing signature to those files, 34 header bytes each, and never changes the audio or touches a file that already has one. A file that has not changed since an earlier check is not read again unless Recheck all is on."
+                color: page.textDim
+                font.pixelSize: 12
+              }
+              // The folder choice, written straight to the backend's prefs
+              // (an action card, like Diagnostics: nothing to stage). The
+              // chosen path only ever comes from the system dialog, never
+              // typed, and the row is inert while a run is on.
+              FolderDialog {
+                id: flacFolderDlg
+                onAccepted: waves.flacCheckSetFolder(page.urlToPath(selectedFolder))
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                spacing: 8
+                enabled: !flacCard.running
+                opacity: flacCard.running ? 0.5 : 1.0
+                ActionButton {
+                  objectName: "flacSourceWaves"
+                  label: "WAVES LIBRARY"
+                  primary: !flacCard.chosen
+                  onClicked: waves.flacCheckSetSource("waves")
+                }
+                ActionButton {
+                  objectName: "flacSourceFolder"
+                  label: "CUSTOM LOCATION"
+                  primary: flacCard.chosen
+                  // No folder picked yet: go straight to the dialog, which
+                  // selects this source when it returns one.
+                  onClicked: {
+                    if ((flacCard.src.folder || "") === "") {
+                      flacFolderDlg.open()
+                      return
+                    }
+                    waves.flacCheckSetSource("folder")
+                  }
+                }
+                // What a scan of the selection walks: the chosen folder, or
+                // the Waves library's folders.
+                Rectangle {
+                  Layout.fillWidth: true
+                  Layout.preferredHeight: 36
+                  radius: 8
+                  color: page.surface2
+                  border.color: page.outline
+                  Text {
+                    objectName: "flacPath"
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    textFormat: Text.PlainText
+                    elide: Text.ElideMiddle
+                    font.family: page.mono
+                    font.pixelSize: 13
+                    readonly property string wavesList: (flacCard.src.waves || []).join(", ")
+                    color: (flacCard.chosen ? flacCard.src.folder : wavesList) ? page.textHi : page.textDim
+                    text: flacCard.chosen ? (flacCard.src.folder || "No folder chosen") : (wavesList || "No download folder is set")
+                  }
+                }
+                ActionButton {
+                  objectName: "flacBrowseBtn"
+                  visible: flacCard.chosen
+                  label: "BROWSE"
+                  primary: true
+                  onClicked: {
+                    var du = page.pathUrl(flacCard.src.folder)
+                    if (du !== "")
+                      flacFolderDlg.currentFolder = du
+                    flacFolderDlg.open()
+                  }
+                }
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 2
+                Layout.bottomMargin: 2
+                spacing: 10
+                // SCAN, or CANCEL while a run is on.
+                ActionButton {
+                  objectName: "flacScanBtn"
+                  label: flacCard.running ? "CANCEL" : "SCAN"
+                  primary: !flacCard.running
+                  onClicked: {
+                    if (flacCard.running)
+                      waves.flacCheckCancel()
+                    else
+                      waves.flacCheckScan(page.flacDeep, page.flacRecheck)
+                  }
+                }
+                // VIEW REPORTS: the reports folder, newest report selected,
+                // whenever one exists (a run in progress included). It sits
+                // beside SCAN so FIX appearing never moves it.
+                ActionButton {
+                  objectName: "flacReportsBtn"
+                  visible: flacCard.st.reports === true
+                  label: "VIEW REPORTS"
+                  onClicked: waves.flacCheckRevealReports()
+                }
+                // FIX N FILES: only after a scan found files without a signature.
+                ActionButton {
+                  objectName: "flacFixBtn"
+                  visible: flacCard.fixable > 0
+                  label: "FIX " + page.flacNum(flacCard.fixable) + (flacCard.fixable === 1 ? " FILE" : " FILES")
+                  warn: true
+                  onClicked: page.flacFixRequested(flacCard.fixable, page.flacWhere())
+                }
+                // RESUME LAST FIX: a fix stopped before it finished. Asks
+                // through Main.qml's gate like FIX; the backend then scans the
+                // same folders again and writes what is still missing.
+                ActionButton {
+                  objectName: "flacResumeBtn"
+                  visible: page.flacResumable()
+                  label: "RESUME LAST FIX"
+                  warn: true
+                  onClicked: page.flacResumeRequested(page.flacResumeWhere())
+                }
+                Item {
+                  Layout.fillWidth: true
+                }
+                // The two switches, side by side on the right at their
+                // natural width; where the buttons leave less room (a narrow
+                // window, a long FIX count) the labels wrap rather than
+                // running off the card. The buttons never stretch.
+                RowLayout {
+                  objectName: "flacOptions"
+                  spacing: 16
+                  Layout.fillWidth: true
+                  Layout.maximumWidth: implicitWidth
+                  opacity: flacCard.running ? 0.5 : 1.0
+                  // Deep check: decode every file too. Off by default, it
+                  // takes about a second per track.
+                  RowLayout {
+                    objectName: "flacDeepRow"
+                    spacing: 8
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
+                    SToggle {
+                      checked: page.flacDeep
+                      TapAction {
+                        objectName: "flacDeepToggle"
+                        anchors.fill: parent
+                        enabled: !flacCard.running
+                        accessibleLabel: "Deep check: decode to find damage"
+                        role: Accessible.CheckBox
+                        checkable: true
+                        checked: page.flacDeep
+                        onTriggered: page.flacDeep = !page.flacDeep
+                      }
+                    }
+                    Text {
+                      id: flacDeepTxt
+                      Layout.fillWidth: true
+                      wrapMode: Text.WordWrap
+                      text: "Deep check: decode to find damage (slow)"
+                      color: page.textDim
+                      font.pixelSize: 12
+                    }
+                  }
+                  // Recheck all: a scan normally takes an earlier scan's
+                  // verdict for a file whose size and time are unchanged. This
+                  // reads every file again (with Deep check, decodes it),
+                  // which is the only way to find damage that left both alone.
+                  RowLayout {
+                    objectName: "flacRecheckRow"
+                    spacing: 8
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
+                    SToggle {
+                      checked: page.flacRecheck
+                      TapAction {
+                        objectName: "flacRecheckToggle"
+                        anchors.fill: parent
+                        enabled: !flacCard.running
+                        accessibleLabel: "Recheck all: read unchanged files too"
+                        role: Accessible.CheckBox
+                        checkable: true
+                        checked: page.flacRecheck
+                        onTriggered: page.flacRecheck = !page.flacRecheck
+                      }
+                    }
+                    Text {
+                      id: flacRecheckTxt
+                      Layout.fillWidth: true
+                      wrapMode: Text.WordWrap
+                      text: "Recheck all: read unchanged files too"
+                      color: page.textDim
+                      font.pixelSize: 12
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -5637,6 +6089,23 @@ Item {
                   // decorative wave tile in that slot would read as a
                   // dead panel rather than finished surface, so the
                   // row just stops there.
+                }
+
+                // FLAC signature check, Advanced section only, above the
+                // reset row. Built only while the section is open; the
+                // deep-link jump waits for the item and lands on it.
+                Loader {
+                  id: flacLoader
+                  active: card.open && card.modelData.id === "advanced"
+                  visible: active
+                  width: inner.width
+                  height: (active && item) ? item.implicitHeight : 0
+                  sourceComponent: flacCardComp
+                  onItemChanged: {
+                    page.flacCardItem = item
+                    if (item && page.jumpFlac)
+                      Qt.callLater(page._positionJump)
+                  }
                 }
 
                 // Reset actions, Advanced section only, at the very

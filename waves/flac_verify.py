@@ -33,8 +33,8 @@ and the library check go through. Three guarantees hold for everything in it:
 
 Qt-free on purpose: the download engine calls :func:`seal_file` directly and
 the tests drive it with plain files. The library check's folder walk,
-remembered verdicts, reports and fix loop are not here; they build on these
-read and seal primitives.
+remembered verdicts, reports and fix loop live in :mod:`waves.library.flac_check`
+and build on these read and seal primitives.
 """
 
 from __future__ import annotations
@@ -209,6 +209,14 @@ def read_streaminfo(path: str | os.PathLike) -> StreamInfo:
             raise FlacHeaderError(_NOT_FIRST)
         offset = pos + 4
         raw = f.read(STREAMINFO_SIZE)
+    return _parse_streaminfo(offset, raw)
+
+
+def parse_streaminfo(offset: int, raw: bytes) -> StreamInfo:
+    """The STREAMINFO fields of the 34 block bytes found at ``offset``.
+
+    Public for the verdict store, which keeps the block bytes and rebuilds
+    the same StreamInfo a read would give."""
     return _parse_streaminfo(offset, raw)
 
 
@@ -474,9 +482,12 @@ def decode_md5(
     ffmpeg: str,
     info: StreamInfo,
     should_continue: Callable[[], bool] | None = None,
+    shared: int = 1,
 ) -> tuple[bytes, int]:
     """Decode the file through ffmpeg and hash the PCM the way libFLAC
     defines the signature. Returns the 16-byte digest and the sample count.
+    ``shared`` is how many decodes run at once: they split the link between
+    them, so each gets that many times as long before it counts as stuck.
 
     Reads only. The decoder child is killed on cancel and on any error.
 
@@ -519,7 +530,7 @@ def decode_md5(
         pcm_fmt,
         "-",
     ]
-    limit = decode_time_limit(os.path.getsize(path))
+    limit = decode_time_limit(os.path.getsize(path)) * max(1, shared)
     digest = hashlib.md5(usedforsecurity=False)  # the FLAC format mandates MD5; nothing here is a security claim
     n_bytes = 0
     # argv is the configured ffmpeg path plus one file under the user's folders.
@@ -584,12 +595,12 @@ def _read_row(path: str) -> Row:
     return Row(path, UNSET if info.md5_unset else SET, info=info, size=size, mtime_ns=mtime_ns)
 
 
-def _decode_row(row: Row, ffmpeg: str, should_continue: Callable[[], bool] | None) -> Row:
+def _decode_row(row: Row, ffmpeg: str, should_continue: Callable[[], bool] | None, shared: int = 1) -> Row:
     """The row with the audio decoded and hashed, or with the status that
     says why it could not be (the status is unchanged on success)."""
     assert row.info is not None  # noqa: S101 (callers pass a header row)
     try:
-        md5, samples = decode_md5(row.path, ffmpeg, row.info, should_continue)
+        md5, samples = decode_md5(row.path, ffmpeg, row.info, should_continue, shared)
     except Cancelled:
         return replace(row, status=CANCELLED)
     except Unsupported as exc:
@@ -605,13 +616,15 @@ def check_file(
     *,
     deep: bool = False,
     should_continue: Callable[[], bool] | None = None,
+    shared: int = 1,
 ) -> Row:
     """Read one file's verdict. Header only by default; ``deep`` decodes the
-    audio and compares. Never writes."""
+    audio and compares (``shared``: how many decodes run at once, see
+    :func:`decode_md5`). Never writes."""
     row = _read_row(path)
     if row.info is None or not deep or not ffmpeg:
         return row
-    row = _decode_row(row, ffmpeg, should_continue)
+    row = _decode_row(row, ffmpeg, should_continue, shared)
     info = row.info
     if info is None or row.md5_audio is None or info.md5_unset:
         return row

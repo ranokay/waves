@@ -978,6 +978,12 @@ ApplicationWindow {
   // Advanced-settings reset confirmations. Both actions are destructive, so
   // nothing happens until the user confirms in these dialogs.
   property bool confirmSettingsReset: false
+  // The FLAC check's fix (Advanced settings): confirmed with the count of
+  // files it will write a signature into, before the backend is asked.
+  property bool confirmFlacFix: false
+  property int flacFixCount: 0
+  property string flacFixWhere: ""   // the folders the fix writes in, shown in the gate
+  property bool flacFixResume: false // the gate asks to resume a fix that stopped, not to start one
   property bool confirmFactoryReset: false
   // The set folder failed the reachability probe (NAS asleep, stale mount);
   // the download is held backend-side until Try again / a new folder.
@@ -3899,6 +3905,19 @@ ApplicationWindow {
     browseOpen = false
     Qt.callLater(function () {
       settingsPage.jumpToCard("ffmpeg")
+    })
+  }
+  // Deep-link to the FLAC signatures card (from the FLAC notice).
+  function openFlacSetting() {
+    navPush()
+    markNav("settings")
+    setupOpen = false
+    settingsOpen = true
+    artistOpen = false
+    libraryOpen = false
+    browseOpen = false
+    Qt.callLater(function () {
+      settingsPage.jumpToCard("flac")
     })
   }
   // Deep-link to the Music library card (from the Library section's
@@ -9751,6 +9770,17 @@ ApplicationWindow {
       onAppleSetupSkipped: root.openSearch()
       onResetSettingsRequested: root.confirmSettingsReset = true
       onFactoryResetRequested: root.confirmFactoryReset = true
+      onFlacFixRequested: function (count, where) {
+        root.flacFixResume = false
+        root.flacFixCount = count
+        root.flacFixWhere = where
+        root.confirmFlacFix = true
+      }
+      onFlacResumeRequested: function (where) {
+        root.flacFixResume = true
+        root.flacFixWhere = where
+        root.confirmFlacFix = true
+      }
     }
 
     // Library page (My Music): the Library section first (ADR 0007 --
@@ -10677,6 +10707,11 @@ ApplicationWindow {
     // True when this install went through the first-run terms gate, so
     // the opt-in prompt keeps its fresh-setup wording across launches.
     property bool updatePromptFresh: false
+    // FLAC signature notice (flacNoticeGate): shown once per install, ever.
+    // Keyed to the notice, not the version, so a later update never brings it
+    // back. A fresh install marks it seen at the terms gate: only files saved
+    // by an earlier version can need the fix.
+    property bool flacNoticeSeen: false
     // Exit warning (exitGate): "Don't warn me again" mutes the
     // downloads-still-running close prompt permanently.
     property bool exitWarnMuted: false
@@ -11040,6 +11075,103 @@ ApplicationWindow {
     }
   }
 
+  // FLAC signature fix (Advanced settings). Confirms with the file count and
+  // says exactly what is written: the 34-byte header block of each file the
+  // scan found without a signature, and nothing else. The same gate asks to
+  // resume a fix that stopped before it finished (flacFixResume): the count
+  // is not known until the backend has scanned the folders again.
+  Rectangle {
+    id: flacFixGate
+    objectName: "flacFixGate"
+    anchors.fill: parent
+    visible: root.confirmFlacFix
+    color: "#cc06070e"
+    MouseArea {
+      anchors.fill: parent
+      onClicked: root.confirmFlacFix = false
+    }   // click-away cancels
+    Rectangle {
+      anchors.centerIn: parent
+      width: 460
+      implicitHeight: flacFixCol.implicitHeight + 40
+      radius: 14
+      color: root.surface2
+      border.color: root.outline
+      MouseArea {
+        anchors.fill: parent
+      }   // a click on the card must not dismiss
+      ColumnLayout {
+        id: flacFixCol
+        anchors.centerIn: parent
+        width: parent.width - 40
+        spacing: 14
+        Text {
+          objectName: "flacFixTitle"
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          color: root.textHi
+          font.pixelSize: 18
+          font.bold: true
+          wrapMode: Text.WordWrap
+          text: root.flacFixResume ? "Resume the last fix?" : "Write the signature into " + root.flacFixCount + (root.flacFixCount === 1 ? " file?" : " files?")
+        }
+        Text {
+          visible: root.flacFixWhere !== ""
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          wrapMode: Text.WrapAnywhere
+          maximumLineCount: 3
+          elide: Text.ElideRight
+          color: root.textHi
+          font.family: root.mono
+          font.pixelSize: 12
+          text: root.flacFixWhere
+        }
+        Text {
+          visible: root.flacFixResume
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          color: root.textLo
+          font.pixelSize: 13
+          lineHeight: 1.3
+          text: "The last fix stopped before it finished. Waves scans these folders again and writes the signature into the files it did not reach. The files it already signed are skipped."
+        }
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          color: root.textLo
+          font.pixelSize: 13
+          lineHeight: 1.3
+          text: "Each file is decoded and checked again first, then its 34-byte FLAC header block is updated in place. The audio is never changed, no file is moved, renamed or deleted, and a file that already carries a signature is never rewritten. A report of every file is saved when it finishes."
+        }
+        RowLayout {
+          Layout.alignment: Qt.AlignHCenter
+          Layout.topMargin: 4
+          spacing: 12
+          ActionButton {
+            objectName: "flacFixConfirm"
+            primary: true
+            label: root.flacFixResume ? "RESUME" : "WRITE SIGNATURES"
+            onClicked: {
+              root.confirmFlacFix = false
+              if (root.flacFixResume)
+                waves.flacCheckResume()
+              else
+                waves.flacCheckFix()
+            }
+          }
+          ActionButton {
+            objectName: "flacFixCancel"
+            label: "CANCEL"
+            onClicked: root.confirmFlacFix = false
+          }
+        }
+      }
+    }
+  }
+
   // Reset application (Advanced settings): the factory wipe. Confirms with
   // an explicit description of what is erased; on confirm the backend wipes
   // its saved state and the app closes so the next launch is a first run.
@@ -11211,7 +11343,10 @@ ApplicationWindow {
     // are mutually exclusive on termsCurrentAccepted (the same test the
     // terms gate shows on, version included), so this never stacks with
     // termsGate, a terms-revision re-prompt included.
-    visible: root.signedIn && ((!setupSettings.ffmpegSetupDone && !root.termsCurrentAccepted) || (setupSettings.ffmpegSetupDone && root.termsCurrentAccepted && appFfmpeg.stateKey === "missing" && !ffmpegGate.sessionSnoozed && !setupSettings.ffmpegPromptDismissed))
+    // Eligibility, not `visible`: the FLAC notice reads this while another
+    // gate may still be fading in, so a lagging visible cannot stack them.
+    readonly property bool wanted: root.signedIn && ((!setupSettings.ffmpegSetupDone && !root.termsCurrentAccepted) || (setupSettings.ffmpegSetupDone && root.termsCurrentAccepted && appFfmpeg.stateKey === "missing" && !ffmpegGate.sessionSnoozed && !setupSettings.ffmpegPromptDismissed))
+    visible: wanted
     color: "#f406070e"
     // Eat every click; the only way past is the Continue / "later" choice.
     MouseArea {
@@ -11969,8 +12104,14 @@ ApplicationWindow {
             // whose stored version is older.
             legalSettings.termsAcceptedVersion = root.termsVersion
             legalSettings.termsAcceptedDate = new Date().toISOString().slice(0, 10)
+            // A fresh install never needs the FLAC notice: only files saved
+            // by an earlier version can lack a signature. A terms-revision
+            // re-accept is not a first run, so it leaves the notice due.
+            if (!legalSettings.termsAccepted) {
+              setupSettings.updatePromptFresh = true
+              setupSettings.flacNoticeSeen = true
+            }
             legalSettings.termsAccepted = true
-            setupSettings.updatePromptFresh = true
           }
         }
         Text {
@@ -12281,6 +12422,128 @@ ApplicationWindow {
           ActionButton {
             label: "NOT NOW"
             onClicked: updateOptInGate.answer(false)
+          }
+        }
+      }
+    }
+  }
+
+  // FLAC signature notice: once per install, after updating from a version
+  // that could save FLAC files without their audio signature (the gap came
+  // from tidal-dl-ng). It waits for Browse with every first-run prompt gone,
+  // and any answer, a click-away included, retires it for good
+  // (setupSettings.flacNoticeSeen).
+  Rectangle {
+    id: flacNoticeGate
+    objectName: "flacNoticeGate"
+    parent: Overlay.overlay
+    anchors.fill: parent
+    z: 1200
+    // Every first-run step and the update prompt are out of the way. Read
+    // from their eligibility, never their visible: the update prompt's
+    // visible trails its own fade-in, so in the tick both become due it
+    // still reads false and this card would land on top of it.
+    readonly property bool promptsClear: root.signedIn && setupSettings.ffmpegSetupDone && root.termsCurrentAccepted && bootOverlay.done && !ffmpegGate.wanted && !updateOptInGate.shouldShow
+    readonly property bool shouldShow: promptsClear && !setupSettings.flacNoticeSeen && root.browseOpen && !root.settingsOpen && !root.artistOpen && !root.libraryOpen
+    // Latched: once up it stays until answered, whatever moves behind it.
+    // Taken a beat later and re-read then: one flip (signedIn, say) can
+    // reach this binding before the update prompt's, and the transient
+    // true it reads in between must not latch.
+    property bool shown: false
+    function latch() {
+      if (shouldShow)
+        shown = true
+    }
+    onShouldShowChanged: if (shouldShow)
+      Qt.callLater(latch)
+    Component.onCompleted: Qt.callLater(latch)
+    // Never stacked: a prompt that comes due while this is up (an FFmpeg
+    // re-prompt, then the update prompt) takes the frame first, and this
+    // returns once that one has faded all the way out.
+    readonly property bool onTop: shown && promptsClear && !updateOptInGate.visible
+    // Only while on top: through its fade-out, as it steps aside for
+    // another prompt, a stray click must not retire a notice never read.
+    function answer(toFix) {
+      if (!onTop)
+        return
+      setupSettings.flacNoticeSeen = true
+      shown = false
+      if (toFix)
+        root.openFlacSetting()
+    }
+    visible: opacity > 0
+    opacity: onTop ? 1 : 0
+    Behavior on opacity {
+      NumberAnimation {
+        duration: 520
+        easing.type: Easing.OutCubic
+      }
+    }
+    color: "#cc06070e"
+    MouseArea {
+      anchors.fill: parent
+      enabled: flacNoticeGate.onTop
+      onClicked: flacNoticeGate.answer(false)
+    }
+    Rectangle {
+      anchors.centerIn: parent
+      width: 500
+      implicitHeight: fnoCol.implicitHeight + 40
+      radius: 14
+      color: root.surface2
+      border.color: root.outline
+      anchors.verticalCenterOffset: flacNoticeGate.onTop ? 0 : flacNoticeGate.height / 2 + height
+      Behavior on anchors.verticalCenterOffset {
+        NumberAnimation {
+          duration: 520
+          easing.type: Easing.OutCubic
+        }
+      }
+      MouseArea {
+        anchors.fill: parent
+      }   // a click on the card must not dismiss
+      ColumnLayout {
+        id: fnoCol
+        anchors.centerIn: parent
+        width: parent.width - 40
+        spacing: 14
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          horizontalAlignment: Text.AlignHCenter
+          color: root.textHi
+          font.pixelSize: 18
+          font.bold: true
+          wrapMode: Text.WordWrap
+          text: "FLAC files from earlier versions"
+        }
+        // StyledText for the one bold phrase, lit in textHi: a string
+        // literal plus a palette colour, no remote data. The phrase is the
+        // point: the music is fine and the fix is optional.
+        Text { // guard:deliberate-richtext flac-notice-body
+          textFormat: Text.StyledText
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          horizontalAlignment: Text.AlignHCenter
+          color: root.textLo
+          font.pixelSize: 13
+          lineHeight: 1.3
+          text: "Some FLAC files saved by earlier versions of Waves (and by tidal-dl-ng, which Waves grew from) are missing their audio signature. <b><font color=\"" + root.textHi + "\">The music in them is intact and plays normally</font></b>, but strict tools like flac -t or Music Assistant may flag them. Waves now adds the signature to everything it saves, and a new check in Settings can find and fix older files for you in a few clicks, without touching the audio. <b><font color=\"" + root.textHi + "\">Fixing them is optional.</font></b>"
+        }
+        RowLayout {
+          Layout.alignment: Qt.AlignHCenter
+          Layout.topMargin: 4
+          spacing: 12
+          ActionButton {
+            objectName: "flacNoticeFix"
+            primary: true
+            label: "TAKE ME TO THE FIX"
+            onClicked: flacNoticeGate.answer(true)
+          }
+          ActionButton {
+            objectName: "flacNoticeGotIt"
+            label: "GOT IT"
+            onClicked: flacNoticeGate.answer(false)
           }
         }
       }

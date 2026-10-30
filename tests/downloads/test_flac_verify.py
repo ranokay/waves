@@ -724,6 +724,20 @@ def test_a_decode_that_stops_making_progress_is_stopped_by_its_time_limit(tmp_pa
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the stand-in decoder is a shell script")
+def test_a_decode_sharing_the_link_gets_that_many_times_as_long(tmp_path, monkeypatch):
+    """Several decodes at once split a slow share between them: a limit
+    sized for one would fail healthy files as "did not decode cleanly"."""
+    monkeypatch.setattr(fv, "DECODE_MIN_SECONDS", 1.0)
+    path = _whole_frames_file(tmp_path)
+    t0 = time.monotonic()
+
+    row = fv.check_file(str(path), _stalled_decoder(tmp_path), deep=True, shared=2)
+
+    assert time.monotonic() - t0 >= 1.5
+    assert (row.status, row.detail) == (fv.DECODE_FAILED, "the decoder did not finish within 2 seconds")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in decoder is a shell script")
 def test_cancel_reaches_a_decode_that_is_not_producing_output(tmp_path):
     """The read loop only asks between chunks; a decoder stuck before its
     first chunk is stopped by the watchdog, and the row says cancelled."""

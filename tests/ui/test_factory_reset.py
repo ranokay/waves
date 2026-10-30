@@ -199,6 +199,9 @@ def test_factory_reset_wipes_waves_files_and_keeps_install_channel(tmp_path, mon
         "mbarbiter.sqlite3",
         "mbarbiter.sqlite3-wal",
         "mbarbiter.sqlite3-shm",
+        "flac-check.sqlite3",
+        "flac-check.sqlite3-wal",
+        "flac-check.sqlite3-shm",
         "crash.log",
         "crash.log.1",
         "waves_dev.log",
@@ -284,6 +287,104 @@ def test_factory_reset_wipes_the_remembered_quarantine_roots(tmp_path, monkeypat
 
     assert not (base / _QUARANTINE_SIDECAR_NAME).exists()
     assert not (base / staged).exists()
+
+
+def _flac_owner(base, stub):
+    from waves.desktop.library.flac_check import FlacCheck
+
+    return FlacCheck(
+        str(base),
+        waves_roots=lambda: [],
+        ffmpeg=lambda: "",
+        post=lambda *a: None,
+        start=lambda *a: None,
+        reveal=lambda p: None,
+        factory_reset=lambda: getattr(stub, "_factory_reset", False),
+        prefs={},
+        save_prefs=lambda: None,
+    )
+
+
+def test_a_factory_reset_waits_for_the_open_verdict_store_before_any_wipe(tmp_path, monkeypatch):
+    """A scan holds the FLAC check's sqlite store open; the reset must not
+    unlink it underneath the worker (Windows refuses, and POSIX would leave
+    the worker writing an unlinked file). It waits for the close instead."""
+    import threading
+
+    base = tmp_path / "cfg"
+    base.mkdir()
+    (base / "settings.json").write_text("x")
+    stub = _reset_stub()
+    stub._flac_check = _flac_owner(base, stub)
+    cache = stub._flac_check._open_cache()
+    assert cache is not None
+    assert not stub._flac_check.cache_busy_event().is_set()
+
+    worker = threading.Thread(target=lambda: _run_factory_reset(base, monkeypatch, stub))
+    worker.start()
+    try:
+        # The reset is parked on the cache event: nothing in the folder moved.
+        assert (base / "settings.json").exists()
+        assert (base / "flac-check.sqlite3").exists()
+    finally:
+        stub._flac_check._close_cache(cache)
+        worker.join(10)
+    assert not worker.is_alive()
+    assert not (base / "settings.json").exists()
+    assert not (base / "flac-check.sqlite3").exists(), "the scan's close path took the store"
+
+
+def test_a_reset_that_outlives_its_wait_never_unlinks_the_open_store_and_the_scan_deletes_it_on_close(
+    tmp_path, monkeypatch
+):
+    """A worker that never closes within the bounded wait: the reset takes
+    everything else, leaves the open store alone, and the scan's close path
+    deletes it because the reset latch is set."""
+    monkeypatch.setattr(backend_mod, "_FLAC_CACHE_RELEASE_WAIT_S", 0.01)
+    base = tmp_path / "cfg"
+    base.mkdir()
+    (base / "settings.json").write_text("x")
+    stub = _reset_stub()
+    stub._flac_check = _flac_owner(base, stub)
+    cache = stub._flac_check._open_cache()
+    assert cache is not None
+
+    _run_factory_reset(base, monkeypatch, stub)
+
+    assert not (base / "settings.json").exists()
+    assert (base / "flac-check.sqlite3").exists(), "an open store is never unlinked under its worker"
+    stub._flac_check._close_cache(cache)
+    assert not (base / "flac-check.sqlite3").exists()
+
+
+def test_factory_reset_takes_every_flac_report_and_nothing_else_there(tmp_path, monkeypatch):
+    """The FLAC check's reports, a second one in the same second included
+    (named with a counter), go with the reset; any other name in the
+    reports folder is the user's and stays."""
+    from waves.library import flac_check
+
+    base = tmp_path / "cfg"
+    reports = base / backend_mod.REPORTS_DIR
+    reports.mkdir(parents=True)
+    ours = [flac_check.report_name(kind, 1_700_000_000, n) for kind in ("scan", "fix") for n in (1, 2, 10, 999)]
+    for name in ours:
+        (reports / name).write_text("ours")
+    foreign = [
+        "flac-check-scan-20260101-010101-1.csv",
+        "flac-check-scan-20260101-010101-0.csv",
+        "flac-check-scan-20260101-010101-1000.csv",
+        "flac-check-scan-20260101-010101-2.csv.bak",
+        "flac-check-scan-20260101-010101-copy.csv",
+        "my-report.csv",
+    ]
+    for name in foreign:
+        (reports / name).write_text("precious")
+
+    _run_factory_reset(base, monkeypatch)
+
+    for name in ours:
+        assert not (reports / name).exists(), name
+    assert sorted(os.listdir(reports)) == sorted(foreign)
 
 
 def test_factory_reset_takes_everything_a_self_update_left_behind(tmp_path, monkeypatch):
