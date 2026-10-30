@@ -63,4 +63,4 @@ A future claim that needs a real container service or a real browser would justi
 
 ## Record the evidence
 
-The PR body follows `.github/pull_request_template.md`: change class, tests added, red and green proof, gate commands with exits and counts, reviewer count, and qualification gaps. Screenshots and recordings are evidence only for native claims lower layers cannot show.
+The PR body follows `.github/pull_request_template.md`: change class, tests added, red and green proof, gate commands with exits and counts, review, and qualification gaps. Screenshots and recordings are evidence only for native claims lower layers cannot show.
