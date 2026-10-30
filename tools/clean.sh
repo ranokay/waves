@@ -4,14 +4,14 @@
 # Deletes only what the build and test tools recreate: the Nuitka/Flatpak
 # outputs (dist, build-dir, flatpak-repo), bytecode and tool caches
 # (__pycache__, .pytest_cache, .ruff_cache, .mypy_cache, .hypothesis),
-# QML compile artifacts (*.qmlc, *.jsc), and the local code-review-graph
-# store. Everything else is left alone: never `git clean`, never `.venv`,
-# and never the deferred-channel sources under packaging/ (aur, winget).
+# and QML compile artifacts (*.qmlc, *.jsc). Everything else is left alone:
+# never `git clean`, never `.venv`, and never the deferred-channel sources
+# under packaging/ (aur, winget).
 # Idempotent: a second run removes nothing and still exits 0.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-rm -rf dist build-dir flatpak-repo .code-review-graph \
+rm -rf dist build-dir flatpak-repo \
   .pytest_cache .ruff_cache .mypy_cache .hypothesis
 
 # Next-to-source artifacts, everywhere but the venv and git metadata.
