@@ -10839,6 +10839,7 @@ ApplicationWindow {
         }
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
+          Layout.preferredWidth: Math.min(implicitWidth, parent.width)
           Layout.topMargin: 4
           spacing: 12
           ActionButton {
@@ -10931,6 +10932,7 @@ ApplicationWindow {
         }
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
+          Layout.preferredWidth: Math.min(implicitWidth, parent.width)
           Layout.topMargin: 4
           spacing: 12
           ActionButton {
@@ -11017,6 +11019,7 @@ ApplicationWindow {
         }
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
+          Layout.preferredWidth: Math.min(implicitWidth, parent.width)
           Layout.topMargin: 4
           spacing: 12
           ActionButton {
@@ -11182,6 +11185,7 @@ ApplicationWindow {
         }
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
+          Layout.preferredWidth: Math.min(implicitWidth, parent.width)
           Layout.topMargin: 4
           spacing: 12
           ActionButton {
@@ -11268,6 +11272,7 @@ ApplicationWindow {
         }
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
+          Layout.preferredWidth: Math.min(implicitWidth, parent.width)
           Layout.topMargin: 4
           spacing: 12
           ActionButton {
@@ -11858,6 +11863,7 @@ ApplicationWindow {
         }
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
+          Layout.preferredWidth: Math.min(implicitWidth, parent.width)
           Layout.topMargin: 4
           spacing: 12
           ActionButton {

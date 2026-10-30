@@ -11,8 +11,9 @@ and a pair in one centred row.
 
 The claim under test is geometry, which only the laid-out tree can show, so
 the scenario boots the real ``Main.qml`` at the 880x560 minimum window and
-measures every converted action with ``mapToItem``: hug width, centring, card
-containment, and a pair's shared row and non-overlap. A provider-supplied
+measures every converted action with ``mapToItem``: hug width, centring,
+containment in its card or its padded content column, and a pair's shared row
+and non-overlap. A provider-supplied
 label (the welcome, browse and search-empty CTAs) can be longer than its
 container; the button must stop at the container and elide the word instead
 of drawing outside it.
@@ -125,6 +126,13 @@ _GATE_CASES = (
         "ffmpegGate",
         1,
     ),
+    (
+        "ffmpeg gate installing",
+        "appFfmpeg.lifeState = 'downloading'; ffmpegGate.visible = true",
+        "ffmpegGate.visible = false; appFfmpeg.lifeState = ''",
+        "ffmpegGate",
+        1,
+    ),
 )
 
 
@@ -150,13 +158,16 @@ def _check_surface(
     expected: int,
     *,
     capped: bool = False,
+    centred: bool | None = None,
 ) -> None:
     """One surface's geometry: hug, centre, containment, and pair shape."""
     if len(buttons) != expected:
         problems.append(f"{name}: {len(buttons)} actions measured, expected {expected}")
         return
+    if centred is None:
+        centred = expected == 1
     for b in buttons:
-        _check_button(problems, name, b, capped=capped, centred=expected == 1)
+        _check_button(problems, name, b, capped=capped, centred=centred)
     if expected == 2:
         _check_pair(problems, name, buttons)
 
@@ -190,6 +201,16 @@ def _check_pair(problems: list[str], name: str, buttons: list[dict]) -> None:
     group_centre = (left["x"] + right["x"] + right["width"]) / 2
     if abs(group_centre - left["cardWidth"] / 2) > 1.0:
         problems.append(f"{name} does not centre its pair: centre {group_centre} in {left['cardWidth']}")
+
+
+def _check_containment(problems: list[str], name: str, buttons: list[dict]) -> None:
+    """The button sits inside its real card (the nearest rounded ancestor)."""
+    for b in buttons:
+        where = f"{name} [{b['object'] or b['label']}]"
+        if b["x"] < -0.5 or b["x"] + b["width"] > b["cardWidth"] + 0.5:
+            problems.append(f"{where} leaves its card horizontally: x {b['x']} width {b['width']}")
+        if b["y"] < -0.5 or b["y"] + b["height"] > b["cardHeight"] + 0.5:
+            problems.append(f"{where} leaves its card vertically: y {b['y']} height {b['height']}")
 
 
 def _check_long_label(problems: list[str], name: str, buttons: list[dict]) -> None:
@@ -307,6 +328,7 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
     settle(350)
     provider_scope = "findFirst(setupPane, function (o) { return o.objectName === 'welcomeProviderAction' && o.visible === true; }).parent"
     _check_surface(problems, "welcome provider CTA", _measure(q, provider_scope, provider_scope), 1)
+    _check_containment(problems, "welcome provider CTA", _measure(q, provider_scope))
 
     q("root.setupMode = 'tidal'; root.setupUrlOpened = true")
     settle(350)
@@ -315,6 +337,7 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
         "welcome sign-in actions",
         _measure(q, "findFirst(setupPane, function (o) { return o.objectName === 'welcomeSignIn'; })"),
         3,
+        centred=True,
     )
 
     # --- Provider-supplied labels longer than their container ------------
@@ -348,6 +371,56 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
         "welcome provider CTA long label",
         _measure(q, provider_scope, provider_scope),
     )
+
+    # --- Hover, the focus ring and the three keys on a converted action --
+    q("root.ffmpegBlocked = true")
+    settle(300)
+    find_primary = (
+        "findFirst(ffmpegBlockGate, function (o) { return o.label === 'Set up FFmpeg' && o.clicked !== undefined; })"
+    )
+    find_continue = (
+        "findFirst(ffmpegBlockGate, function (o) {"
+        " return o.objectName === 'ffmpegGateContinue' && o.visible === true; })"
+    )
+    setup_button = q(scene_js(f"return {find_primary};"))
+    if setup_button is None:
+        problems.append("the FFmpeg block gate's primary action is not in the tree")
+    else:
+        QTest.mouseMove(root, QPoint(2, 2))
+        settle(180)
+        idle = setup_button.property("color").name()
+        point = q(scene_js(f"var b = {find_primary}; return b.mapToItem(null, b.width / 2, b.height / 2);"))
+        QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
+        settle(200)
+        hovered = setup_button.property("color").name()
+        if hovered == idle:
+            problems.append("hovering a converted primary action drew no hover feedback")
+
+    root.requestActivate()
+    settle(80)
+    for key, word in ((Qt.Key_Return, "Return"), (Qt.Key_Enter, "Enter"), (Qt.Key_Space, "Space")):
+        if not bool(q("root.ffmpegBlocked")):
+            q("root.ffmpegBlocked = true")
+            settle(220)
+        target = q(scene_js(f"return {find_continue};"))
+        if target is None:
+            problems.append(f"the FFmpeg block gate's converted action vanished before {word}")
+            break
+        target.forceActiveFocus()
+        settle(120)
+        ring = q(
+            scene_js(
+                f"var b = {find_continue};"
+                " return findFirst(b, function (o) { return o.border !== undefined"
+                " && o.border.width === 2 && o.visible === true; }) !== null;"
+            )
+        )
+        if not bool(ring):
+            problems.append(f"the converted action drew no focus ring for {word}")
+        QTest.keyClick(root, key)
+        settle(250)
+        if bool(q("root.ffmpegBlocked")):
+            problems.append(f"{word} on the converted FFmpeg continue action never fired")
 
     # --- A disabled action cannot fire by pointer, key or AX press --------
     q("root.setupOpen = false")

@@ -4,7 +4,6 @@ import QtQuick.Layouts
 import "StatusLight.js" as StatusLight
 import "../../primitives" as Primitives
 import "../../primitives"
-import "../../components"
 import "../search"
 
 // Provider welcome surface: the first-run gate, and the same cards

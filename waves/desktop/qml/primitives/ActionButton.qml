@@ -16,6 +16,7 @@ Rectangle {
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property int btnPadH: 12   // label padding, left/right
+  readonly property int padH: compact ? 9 : btnPadH   // the padding at the current scale
   readonly property int btnPadV: 7   // label padding, top/bottom
   readonly property int btnRad: 8   // button corner radius
   readonly property real btnTrack: 0   // label letter-spacing
@@ -84,7 +85,7 @@ Rectangle {
     }
   }
   readonly property color bg: danger ? redCont : warn ? goldCont : (primary ? accentCont : "transparent")
-  implicitWidth: iconOnly ? implicitHeight : sbTxt.implicitWidth + (compact ? 9 : btnPadH) * 2
+  implicitWidth: iconOnly ? implicitHeight : sbTxt.implicitWidth + padH * 2
   implicitHeight: sbTxt.implicitHeight + (compact ? 3 : btnPadV) * 2
   radius: compact ? 5 : btnRad
   color: (sbMa.containsMouse && (sb.primary || sb.danger || sb.warn)) ? Qt.lighter(sb.bg, 1.35) : sb.bg
@@ -103,7 +104,7 @@ Rectangle {
     // the natural hug unless the host caps the button, and then the label
     // elides inside it rather than drawing past the rectangle.
     visible: !sb.iconOnly
-    width: Math.min(implicitWidth, Math.max(0, sb.width - (sb.compact ? 9 : sb.btnPadH) * 2))
+    width: Math.min(implicitWidth, Math.max(0, sb.width - sb.padH * 2))
     elide: Text.ElideRight
     textFormat: Text.PlainText
     text: sb.label
