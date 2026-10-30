@@ -15,13 +15,13 @@ measures every converted action with ``mapToItem``: hug width, centring,
 containment in its card or its padded content column, and a pair's shared row
 and non-overlap. A provider-supplied
 label (the welcome, browse and search-empty CTAs) can be longer than its
-container; the button must stop at the container and elide the word instead
-of drawing outside it.
+container; the welcome, browse, search-empty and My Music empty-state CTAs
+must stop at the container and elide the word instead of drawing outside it.
 
 It also drives the disabled terms action: while its checkbox is clear it is
-no tab stop, and a real click, a Return press and the platform Press action
-must none of them accept the terms. Ticking the box arms it and Return
-accepts, so the enabled path still fires.
+no tab stop, and a real click, Return/Enter/Space delivered straight to its
+handlers, and the platform Press action must none of them accept the terms.
+Ticking the box arms it and Return accepts, so the enabled path still fires.
 
 The child installs a Qt message handler before the engine exists and fails on
 any binding loop: the label's width is tied to the button's width, and a loop
@@ -253,8 +253,8 @@ def _run_scenario() -> int:
 
 
 def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenario)
-    from PySide6.QtCore import QPoint, Qt
-    from PySide6.QtGui import QAccessible
+    from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
+    from PySide6.QtGui import QAccessible, QKeyEvent
     from PySide6.QtTest import QTest
 
     booted = boot_main_qml()
@@ -439,6 +439,17 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
     if ack is None:
         problems.append("the terms gate's ACKNOWLEDGE action is not in the tree")
     else:
+        # First prove the direct key delivery below reaches this button's
+        # handlers: armed, the same event accepts.
+        q("ackChk.checked = true")
+        settle(200)
+        QCoreApplication.sendEvent(ack, QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
+        settle(300)
+        if not bool(q("legalSettings.termsAccepted")):
+            problems.append("Return sent to the armed terms action never accepted")
+        q("legalSettings.termsAccepted = false; ackChk.checked = false")
+        settle(250)
+
         if bool(ack.property("activeFocusOnTab")):
             problems.append("the disabled terms action is still a tab stop")
         accepted = bool(q("legalSettings.termsAccepted"))
@@ -453,10 +464,10 @@ def _scenario_body(loops: list[str]) -> int:  # noqa: C901 (one straight scenari
         if bool(q("legalSettings.termsAccepted")) != accepted:
             problems.append("a pointer click fired the disabled terms action")
 
+        # Delivered to the item itself, the guard in each handler is the only
+        # thing between the key and the gate (focus cannot reach it).
         for key, word in ((Qt.Key_Return, "Return"), (Qt.Key_Enter, "Enter"), (Qt.Key_Space, "Space")):
-            ack.forceActiveFocus()
-            settle(80)
-            QTest.keyClick(root, key)
+            QCoreApplication.sendEvent(ack, QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier))
             settle(200)
             if bool(q("legalSettings.termsAccepted")) != accepted:
                 problems.append(f"{word} fired the disabled terms action")
