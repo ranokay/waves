@@ -261,7 +261,7 @@ def test_raw_sidecar_keeps_the_master_bytes(tmp_path):
 
 
 def test_sidecar_without_a_converter_keeps_the_true_extension(tmp_path, monkeypatch):
-    monkeypatch.setattr("waves.providers.apple.files.shutil.which", lambda name: None)
+    monkeypatch.setattr("waves.system_ffmpeg.find_system_ffmpeg", lambda *args, **kwargs: "")
     jpeg = b"\xff\xd8\xff\xe0" + b"jpeg"
 
     target = write_cover_sidecar(tmp_path, jpeg, "png", ffmpeg_path="")

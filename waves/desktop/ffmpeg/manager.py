@@ -59,7 +59,7 @@ from threading import Event
 
 import requests
 
-from waves.desktop import proc
+from waves import system_ffmpeg
 from waves.file_integrity import sha256_file
 
 logger = logging.getLogger("waves")
@@ -731,9 +731,7 @@ def _safe_target() -> tuple[str, str]:
 
 
 def _which_ffmpeg(os_key: str) -> str:
-    import shutil
-
-    return shutil.which(_exe_name(os_key)) or ""
+    return system_ffmpeg.working_system_ffmpeg(_exe_name(os_key))
 
 
 def _ffprobe_beside(ffmpeg_path: str, os_key: str) -> str:
@@ -760,45 +758,9 @@ def _runnable(path: Path) -> bool:
 
 # Probing a binary means fork+exec+wait on it, which can block for the whole
 # timeout when the file lives on a hung/stale mount. status() runs on the GUI
-# thread (it's the synchronous ffmpegStatus slot), so keep the timeout short and
-# memoize by (path, size, mtime): the first probe pays the cost, repeated
-# status() calls (Settings open, every ffmpegStatusChanged) reuse the result and
-# never re-fork. A different binary at the same path (size/mtime change) evicts.
-_PROBE_TIMEOUT = 4
-_probe_cache: dict[str, tuple[float, int, str]] = {}
-
-
-def _probe_version(path: str) -> str:
-    """Return the ``ffmpeg version <x>`` (or ``ffprobe version <x>``) token,
-    or "" if the binary won't run.
-
-    Memoized per (path, mtime, size) so a repeated ``status()`` on the GUI
-    thread doesn't re-fork a subprocess. A short timeout bounds the worst case
-    (hung/stale-mount binary) instead of freezing the UI.
-    """
-    try:
-        st = os.stat(path)
-        key = (st.st_mtime, st.st_size)
-    except OSError:
-        _probe_cache.pop(path, None)
-        return ""
-    cached = _probe_cache.get(path)
-    if cached is not None and cached[:2] == key:
-        return cached[2]
-    try:
-        out = subprocess.run(
-            [path, "-version"], capture_output=True, text=True, timeout=_PROBE_TIMEOUT, creationflags=proc.NO_WINDOW
-        )
-    except Exception:
-        return ""
-    if out.returncode != 0:
-        ver = ""
-    else:
-        first = (out.stdout or "").splitlines()[0] if out.stdout else ""
-        m = re.search(r"(?:ffmpeg|ffprobe) version (\S+)", first)
-        ver = m.group(1) if m else (first.strip() or "")
-    _probe_cache[path] = (key[0], key[1], ver)
-    return ver
+# thread (it's the synchronous ffmpegStatus slot), so the probe is bounded and
+# memoized by (path, size, mtime); see :mod:`waves.system_ffmpeg`.
+_probe_version = system_ffmpeg.probe_version
 
 
 def _extract_binary(zip_path: Path, dest: Path, exe: str) -> None:

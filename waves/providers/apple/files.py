@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -34,6 +33,7 @@ from waves.paths import (
 )
 from waves.playlists import populate_playlists
 from waves.providers.apple import child_guard
+from waves.system_ffmpeg import working_system_ffmpeg
 
 logger = logging.getLogger("waves.providers.apple.files")
 
@@ -177,7 +177,7 @@ def convert_image(image: bytes, target_format: str, ffmpeg_path: str = "") -> by
     conversion fails; callers then keep the served bytes under their true
     extension rather than faking one.
     """
-    ffmpeg = str(ffmpeg_path or "").strip() or shutil.which("ffmpeg") or ""
+    ffmpeg = str(ffmpeg_path or "").strip() or working_system_ffmpeg(retry_slow=True) or ""
     if not ffmpeg:
         return None
     codec = "png" if str(target_format or "").strip().lower() == "png" else "mjpeg"

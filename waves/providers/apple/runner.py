@@ -112,6 +112,7 @@ from waves.providers.apple.supervision import (
 )
 from waves.providers.apple.workdirs import make_workdir
 from waves.providers.base import AudioType, RefusalKind
+from waves.system_ffmpeg import working_system_ffmpeg
 
 logger = logging.getLogger("waves.providers.apple.runner")
 
@@ -780,7 +781,7 @@ def flac_ffmpeg(hooks: AppleJobHooks) -> str:
     except Exception:
         logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)
     try:
-        return shutil.which("ffmpeg") or ""
+        return working_system_ffmpeg(retry_slow=True)
     except Exception:
         return ""
 

@@ -23,6 +23,7 @@ import pytest
 from conftest import _InlineWriter
 from support.bridge_stub import BridgeStub
 
+from waves import system_ffmpeg
 from waves.config import Settings as SettingsSingleton
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop.backend import WavesBridge
@@ -35,6 +36,15 @@ from waves.model.download_policy import capture_intent
 # settings file, which the bug template asks users to paste in public.
 _MANAGED = "/Users/testuser/Library/Application Support/Waves/bin/ffmpeg"
 _PATH_FFMPEG = "/usr/local/bin/ffmpeg"
+
+
+@pytest.fixture(autouse=True)
+def _resolve_by_path_only(monkeypatch):
+    """These tests model path resolution, not discovery: a binary that
+    ``shutil.which`` names answers the probe, and no package-manager folder
+    contributes a candidate the test did not name."""
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "n7.1")
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: ())
 
 
 class _Stub(BridgeStub):

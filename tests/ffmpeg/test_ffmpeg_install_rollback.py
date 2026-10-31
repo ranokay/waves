@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from waves import system_ffmpeg
 from waves.desktop.ffmpeg import manager as fm
 
 
@@ -335,11 +336,11 @@ def test_the_gui_thread_probe_stays_bounded():
     that SOME timeout is passed, so this is the assertion that matters: raise
     the constant to 900 and a GUI-thread freeze of a quarter hour ships green.
     """
-    assert 0 < fm._PROBE_TIMEOUT <= 10, "status() runs on the GUI thread; this is its worst case"
+    assert 0 < system_ffmpeg.PROBE_TIMEOUT <= 10, "status() runs on the GUI thread; this is its worst case"
 
 
 def test_probe_version_is_cached_per_binary(tmp_path, monkeypatch):
-    fm._probe_cache.clear()
+    system_ffmpeg._probe_cache.clear()
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
 
@@ -366,11 +367,11 @@ def test_probe_version_is_cached_per_binary(tmp_path, monkeypatch):
     assert fm._probe_version(str(binary)) == "n7.1"
     assert fm._probe_version(str(binary)) == "n7.1"
     assert sum(runs) == 1  # only the first call actually forked
-    assert passed == [fm._PROBE_TIMEOUT], "the probe forked without the bounded timeout"
+    assert passed == [system_ffmpeg.PROBE_TIMEOUT], "the probe forked without the bounded timeout"
 
 
 def test_probe_version_reprobes_when_binary_changes(tmp_path, monkeypatch):
-    fm._probe_cache.clear()
+    system_ffmpeg._probe_cache.clear()
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
 
@@ -400,7 +401,7 @@ def test_probe_version_reprobes_when_binary_changes(tmp_path, monkeypatch):
 
 
 def test_probe_version_missing_file_returns_empty_and_evicts(tmp_path, monkeypatch):
-    fm._probe_cache.clear()
+    system_ffmpeg._probe_cache.clear()
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
 
@@ -411,11 +412,11 @@ def test_probe_version_missing_file_returns_empty_and_evicts(tmp_path, monkeypat
 
     monkeypatch.setattr(fm.subprocess, "run", lambda *a, **k: _R())
     assert fm._probe_version(str(binary)) == "n7.1"
-    assert str(binary) in fm._probe_cache
+    assert str(binary) in system_ffmpeg._probe_cache
     binary.unlink()
     # A now-missing path returns "" (no subprocess) and drops the stale entry.
     called: list[int] = []
     monkeypatch.setattr(fm.subprocess, "run", lambda *a, **k: called.append(1))
     assert fm._probe_version(str(binary)) == ""
     assert called == []
-    assert str(binary) not in fm._probe_cache
+    assert str(binary) not in system_ffmpeg._probe_cache
