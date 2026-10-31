@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -310,6 +311,46 @@ def test_a_worker_retry_keeps_the_gui_probe_cached(tmp_path, monkeypatch):
     assert system_ffmpeg.working_system_ffmpeg(retry_slow=True) == exe
     assert gui_results == [""]
     assert len(runs) == 2
+
+
+@posix_only
+def test_two_workers_retry_a_slow_binary_once(tmp_path, monkeypatch):
+    """The in-flight check and registration are atomic: two jobs arriving
+    together must not fork the same hung binary twice."""
+    exe = _make(tmp_path)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
+    monkeypatch.setattr(system_ffmpeg, "PROBE_SLOW_RETRY_S", -1.0)
+
+    def timeout(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", timeout)
+    assert system_ffmpeg.working_system_ffmpeg() == exe  # records the slow copy
+
+    started = threading.Event()
+    release = threading.Event()
+    runs = []
+
+    def run(argv, **kw):
+        runs.append(argv)
+        started.set()
+        release.wait(5)
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    second: list[bool] = []
+
+    first_thread = threading.Thread(target=system_ffmpeg._probe_retry_slow, args=(exe,))
+    first_thread.start()
+    assert started.wait(5), "the first worker never probed"
+    second_thread = threading.Thread(target=lambda: second.append(system_ffmpeg._probe_retry_slow(exe)))
+    second_thread.start()
+    second_thread.join(2)
+    assert second == [True], "the second worker forked the same slow binary"
+    release.set()
+    first_thread.join(5)
+    assert len(runs) == 1
 
 
 def test_a_probe_reads_the_ffprobe_version_token(tmp_path, monkeypatch):

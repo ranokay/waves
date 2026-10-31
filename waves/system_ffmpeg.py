@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from threading import Lock
 
 #: Suppress the console window a child process would otherwise open in the
 #: packaged Windows app (see ``waves/flac_verify.py``). 0 elsewhere.
@@ -158,8 +159,10 @@ _probe_cache: dict[str, tuple[float, int, str]] = {}
 # over. (mtime, size, monotonic deadline for the next probe.)
 _probe_slow: dict[str, tuple[float, int, float]] = {}
 # One worker probe per path at a time: concurrent jobs must not each fork the
-# same hung binary after its pause expires.
+# same hung binary after its pause expires. The lock guards the set only; the
+# subprocess runs outside it.
 _probe_inflight: set[str] = set()
+_probe_lock = Lock()
 
 
 def probe_version(path: str) -> str:
@@ -261,12 +264,14 @@ def _probe_retry_slow(path: str) -> bool:
         return False
     if time.monotonic() < rec[2]:
         return True
-    if path in _probe_inflight:
-        return True
+    with _probe_lock:
+        if path in _probe_inflight:
+            return True
+        _probe_inflight.add(path)
     # Keep the cached "" and slow record while the probe runs: a concurrent
     # status() on the GUI thread reads them and does not fork the same binary.
-    _probe_inflight.add(path)
     try:
         return bool(_spawn_probe(path, (st.st_mtime, st.st_size))) or probe_was_slow(path)
     finally:
-        _probe_inflight.discard(path)
+        with _probe_lock:
+            _probe_inflight.discard(path)
