@@ -351,6 +351,7 @@ def test_two_workers_retry_a_slow_binary_once(tmp_path, monkeypatch):
     release.set()
     first_thread.join(5)
     assert len(runs) == 1
+    assert system_ffmpeg._probe_retry_slow(exe) is False, "a working probe must clear the slow record"
 
 
 def test_a_probe_reads_the_ffprobe_version_token(tmp_path, monkeypatch):

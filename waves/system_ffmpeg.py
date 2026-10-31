@@ -259,12 +259,15 @@ def _probe_retry_slow(path: str) -> bool:
         st = os.stat(path)
     except OSError:
         return False
-    rec = _probe_slow.get(path)
-    if rec is None or rec[:2] != (st.st_mtime, st.st_size):
-        return False
-    if time.monotonic() < rec[2]:
-        return True
     with _probe_lock:
+        # Re-read under the lock: another worker may have refreshed the record
+        # between the stat above and this point. Its write completes before it
+        # clears the in-flight marker below.
+        rec = _probe_slow.get(path)
+        if rec is None or rec[:2] != (st.st_mtime, st.st_size):
+            return False
+        if time.monotonic() < rec[2]:
+            return True
         if path in _probe_inflight:
             return True
         _probe_inflight.add(path)
