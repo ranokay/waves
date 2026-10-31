@@ -112,7 +112,7 @@ from waves.providers.apple.supervision import (
 )
 from waves.providers.apple.workdirs import make_workdir
 from waves.providers.base import AudioType, RefusalKind
-from waves.system_ffmpeg import working_system_ffmpeg
+from waves.system_ffmpeg import probe_was_slow, working_system_ffmpeg
 
 logger = logging.getLogger("waves.providers.apple.runner")
 
@@ -632,19 +632,27 @@ def track_relative(
 # --------------------------------------------------------------------------
 
 
+def _usable_ffmpeg(path: str) -> bool:
+    """Whether ``path`` is an existing binary not already known to be slow.
+
+    A slow resolver fallback is kept so jobs still have a binary, but at a
+    provider boundary it must not shadow a later working candidate."""
+    return bool(path) and pathlib.Path(path).is_file() and not probe_was_slow(path)
+
+
 def cover_convert_ffmpeg(hooks: AppleJobHooks) -> str:
-    """An ffmpeg binary for cover conversion, or "" (PATH fallback).
+    """An ffmpeg binary for cover conversion, or "" (system fallback).
 
     The Apple provider's resolved path covers managed installs; the persisted
     setting covers TIDAL's standalone art action; the converter itself falls
-    back to PATH.
+    back to the shared system resolver.
     """
     provider = hooks.provider()
     path = str(getattr(provider, "ffmpeg_path", "") or "").strip()
-    if not path:
+    if not _usable_ffmpeg(path):
         data = _data(hooks)
         path = str(getattr(data, "path_binary_ffmpeg", "") or "").strip()
-    return path
+    return path if _usable_ffmpeg(path) else ""
 
 
 def embed_cover_bytes(hooks: AppleJobHooks, cover: bytes | None) -> bytes | None:
@@ -765,18 +773,19 @@ def flac_ffmpeg(hooks: AppleJobHooks) -> str:
     """An ffmpeg binary for the Apple FLAC conversion, or "" to keep .m4a.
 
     Precedence mirrors the probe: the provider's resolved path first, then
-    the saved override, then PATH.
+    the saved override, then a working system copy. A path already recorded
+    slow is skipped so it cannot shadow a working candidate.
     """
     try:
         provider = hooks.provider()
         cand = str(getattr(provider, "ffmpeg_path", "") or "")
-        if cand and pathlib.Path(cand).is_file():
+        if _usable_ffmpeg(cand):
             return cand
     except Exception:
         logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)
     try:
         cand = str(getattr(_data(hooks), "path_binary_ffmpeg", "") or "")
-        if cand and pathlib.Path(cand).is_file():
+        if _usable_ffmpeg(cand):
             return cand
     except Exception:
         logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)

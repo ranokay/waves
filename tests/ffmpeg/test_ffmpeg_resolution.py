@@ -19,7 +19,7 @@ from support.bridge_stub import BridgeStub
 from waves import system_ffmpeg
 from waves.desktop.backend import WavesBridge
 from waves.desktop.ffmpeg import manager as fm
-from waves.providers.apple import runner
+from waves.providers.apple import engine, runner
 
 pytestmark = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX executable bits")
 
@@ -121,6 +121,39 @@ def test_a_slow_custom_binary_stays_the_selection(tmp_path, monkeypatch):
     assert status["custom"] is True
     assert status["version"] == ""
     assert status["path"] != good
+
+
+def test_apple_helpers_skip_a_slow_retained_path(tmp_path, monkeypatch):
+    """The resolver's slow fallback is kept for jobs, but an Apple provider
+    boundary must retry discovery instead of locking onto it."""
+    slow = _make(tmp_path / "slow")
+    good = _make(tmp_path / "good")
+    monkeypatch.setattr(runner, "probe_was_slow", lambda path: path == slow)
+    monkeypatch.setattr(runner, "working_system_ffmpeg", lambda **_kw: good)
+    hooks = SimpleNamespace(
+        provider=lambda: SimpleNamespace(ffmpeg_path=slow),
+        settings=lambda: SimpleNamespace(data=SimpleNamespace(path_binary_ffmpeg=slow)),
+    )
+    assert runner.flac_ffmpeg(hooks) == good
+    assert runner.cover_convert_ffmpeg(hooks) == ""
+
+
+def test_apple_decode_check_skips_a_slow_path(tmp_path, monkeypatch):
+    slow = _make(tmp_path / "slow")
+    good = _make(tmp_path / "good")
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"audio")
+    monkeypatch.setattr(engine, "probe_was_slow", lambda path: path == slow)
+    monkeypatch.setattr(engine, "working_system_ffmpeg", lambda **_kw: good)
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(argv[0])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(engine.subprocess, "run", run)
+    engine.decode_check(staged, slow)
+    assert seen == [good]
 
 
 def test_gui_readers_never_re_probe_a_slow_binary(tmp_path, monkeypatch):
