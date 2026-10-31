@@ -37,8 +37,9 @@ PROBE_TIMEOUT = 4
 #: worker may probe it again.
 PROBE_SLOW_RETRY_S = 60.0
 #: Spawn errors that say the file itself cannot run, unlike a transient
-#: EAGAIN/ETXTBSY that says "not right now".
-_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC})
+#: EAGAIN/ETXTBSY that says "not right now". ENOENT here means the file exists
+#: (it passed the discovery stat) but its loader/interpreter does not.
+_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC, errno.ENOENT})
 #: Spawn errors a later ``chmod`` can repair without changing (mtime, size), so
 #: caching them would keep a repaired binary unavailable until restart.
 _UNCACHED_PROBE_ERRORS = frozenset({errno.EACCES, errno.EPERM})
@@ -65,9 +66,8 @@ def _path_candidates(name: str) -> list[str]:
     path = os.environ.get("PATH", os.defpath)
     candidates: list[str] = []
     for folder in path.split(os.pathsep):
-        if not folder:
-            continue
-        candidate = shutil.which(name, path=folder)
+        # An empty PATH component means the current directory.
+        candidate = shutil.which(name, path=folder or os.curdir)
         if candidate and candidate not in candidates:
             candidates.append(candidate)
     if not candidates:
@@ -142,6 +142,11 @@ def probe_version(path: str) -> str:
     cached = _probe_cache.get(path)
     if cached is not None and cached[:2] == key:
         return cached[2]
+    return _spawn_probe(path, key)
+
+
+def _spawn_probe(path: str, key: tuple[float, int]) -> str:
+    """Fork the binary, record the result in the cache and slow record."""
     try:
         out = subprocess.run(
             [path, "-version"],
@@ -156,9 +161,11 @@ def probe_version(path: str) -> str:
     except OSError as exc:
         return _record_probe_error(path, key, exc)
     except Exception:
+        _probe_slow.pop(path, None)
         _probe_cache[path] = (key[0], key[1], "")
         return ""
     ver = _version_token(out)
+    _probe_slow.pop(path, None)
     _probe_cache[path] = (key[0], key[1], ver)
     return ver
 
@@ -180,8 +187,10 @@ def _record_slow(path: str, key: tuple[float, int]) -> None:
 def _record_probe_error(path: str, key: tuple[float, int], exc: OSError) -> str:
     """Classify a spawn error: permanent, chmod-repairable, or transient."""
     if exc.errno in _UNCACHED_PROBE_ERRORS:
+        _probe_slow.pop(path, None)
         _probe_cache.pop(path, None)
     elif exc.errno in _PERMANENT_PROBE_ERRORS:
+        _probe_slow.pop(path, None)
         _probe_cache[path] = (key[0], key[1], "")
     else:
         _record_slow(path, key)
@@ -213,6 +222,6 @@ def _probe_retry_slow(path: str) -> bool:
         return False
     if time.monotonic() < rec[2]:
         return True
-    _probe_cache.pop(path, None)  # the timeout's cached "" would answer instead
-    _probe_slow.pop(path, None)  # a fresh timeout below re-adds it
-    return bool(probe_version(path)) or probe_was_slow(path)
+    # Keep the cached "" and slow record while the probe runs: a concurrent
+    # status() on the GUI thread reads them and does not fork the same binary.
+    return bool(_spawn_probe(path, (st.st_mtime, st.st_size))) or probe_was_slow(path)

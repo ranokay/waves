@@ -139,6 +139,25 @@ def test_a_broken_path_copy_is_passed_over_for_a_later_path_copy(tmp_path, monke
 
 
 @posix_only
+def test_an_empty_path_component_means_the_working_directory(tmp_path, monkeypatch):
+    """PATH=dir: means cwd too: a broken copy in dir must not hide ./ffmpeg."""
+    broken_dir = tmp_path / "broken"
+    broken = _make(broken_dir)
+    good = _make(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(broken_dir), "")))
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: ())
+
+    def run(argv, **kw):
+        if argv[0] == broken:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1 built", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    assert os.path.samefile(system_ffmpeg.working_system_ffmpeg(), good)
+
+
+@posix_only
 def test_a_slow_ffmpeg_does_not_shadow_a_working_one(tmp_path, monkeypatch):
     """The first candidate hangs the probe (it may be hung for good): a copy
     further down the list that answers is the one jobs and status get."""
@@ -192,6 +211,24 @@ def test_a_slow_ffmpeg_is_probed_again_for_a_job_once_its_pause_is_over(tmp_path
     assert not system_ffmpeg._probe_slow
 
 
+def test_a_missing_loader_is_cached_as_broken(tmp_path, monkeypatch):
+    """The file exists but cannot start (missing ELF loader or interpreter):
+    it is broken, not slow, so jobs must not keep it as a fallback."""
+    binary = tmp_path / "ffmpeg"
+    binary.write_bytes(b"BIN")
+    runs = []
+
+    def broken(argv, **kw):
+        runs.append(argv)
+        raise OSError(errno.ENOENT, "No such file or directory")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", broken)
+    assert system_ffmpeg.probe_version(str(binary)) == ""
+    assert system_ffmpeg.probe_version(str(binary)) == ""
+    assert len(runs) == 1
+    assert not system_ffmpeg._probe_slow
+
+
 def test_a_permission_error_is_probed_again_after_the_binary_is_repaired(tmp_path, monkeypatch):
     """chmod +x changes no mtime/size: an EACCES result must not be cached as
     a permanently broken copy."""
@@ -210,6 +247,29 @@ def test_a_permission_error_is_probed_again_after_the_binary_is_repaired(tmp_pat
     assert system_ffmpeg.probe_version(str(binary)) == "7.1"
     assert len(calls) == 2
     assert not system_ffmpeg._probe_slow
+
+
+@posix_only
+def test_a_worker_retry_keeps_the_gui_probe_cached(tmp_path, monkeypatch):
+    """While a worker re-probes a slow binary, a concurrent status() reads the
+    cached empty result instead of forking the same binary on the GUI thread."""
+    exe = _make(tmp_path)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
+    monkeypatch.setattr(system_ffmpeg, "PROBE_SLOW_RETRY_S", -1.0)
+    runs = []
+    gui_results = []
+
+    def run(argv, **kw):
+        runs.append(argv)
+        if len(runs) == 2:
+            gui_results.append(system_ffmpeg.probe_version(exe))
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    assert system_ffmpeg.working_system_ffmpeg(retry_slow=True) == exe
+    assert gui_results == [""]
+    assert len(runs) == 2
 
 
 def test_a_probe_reads_the_ffprobe_version_token(tmp_path, monkeypatch):
