@@ -154,7 +154,30 @@ def test_an_empty_path_component_means_the_working_directory(tmp_path, monkeypat
         return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1 built", stderr="")
 
     monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
-    assert os.path.samefile(system_ffmpeg.working_system_ffmpeg(), good)
+    found = system_ffmpeg.working_system_ffmpeg()
+    assert os.path.isabs(found)
+    assert os.path.samefile(found, good)
+
+
+@posix_only
+def test_the_same_binary_on_two_path_entries_is_probed_once(tmp_path, monkeypatch):
+    """Symlinked PATH folders pointing at one file are one candidate, not two
+    GUI-thread probes of a possibly hung binary."""
+    folder = tmp_path / "bin"
+    exe = _make(folder)
+    link = tmp_path / "link"
+    link.symlink_to(folder, target_is_directory=True)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(folder), str(link))))
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: ())
+    runs = []
+
+    def run(argv, **kw):
+        runs.append(argv)
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1 built", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    assert system_ffmpeg.working_system_ffmpeg() == exe
+    assert len(runs) == 1
 
 
 @posix_only

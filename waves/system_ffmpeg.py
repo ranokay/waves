@@ -48,6 +48,10 @@ _UNCACHED_PROBE_ERRORS = frozenset({errno.EACCES, errno.EPERM, errno.ENOENT})
 _MACOS_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
 _LINUX_DIRS = ("/usr/local/bin", "/usr/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin")
 _WINDOWS_DIRS: tuple[str, ...] = ()
+_PATHEXT = tuple(
+    ext if ext.startswith(".") else f".{ext}"
+    for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
+)
 
 
 def known_dirs() -> tuple[str, ...]:
@@ -59,22 +63,51 @@ def known_dirs() -> tuple[str, ...]:
     return _LINUX_DIRS
 
 
+def _runnable(path: str) -> bool:
+    try:
+        return os.path.isfile(path) and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
+def _windows_candidates(folder: str, name: str) -> list[str]:
+    """Executables for ``name`` in ``folder`` under Windows' PATHEXT rules."""
+    lowered = name.lower()
+    names = (name,) if any(lowered.endswith(ext.lower()) for ext in _PATHEXT) else tuple(name + ext for ext in _PATHEXT)
+    return [candidate for candidate in (os.path.join(folder, entry) for entry in names) if _runnable(candidate)]
+
+
+def _add_candidate(candidates: list[str], seen: set[str], path: str) -> None:
+    """Append ``path`` once, comparing the file it actually resolves to."""
+    real = os.path.realpath(path)
+    if real not in seen:
+        seen.add(real)
+        candidates.append(path)
+
+
 def _path_candidates(name: str) -> list[str]:
     """Every executable ``name`` on PATH, in PATH order.
 
     ``shutil.which`` alone returns only the first, so a broken first copy would
-    hide a working one later on the user's PATH."""
+    hide a working one later on the user's PATH. A relative hit (an empty PATH
+    entry means the current directory) is made absolute so a later chdir cannot
+    change which file the reported path means."""
     path = os.environ.get("PATH", os.defpath)
     candidates: list[str] = []
+    seen: set[str] = set()
     for folder in path.split(os.pathsep):
-        # An empty PATH component means the current directory.
-        candidate = shutil.which(name, path=folder or os.curdir)
-        if candidate and candidate not in candidates:
-            candidates.append(candidate)
+        base = os.path.abspath(folder or os.curdir)
+        if os.name == "nt":
+            for candidate in _windows_candidates(base, name):
+                _add_candidate(candidates, seen, candidate)
+            continue
+        found = shutil.which(name, path=base)
+        if found:
+            _add_candidate(candidates, seen, os.path.abspath(found))
     if not candidates:
         found = shutil.which(name)
         if found:
-            candidates.append(found)
+            _add_candidate(candidates, seen, os.path.abspath(found))
     return candidates
 
 
@@ -83,10 +116,11 @@ def find_system_ffmpeg(name: str = "ffmpeg", works: Callable[[str], bool] | None
     With ``works``, a candidate it rejects (a broken install left behind) is
     passed over for the next one."""
     candidates = _path_candidates(name)
+    seen = {os.path.realpath(candidate) for candidate in candidates}
     for folder in known_dirs():
         candidate = os.path.join(folder, name)
-        if candidate not in candidates and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            candidates.append(candidate)
+        if _runnable(candidate):
+            _add_candidate(candidates, seen, candidate)
     for candidate in candidates:
         if works is None or works(candidate):
             return candidate
@@ -112,9 +146,10 @@ def working_system_ffmpeg(name: str = "ffmpeg", *, retry_slow: bool = False) -> 
 # Probing a binary means fork+exec+wait on it, which can block for the whole
 # timeout when the file lives on a hung/stale mount. status() runs on the GUI
 # thread (it's the synchronous ffmpegStatus slot), so keep the timeout short and
-# memoize by (path, size, mtime): the first probe pays the cost, repeated
-# status() calls (Settings open, every ffmpegStatusChanged) reuse the result and
-# never re-fork. A different binary at the same path (size/mtime change) evicts.
+# memoize by (path, size, mtime): a successful, timed-out or transient result is
+# reused instead of re-forked. Results a later repair can change (chmod, a
+# missing loader) are deliberately not cached; a different binary at the same
+# path (size/mtime change) evicts.
 _probe_cache: dict[str, tuple[float, int, str]] = {}
 # A binary that did not answer within the timeout (a cold start from snap, a
 # virus scan of a large ffmpeg.exe on its first run) or hit a transient spawn
@@ -122,6 +157,9 @@ _probe_cache: dict[str, tuple[float, int, str]] = {}
 # working_system_ffmpeg), and a worker may probe it again once its pause is
 # over. (mtime, size, monotonic deadline for the next probe.)
 _probe_slow: dict[str, tuple[float, int, float]] = {}
+# One worker probe per path at a time: concurrent jobs must not each fork the
+# same hung binary after its pause expires.
+_probe_inflight: set[str] = set()
 
 
 def probe_version(path: str) -> str:
@@ -130,9 +168,9 @@ def probe_version(path: str) -> str:
 
     Memoized per (path, mtime, size) so a repeated ``status()`` on the GUI
     thread doesn't re-fork a subprocess. A short timeout bounds the worst case
-    (hung/stale-mount binary) instead of freezing the UI. A binary that timed
-    out or hit a transient spawn error is recorded slow and cached as "", so
-    status() does not fork it again.
+    (hung/stale-mount binary) instead of freezing the UI. A success, a timeout
+    or a transient spawn error is cached; a result a repair can change is not,
+    so ``chmod`` or a newly installed loader is picked up on the next probe.
     """
     try:
         st = os.stat(path)
@@ -147,7 +185,7 @@ def probe_version(path: str) -> str:
 
 
 def _spawn_probe(path: str, key: tuple[float, int]) -> str:
-    """Fork the binary, record the result in the cache and slow record."""
+    """Fork the binary and record the outcome in the cache/slow records."""
     try:
         out = subprocess.run(
             [path, "-version"],
@@ -186,7 +224,7 @@ def _record_slow(path: str, key: tuple[float, int]) -> None:
 
 
 def _record_probe_error(path: str, key: tuple[float, int], exc: OSError) -> str:
-    """Classify a spawn error: permanent, chmod-repairable, or transient."""
+    """Classify a spawn error: permanent, repair-recoverable, or transient."""
     if exc.errno in _UNCACHED_PROBE_ERRORS:
         _probe_slow.pop(path, None)
         _probe_cache.pop(path, None)
@@ -223,6 +261,12 @@ def _probe_retry_slow(path: str) -> bool:
         return False
     if time.monotonic() < rec[2]:
         return True
+    if path in _probe_inflight:
+        return True
     # Keep the cached "" and slow record while the probe runs: a concurrent
     # status() on the GUI thread reads them and does not fork the same binary.
-    return bool(_spawn_probe(path, (st.st_mtime, st.st_size))) or probe_was_slow(path)
+    _probe_inflight.add(path)
+    try:
+        return bool(_spawn_probe(path, (st.st_mtime, st.st_size))) or probe_was_slow(path)
+    finally:
+        _probe_inflight.discard(path)
