@@ -123,6 +123,10 @@ def probe_version(path: str) -> str:
         _probe_cache[path] = (key[0], key[1], "")
         return ""
     except Exception:
+        # A file that cannot exec (wrong arch, no read permission, a stale
+        # mount) will not answer on the next status() either: memoize it so
+        # the GUI thread forks it once, not once per call.
+        _probe_cache[path] = (key[0], key[1], "")
         return ""
     if out.returncode != 0:
         ver = ""

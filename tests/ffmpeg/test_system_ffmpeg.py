@@ -181,6 +181,23 @@ def test_a_probe_reads_the_ffprobe_version_token(tmp_path, monkeypatch):
     assert system_ffmpeg.probe_version(str(binary)) == "7.1"
 
 
+def test_a_probe_that_cannot_exec_is_not_forked_again(tmp_path, monkeypatch):
+    """A broken binary is memoized like a timed-out one: status() must not pay
+    a fork per call for a copy that cannot run."""
+    binary = tmp_path / "ffmpeg"
+    binary.write_bytes(b"BIN")
+    runs = []
+
+    def broken(argv, **kw):
+        runs.append(argv)
+        raise OSError("cannot execute")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", broken)
+    assert system_ffmpeg.probe_version(str(binary)) == ""
+    assert system_ffmpeg.probe_version(str(binary)) == ""
+    assert len(runs) == 1
+
+
 def test_a_probe_passes_the_windows_no_console_flag(tmp_path, monkeypatch):
     """The packaged Windows app runs console-less: every probe must spawn with
     CREATE_NO_WINDOW or a console flashes over the UI."""

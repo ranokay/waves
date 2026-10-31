@@ -5567,7 +5567,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         Reads the startup snapshot (``_ffmpeg_user_path``), NOT the live
         ``settings.data.path_binary_ffmpeg``, the latter is mutated in-memory by
         both ``_resolve_ffmpeg`` (managed path) and ``Download.__init__``
-        (``shutil.which`` $PATH location) when no override is set, and neither is
+        (system-discovery path) when no override is set, and neither is
         a user choice. The abspath guard additionally drops a managed path that an
         older build may have persisted. Used for the status (a genuine override is
         an unmanaged binary → yellow) and to keep the path box empty unless the

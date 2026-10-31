@@ -285,15 +285,18 @@ class FfmpegManager:
         """Describe the current FFmpeg situation for the UI.
 
         ``state`` is ``managed`` (our copy, green), ``path`` (an unmanaged
-        binary: a user-linked ``custom_path`` or one found on $PATH, yellow) or
-        ``missing`` (red). ``managed`` is True only for our own copy; ``custom``
-        is True when a user-linked override is what's being used.
+        binary: a user-linked ``custom_path`` or a working system copy from
+        $PATH or a package manager's folder, yellow) or ``missing`` (red).
+        ``managed`` is True only for our own copy; ``custom`` is True when a
+        user-linked override is what's being used. A system copy that only
+        timed out on its probe is still reported as ``path`` (it stays the
+        fallback jobs use), with an empty ``version``.
         ``source``/``source_url``/``source_license`` describe the build source
         for *this* platform only. ``ffprobe`` is the ffprobe in the same folder
         as the reported binary, ``""`` when none is there.
 
-        Precedence is ``managed → custom → PATH → missing``: the managed copy is
-        reported first so the transient managed path that the backend injects
+        Precedence is ``managed → custom → system → missing``: the managed copy
+        is reported first so the transient managed path that the backend injects
         into ``path_binary_ffmpeg`` (see ``WavesBridge._resolve_ffmpeg``) can
         never be mistaken for a user override here.
         """
@@ -323,7 +326,7 @@ class FfmpegManager:
             }
         cp = (custom_path or "").strip()
         if cp and os.path.isfile(cp):
-            ver = _probe_version(cp)
+            ver = system_ffmpeg.probe_version(cp)
             if ver:  # only treat a *working* binary as available (fail-closed)
                 return {
                     **base,
@@ -345,7 +348,7 @@ class FfmpegManager:
                 "managed": False,
                 "custom": False,
                 "path": on_path,
-                "version": _probe_version(on_path),
+                "version": system_ffmpeg.probe_version(on_path),
                 "build": "",
                 "ffprobe": _ffprobe_beside(on_path, self.os_key),
             }
@@ -508,10 +511,10 @@ class FfmpegManager:
             # checksum-valid but non-runnable download (wrong arch, missing
             # loader, Gatekeeper block) leaves the existing working copy
             # untouched. Only binaries that actually run get promoted.
-            ver = _probe_version(str(staged))
+            ver = system_ffmpeg.probe_version(str(staged))
             if not ver:
                 raise RuntimeError("FFmpeg downloaded but `ffmpeg -version` failed, keeping the existing binary")
-            ffprobe_ver = _probe_version(str(staged_ffprobe))
+            ffprobe_ver = system_ffmpeg.probe_version(str(staged_ffprobe))
             if not ffprobe_ver:
                 raise RuntimeError("FFmpeg downloaded but `ffprobe -version` failed, keeping the existing binaries")
 
@@ -754,13 +757,6 @@ def _runnable(path: Path) -> bool:
         return path.is_file() and os.access(path, os.X_OK)
     except OSError:
         return False
-
-
-# Probing a binary means fork+exec+wait on it, which can block for the whole
-# timeout when the file lives on a hung/stale mount. status() runs on the GUI
-# thread (it's the synchronous ffmpegStatus slot), so the probe is bounded and
-# memoized by (path, size, mtime); see :mod:`waves.system_ffmpeg`.
-_probe_version = system_ffmpeg.probe_version
 
 
 def _extract_binary(zip_path: Path, dest: Path, exe: str) -> None:
