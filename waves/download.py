@@ -98,6 +98,7 @@ from waves.progress import Progress, TaskID
 from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
 from waves.providers.tidal_client import instantiate_media, items_results_all
 from waves.redaction import content as log_content
+from waves.system_ffmpeg import working_system_ffmpeg
 
 # Child of "waves", so it inherits the app's handlers and its INFO records join
 # the always-on breadcrumb ring crash reports are stitched from.
@@ -581,7 +582,7 @@ class Download:
         self._segment_executor_lock: Lock = Lock()
 
         if not self.settings.data.path_binary_ffmpeg:
-            self.settings.data.path_binary_ffmpeg = shutil.which("ffmpeg")
+            self.settings.data.path_binary_ffmpeg = working_system_ffmpeg() or None
 
         # True whenever ffmpeg is genuinely absent, decoupled from the two gated
         # flags: the MP4/M4A duration-repair remux also needs ffmpeg, so callers
@@ -595,9 +596,10 @@ class Download:
             self.settings.data.extract_flac_all = False
 
             self.fn_logger.error(
-                "FFmpeg not found (not set and not on $PATH). FLAC extraction, video conversion, and MP4/M4A "
-                "duration repair are disabled; files may play but can report 0:00 in strict players. Install "
-                "FFmpeg from Settings, or set `path_binary_ffmpeg` (or have ffmpeg on the $PATH)."
+                "FFmpeg not found (not set and not on $PATH or in a package manager's folder). FLAC extraction, "
+                "video conversion, and MP4/M4A duration repair are disabled; files may play but can report 0:00 in "
+                "strict players. Install FFmpeg from Settings, or set `path_binary_ffmpeg` (or install it with "
+                "Homebrew, MacPorts or your package manager)."
             )
 
     def _get_media_urls(

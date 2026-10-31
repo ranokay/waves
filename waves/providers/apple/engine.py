@@ -37,6 +37,7 @@ from waves.providers.apple import child_guard
 from waves.providers.apple.child_guard import run_guarded
 from waves.providers.apple.gamdl_logs import quiet_gamdl_logs
 from waves.providers.apple.workdirs import make_workdir
+from waves.system_ffmpeg import probe_was_slow, working_system_ffmpeg
 
 if TYPE_CHECKING:
     from gamdl.downloader.base import AppleMusicBaseDownloader
@@ -188,7 +189,11 @@ def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
     exit 0 (the outbreak's malformed ALAC presents exactly so), so any
     stderr under ``-v error`` fails the file, not just a nonzero exit.
     """
-    ffmpeg = ffmpeg_path if ffmpeg_path and Path(ffmpeg_path).is_file() else (shutil.which("ffmpeg") or "")
+    ffmpeg = (
+        ffmpeg_path
+        if ffmpeg_path and Path(ffmpeg_path).is_file() and not probe_was_slow(ffmpeg_path)
+        else working_system_ffmpeg(retry_slow=True)
+    )
     if not ffmpeg:
         logger.debug("Apple decode check skipped (no ffmpeg)")
         return

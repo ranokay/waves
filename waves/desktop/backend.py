@@ -176,6 +176,7 @@ from waves.providers.base import validate_row
 from waves.providers.search_merge import fold_search_groups
 from waves.providers.tidal_client import quality_audio_highest
 from waves.providers.tidal_folders import FOLDER_PATH_TOKEN, apply_folder_path
+from waves.system_ffmpeg import working_system_ffmpeg
 
 from . import __version__ as _WAVES_VERSION
 from .bridge_surfaces import (
@@ -5506,7 +5507,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Point ``path_binary_ffmpeg`` at the managed binary when the user has
         no explicit override, so ``Download`` finds ffmpeg without the user
         installing one. In-memory only (never persisted): the precedence is
-        explicit override → managed copy → PATH. Read the user's snapshot,
+        explicit override → managed copy → a working system copy. Read the
+        user's snapshot,
         since the live field may contain a previous runtime's injection.
         Assign only the final path so running downloads never see a temporary
         empty path. The caller holds ``_settings_save_lock``.
@@ -5516,7 +5518,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self.settings.data.ffmpeg_source = self._ffmpeg_source_label()
         path = self._user_ffmpeg_path()
         if not path:
-            path = str(self._ffmpeg.binary_path) if self._ffmpeg.is_installed() else shutil.which("ffmpeg") or ""
+            path = str(self._ffmpeg.binary_path) if self._ffmpeg.is_installed() else working_system_ffmpeg()
         # Disable features before dropping the last binary; enable preferences
         # only after publishing a usable path. Unlocked Download readers must
         # never see enabled features paired with an empty executable.
@@ -5530,14 +5532,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _ffmpeg_source_label(self) -> str:
         """Category of the ffmpeg binary a download would actually use, for the
         persisted ``ffmpeg_source`` field. Mirrors the real precedence (a genuine
-        user override wins, then the bundled managed copy, then a binary on PATH,
-        then none) and returns a CATEGORY only, never a path (so nothing sensitive
-        reaches the config or a diagnostics bundle)."""
+        user override wins, then the bundled managed copy, then a working system
+        binary, then none) and returns a CATEGORY only, never a path (so nothing
+        sensitive reaches the config or a diagnostics bundle)."""
         if self._user_ffmpeg_path():
             return "custom"
         if self._ffmpeg.is_installed():
             return "managed"
-        if shutil.which("ffmpeg"):
+        if working_system_ffmpeg():
             return "system"
         return "none"
 
@@ -5565,7 +5567,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         Reads the startup snapshot (``_ffmpeg_user_path``), NOT the live
         ``settings.data.path_binary_ffmpeg``, the latter is mutated in-memory by
         both ``_resolve_ffmpeg`` (managed path) and ``Download.__init__``
-        (``shutil.which`` $PATH location) when no override is set, and neither is
+        (system-discovery path) when no override is set, and neither is
         a user choice. The abspath guard additionally drops a managed path that an
         older build may have persisted. Used for the status (a genuine override is
         an unmanaged binary → yellow) and to keep the path box empty unless the
@@ -16906,9 +16908,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 os.remove(old)
 
     def _preview_ffmpeg_bin(self) -> str | None:
-        """Path to an ffmpeg binary for the preview remux (managed → PATH)."""
+        """Path to an ffmpeg binary for the preview remux (managed → system)."""
         # Keep the path from this resolution when runtime state changes later.
-        return self._resolve_ffmpeg() or shutil.which("ffmpeg")
+        return self._resolve_ffmpeg() or working_system_ffmpeg() or None
 
     def _localise_hls(self, hls: str, whole: bool, work_dir: str) -> str | None:
         """Fetch an HLS preview's segments in parallel into ``work_dir`` and
@@ -23933,10 +23935,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     def _flac_check_ffmpeg(self) -> str:
         """The decoder the fix and the deep check use: the configured or
-        managed ffmpeg, else one on PATH; "" when there is none."""
+        managed ffmpeg, else a working system copy; "" when there is none."""
         with contextlib.suppress(Exception):
             self._resolve_ffmpeg()
-        path = (getattr(self.settings.data, "path_binary_ffmpeg", "") or "").strip() or shutil.which("ffmpeg") or ""
+        path = (getattr(self.settings.data, "path_binary_ffmpeg", "") or "").strip() or working_system_ffmpeg() or ""
         return path if path and os.path.isfile(path) else ""
 
     @Slot(result="QVariant")

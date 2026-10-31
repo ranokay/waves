@@ -235,7 +235,7 @@ def test_missing_binaries_name_the_settings_field(tmp_path, monkeypatch):
 
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape\n")
-    monkeypatch.setattr(engine.shutil, "which", lambda name: None)
+    monkeypatch.setattr(engine.shutil, "which", lambda name, **_kw: None)
 
     with pytest.raises(engine.AppleDownloadError, match="N_m3u8DL-RE"):
         engine.download_song_file(song_id="song-1", atmos=False, cookies_path=str(cookies))
@@ -249,7 +249,7 @@ def test_ffprobe_prefers_the_ffmpeg_sibling(tmp_path, monkeypatch):
     ffmpeg.write_bytes(b"x")
     sibling = tmp_path / "bin" / "ffprobe"
     sibling.write_bytes(b"x")
-    monkeypatch.setattr(engine.shutil, "which", lambda name: None)
+    monkeypatch.setattr(engine.shutil, "which", lambda name, **_kw: None)
 
     assert engine.ffprobe_for(str(ffmpeg)) == str(sibling)
     assert engine.ffprobe_for(str(tmp_path / "nowhere" / "ffmpeg")) == ""

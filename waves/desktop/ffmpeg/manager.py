@@ -59,7 +59,7 @@ from threading import Event
 
 import requests
 
-from waves.desktop import proc
+from waves import system_ffmpeg
 from waves.file_integrity import sha256_file
 
 logger = logging.getLogger("waves")
@@ -285,15 +285,18 @@ class FfmpegManager:
         """Describe the current FFmpeg situation for the UI.
 
         ``state`` is ``managed`` (our copy, green), ``path`` (an unmanaged
-        binary: a user-linked ``custom_path`` or one found on $PATH, yellow) or
-        ``missing`` (red). ``managed`` is True only for our own copy; ``custom``
-        is True when a user-linked override is what's being used.
+        binary: a user-linked ``custom_path`` or a working system copy from
+        $PATH or a package manager's folder, yellow) or ``missing`` (red).
+        ``managed`` is True only for our own copy; ``custom`` is True when a
+        user-linked override is what's being used. A system copy that only
+        timed out on its probe is still reported as ``path`` (it stays the
+        fallback jobs use), with an empty ``version``.
         ``source``/``source_url``/``source_license`` describe the build source
         for *this* platform only. ``ffprobe`` is the ffprobe in the same folder
         as the reported binary, ``""`` when none is there.
 
-        Precedence is ``managed → custom → PATH → missing``: the managed copy is
-        reported first so the transient managed path that the backend injects
+        Precedence is ``managed → custom → system → missing``: the managed copy
+        is reported first so the transient managed path that the backend injects
         into ``path_binary_ffmpeg`` (see ``WavesBridge._resolve_ffmpeg``) can
         never be mistaken for a user override here.
         """
@@ -323,8 +326,8 @@ class FfmpegManager:
             }
         cp = (custom_path or "").strip()
         if cp and os.path.isfile(cp):
-            ver = _probe_version(cp)
-            if ver:  # only treat a *working* binary as available (fail-closed)
+            ver = system_ffmpeg.probe_version(cp)
+            if ver or system_ffmpeg.probe_was_slow(cp):  # fail-closed, but keep a slow override selected
                 return {
                     **base,
                     "state": "path",
@@ -345,7 +348,7 @@ class FfmpegManager:
                 "managed": False,
                 "custom": False,
                 "path": on_path,
-                "version": _probe_version(on_path),
+                "version": system_ffmpeg.probe_version(on_path),
                 "build": "",
                 "ffprobe": _ffprobe_beside(on_path, self.os_key),
             }
@@ -508,10 +511,10 @@ class FfmpegManager:
             # checksum-valid but non-runnable download (wrong arch, missing
             # loader, Gatekeeper block) leaves the existing working copy
             # untouched. Only binaries that actually run get promoted.
-            ver = _probe_version(str(staged))
+            ver = system_ffmpeg.probe_version(str(staged))
             if not ver:
                 raise RuntimeError("FFmpeg downloaded but `ffmpeg -version` failed, keeping the existing binary")
-            ffprobe_ver = _probe_version(str(staged_ffprobe))
+            ffprobe_ver = system_ffmpeg.probe_version(str(staged_ffprobe))
             if not ffprobe_ver:
                 raise RuntimeError("FFmpeg downloaded but `ffprobe -version` failed, keeping the existing binaries")
 
@@ -731,9 +734,7 @@ def _safe_target() -> tuple[str, str]:
 
 
 def _which_ffmpeg(os_key: str) -> str:
-    import shutil
-
-    return shutil.which(_exe_name(os_key)) or ""
+    return system_ffmpeg.working_system_ffmpeg(_exe_name(os_key))
 
 
 def _ffprobe_beside(ffmpeg_path: str, os_key: str) -> str:
@@ -756,49 +757,6 @@ def _runnable(path: Path) -> bool:
         return path.is_file() and os.access(path, os.X_OK)
     except OSError:
         return False
-
-
-# Probing a binary means fork+exec+wait on it, which can block for the whole
-# timeout when the file lives on a hung/stale mount. status() runs on the GUI
-# thread (it's the synchronous ffmpegStatus slot), so keep the timeout short and
-# memoize by (path, size, mtime): the first probe pays the cost, repeated
-# status() calls (Settings open, every ffmpegStatusChanged) reuse the result and
-# never re-fork. A different binary at the same path (size/mtime change) evicts.
-_PROBE_TIMEOUT = 4
-_probe_cache: dict[str, tuple[float, int, str]] = {}
-
-
-def _probe_version(path: str) -> str:
-    """Return the ``ffmpeg version <x>`` (or ``ffprobe version <x>``) token,
-    or "" if the binary won't run.
-
-    Memoized per (path, mtime, size) so a repeated ``status()`` on the GUI
-    thread doesn't re-fork a subprocess. A short timeout bounds the worst case
-    (hung/stale-mount binary) instead of freezing the UI.
-    """
-    try:
-        st = os.stat(path)
-        key = (st.st_mtime, st.st_size)
-    except OSError:
-        _probe_cache.pop(path, None)
-        return ""
-    cached = _probe_cache.get(path)
-    if cached is not None and cached[:2] == key:
-        return cached[2]
-    try:
-        out = subprocess.run(
-            [path, "-version"], capture_output=True, text=True, timeout=_PROBE_TIMEOUT, creationflags=proc.NO_WINDOW
-        )
-    except Exception:
-        return ""
-    if out.returncode != 0:
-        ver = ""
-    else:
-        first = (out.stdout or "").splitlines()[0] if out.stdout else ""
-        m = re.search(r"(?:ffmpeg|ffprobe) version (\S+)", first)
-        ver = m.group(1) if m else (first.strip() or "")
-    _probe_cache[path] = (key[0], key[1], ver)
-    return ver
 
 
 def _extract_binary(zip_path: Path, dest: Path, exe: str) -> None:

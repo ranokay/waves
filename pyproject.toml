@@ -381,6 +381,9 @@ ignore = [
 # intentionally shells out (S603/S607); install() is one linear sequence (C901);
 # and its raised errors carry deliberately descriptive messages (TRY003).
 "waves/desktop/ffmpeg/manager.py" = ["S603", "S607", "C901", "TRY003"]
+# The user-install discovery probes the binary the user chose to install, so it
+# intentionally shells out to a resolved path (S603) with a fixed argv.
+"waves/system_ffmpeg.py" = ["S603"]
 # Same shape for the managed Apple runtime : it downloads and runs
 # the N_m3u8DL-RE binary and probes the container runtime (S603/S607), its
 # install is one linear sequence (C901), and its errors carry deliberately

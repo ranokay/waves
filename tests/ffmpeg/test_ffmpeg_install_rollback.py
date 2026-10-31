@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from waves import system_ffmpeg
 from waves.desktop.ffmpeg import manager as fm
 
 
@@ -88,7 +89,7 @@ def _session_for(
 def test_failed_smoketest_leaves_existing_binary_untouched(tmp_path, monkeypatch):
     # First install a working managed copy.
     rel, session = _session_for(b"GOODBINARY")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)  # avoid macOS codesign path
     mgr.install(release=rel, session=session)
@@ -101,7 +102,7 @@ def test_failed_smoketest_leaves_existing_binary_untouched(tmp_path, monkeypatch
     rel2 = fm.Release(
         source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
     )
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "")  # staged binary is non-runnable
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "")  # staged binary is non-runnable
 
     with pytest.raises(RuntimeError, match="version"):
         mgr.install(release=rel2, session=session2)
@@ -117,7 +118,7 @@ def test_failed_smoketest_writes_no_manifest_when_nothing_installed(tmp_path, mo
     # Fresh install (no prior binary) whose download won't run: nothing lands,
     # and status() must not report managed/green off a stale manifest.
     rel, session = _session_for(b"BADBINARY")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "")
     monkeypatch.setattr(fm, "_which_ffmpeg", lambda os_key: "")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
@@ -134,7 +135,7 @@ def test_failed_smoketest_writes_no_manifest_when_nothing_installed(tmp_path, mo
 def test_successful_install_still_promotes_and_writes_manifest(tmp_path, monkeypatch):
     # The reordering must not break the happy path.
     rel, session = _session_for(b"OKBINARY")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
     st = mgr.install(release=rel, session=session)
@@ -149,7 +150,7 @@ def test_an_ffprobe_that_will_not_run_keeps_the_existing_pair(tmp_path, monkeypa
     # ffprobe gets ffmpeg's smoke test: a staged ffprobe that will not run
     # promotes neither binary, so the working pair stays a pair.
     rel, session = _session_for(b"GOODBINARY", b"GOODPROBE")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
     mgr.install(release=rel, session=session)
@@ -159,7 +160,7 @@ def test_an_ffprobe_that_will_not_run_keeps_the_existing_pair(tmp_path, monkeypa
     rel2 = fm.Release(
         source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
     )
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "" if Path(p).name.startswith("ffprobe.") else "n9.9")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "" if Path(p).name.startswith("ffprobe.") else "n9.9")
 
     with pytest.raises(RuntimeError, match="ffprobe -version"):
         mgr.install(release=rel2, session=session2)
@@ -237,7 +238,7 @@ def test_macos_verify_failure_refuses_promotion_and_does_not_resign(tmp_path, mo
 def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch):
     # First install a working managed copy (linux path avoids codesign).
     rel, session = _session_for(b"GOODBINARY")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n8.1.1")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
     mgr.install(release=rel, session=session)
@@ -251,7 +252,7 @@ def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch
         source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
     )
     monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n9.9")
 
     def fake_run(argv, *a, **kw):
         class _R:
@@ -273,7 +274,7 @@ def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch
 def test_verified_signature_install_promotes_through_the_real_gate(tmp_path, monkeypatch):
     # The good path must exercise _macos_verify, not stub it: codesign passes.
     rel, session = _session_for(b"SIGNEDBINARY")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n9.9")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
 
@@ -295,7 +296,7 @@ def test_verified_signature_install_promotes_through_the_real_gate(tmp_path, mon
 
 def test_an_unsigned_ffprobe_is_refused_like_an_unsigned_ffmpeg(tmp_path, monkeypatch):
     rel, session = _session_for(b"SIGNEDBINARY", b"UNSIGNEDPROBE")
-    monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
+    monkeypatch.setattr(system_ffmpeg, "probe_version", lambda p: "n9.9")
     mgr = fm.FfmpegManager(tmp_path)
     monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
     verified: list[str] = []
@@ -322,24 +323,25 @@ def test_an_unsigned_ffprobe_is_refused_like_an_unsigned_ffmpeg(tmp_path, monkey
 
 
 # --------------------------------------------------------------------------- #
-# _probe_version is memoized and uses a bounded timeout so status()
-# on the GUI thread cannot re-fork a subprocess per call.
+# The probe is memoized and uses a bounded per-candidate timeout, so status()
+# on the GUI thread pays it once per copy and never re-forks on a repeat call.
 # --------------------------------------------------------------------------- #
-def test_the_gui_thread_probe_stays_bounded():
+def test_each_gui_thread_probe_stays_bounded():
     """The bound itself, asserted from the test BODY rather than inside the
-    fake subprocess.run below, which _probe_version
+    fake subprocess.run below, which probe_version
     wraps in `except Exception: return ""`: an AssertionError in there would be
     swallowed, and the guard would go red one line later on
     `assert '' == 'n7.1'`, so whoever raised the timeout would read that instead
     of the reason. Interpolating the constant into its own expectation pins only
     that SOME timeout is passed, so this is the assertion that matters: raise
-    the constant to 900 and a GUI-thread freeze of a quarter hour ships green.
+    the constant to 900 and one hung candidate freezes the GUI for a quarter
+    hour. Discovery may probe each candidate once; every result is memoized.
     """
-    assert 0 < fm._PROBE_TIMEOUT <= 10, "status() runs on the GUI thread; this is its worst case"
+    assert 0 < system_ffmpeg.PROBE_TIMEOUT <= 10, "each GUI-thread probe must stay bounded"
 
 
 def test_probe_version_is_cached_per_binary(tmp_path, monkeypatch):
-    fm._probe_cache.clear()
+    system_ffmpeg._probe_cache.clear()
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
 
@@ -354,23 +356,23 @@ def test_probe_version_is_cached_per_binary(tmp_path, monkeypatch):
     def fake_run(argv, *a, **kw):
         runs.append(1)
         # Recorded, not asserted: an AssertionError raised in here is eaten by
-        # _probe_version's own `except Exception: return ""`, so the failure
+        # probe_version's own `except Exception: return ""`, so the failure
         # would arrive as `assert '' == 'n7.1'` with no message at all. See
-        # test_the_gui_thread_probe_stays_bounded for the bound.
+        # test_each_gui_thread_probe_stays_bounded for the bound.
         passed.append(kw.get("timeout"))
         return _R()
 
     monkeypatch.setattr(fm.subprocess, "run", fake_run)
 
-    assert fm._probe_version(str(binary)) == "n7.1"
-    assert fm._probe_version(str(binary)) == "n7.1"
-    assert fm._probe_version(str(binary)) == "n7.1"
+    assert system_ffmpeg.probe_version(str(binary)) == "n7.1"
+    assert system_ffmpeg.probe_version(str(binary)) == "n7.1"
+    assert system_ffmpeg.probe_version(str(binary)) == "n7.1"
     assert sum(runs) == 1  # only the first call actually forked
-    assert passed == [fm._PROBE_TIMEOUT], "the probe forked without the bounded timeout"
+    assert passed == [system_ffmpeg.PROBE_TIMEOUT], "the probe forked without the bounded timeout"
 
 
 def test_probe_version_reprobes_when_binary_changes(tmp_path, monkeypatch):
-    fm._probe_cache.clear()
+    system_ffmpeg._probe_cache.clear()
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
 
@@ -388,19 +390,19 @@ def test_probe_version_reprobes_when_binary_changes(tmp_path, monkeypatch):
         return _R()
 
     monkeypatch.setattr(fm.subprocess, "run", fake_run)
-    assert fm._probe_version(str(binary)) == "n7.1"
+    assert system_ffmpeg.probe_version(str(binary)) == "n7.1"
     # Replace the file with different content + bump mtime → cache evicts.
     import os
 
     binary.write_bytes(b"DIFFERENTBIN")
     st = binary.stat()
     os.utime(binary, (st.st_atime + 5, st.st_mtime + 5))
-    assert fm._probe_version(str(binary)) == "n9.9"
+    assert system_ffmpeg.probe_version(str(binary)) == "n9.9"
     assert sum(runs) == 2
 
 
 def test_probe_version_missing_file_returns_empty_and_evicts(tmp_path, monkeypatch):
-    fm._probe_cache.clear()
+    system_ffmpeg._probe_cache.clear()
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
 
@@ -410,12 +412,12 @@ def test_probe_version_missing_file_returns_empty_and_evicts(tmp_path, monkeypat
         stderr = ""
 
     monkeypatch.setattr(fm.subprocess, "run", lambda *a, **k: _R())
-    assert fm._probe_version(str(binary)) == "n7.1"
-    assert str(binary) in fm._probe_cache
+    assert system_ffmpeg.probe_version(str(binary)) == "n7.1"
+    assert str(binary) in system_ffmpeg._probe_cache
     binary.unlink()
     # A now-missing path returns "" (no subprocess) and drops the stale entry.
     called: list[int] = []
     monkeypatch.setattr(fm.subprocess, "run", lambda *a, **k: called.append(1))
-    assert fm._probe_version(str(binary)) == ""
+    assert system_ffmpeg.probe_version(str(binary)) == ""
     assert called == []
-    assert str(binary) not in fm._probe_cache
+    assert str(binary) not in system_ffmpeg._probe_cache
