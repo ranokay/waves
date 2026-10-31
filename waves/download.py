@@ -4022,15 +4022,16 @@ class Download:
         TIDAL serves machine-transcribed lyrics for track IDs without
         human-submitted text (recent re-recordings especially), while LRCLIB
         carries community-synced lyrics, so LRCLIB wins when the preference is
-        on. A miss or outage there falls through to TIDAL's own lyrics, so the
-        worst case is exactly the historical behaviour.
+        on. TIDAL is asked whenever LRCLIB has no timed lyrics: a miss or an
+        outage falls through to TIDAL's own lyrics, and a plain-only LRCLIB hit
+        still takes TIDAL's timed ones when it has them (LRCLIB's plain text
+        stays the untimed form), so a timed .lrc is never lost to plain text.
 
         Returns:
             tuple[str, str, str]: (lyrics, synced, unsynced); lyrics is the
             best available form (synced over unsynced), all empty when neither
             source has any.
         """
-        lyrics: str = ""
         lyrics_synced: str = ""
         lyrics_unsynced: str = ""
 
@@ -4043,21 +4044,19 @@ class Download:
                 duration=track.duration or 0,
                 title_bare=track.name,
             )
-            lyrics = lyrics_synced or lyrics_unsynced
 
-        if not lyrics:
+        if not lyrics_synced:
             try:
                 lyrics_obj = track.lyrics()
 
-                if lyrics_obj.text:
+                if lyrics_obj.text and not lyrics_unsynced:
                     lyrics_unsynced = lyrics_obj.text
-                    lyrics = lyrics_unsynced
                 if lyrics_obj.subtitles:
                     lyrics_synced = lyrics_obj.subtitles
-                    lyrics = lyrics_synced
             except Exception:
-                lyrics = ""
                 self.fn_logger.debug(f"Could not retrieve lyrics for `{log_content(name_builder_item(track))}`.")
+
+        lyrics = lyrics_synced or lyrics_unsynced
 
         return lyrics, lyrics_synced, lyrics_unsynced
 
