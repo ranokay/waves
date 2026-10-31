@@ -356,9 +356,9 @@ def test_probe_version_is_cached_per_binary(tmp_path, monkeypatch):
     def fake_run(argv, *a, **kw):
         runs.append(1)
         # Recorded, not asserted: an AssertionError raised in here is eaten by
-        # _probe_version's own `except Exception: return ""`, so the failure
+        # probe_version's own `except Exception: return ""`, so the failure
         # would arrive as `assert '' == 'n7.1'` with no message at all. See
-        # test_the_gui_thread_probe_stays_bounded for the bound.
+        # test_each_gui_thread_probe_stays_bounded for the bound.
         passed.append(kw.get("timeout"))
         return _R()
 

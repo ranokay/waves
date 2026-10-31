@@ -16,6 +16,7 @@ further down the list.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -34,6 +35,9 @@ CREATE_NO_WINDOW: int = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 PROBE_TIMEOUT = 4
 #: How long a timed-out binary waits before a worker may probe it again.
 PROBE_SLOW_RETRY_S = 60.0
+#: Spawn errors that say the file itself cannot run, unlike a transient
+#: EAGAIN/ETXTBSY that says "not right now".
+_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC, errno.EACCES, errno.EPERM})
 
 
 def known_dirs() -> tuple[str, ...]:
@@ -122,10 +126,18 @@ def probe_version(path: str) -> str:
         _probe_slow[path] = (key[0], key[1], time.monotonic() + PROBE_SLOW_RETRY_S)
         _probe_cache[path] = (key[0], key[1], "")
         return ""
+    except OSError as exc:
+        # A permanent fault (wrong arch, no exec permission) will not answer
+        # on the next status() either: memoize it so the GUI thread forks it
+        # once, not once per call. A transient fault (EAGAIN under resource
+        # pressure, ETXTBSY during a package-manager swap) is not evidence of
+        # a broken install: keep it as a slow fallback a worker may retry,
+        # exactly like a timed-out probe.
+        if exc.errno not in _PERMANENT_PROBE_ERRORS:
+            _probe_slow[path] = (key[0], key[1], time.monotonic() + PROBE_SLOW_RETRY_S)
+        _probe_cache[path] = (key[0], key[1], "")
+        return ""
     except Exception:
-        # A file that cannot exec (wrong arch, no read permission, a stale
-        # mount) will not answer on the next status() either: memoize it so
-        # the GUI thread forks it once, not once per call.
         _probe_cache[path] = (key[0], key[1], "")
         return ""
     if out.returncode != 0:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import stat
 import subprocess
 import sys
@@ -182,20 +183,42 @@ def test_a_probe_reads_the_ffprobe_version_token(tmp_path, monkeypatch):
 
 
 def test_a_probe_that_cannot_exec_is_not_forked_again(tmp_path, monkeypatch):
-    """A broken binary is memoized like a timed-out one: status() must not pay
-    a fork per call for a copy that cannot run."""
+    """A permanently broken binary is memoized like a timed-out one: status()
+    must not pay a fork per call for a copy that cannot run."""
     binary = tmp_path / "ffmpeg"
     binary.write_bytes(b"BIN")
     runs = []
 
     def broken(argv, **kw):
         runs.append(argv)
-        raise OSError("cannot execute")
+        raise OSError(errno.ENOEXEC, "Exec format error")
 
     monkeypatch.setattr(system_ffmpeg.subprocess, "run", broken)
     assert system_ffmpeg.probe_version(str(binary)) == ""
     assert system_ffmpeg.probe_version(str(binary)) == ""
     assert len(runs) == 1
+    assert not system_ffmpeg._probe_slow
+
+
+def test_a_transient_exec_failure_stays_a_retryable_fallback(tmp_path, monkeypatch):
+    """EAGAIN/ETXTBSY says "not right now", not "broken": the copy stays a
+    fallback and a worker's retry after the pause can warm it up."""
+    exe = _make(tmp_path)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
+    monkeypatch.setattr(system_ffmpeg, "PROBE_SLOW_RETRY_S", -1.0)
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1 built", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    assert system_ffmpeg.working_system_ffmpeg(retry_slow=True) == exe
+    assert system_ffmpeg.probe_version(exe) == "7.1"
+    assert not system_ffmpeg._probe_slow
 
 
 def test_a_probe_passes_the_windows_no_console_flag(tmp_path, monkeypatch):
