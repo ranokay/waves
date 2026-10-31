@@ -44,50 +44,43 @@ def _lyrics_download(
 
 
 def test_a_plain_only_lrclib_hit_still_takes_tidals_timed_lyrics(monkeypatch):
-    download, track = _lyrics_download(
-        monkeypatch,
-        ("", "plain from lrclib"),
-        lambda: SimpleNamespace(text="tidal text", subtitles="[00:01.00] timed"),
-    )
+    tidal = MagicMock(return_value=SimpleNamespace(text="tidal text", subtitles="[00:01.00] timed"))
+    download, track = _lyrics_download(monkeypatch, ("", "plain from lrclib"), tidal)
 
     assert download._retrieve_lyrics(track) == ("[00:01.00] timed", "[00:01.00] timed", "plain from lrclib")
+    tidal.assert_called_once()
 
 
 def test_a_plain_only_lrclib_hit_stands_when_tidal_has_nothing_timed(monkeypatch):
-    download, track = _lyrics_download(
-        monkeypatch, ("", "plain from lrclib"), lambda: SimpleNamespace(text="t", subtitles="")
-    )
+    tidal = MagicMock(return_value=SimpleNamespace(text="t", subtitles=""))
+    download, track = _lyrics_download(monkeypatch, ("", "plain from lrclib"), tidal)
 
     assert download._retrieve_lyrics(track) == ("plain from lrclib", "", "plain from lrclib")
+    tidal.assert_called_once_with()
 
 
 def test_a_plain_only_lrclib_hit_stands_when_tidal_fails(monkeypatch):
-    def boom():
-        raise RuntimeError("404")
-
-    download, track = _lyrics_download(monkeypatch, ("", "plain from lrclib"), boom)
+    tidal = MagicMock(side_effect=RuntimeError("404"))
+    download, track = _lyrics_download(monkeypatch, ("", "plain from lrclib"), tidal)
 
     assert download._retrieve_lyrics(track) == ("plain from lrclib", "", "plain from lrclib")
+    tidal.assert_called_once_with()
 
 
 def test_timed_lrclib_lyrics_never_ask_tidal(monkeypatch):
-    def never():
-        raise AssertionError("TIDAL was asked")
-
-    download, track = _lyrics_download(monkeypatch, ("[00:01.00] lrclib", "plain"), never)
+    tidal = MagicMock(side_effect=AssertionError("TIDAL was asked"))
+    download, track = _lyrics_download(monkeypatch, ("[00:01.00] lrclib", "plain"), tidal)
 
     assert download._retrieve_lyrics(track) == ("[00:01.00] lrclib", "[00:01.00] lrclib", "plain")
+    tidal.assert_not_called()
 
 
 def test_preference_off_asks_tidal_directly(monkeypatch):
     def never(*_a, **_kw):
         raise AssertionError("LRCLIB was asked with the preference off")
 
-    download, track = _lyrics_download(
-        monkeypatch,
-        never,
-        lambda: SimpleNamespace(text="tidal text", subtitles="[00:01.00] timed"),
-        prefer_lrclib=False,
-    )
+    tidal = MagicMock(return_value=SimpleNamespace(text="tidal text", subtitles="[00:01.00] timed"))
+    download, track = _lyrics_download(monkeypatch, never, tidal, prefer_lrclib=False)
 
     assert download._retrieve_lyrics(track) == ("[00:01.00] timed", "[00:01.00] timed", "tidal text")
+    tidal.assert_called_once_with()
