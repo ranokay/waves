@@ -102,6 +102,27 @@ def test_the_apple_flac_fallback_runs_the_same_discovered_binary(tmp_path, monke
     assert runner.flac_ffmpeg(hooks) == good
 
 
+def test_a_slow_custom_binary_stays_the_selection(tmp_path, monkeypatch):
+    """A timed-out custom override must not make Settings fall through to a
+    different system binary: downloads keep the user's explicit choice."""
+    custom = _make(tmp_path / "custom")
+    good = _make(tmp_path / "brew")
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path / "brew"),))
+
+    def run(argv, **kw):
+        if argv[0] == custom:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1 built", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    status = fm.FfmpegManager(tmp_path / "app").status(custom)
+    assert status["path"] == custom
+    assert status["custom"] is True
+    assert status["version"] == ""
+    assert status["path"] != good
+
+
 def test_gui_readers_never_re_probe_a_slow_binary(tmp_path, monkeypatch):
     """After the first probe times out, status(), the resolver, the source
     label, preview and the FLAC check all reuse the memoized result: the GUI

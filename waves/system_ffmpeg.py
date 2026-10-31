@@ -38,16 +38,23 @@ PROBE_TIMEOUT = 4
 PROBE_SLOW_RETRY_S = 60.0
 #: Spawn errors that say the file itself cannot run, unlike a transient
 #: EAGAIN/ETXTBSY that says "not right now".
-_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC, errno.EACCES, errno.EPERM})
+_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC})
+#: Spawn errors a later ``chmod`` can repair without changing (mtime, size), so
+#: caching them would keep a repaired binary unavailable until restart.
+_UNCACHED_PROBE_ERRORS = frozenset({errno.EACCES, errno.EPERM})
+
+_MACOS_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
+_LINUX_DIRS = ("/usr/local/bin", "/usr/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin")
+_WINDOWS_DIRS: tuple[str, ...] = ()
 
 
 def known_dirs() -> tuple[str, ...]:
     """Folders the user's package managers install into, per platform."""
     if sys.platform == "darwin":
-        return ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
+        return _MACOS_DIRS
     if sys.platform.startswith("win"):
-        return ()
-    return ("/usr/local/bin", "/usr/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin")
+        return _WINDOWS_DIRS
+    return _LINUX_DIRS
 
 
 def find_system_ffmpeg(name: str = "ffmpeg", works: Callable[[str], bool] | None = None) -> str:
@@ -79,7 +86,7 @@ def working_system_ffmpeg(name: str = "ffmpeg", *, retry_slow: bool = False) -> 
     hit = find_system_ffmpeg(name, works=lambda path: bool(probe_version(path)))
     if hit:
         return hit
-    return find_system_ffmpeg(name, works=_probe_retry_slow if retry_slow else _probe_was_slow)
+    return find_system_ffmpeg(name, works=_probe_retry_slow if retry_slow else probe_was_slow)
 
 
 # Probing a binary means fork+exec+wait on it, which can block for the whole
@@ -109,10 +116,10 @@ def probe_version(path: str) -> str:
     """
     try:
         st = os.stat(path)
-        key = (st.st_mtime, st.st_size)
     except OSError:
         _probe_cache.pop(path, None)
         return ""
+    key = (st.st_mtime, st.st_size)
     cached = _probe_cache.get(path)
     if cached is not None and cached[:2] == key:
         return cached[2]
@@ -125,34 +132,45 @@ def probe_version(path: str) -> str:
             creationflags=CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
-        _probe_slow[path] = (key[0], key[1], time.monotonic() + PROBE_SLOW_RETRY_S)
-        _probe_cache[path] = (key[0], key[1], "")
+        _record_slow(path, key)
         return ""
     except OSError as exc:
-        # A permanent fault (wrong arch, no exec permission) will not answer
-        # on the next status() either: memoize it so the GUI thread forks it
-        # once, not once per call. A transient fault (EAGAIN under resource
-        # pressure, ETXTBSY during a package-manager swap) is not evidence of
-        # a broken install: keep it as a slow fallback a worker may retry,
-        # exactly like a timed-out probe.
-        if exc.errno not in _PERMANENT_PROBE_ERRORS:
-            _probe_slow[path] = (key[0], key[1], time.monotonic() + PROBE_SLOW_RETRY_S)
-        _probe_cache[path] = (key[0], key[1], "")
-        return ""
+        return _record_probe_error(path, key, exc)
     except Exception:
         _probe_cache[path] = (key[0], key[1], "")
         return ""
-    if out.returncode != 0:
-        ver = ""
-    else:
-        first = (out.stdout or "").splitlines()[0] if out.stdout else ""
-        m = re.search(r"(?:ffmpeg|ffprobe) version (\S+)", first)
-        ver = m.group(1) if m else (first.strip() or "")
+    ver = _version_token(out)
     _probe_cache[path] = (key[0], key[1], ver)
     return ver
 
 
-def _probe_was_slow(path: str) -> bool:
+def _version_token(out) -> str:
+    """The version token in an ``-version`` answer, or "" for a nonzero exit."""
+    if out.returncode != 0:
+        return ""
+    first = (out.stdout or "").splitlines()[0] if out.stdout else ""
+    m = re.search(r"(?:ffmpeg|ffprobe) version (\S+)", first)
+    return m.group(1) if m else first.strip()
+
+
+def _record_slow(path: str, key: tuple[float, int]) -> None:
+    _probe_slow[path] = (key[0], key[1], time.monotonic() + PROBE_SLOW_RETRY_S)
+    _probe_cache[path] = (key[0], key[1], "")
+
+
+def _record_probe_error(path: str, key: tuple[float, int], exc: OSError) -> str:
+    """Classify a spawn error: permanent, chmod-repairable, or transient."""
+    if exc.errno in _UNCACHED_PROBE_ERRORS:
+        _probe_cache.pop(path, None)
+    elif exc.errno in _PERMANENT_PROBE_ERRORS:
+        _probe_cache[path] = (key[0], key[1], "")
+    else:
+        _record_slow(path, key)
+    return ""
+
+
+def probe_was_slow(path: str) -> bool:
+    """Whether the last probe of ``path`` timed out (or failed transiently)."""
     try:
         st = os.stat(path)
     except OSError:
@@ -178,4 +196,4 @@ def _probe_retry_slow(path: str) -> bool:
         return True
     _probe_cache.pop(path, None)  # the timeout's cached "" would answer instead
     _probe_slow.pop(path, None)  # a fresh timeout below re-adds it
-    return bool(probe_version(path)) or _probe_was_slow(path)
+    return bool(probe_version(path)) or probe_was_slow(path)

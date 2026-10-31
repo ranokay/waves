@@ -163,10 +163,32 @@ def test_a_slow_ffmpeg_is_probed_again_for_a_job_once_its_pause_is_over(tmp_path
     monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
     assert system_ffmpeg.working_system_ffmpeg(retry_slow=True) == exe
     assert len(runs) == 2  # the first probe, and the retry its expired pause allowed
-    assert system_ffmpeg.working_system_ffmpeg() == exe and len(runs) == 2  # status() never re-forks
+    assert system_ffmpeg.working_system_ffmpeg() == exe  # status() never re-forks
+    assert len(runs) == 2
     warmed.append(True)
     assert system_ffmpeg.working_system_ffmpeg(retry_slow=True) == exe
-    assert system_ffmpeg.probe_version(exe) == "7.1" and not system_ffmpeg._probe_slow
+    assert system_ffmpeg.probe_version(exe) == "7.1"
+    assert not system_ffmpeg._probe_slow
+
+
+def test_a_permission_error_is_probed_again_after_the_binary_is_repaired(tmp_path, monkeypatch):
+    """chmod +x changes no mtime/size: an EACCES result must not be cached as
+    a permanently broken copy."""
+    binary = tmp_path / "ffmpeg"
+    binary.write_bytes(b"BIN")
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise OSError(errno.EACCES, "Permission denied")
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    assert system_ffmpeg.probe_version(str(binary)) == ""
+    assert system_ffmpeg.probe_version(str(binary)) == "7.1"
+    assert len(calls) == 2
+    assert not system_ffmpeg._probe_slow
 
 
 def test_a_probe_reads_the_ffprobe_version_token(tmp_path, monkeypatch):

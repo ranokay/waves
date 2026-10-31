@@ -327,7 +327,7 @@ class FfmpegManager:
         cp = (custom_path or "").strip()
         if cp and os.path.isfile(cp):
             ver = system_ffmpeg.probe_version(cp)
-            if ver:  # only treat a *working* binary as available (fail-closed)
+            if ver or system_ffmpeg.probe_was_slow(cp):  # fail-closed, but keep a slow override selected
                 return {
                     **base,
                     "state": "path",
