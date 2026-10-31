@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import stat
 import subprocess
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -19,6 +20,8 @@ from waves import system_ffmpeg
 from waves.desktop.backend import WavesBridge
 from waves.desktop.ffmpeg import manager as fm
 from waves.providers.apple import runner
+
+pytestmark = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX executable bits")
 
 
 def _make(folder, executable=True):

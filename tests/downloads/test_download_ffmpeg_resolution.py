@@ -7,6 +7,7 @@ same package-manager discovery as the card instead of ``shutil.which`` alone.
 from __future__ import annotations
 
 import stat
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,9 @@ from waves import system_ffmpeg
 from waves.config import Settings
 from waves.desktop.ffmpeg import manager as fm
 from waves.download import Download
+
+posix_only = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX executable bits")
+pytestmark = posix_only
 
 
 def _make(folder):
@@ -31,6 +35,17 @@ def _clean_probe_cache(monkeypatch):
     monkeypatch.setattr(system_ffmpeg, "_probe_slow", {})
 
 
+@pytest.fixture(autouse=True)
+def _isolated_ffmpeg_settings(monkeypatch):
+    """Download writes the process-wide Settings singleton: restore the path
+    and the three gated flags after every test."""
+    data = Settings().data
+    monkeypatch.setattr(data, "path_binary_ffmpeg", None)
+    monkeypatch.setattr(data, "video_convert_mp4", True)
+    monkeypatch.setattr(data, "extract_flac", True)
+    monkeypatch.setattr(data, "extract_flac_all", True)
+
+
 def test_a_download_runs_the_ffmpeg_settings_shows(tmp_path, monkeypatch):
     broken = tmp_path / "local"
     brew = tmp_path / "brew"
@@ -39,7 +54,6 @@ def test_a_download_runs_the_ffmpeg_settings_shows(tmp_path, monkeypatch):
     monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(broken), str(brew)))
     monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "n8.1" if path == good else "")
-    Settings().data.path_binary_ffmpeg = None
 
     assert fm.FfmpegManager(tmp_path / "app").status()["path"] == good
     dl = Download(
@@ -58,7 +72,6 @@ def test_a_download_stays_off_a_broken_system_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "")
-    Settings().data.path_binary_ffmpeg = None
 
     dl = Download(
         tidal_obj=MagicMock(),
@@ -81,7 +94,6 @@ def test_a_download_reader_sees_a_slow_binary_as_its_fallback_once(tmp_path, mon
     exe = _make(tmp_path)
     monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
-    Settings().data.path_binary_ffmpeg = None
     runs = []
 
     def slow(argv, **kw):

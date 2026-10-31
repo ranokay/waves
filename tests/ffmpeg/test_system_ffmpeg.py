@@ -200,6 +200,7 @@ def test_a_probe_that_cannot_exec_is_not_forked_again(tmp_path, monkeypatch):
     assert not system_ffmpeg._probe_slow
 
 
+@posix_only
 def test_a_transient_exec_failure_stays_a_retryable_fallback(tmp_path, monkeypatch):
     """EAGAIN/ETXTBSY says "not right now", not "broken": the copy stays a
     fallback and a worker's retry after the pause can warm it up."""
