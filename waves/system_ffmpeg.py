@@ -33,7 +33,8 @@ CREATE_NO_WINDOW: int = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 #: file lives on a hung mount. The GUI thread pays this on status(), so keep it
 #: short.
 PROBE_TIMEOUT = 4
-#: How long a timed-out binary waits before a worker may probe it again.
+#: How long a probe that timed out (or failed transiently) waits before a
+#: worker may probe it again.
 PROBE_SLOW_RETRY_S = 60.0
 #: Spawn errors that say the file itself cannot run, unlike a transient
 #: EAGAIN/ETXTBSY that says "not right now".
@@ -89,10 +90,10 @@ def working_system_ffmpeg(name: str = "ffmpeg", *, retry_slow: bool = False) -> 
 # never re-fork. A different binary at the same path (size/mtime change) evicts.
 _probe_cache: dict[str, tuple[float, int, str]] = {}
 # A binary that did not answer within the timeout (a cold start from snap, a
-# virus scan of a large ffmpeg.exe on its first run) is not known to be
-# broken: it stays a candidate (a fallback one, see working_system_ffmpeg),
-# and a worker may probe it again once its pause is over. (mtime, size,
-# monotonic deadline for the next probe.)
+# virus scan of a large ffmpeg.exe on its first run) or hit a transient spawn
+# error is not known to be broken: it stays a candidate (a fallback one, see
+# working_system_ffmpeg), and a worker may probe it again once its pause is
+# over. (mtime, size, monotonic deadline for the next probe.)
 _probe_slow: dict[str, tuple[float, int, float]] = {}
 
 
@@ -103,7 +104,8 @@ def probe_version(path: str) -> str:
     Memoized per (path, mtime, size) so a repeated ``status()`` on the GUI
     thread doesn't re-fork a subprocess. A short timeout bounds the worst case
     (hung/stale-mount binary) instead of freezing the UI. A binary that timed
-    out is recorded slow and cached as "", so status() does not fork it again.
+    out or hit a transient spawn error is recorded slow and cached as "", so
+    status() does not fork it again.
     """
     try:
         st = os.stat(path)
@@ -160,10 +162,11 @@ def _probe_was_slow(path: str) -> bool:
 
 
 def _probe_retry_slow(path: str) -> bool:
-    """(worker thread) A slow binary, probed again once its pause is over: a
-    cold start that warmed up answers (the cached empty version is replaced,
-    so status() shows the real one from then on), while one that keeps
-    hanging earns another pause and stays a last resort."""
+    """(worker thread) A slow binary (timed out or hit a transient spawn
+    error), probed again once its pause is over: a cold start that warmed up
+    answers (the cached empty version is replaced, so status() shows the real
+    one from then on), while one that keeps hanging earns another pause and
+    stays a last resort."""
     try:
         st = os.stat(path)
     except OSError:
