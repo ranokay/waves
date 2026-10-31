@@ -211,21 +211,38 @@ def test_a_slow_ffmpeg_is_probed_again_for_a_job_once_its_pause_is_over(tmp_path
     assert not system_ffmpeg._probe_slow
 
 
-def test_a_missing_loader_is_cached_as_broken(tmp_path, monkeypatch):
+def test_a_missing_loader_is_passed_over_not_kept_as_a_fallback(tmp_path, monkeypatch):
     """The file exists but cannot start (missing ELF loader or interpreter):
     it is broken, not slow, so jobs must not keep it as a fallback."""
-    binary = tmp_path / "ffmpeg"
-    binary.write_bytes(b"BIN")
-    runs = []
+    _make(tmp_path)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
 
     def broken(argv, **kw):
-        runs.append(argv)
         raise OSError(errno.ENOENT, "No such file or directory")
 
     monkeypatch.setattr(system_ffmpeg.subprocess, "run", broken)
+    assert system_ffmpeg.working_system_ffmpeg() == ""
+    assert not system_ffmpeg._probe_slow
+
+
+def test_a_repaired_loader_is_found_without_restart(tmp_path, monkeypatch):
+    """Installing the missing loader/interpreter changes neither mtime nor
+    size: an ENOENT result must not stay cached as broken."""
+    binary = tmp_path / "ffmpeg"
+    binary.write_bytes(b"BIN")
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise OSError(errno.ENOENT, "No such file or directory")
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
     assert system_ffmpeg.probe_version(str(binary)) == ""
-    assert system_ffmpeg.probe_version(str(binary)) == ""
-    assert len(runs) == 1
+    assert system_ffmpeg.probe_version(str(binary)) == "7.1"
+    assert len(calls) == 2
     assert not system_ffmpeg._probe_slow
 
 

@@ -37,12 +37,13 @@ PROBE_TIMEOUT = 4
 #: worker may probe it again.
 PROBE_SLOW_RETRY_S = 60.0
 #: Spawn errors that say the file itself cannot run, unlike a transient
-#: EAGAIN/ETXTBSY that says "not right now". ENOENT here means the file exists
-#: (it passed the discovery stat) but its loader/interpreter does not.
-_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC, errno.ENOENT})
-#: Spawn errors a later ``chmod`` can repair without changing (mtime, size), so
-#: caching them would keep a repaired binary unavailable until restart.
-_UNCACHED_PROBE_ERRORS = frozenset({errno.EACCES, errno.EPERM})
+#: EAGAIN/ETXTBSY that says "not right now".
+_PERMANENT_PROBE_ERRORS = frozenset({errno.ENOEXEC})
+#: Spawn errors a later repair can fix without changing (mtime, size): a
+#: ``chmod +x``, a missing loader/interpreter installed behind an existing
+#: script, or the file vanishing between the stat and the exec. Caching them
+#: would keep a repaired binary unavailable until restart.
+_UNCACHED_PROBE_ERRORS = frozenset({errno.EACCES, errno.EPERM, errno.ENOENT})
 
 _MACOS_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
 _LINUX_DIRS = ("/usr/local/bin", "/usr/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin")
