@@ -68,7 +68,7 @@ from waves.providers.apple.supervision import wrapper_data_host_dir
 @pytest.fixture(autouse=True)
 def _isolated_path_binaries(monkeypatch):
     """Bridge light/gate tests must not see the machine's own binaries."""
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr(shutil, "which", lambda _name, **_kw: None)
 
 
 def _cookies_file(tmp_path: Path, *, with_token: bool = True) -> str:
@@ -1621,7 +1621,9 @@ def test_override_binary_counts_as_runtime_ready(tmp_path):
 
 
 def test_path_binary_counts_as_runtime_ready(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/N_m3u8DL-RE" if name == "N_m3u8DL-RE" else None)
+    monkeypatch.setattr(
+        shutil, "which", lambda name, **_kw: "/usr/local/bin/N_m3u8DL-RE" if name == "N_m3u8DL-RE" else None
+    )
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
 
@@ -1974,7 +1976,7 @@ def test_setup_state_finds_ffprobe_where_the_codec_check_looks(tmp_path):
 
 def test_setup_state_accepts_an_ffprobe_on_path(tmp_path, monkeypatch):
     tool = _tool(tmp_path / "on-path", "ffprobe")
-    monkeypatch.setattr(shutil, "which", lambda name: str(tool) if name == "ffprobe" else None)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: str(tool) if name == "ffprobe" else None)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
 
     steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}

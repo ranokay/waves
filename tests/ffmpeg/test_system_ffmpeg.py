@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import os
 import stat
 import subprocess
 import sys
@@ -32,7 +33,7 @@ def _clean_probe_cache(monkeypatch):
 
 @posix_only
 def test_path_hit_wins(tmp_path, monkeypatch):
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: "/on/path/ffmpeg")
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: "/on/path/ffmpeg")
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     _make(tmp_path)
     assert system_ffmpeg.find_system_ffmpeg() == "/on/path/ffmpeg"
@@ -40,7 +41,7 @@ def test_path_hit_wins(tmp_path, monkeypatch):
 
 @posix_only
 def test_package_manager_folder_found_when_path_is_bare(tmp_path, monkeypatch):
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     missing = tmp_path / "missing"
     present = tmp_path / "brew"
     exe = _make(present)
@@ -50,7 +51,7 @@ def test_package_manager_folder_found_when_path_is_bare(tmp_path, monkeypatch):
 
 @posix_only
 def test_non_executable_file_is_skipped(tmp_path, monkeypatch):
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     _make(tmp_path, executable=False)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     assert system_ffmpeg.find_system_ffmpeg() == ""
@@ -61,7 +62,7 @@ def test_a_broken_install_is_passed_over_for_one_that_works(tmp_path, monkeypatc
     broken = tmp_path / "local"
     brew = tmp_path / "brew"
     bad, good = _make(broken), _make(brew)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(broken), str(brew)))
     assert system_ffmpeg.find_system_ffmpeg(works=lambda p: p == good) == good
     assert system_ffmpeg.find_system_ffmpeg(works=lambda p: False) == ""
@@ -91,7 +92,7 @@ def test_status_never_reports_a_broken_system_ffmpeg_installed(tmp_path, monkeyp
     from waves.desktop.ffmpeg import manager as fm
 
     _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "")
     assert fm._which_ffmpeg("macos") == ""
@@ -103,7 +104,7 @@ def test_an_ffmpeg_too_slow_for_the_probe_is_kept_and_not_probed_again(tmp_path,
     """A cold first run (snap, a virus scan) that outlasts the probe is not a
     broken install: jobs keep it, and the GUI thread never forks it again."""
     exe = _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     runs = []
 
@@ -118,6 +119,26 @@ def test_an_ffmpeg_too_slow_for_the_probe_is_kept_and_not_probed_again(tmp_path,
 
 
 @posix_only
+def test_a_broken_path_copy_is_passed_over_for_a_later_path_copy(tmp_path, monkeypatch):
+    """PATH can hold several ffmpeg copies: the first one being broken must not
+    hide a working copy later in the same list."""
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    bad = _make(first)
+    good = _make(second)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(first), str(second))))
+    monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: ())
+
+    def run(argv, **kw):
+        if argv[0] == bad:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return SimpleNamespace(returncode=0, stdout="ffmpeg version 7.1 built", stderr="")
+
+    monkeypatch.setattr(system_ffmpeg.subprocess, "run", run)
+    assert system_ffmpeg.working_system_ffmpeg() == good
+
+
+@posix_only
 def test_a_slow_ffmpeg_does_not_shadow_a_working_one(tmp_path, monkeypatch):
     """The first candidate hangs the probe (it may be hung for good): a copy
     further down the list that answers is the one jobs and status get."""
@@ -125,7 +146,7 @@ def test_a_slow_ffmpeg_does_not_shadow_a_working_one(tmp_path, monkeypatch):
     (tmp_path / "b").mkdir()
     hung = _make(tmp_path / "a")
     good = _make(tmp_path / "b")
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(
         system_ffmpeg,
         "known_dirs",
@@ -148,7 +169,7 @@ def test_a_slow_ffmpeg_is_probed_again_for_a_job_once_its_pause_is_over(tmp_path
     pause: a cold start that warmed up answers, and status() shows its real
     version from then on."""
     exe = _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     monkeypatch.setattr(system_ffmpeg, "PROBE_SLOW_RETRY_S", -1.0)  # the pause is already over
     runs = []
@@ -227,7 +248,7 @@ def test_a_transient_exec_failure_stays_a_retryable_fallback(tmp_path, monkeypat
     """EAGAIN/ETXTBSY says "not right now", not "broken": the copy stays a
     fallback and a worker's retry after the pause can warm it up."""
     exe = _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     monkeypatch.setattr(system_ffmpeg, "PROBE_SLOW_RETRY_S", -1.0)
     calls = []

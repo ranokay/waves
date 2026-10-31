@@ -142,7 +142,7 @@ def _park_saves_during_serialization(stub, monkeypatch):
 
 @pytest.mark.parametrize("path", [_MANAGED, _PATH_FFMPEG, None], ids=["managed", "system", "missing"])
 def test_a_running_download_keeps_ffmpeg_values_during_serialization(path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: None)
     stub = _bridge()
     stub.settings.write_serialized = lambda payload: stub.settings.saved.append(json.loads(payload))
     data = stub.settings.data
@@ -244,14 +244,14 @@ def test_rebuilding_a_download_resolves_binary_and_restores_usable_preferences(
     stub._event_run = threading.Event()
     stub._warn_if_ffmpeg_missing = lambda dl: None
 
-    def which(name):
+    def which(name, **_kw):
         assert data.path_binary_ffmpeg == _PATH_FFMPEG, "resolution temporarily cleared the live path"
         return on_path
 
     monkeypatch.setattr(shutil, "which", which)
     # Download's own missing-binary check also asks PATH after final resolution.
     if not expected:
-        monkeypatch.setattr(shutil, "which", lambda name: None)
+        monkeypatch.setattr(shutil, "which", lambda name, **_kw: None)
 
     WavesBridge._init_download(stub)
 
@@ -279,7 +279,7 @@ def test_clearing_a_user_override_keeps_the_managed_binary_before_rebuild():
 
 @pytest.mark.parametrize("path_first", [False, True, None], ids=["flags-first", "path-first", "path-only"])
 def test_a_signed_out_path_edit_restores_the_preferences_apple_captures(path_first, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: None)
     stub = _apply_bridge()
     stub._ffmpeg = SimpleNamespace(is_installed=lambda: False, binary_path=_MANAGED)
     stub.settings.data.path_binary_ffmpeg = None
@@ -305,7 +305,7 @@ def test_a_signed_out_path_edit_restores_the_preferences_apple_captures(path_fir
 
 
 def test_clearing_the_last_binary_disables_features_before_the_apply_save(monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: None)
     stub = _apply_bridge()
     stub._ffmpeg = SimpleNamespace(is_installed=lambda: False, binary_path=_MANAGED)
     stub._ffmpeg_user_path = "/opt/custom/ffmpeg"
@@ -484,7 +484,7 @@ def _preview_path(stub) -> str | None:
 def test_a_reader_keeps_the_resolved_path_through_a_save(reader, monkeypatch):
     """Provider configuration and previews retain the selected binary when
     a concurrent save serializes the user preferences."""
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: None)
     stub = _resolving_bridge()
     saver, parked, release = _park_saves_during_serialization(stub, monkeypatch)
     _after_each_resolve(stub, _a_save_starts(saver, parked))
@@ -506,7 +506,7 @@ def test_a_removal_during_a_configure_leaves_apple_off_the_deleted_binary(monkey
     thread. Handed to the provider after the lock was released, that path
     landed after the removal's own configure and left Apple on a binary that
     no longer exists."""
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: None)
     stub = _resolving_bridge()
     installed = [True]
     stub._ffmpeg = SimpleNamespace(
@@ -561,7 +561,7 @@ def _build_snapshot_job_download(stub):
 def test_a_download_built_as_a_save_starts_sees_the_managed_path(build, on_path, monkeypatch):
     """Download construction and concurrent serialization preserve the
     managed binary for both shared and captured job settings."""
-    monkeypatch.setattr(shutil, "which", lambda name: on_path)
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: on_path)
     singleton = SettingsSingleton()
     data = CfgSettings()
     data.path_binary_ffmpeg = _MANAGED

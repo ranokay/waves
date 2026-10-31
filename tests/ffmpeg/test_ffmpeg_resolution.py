@@ -62,7 +62,7 @@ def _broken_then_working(tmp_path, monkeypatch):
     brew = tmp_path / "brew"
     good = _make(brew)
     _make(broken)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(broken), str(brew)))
     monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "n8.1" if path == good else "")
     return good
@@ -107,7 +107,7 @@ def test_a_slow_custom_binary_stays_the_selection(tmp_path, monkeypatch):
     different system binary: downloads keep the user's explicit choice."""
     custom = _make(tmp_path / "custom")
     good = _make(tmp_path / "brew")
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path / "brew"),))
 
     def run(argv, **kw):
@@ -128,7 +128,7 @@ def test_gui_readers_never_re_probe_a_slow_binary(tmp_path, monkeypatch):
     label, preview and the FLAC check all reuse the memoized result: the GUI
     thread never forks the binary again."""
     exe = _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     runs = []
 

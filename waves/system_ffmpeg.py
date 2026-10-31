@@ -57,12 +57,31 @@ def known_dirs() -> tuple[str, ...]:
     return _LINUX_DIRS
 
 
+def _path_candidates(name: str) -> list[str]:
+    """Every executable ``name`` on PATH, in PATH order.
+
+    ``shutil.which`` alone returns only the first, so a broken first copy would
+    hide a working one later on the user's PATH."""
+    path = os.environ.get("PATH", os.defpath)
+    candidates: list[str] = []
+    for folder in path.split(os.pathsep):
+        if not folder:
+            continue
+        candidate = shutil.which(name, path=folder)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    if not candidates:
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    return candidates
+
+
 def find_system_ffmpeg(name: str = "ffmpeg", works: Callable[[str], bool] | None = None) -> str:
     """Path to an FFmpeg on PATH or in a package manager's folder, else "".
     With ``works``, a candidate it rejects (a broken install left behind) is
     passed over for the next one."""
-    found = shutil.which(name)
-    candidates = [found] if found else []
+    candidates = _path_candidates(name)
     for folder in known_dirs():
         candidate = os.path.join(folder, name)
         if candidate not in candidates and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
@@ -148,7 +167,7 @@ def _version_token(out) -> str:
     """The version token in an ``-version`` answer, or "" for a nonzero exit."""
     if out.returncode != 0:
         return ""
-    first = (out.stdout or "").splitlines()[0] if out.stdout else ""
+    first = (out.stdout or "").split("\n", 1)[0]
     m = re.search(r"(?:ffmpeg|ffprobe) version (\S+)", first)
     return m.group(1) if m else first.strip()
 

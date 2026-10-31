@@ -51,7 +51,7 @@ def test_a_download_runs_the_ffmpeg_settings_shows(tmp_path, monkeypatch):
     brew = tmp_path / "brew"
     good = _make(brew)
     _make(broken)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(broken), str(brew)))
     monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "n8.1" if path == good else "")
 
@@ -69,7 +69,7 @@ def test_a_download_runs_the_ffmpeg_settings_shows(tmp_path, monkeypatch):
 
 def test_a_download_stays_off_a_broken_system_binary(tmp_path, monkeypatch):
     _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     monkeypatch.setattr(system_ffmpeg, "probe_version", lambda path: "")
 
@@ -92,7 +92,7 @@ def test_a_download_reader_sees_a_slow_binary_as_its_fallback_once(tmp_path, mon
     import subprocess
 
     exe = _make(tmp_path)
-    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name: None)
+    monkeypatch.setattr(system_ffmpeg.shutil, "which", lambda name, **_kw: None)
     monkeypatch.setattr(system_ffmpeg, "known_dirs", lambda: (str(tmp_path),))
     runs = []
 
