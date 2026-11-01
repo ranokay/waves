@@ -199,6 +199,9 @@ ApplicationWindow {
       if (!root.videoHoverPeek && root.peekNow)
         root.peekClose()
     }
+    function onQueueLedgerRowsChanged() {
+      root.queueLedgerRows = waves.wavesPref("queue_ledger_rows") || 12
+    }
   }
   property string artFxVariant: root.artHoverTilt ? "tilt" : "none"
   property real artFxTilt: 8
@@ -1543,12 +1546,13 @@ ApplicationWindow {
   // streamed live from the bridge while the album downloads.
   property var queueExpanded: ({})
   property var queueTracks: ({})
-  // How many ledger rows an expanded queue row builds, and how many the
-  // hover peek builds. Both are ceilings, not page sizes: the whole list is
-  // already in queueTracks and every row's live state keeps arriving, these
-  // only bound how many delegates exist. 500 covers any album and all but
-  // the largest playlists in full; the peek only ever shows its top sliver.
-  readonly property int queueLedgerMax: 500
+  // How many ledger rows an expanded queue row shows before its own list
+  // scrolls, and how many the hover peek builds. The visible-row count is a
+  // setting (Settings > Advanced) and is re-read when it changes; the peek
+  // only ever shows its top sliver. Neither is a ceiling on the tracks the
+  // row can reach: the whole list is in queueTracks and the ledger scrolls
+  // to any of it.
+  property int queueLedgerRows: waves.wavesPref("queue_ledger_rows") || 12
   readonly property int queueLedgerPeek: 3
   // Queue drawer width, dragged by the handle on its own edge, and remembered
   // across launches the way the window frame is (0 is the never-saved
