@@ -117,7 +117,9 @@ def share_url(from_name: str) -> str:
     It also drops anything after the share, because a from-name for a submount
     names both the share and the folder inside it. That folder is not lost:
     :func:`share_subpath` returns it, and :func:`plan_for` puts it back in
-    front of the path within the mount."""
+    front of the path within the mount. The share segment itself stays
+    percent-encoded, because mount_smbfs takes it that way; :func:`share_subpath`
+    decodes the folders below it for use as a path."""
     if not from_name.startswith("//"):
         return ""
     host_part, _, path = from_name[2:].partition("/")
@@ -181,9 +183,9 @@ def plan_for(path: str) -> tuple[str, str]:
     sub = subpath_within(path, point)
     if not url or sub is None:
         return ("", "")
-    above = share_subpath(from_name)
-    if above:
-        sub = os.path.join(above, sub) if sub else above
+    share_folder = share_subpath(from_name)
+    if share_folder:
+        sub = os.path.join(share_folder, sub) if sub else share_folder
     # The URL names a host and often a username, and it is about to be handed
     # to a subprocess whose argv an OSError or a timeout would carry into the
     # exception text. Registered here, at the one place it is derived, so a

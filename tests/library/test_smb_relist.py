@@ -92,6 +92,8 @@ def test_a_submount_is_relisted_below_its_own_folder(monkeypatch):
         "//nas/Media",
         os.path.join("My Music", "Jazz"),
     )
+    # The library can BE the submount point, with no path left below it.
+    assert smb_relist.plan_for("/Volumes/My Music") == ("//nas/Media", "My Music")
 
 
 def test_a_listing_that_repeats_a_name_is_refused():
