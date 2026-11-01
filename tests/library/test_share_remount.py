@@ -52,6 +52,19 @@ def test_origin_url_percent_encodes_share_segments():
     assert netmount.origin_url("smbfs", "//nas/My Music/sub dir") == "smb://nas/My%20Music/sub%20dir"
 
 
+def test_origin_url_does_not_encode_an_already_encoded_share_name():
+    # macOS stores the smbfs from-name already encoded. Encoding that again
+    # would name a share that does not exist, so the remount would always fail.
+    assert netmount.origin_url("smbfs", "//nas/My%20Music") == "smb://nas/My%20Music"
+    assert netmount.origin_url("smbfs", "//nas/My Music") == "smb://nas/My%20Music"
+
+
+def test_origin_url_keeps_an_encoded_delimiter_in_its_segment():
+    # Unquoting a segment and quoting it back must not turn "%2F" into a path
+    # separator. SMB names cannot hold "/", but the encoding is explicit.
+    assert netmount.origin_url("smbfs", "//nas/My%2FMusic") == "smb://nas/My%2FMusic"
+
+
 def test_origin_url_rejects_local_disks_and_junk():
     assert netmount.origin_url("apfs", "/dev/disk3s1") == ""
     assert netmount.origin_url("smbfs", "not-a-share") == ""
