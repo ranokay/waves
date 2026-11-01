@@ -115,7 +115,8 @@ def origin_url(fstype: str, from_name: str) -> str:
     network origin. "//user@nas/Media" (smbfs) becomes "smb://user@nas/Media",
     with each path segment percent-encoded (share names carry spaces). macOS
     already stores smbfs from-names encoded ("//nas/My%20Music"), so each
-    segment is decoded first and never encoded twice."""
+    segment is decoded first and never encoded twice. Re-quoting keeps every
+    decoded delimiter inside its own segment (an encoded "/" stays "%2F")."""
     if fstype not in NETWORK_FSTYPES or not from_name.startswith("//"):
         return ""
     scheme = {"smbfs": "smb", "cifs": "smb", "afpfs": "afp", "webdav": "http", "nfs": "nfs"}[fstype]
