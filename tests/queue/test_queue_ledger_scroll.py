@@ -266,13 +266,20 @@ def _run_scenario() -> int:
         bad.append("the ledger still carries an 'N more tracks' line instead of scrolling")
     if not wait_for(lambda: bool(lq("qLedgerScroll.visible")), "the ledger shows its scrollbar"):
         bad.append("an open ledger that scrolls shows no scrollbar")
-    elif float(lq("qLedgerScroll.x")) < float(lq("qLedger.width")):
-        bad.append("the ledger scrollbar sits over the rows instead of beside them")
-    elif (
-        float(lq("qLedgerScroll.x")) + float(lq("qLedgerScroll.width"))
-        > float(qd("queueList.itemAtIndex(0).width")) + 0.5
-    ):
-        bad.append("the ledger scrollbar overflows the row's right edge")
+    else:
+        # Both in qtrackClip coordinates, after the layout has settled: the
+        # bar's top must sit on the list's top (not over the divider/header),
+        # and its left edge just right of the list's right edge.
+        bar_y = float(lq("qLedgerScroll.mapToItem(qtrackClip, 0, 0).y"))
+        list_y = float(lq("qLedger.mapToItem(qtrackClip, 0, 0).y"))
+        bar_x = float(lq("qLedgerScroll.mapToItem(qtrackClip, 0, 0).x"))
+        list_right = float(lq("qLedger.mapToItem(qtrackClip, qLedger.width, 0).x"))
+        if abs(bar_y - list_y) > 0.5:
+            bad.append(f"the ledger scrollbar's top is at {bar_y}, want the list's top {list_y}")
+        if not 0.5 <= bar_x - list_right <= 2:
+            bad.append(f"the ledger scrollbar's left edge is at {bar_x}, want just right of the list ({list_right})")
+        if bar_x + float(lq("qLedgerScroll.width")) > float(qd("queueList.itemAtIndex(0).width")) + 0.5:
+            bad.append("the ledger scrollbar overflows the row's right edge")
 
     checkpoint("reachable")
     # Failed and unavailable tracks past the old ceiling are reachable, under

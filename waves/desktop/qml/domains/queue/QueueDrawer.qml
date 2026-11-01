@@ -1348,8 +1348,8 @@ Drawer {
                 objectName: "qLedgerScroll"
                 orientation: Qt.Vertical
                 policy: ScrollBar.AlwaysOn
-                x: qLedger.mapToItem(qtrackClip, qLedger.width + 1, 0).x
-                y: qLedger.mapToItem(qtrackClip, 0, 0).y
+                x: qtrackCol.x + qLedger.x + qLedger.width + 1
+                y: qtrackCol.y + qLedger.y
                 width: 7
                 height: qLedger.height
                 leftPadding: 3
