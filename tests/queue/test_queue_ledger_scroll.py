@@ -35,15 +35,16 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_MAIN
 from support.qml import (
     EXIT_NO_QT,
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    boot_main_qml,
+    checkpoint,
     run_scenario,
-    sandbox_qml_settings,
     scoped_q,
+    wait_until,
 )
 
 # Well past the old ceiling of 500, and not a round number, so an off-by-one
@@ -67,83 +68,50 @@ def test_every_track_of_a_huge_playlist_is_reachable():
     )
 
 
-def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
+def _run_scenario() -> int:  # (one straight scenario, seven checks)
     try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+        booted = boot_main_qml()
     except Exception as exc:  # pragma: no cover - environment guard
-        print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return EXIT_NO_QT
-
-    from support.offline import PARK_LOGIN_QML, patch_offline
-
-    patch_offline()
-    app = QGuiApplication.instance() or QGuiApplication([])
-    sandbox_qml_settings()
-    try:
-        from waves.desktop.app import _load_mono
-        from waves.desktop.backend import WavesBridge
-    except Exception as exc:  # pragma: no cover - environment guard
-        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return EXIT_NO_QT
-
-    engine = QQmlApplicationEngine()
-    bridge = WavesBridge(tidal=None)
-    engine.rootContext().setContextProperty("waves", bridge)
-    engine.rootContext().setContextProperty("monoFont", _load_mono())
-    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
-    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
-    roots = engine.rootObjects()
-    if not roots:
-        print("Main.qml failed to load", file=sys.stderr)
+        print(f"Main.qml did not boot: {exc}", file=sys.stderr)
         return EXIT_PRECONDITION
-    root = roots[0]
+    if booted == EXIT_NO_QT:
+        return EXIT_NO_QT
+    _, q, _, bridge = booted
 
-    def q(expr: str):
-        e = QQmlExpression(QQmlEngine.contextForObject(root), root, expr)
-        r = e.evaluate()
-        if e.hasError():
-            raise RuntimeError(e.error().toString())
-        return r[0] if isinstance(r, tuple) else r
+    from PySide6.QtQml import QQmlEngine, QQmlExpression
 
     # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
-
-    def settle(ms: int) -> None:
-        loop = QEventLoop()
-        QTimer.singleShot(ms, loop.quit)
-        loop.exec()
-
-    settle(120)
-    q(PARK_LOGIN_QML)
     q("queueDrawer.open()")
-    settle(120)
-    if not bool(q("queueDrawer.visible")):
-        print("the queue drawer would not open", file=sys.stderr)
-        return EXIT_PRECONDITION
+    bad: list[str] = []
 
-    def found(name: str) -> str:
-        """An expression naming the first drawer row's descendant `name`."""
-        return f"""(function (name) {{
-            var hit = null;
-            function walk(o) {{
-                if (!o || hit) return;
-                if (o.objectName === name) {{ hit = o; return; }}
-                var kids = o.children;
-                for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
-            }}
-            walk(queueList.itemAtIndex(0));
-            return hit;
-        }})('{name}')"""
+    def wait_for(predicate, message: str, timeout_ms: int = 4000) -> bool:
+        try:
+            wait_until(predicate, timeout_ms=timeout_ms, message=message)
+        except AssertionError:
+            bad.append(message)
+            return False
+        return True
+
+    def walk(obj):
+        yield obj
+        for child in obj.children():
+            yield from walk(child)
+
+    def find(obj, name: str):
+        if obj is None:
+            return None
+        for node in walk(obj):
+            if node.property("objectName") == name:
+                return node
+        return None
+
+    def row():
+        return qd("queueList.itemAtIndex(0)")
 
     def ledger():
-        """The expanded row's ledger list, found inside the row delegate."""
-        obj = qd(found("qLedgerList"))
-        if obj is None:
-            raise RuntimeError("the expanded row has no ledger list")
-        return obj
+        return find(row(), "qLedgerList")
 
     def lq(expr: str):
         """Evaluate an expression in the ledger's own component scope.
@@ -153,6 +121,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
         object itself is what reaches it.
         """
         obj = ledger()
+        if obj is None:
+            raise RuntimeError("the expanded row has no ledger list")
         e = QQmlExpression(QQmlEngine.contextForObject(obj), obj, expr)
         r = e.evaluate()
         if e.hasError():
@@ -161,6 +131,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
 
     def built_titles() -> list[str]:
         """The ledger rows that actually EXIST (the cost), by title."""
+        if ledger() is None:
+            return []
         out = lq(
             """(function () {
                 var out = [];
@@ -170,7 +142,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
                     var kids = o.children;
                     for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
                 }
-                walk(qLedger);
+                walk(qLedger.contentItem);
                 return out.join('|');
             })()"""
         )
@@ -178,21 +150,24 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
 
     def item_prop(index: int, name: str, prop: str) -> str:
         """A named descendant's property on the ledger delegate at `index`."""
-        return str(
+        hit = find(lq(f"qLedger.itemAtIndex({index})"), name)
+        return "" if hit is None else str(hit.property(prop))
+
+    def has_more_line() -> bool:
+        """Whether the old capped-ledger remainder line is still present."""
+        return bool(
             lq(
-                f"""(function () {{
-                var it = qLedger.itemAtIndex({index});
-                if (!it) return '';
-                var hit = null;
-                function walk(o) {{
-                    if (!o || hit) return;
-                    if (o.objectName === '{name}') {{ hit = o; return; }}
-                    var kids = o.children;
-                    for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
-                }}
-                walk(it);
-                return hit ? '' + hit.{prop} : '';
-            }})()"""
+                """(function () {
+                    var hit = false;
+                    function walk(o) {
+                        if (!o || hit) return;
+                        if (o.objectName === 'qTrackMore') { hit = true; return; }
+                        var kids = o.children;
+                        for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
+                    }
+                    walk(qtrackClip);
+                    return hit;
+                })()"""
             )
         )
 
@@ -202,21 +177,30 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
     def seed(count: int, kind: str, name: str, states: dict[int, str] | None = None) -> int:
         qid = bridge._enqueue(name, kind, media_id=f"c-{name}", collection=True, tracks=count)
         bridge.queueChanged.emit(list(bridge._queue))
-        settle(150)
+        wait_for(lambda: row() is not None, "the drawer lists the seeded job")
         for num, status in (states or {}).items():
             bridge._track_lifecycle(
                 qid,
                 {"id": str(num - 1), "num": num, "title": f"track {num}", "status": status},
             )
-        settle(60)
         bridge._merge_queue_tracks(
             qid,
             [{"id": str(i), "num": i + 1, "title": f"track {i + 1}", "duration": "3:00"} for i in range(count)],
         )
-        settle(150)
+        wait_for(
+            lambda: bool(
+                qd(
+                    f"(function(){{ var it = queueList.itemAtIndex(0); return it !== null && it.ledgerLen === {count} }})()"
+                )
+            ),
+            f"the row holds all {count} tracks",
+        )
         return qid
 
-    bad: list[str] = []
+    if not wait_for(lambda: bool(q("queueDrawer.visible")), "the queue drawer opens"):
+        print("the queue drawer would not open", file=sys.stderr)
+        return EXIT_PRECONDITION
+    checkpoint("collapsed")
     peek = int(q("root.queueLedgerPeek"))
     if not 0 < peek <= 5:
         bad.append(f"the hover peek ceiling is {peek}; it must stay small, the sliver shows about one row")
@@ -224,22 +208,40 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
     # A collection far past the old ceiling. Collapsed and unhovered first:
     # the cost of a row nobody opened must be zero, whatever its size.
     qid = seed(BIG, "playlist", "Enormous Mixtape", MISSING)
-    if not bool(qd("queueList.itemAtIndex(0) !== null")):
-        print("no drawer row", file=sys.stderr)
-        return EXIT_PRECONDITION
     built = len(built_titles())
     if built != 0:
         bad.append(f"a collapsed {BIG}-track row already built {built} ledger rows, want 0")
 
+    checkpoint("expanded")
     q(f"root.queueExpanded = ({{ {qid}: true }})")
-    settle(600)
-    if qd(found("qLedgerList")) is None:
-        print("the expanded row has no scrolling ledger list", file=sys.stderr)
+    if ledger() is None:
+        titles = [
+            t
+            for t in str(
+                qd(
+                    """(function () {
+                        var out = [];
+                        function walk(o) {
+                            if (!o) return;
+                            if (o.objectName === 'qTrackTitle') out.push('' + o.text);
+                            var kids = o.children;
+                            for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
+                        }
+                        walk(queueList.itemAtIndex(0));
+                        return out.join('|');
+                    })()"""
+                )
+            ).split("|")
+            if t
+        ]
+        print(
+            f"the expanded row has no scrolling ledger list; it built {len(titles)} of {BIG} tracks "
+            f"(track {BIG} present: {'track ' + str(BIG) in titles})",
+            file=sys.stderr,
+        )
         return EXIT_REGRESSED
-    count = int(lq("qLedger.count"))
-    if count != BIG:
-        bad.append(f"the ledger lists {count} tracks, want all {BIG}")
-    built = len(built_titles())
+    if not wait_for(lambda: int(lq("qLedger.count")) == BIG, "the ledger lists every track"):
+        bad.append(f"the ledger lists {lq('qLedger.count')} tracks, want all {BIG}")
     # The open box is the setting's rows; the ListView only builds its window
     # plus the cache buffer, so the delegate count follows the window, never
     # the job. Derive the bound from the QML's own numbers so it cannot drift.
@@ -253,55 +255,62 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
 
     if rows <= 0:
         bad.append("the ledger has no visible-row setting to bound its window")
-    elif not rows <= built <= window_bound(rows):
-        bad.append(
-            f"an expanded {BIG}-track row built {built} ledger rows, want the {rows}-row window plus its cache (at most {window_bound(rows)})"
-        )
+    elif not wait_for(
+        lambda: rows <= len(built_titles()) <= window_bound(rows),
+        f"the open ledger builds only its {rows}-row window plus cache",
+    ):
+        built = len(built_titles())
+        bad.append(f"an expanded {BIG}-track row built {built} ledger rows, want at most {window_bound(rows)}")
     if not bool(lq("qLedger.interactive")):
         bad.append("a ledger longer than its box does not scroll")
-    box = float(lq("qLedger.height"))
-    want_box = rows * pitch - gap
-    if rows > 0 and abs(box - want_box) > 0.5:
-        bad.append(f"the open ledger is {box}px tall, want its {want_box}px box")
-    if bool(qd(f"{found('qTrackMore')} !== null")):
+    if rows > 0:
+        want_box = rows * pitch - gap
+        if not wait_for(
+            lambda: abs(float(lq("qLedger.height")) - want_box) < 0.5,
+            f"the open ledger takes its {want_box}px box",
+        ):
+            bad.append(f"the open ledger is {lq('qLedger.height')}px tall, want its {want_box}px box")
+    if has_more_line():
         bad.append("the ledger still carries an 'N more tracks' line instead of scrolling")
-    bar = found("qLedgerScroll")
-    if not bool(qd(f"{bar} !== null && {bar}.visible")):
+    if not wait_for(lambda: bool(lq("qLedgerScroll.visible")), "the ledger shows its scrollbar"):
         bad.append("an open ledger that scrolls shows no scrollbar")
-    elif float(qd(f"{bar}.x")) < float(lq("qLedger.width")):
+    elif float(lq("qLedgerScroll.x")) < float(lq("qLedger.width")):
         bad.append("the ledger scrollbar sits over the rows instead of beside them")
 
+    checkpoint("reachable")
     # Failed and unavailable tracks past the old ceiling are reachable, under
     # their own outcomes.
     lq("qLedger.positionViewAtIndex(4, ListView.Beginning)")
-    settle(300)
-    if item_prop(4, "qTrackTitle", "text") != "track 5":
+    if not wait_for(lambda: item_prop(4, "qTrackTitle", "text") == "track 5", "track 5 is reachable"):
         bad.append(f"track 5 is not reachable (row shows {item_prop(4, 'qTrackTitle', 'text')!r})")
     if item_prop(4, "qTrackWord", "target") != "UNAVAILABLE":
         bad.append(f"track 5 reads {item_prop(4, 'qTrackWord', 'target')!r}, want UNAVAILABLE")
     lq("qLedger.positionViewAtIndex(1099, ListView.Beginning)")
-    settle(300)
-    if item_prop(1099, "qTrackTitle", "text") != "track 1100":
+    if not wait_for(lambda: item_prop(1099, "qTrackTitle", "text") == "track 1100", "track 1100 is reachable"):
         bad.append(f"track 1100 is not reachable (row shows {item_prop(1099, 'qTrackTitle', 'text')!r})")
     if item_prop(1099, "qTrackWord", "target") != "FAILED":
         bad.append(f"track 1100 reads {item_prop(1099, 'qTrackWord', 'target')!r}, want FAILED")
 
+    checkpoint("live tick")
     # A live tick: Main.qml replaces the per-qid array with a fresh same-length
     # one and changes one track. Built delegates must survive, the reader must
     # not move, and the changed track must repaint in place.
     lq(f"qLedger.positionViewAtIndex({PARK_AT}, ListView.Beginning)")
-    settle(300)
+    if not wait_for(lambda: lq(f"qLedger.itemAtIndex({PARK_AT})") is not None, "the parked row is built"):
+        bad.append(f"the ledger built no delegate at {PARK_AT} to watch across a tick")
     y0 = float(lq("qLedger.contentY"))
     top0 = first_visible()
     held = lq(f"qLedger.itemAtIndex({PARK_AT})")
     held_next = lq(f"qLedger.itemAtIndex({PARK_AT + 1})")
-    if held is None or held_next is None:
-        bad.append(f"the ledger built no delegate at {PARK_AT} to watch across a tick")
     bridge._track_lifecycle(
         qid,
         {"id": str(PARK_AT), "num": PARK_AT + 1, "title": f"track {PARK_AT + 1}", "status": "failed"},
     )
-    settle(400)
+    if not wait_for(
+        lambda: item_prop(PARK_AT, "qTrackWord", "text") == "FAILED",
+        "the changed track repaints in place",
+    ):
+        bad.append(f"the changed track still reads {item_prop(PARK_AT, 'qTrackWord', 'text')!r}, want FAILED")
     if lq(f"qLedger.itemAtIndex({PARK_AT})") is not held:
         bad.append("a live tick recreated the delegate at the reader's position")
     if lq(f"qLedger.itemAtIndex({PARK_AT + 1})") is not held_next:
@@ -313,15 +322,13 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
         bad.append(f"a live tick changed the first visible row from {top0} to {first_visible()}")
     if item_prop(PARK_AT, "qTrackWord", "target") != "FAILED":
         bad.append("a live tick did not repaint the changed track in place")
-    if item_prop(PARK_AT, "qTrackWord", "text") != "FAILED":
-        bad.append(f"the changed track still reads {item_prop(PARK_AT, 'qTrackWord', 'text')!r}, want FAILED")
 
+    checkpoint("growth")
     # A track arriving live grows the list by one slot without moving the
     # reader, and the new tail is reachable.
     bridge._track_lifecycle(qid, {"id": "late", "title": "late arrival", "status": "queued"})
-    settle(400)
-    if int(lq("qLedger.count")) != BIG + 1:
-        bad.append(f"a track arriving live left the ledger at {qd('qLedger.count')} rows, want {BIG + 1}")
+    if not wait_for(lambda: int(lq("qLedger.count")) == BIG + 1, "the live track joins the ledger"):
+        bad.append(f"a track arriving live left the ledger at {lq('qLedger.count')} rows, want {BIG + 1}")
     if abs(float(lq("qLedger.contentY")) - y0) > 1:
         bad.append("a track arriving live moved the scrolled ledger")
     if first_visible() != top0:
@@ -329,47 +336,53 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six checks)
     if lq(f"qLedger.itemAtIndex({PARK_AT})") is not held:
         bad.append("a track arriving live recreated the delegate at the reader's position")
     lq("qLedger.positionViewAtEnd()")
-    settle(400)
-    if item_prop(BIG, "qTrackTitle", "text") != "late arrival":
+    if not wait_for(lambda: item_prop(BIG, "qTrackTitle", "text") == "late arrival", "the live tail is reachable"):
         bad.append(f"the live tail is not reachable (last row shows {item_prop(BIG, 'qTrackTitle', 'text')!r})")
-    built = len(built_titles())
-    if rows > 0 and not rows <= built <= window_bound(rows):
-        bad.append(f"at its end the ledger built {built} rows, want at most {window_bound(rows)}")
+    if rows > 0 and not wait_for(
+        lambda: rows <= len(built_titles()) <= window_bound(rows),
+        "the ledger's end builds only its window plus cache",
+    ):
+        bad.append(f"at its end the ledger built {len(built_titles())} rows, want at most {window_bound(rows)}")
 
+    checkpoint("pref")
     # The box's size is a setting, and an open row follows it live.
     bridge.setWavesPref("queue_ledger_rows", 6)
-    settle(400)
-    live_rows = int(q("root.queueLedgerRows === undefined ? 0 : root.queueLedgerRows"))
-    if live_rows != 6:
-        bad.append(f"set to 6 rows, Main.qml reads queueLedgerRows {live_rows}")
-    box = float(lq("qLedger.height"))
-    if abs(box - (6 * pitch - gap)) > 0.5:
-        bad.append(f"set to 6 rows, the open ledger is {box}px tall, want {6 * pitch - gap}px")
-    built = len(built_titles())
-    if not 6 <= built <= window_bound(6):
-        bad.append(f"set to 6 rows, the ledger built {built} rows, want at most {window_bound(6)}")
+    if not wait_for(lambda: int(q("root.queueLedgerRows")) == 6, "Main.qml re-reads the row count"):
+        bad.append(f"set to 6 rows, Main.qml reads queueLedgerRows {q('root.queueLedgerRows')}")
+    want_box = 6 * pitch - gap
+    if not wait_for(
+        lambda: abs(float(lq("qLedger.height")) - want_box) < 0.5,
+        f"the ledger follows the setting to {want_box}px",
+    ):
+        bad.append(f"set to 6 rows, the open ledger is {lq('qLedger.height')}px tall, want {want_box}px")
+    if not wait_for(
+        lambda: 6 <= len(built_titles()) <= window_bound(6),
+        "six rows build only their window plus cache",
+    ):
+        bad.append(f"set to 6 rows, the ledger built {len(built_titles())} rows, want at most {window_bound(6)}")
     bridge.setWavesPref("queue_ledger_rows", 12)
-    settle(300)
+    wait_for(lambda: int(q("root.queueLedgerRows")) == 12, "Main.qml re-reads the restored row count")
 
+    checkpoint("album")
     # An ordinary album is untouched: every track, and no scroll.
     q("root.queueExpanded = ({})")
-    settle(200)
     bridge._queue.clear()
     bridge._queue_index.clear()
     bridge.queueChanged.emit([])
-    settle(150)
     qid = seed(SMALL, "album", "Ordinary Record")
     q(f"root.queueExpanded = ({{ {qid}: true }})")
-    settle(600)
-    built = len(built_titles())
-    if built != SMALL:
-        bad.append(f"an expanded {SMALL}-track album built {built} ledger rows, want all {SMALL}")
+    if not wait_for(lambda: len(built_titles()) == SMALL, "the album lists every track"):
+        bad.append(f"an expanded {SMALL}-track album built {len(built_titles())} ledger rows, want all {SMALL}")
     if bool(lq("qLedger.interactive")):
         bad.append("an album that fits still scrolls")
-    box = float(lq("qLedger.height"))
-    if abs(box - (SMALL * pitch - gap)) > 0.5:
-        bad.append(f"an album that fits is {box}px tall, want all {SMALL} rows ({SMALL * pitch - gap}px)")
-    if bool(qd(f"{found('qTrackMore')} !== null")):
+    if not wait_for(
+        lambda: abs(float(lq("qLedger.height")) - (SMALL * pitch - gap)) < 0.5,
+        "the album's ledger fits its rows",
+    ):
+        bad.append(
+            f"an album that fits is {lq('qLedger.height')}px tall, want all {SMALL} rows ({SMALL * pitch - gap}px)"
+        )
+    if has_more_line():
         bad.append("an album that fits still carries an 'N more tracks' line")
 
     if bad:

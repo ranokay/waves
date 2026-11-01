@@ -1037,8 +1037,14 @@ Drawer {
                   spacing: 3
                   // Two rows either side of the window: enough to cover a
                   // wheel step without paying for rows nobody can see.
-                  cacheBuffer: rowH * 2
+                  cacheBuffer: 2 * pitch
                   boundsBehavior: Flickable.StopAtBounds
+                  // The row carries state-transition Behaviors and decrypt
+                  // replays. A reused delegate would animate the track it
+                  // used to show into the one it shows now, so a newly visible
+                  // row gets a fresh delegate instead. The window and cache
+                  // still bound how many exist.
+                  reuseItems: false
                   ScrollBar.vertical: qLedgerScroll
                   // Open and longer than its box, it takes its own presses: a
                   // click or a drag on the list never folds the card (the
@@ -1342,8 +1348,8 @@ Drawer {
                 objectName: "qLedgerScroll"
                 orientation: Qt.Vertical
                 policy: ScrollBar.AlwaysOn
-                x: qtrackCol.x + qLedger.x + qLedger.width + 1
-                y: qtrackCol.y + qLedger.y
+                x: qLedger.mapToItem(qtrackClip, qLedger.width + 1, 0).x
+                y: qLedger.mapToItem(qtrackClip, 0, 0).y
                 width: 7
                 height: qLedger.height
                 leftPadding: 3
