@@ -72,6 +72,9 @@ def test_wiring_the_ledger_model_is_a_slot_store_not_the_array():
         "syncRows no longer grows/shrinks the slot store by the difference"
     )
     assert "ledgerRows.clear(" not in src, "the ledger clears its slots instead of removing only the tail"
+    assert re.search(r"onWantRowsChanged:\s*Qt\.callLater\(syncRows\)", src), (
+        "the slot store is not synced when the slot count changes"
+    )
 
 
 def test_wiring_every_count_taken_from_queue_tracks_uses_length():

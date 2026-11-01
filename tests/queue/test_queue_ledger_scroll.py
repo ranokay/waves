@@ -68,7 +68,7 @@ def test_every_track_of_a_huge_playlist_is_reachable():
     )
 
 
-def _run_scenario() -> int:  # (one straight scenario, seven checks)
+def _run_scenario() -> int:
     try:
         booted = boot_main_qml()
     except Exception as exc:  # pragma: no cover - environment guard
@@ -86,9 +86,11 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
     q("queueDrawer.open()")
     bad: list[str] = []
 
-    def wait_for(predicate, message: str, timeout_ms: int = 4000) -> bool:
+    def wait_for(predicate, message: str) -> bool:
+        # 4s: the card's height Behavior runs 280ms and a live tick's decrypt
+        # runs about 200ms; a loaded machine can stretch either.
         try:
-            wait_until(predicate, timeout_ms=timeout_ms, message=message)
+            wait_until(predicate, timeout_ms=4000, message=message)
         except AssertionError:
             bad.append(message)
             return False
@@ -129,24 +131,44 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    def built_titles() -> list[str]:
-        """The ledger rows that actually EXIST (the cost), by title."""
-        if ledger() is None:
-            return []
-        out = lq(
-            """(function () {
+    def titles_under(root_expr: str) -> list[str]:
+        """The qTrackTitle texts under a QML object expression, by title."""
+        out = qd(
+            f"""(function () {{
                 var out = [];
-                function walk(o) {
+                function walk(o) {{
                     if (!o) return;
                     if (o.objectName === 'qTrackTitle') out.push('' + o.text);
                     var kids = o.children;
                     for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
-                }
-                walk(qLedger.contentItem);
+                }}
+                walk({root_expr});
                 return out.join('|');
-            })()"""
+            }})()"""
         )
         return [t for t in str(out or "").split("|") if t]
+
+    def js_has(root_expr: str, name: str) -> bool:
+        """Whether a named object exists under a QML object expression."""
+        return bool(
+            qd(
+                f"""(function () {{
+                    var hit = false;
+                    function walk(o) {{
+                        if (!o || hit) return;
+                        if (o.objectName === '{name}') {{ hit = true; return; }}
+                        var kids = o.children;
+                        for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
+                    }}
+                    walk({root_expr});
+                    return hit;
+                }})()"""
+            )
+        )
+
+    def built_titles() -> list[str]:
+        """The ledger rows that actually EXIST (the cost), by title."""
+        return titles_under("queueList.itemAtIndex(0)")
 
     def item_prop(index: int, name: str, prop: str) -> str:
         """A named descendant's property on the ledger delegate at `index`."""
@@ -155,21 +177,7 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
 
     def has_more_line() -> bool:
         """Whether the old capped-ledger remainder line is still present."""
-        return bool(
-            lq(
-                """(function () {
-                    var hit = false;
-                    function walk(o) {
-                        if (!o || hit) return;
-                        if (o.objectName === 'qTrackMore') { hit = true; return; }
-                        var kids = o.children;
-                        for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
-                    }
-                    walk(qtrackClip);
-                    return hit;
-                })()"""
-            )
-        )
+        return js_has("queueList.itemAtIndex(0)", "qTrackMore")
 
     def first_visible() -> int:
         return int(lq("qLedger.indexAt(10, qLedger.contentY + 5)"))
@@ -197,7 +205,9 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
         )
         return qid
 
-    if not wait_for(lambda: bool(q("queueDrawer.visible")), "the queue drawer opens"):
+    try:
+        wait_until(lambda: bool(q("queueDrawer.visible")), message="the queue drawer opens")
+    except AssertionError:
         print("the queue drawer would not open", file=sys.stderr)
         return EXIT_PRECONDITION
     checkpoint("collapsed")
@@ -215,25 +225,7 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
     checkpoint("expanded")
     q(f"root.queueExpanded = ({{ {qid}: true }})")
     if ledger() is None:
-        titles = [
-            t
-            for t in str(
-                qd(
-                    """(function () {
-                        var out = [];
-                        function walk(o) {
-                            if (!o) return;
-                            if (o.objectName === 'qTrackTitle') out.push('' + o.text);
-                            var kids = o.children;
-                            for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
-                        }
-                        walk(queueList.itemAtIndex(0));
-                        return out.join('|');
-                    })()"""
-                )
-            ).split("|")
-            if t
-        ]
+        titles = built_titles()
         print(
             f"the expanded row has no scrolling ledger list; it built {len(titles)} of {BIG} tracks "
             f"(track {BIG} present: {'track ' + str(BIG) in titles})",
@@ -276,6 +268,11 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
         bad.append("an open ledger that scrolls shows no scrollbar")
     elif float(lq("qLedgerScroll.x")) < float(lq("qLedger.width")):
         bad.append("the ledger scrollbar sits over the rows instead of beside them")
+    elif (
+        float(lq("qLedgerScroll.x")) + float(lq("qLedgerScroll.width"))
+        > float(qd("queueList.itemAtIndex(0).width")) + 0.5
+    ):
+        bad.append("the ledger scrollbar overflows the row's right edge")
 
     checkpoint("reachable")
     # Failed and unavailable tracks past the old ceiling are reachable, under
@@ -362,6 +359,21 @@ def _run_scenario() -> int:  # (one straight scenario, seven checks)
         bad.append(f"set to 6 rows, the ledger built {len(built_titles())} rows, want at most {window_bound(6)}")
     bridge.setWavesPref("queue_ledger_rows", 12)
     wait_for(lambda: int(q("root.queueLedgerRows")) == 12, "Main.qml re-reads the restored row count")
+
+    checkpoint("fold")
+    # Folding drops the model back to the peek's slots and then none, and
+    # reopening lists every track again from the top: the remove half of the
+    # incremental sync, which a live tick never exercises.
+    q("root.queueExpanded = ({})")
+    if not wait_for(lambda: int(lq("qLedger.count")) == 0, "a folded ledger drops its slots"):
+        bad.append(f"a folded ledger still holds {lq('qLedger.count')} slots, want none")
+    if not wait_for(lambda: float(lq("qtrackClip.implicitHeight")) < 0.5, "a folded ledger closes its box"):
+        bad.append(f"a folded ledger's box is still {lq('qtrackClip.implicitHeight')}px tall")
+    q(f"root.queueExpanded = ({{ {qid}: true }})")
+    if not wait_for(lambda: int(lq("qLedger.count")) == BIG + 1, "a reopened ledger lists every track"):
+        bad.append(f"a reopened ledger holds {lq('qLedger.count')} slots, want {BIG + 1}")
+    if first_visible() != 0:
+        bad.append(f"a reopened ledger starts at row {first_visible()}, want its first track")
 
     checkpoint("album")
     # An ordinary album is untouched: every track, and no scroll.
