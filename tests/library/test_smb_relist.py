@@ -83,6 +83,17 @@ def test_a_folder_is_placed_relative_to_its_mount_point():
     assert smb_relist.subpath_within("", "/Volumes/Media") is None
 
 
+def test_a_submount_is_relisted_below_its_own_folder(monkeypatch):
+    # A submount's from-name names the folder inside the share. The fresh mount
+    # is of the share root, so that folder has to go back in front of the
+    # subpath or the listing lands one level too high.
+    _on_smb(monkeypatch, "/Volumes/My Music", url="//nas/Media/My%20Music")
+    assert smb_relist.plan_for("/Volumes/My Music/Jazz") == (
+        "//nas/Media",
+        os.path.join("My Music", "Jazz"),
+    )
+
+
 def test_a_listing_that_repeats_a_name_is_refused():
     assert smb_relist.trusted_names(["A", "B", "C"]) == ["A", "B", "C"]
     # The shape the broken mount hands over: one page, over and over.

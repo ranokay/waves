@@ -52,6 +52,7 @@ import os
 import subprocess
 import sys
 import unicodedata
+import urllib.parse
 from collections.abc import Callable, Iterable
 
 from waves import redaction
@@ -108,11 +109,15 @@ def share_url(from_name: str) -> str:
 
     A from-name is already in mount_smbfs's syntax, so this mostly validates:
     it insists on a host and a share, keeps any user (which is how the right
-    saved credential is found when one server holds several accounts), drops
-    anything after the share (a from-name for a submount), and drops a
-    password outright. A password should never appear in a from-name, and if
-    one ever did, putting it on a command line would publish it to every
-    process table on the machine."""
+    saved credential is found when one server holds several accounts), and
+    drops a password outright. A password should never appear in a from-name,
+    and if one ever did, putting it on a command line would publish it to every
+    process table on the machine.
+
+    It also drops anything after the share, because a from-name for a submount
+    names both the share and the folder inside it. That folder is not lost:
+    :func:`share_subpath` returns it, and :func:`plan_for` puts it back in
+    front of the path within the mount."""
     if not from_name.startswith("//"):
         return ""
     host_part, _, path = from_name[2:].partition("/")
@@ -127,6 +132,18 @@ def share_url(from_name: str) -> str:
             return ""
         host_part = f"{creds}@{host}" if creds else host
     return f"//{host_part}/{share}"
+
+
+def share_subpath(from_name: str) -> str:
+    """The folders below the share a from-name names, decoded ("" for a mount
+    of the share itself). A submount ("//nas/Media/Music") mounts at "Music",
+    and :func:`share_url` drops that part, so a fresh mount of the share needs
+    it put back in front of the subpath."""
+    if not from_name.startswith("//"):
+        return ""
+    _host, _, path = from_name[2:].partition("/")
+    segs = [s for s in path.strip("/").split("/") if s][1:]
+    return os.sep.join(urllib.parse.unquote(s) for s in segs)
 
 
 def subpath_within(path: str, mount_point: str) -> str | None:
@@ -147,6 +164,11 @@ def subpath_within(path: str, mount_point: str) -> str | None:
 def plan_for(path: str) -> tuple[str, str]:
     """(share_url, subpath) for a folder living on an SMB mount, or ("", "").
 
+    The subpath is relative to the share root, not the mount point: a submount
+    ("//nas/Media/My%20Music" mounted at "/Volumes/My Music") is relisted
+    below "My Music" inside a fresh mount of "//nas/Media", so the listing
+    reads the folder the library actually lives in.
+
     Empty for every path this workaround does not apply to: off macOS, on a
     local disk, on a network filesystem that is not SMB, or on a mount whose
     origin statfs will not name."""
@@ -159,6 +181,9 @@ def plan_for(path: str) -> tuple[str, str]:
     sub = subpath_within(path, point)
     if not url or sub is None:
         return ("", "")
+    above = share_subpath(from_name)
+    if above:
+        sub = os.path.join(above, sub) if sub else above
     # The URL names a host and often a username, and it is about to be handed
     # to a subprocess whose argv an OSError or a timeout would carry into the
     # exception text. Registered here, at the one place it is derived, so a
