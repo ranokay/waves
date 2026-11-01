@@ -34,8 +34,8 @@ dependencies = [
   # Direct import in waves/providers/apple/gamdl_logs.py, which configures the
   # structlog gamdl logs through; floored at gamdl's own requirement.
   "structlog>=26.1.0",
-  "pycryptodome>=3.24.0,<4",
-  "certifi>=2026.7.22",
+  "pycryptodome>=4.1.0,<5",
+  "certifi>=2026.10.19",
   "urllib3>=2.8.0,<3",
 ]
 
@@ -65,7 +65,7 @@ dev = [
   # Same parser as the migrated YAML hook, including duplicate-key rejection.
   "ruamel-yaml==0.19.1",
   # Hooks and CI lint with this one version. Dependabot may bump it.
-  "ruff==0.17.0",
+  "ruff==0.17.2",
   "pyupgrade>=3.22.0,<4",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md). 4.x is AGPL-3.0-only, a
@@ -75,11 +75,11 @@ dev = [
   # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
   # Dependabot may bump it like any other dev tool, and a bump re-baselines
   # the rule exceptions below.
-  "ty==0.0.86",
+  "ty==0.0.91",
 ]
 
 [build-system]
-requires = ["uv_build>=0.13.0,<0.14"]
+requires = ["uv_build>=0.13.5,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
