@@ -36,6 +36,12 @@ from waves.providers import Provider, StatusKind
 
 logger = logging.getLogger("waves.settings")
 
+# How many track rows an open queue row shows before its list stops growing
+# and scrolls inside its own box (Settings > Advanced), and the range the
+# setting offers. The bridge clamps stored values to the same range.
+QUEUE_LEDGER_ROWS_DEFAULT = 12
+QUEUE_LEDGER_ROWS_BOUNDS = (4, 40)
+
 # Type registries, which coercion each settings key needs. settingsSchema()
 # arranges these into task-based sections for the page; the lists below only
 # decide how a value is read from / written back to the config.
@@ -783,6 +789,18 @@ class SettingsSchema:
                     "value": self.preference_bool("video_hover_peek"),
                 },
                 {
+                    "key": "queue_ledger_rows",
+                    "label": "Tracks shown in an open queue row",
+                    "help": (
+                        "How many tracks an open row in the download queue shows before it stops "
+                        "growing. A longer album or playlist scrolls inside that box."
+                    ),
+                    "type": "int",
+                    "value": preference_int("queue_ledger_rows", QUEUE_LEDGER_ROWS_DEFAULT),
+                    "minimum": QUEUE_LEDGER_ROWS_BOUNDS[0],
+                    "maximum": QUEUE_LEDGER_ROWS_BOUNDS[1],
+                },
+                {
                     "key": "notify_completion_toasts",
                     "label": "Completion toasts",
                     "help": (
@@ -1304,6 +1322,7 @@ class SettingsSchema:
                     "hover_control_motion",
                     "art_hover_tilt",
                     "video_hover_peek",
+                    "queue_ledger_rows",
                     "downsample_target",
                     "downloads_simultaneous_per_track_max",
                     "download_delay",

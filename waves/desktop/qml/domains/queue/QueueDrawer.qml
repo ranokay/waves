@@ -15,7 +15,7 @@ import "../downloads"
 //   host.height / host.width      the window bounds it spans
 //   host.queueWidth               the remembered width (the grip writes it)
 //   host.activeQueueCount / host.queueTracks / host.queueExpanded /
-//     host.completedCollapsed / host.queueLedgerMax / host.queueLedgerPeek
+//     host.completedCollapsed / host.queueLedgerRows / host.queueLedgerPeek
 //     the queue state the rows render
 //   host.pulseSection / host.pulseTick / host.ledPulse / host.shimmerPhase /
 //     host.queueEdgeHeld  the shared section-pulse and light clocks
@@ -52,6 +52,14 @@ Drawer {
   readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
+  // One mono digit at the ledger's number size, so the number column fits a
+  // four-digit playlist position instead of a fixed two-digit width.
+  TextMetrics {
+    id: ledgerDigit
+    font.family: mono
+    font.pixelSize: 10
+    text: "0"
+  }
   // 420, not the 340 it shipped at: the quality a row states is the
   // element that costs the title its width, and at 340 either the tier
   // or the title had to give way. It is the floor now rather than the
@@ -453,19 +461,14 @@ Drawer {
         // no track fetch, because there is nothing to open.
         readonly property bool peekable: expandable || single
         readonly property bool peeking: peekable && !qexp && cardHover.containsMouse
-        // How many track rows the ledger holds, and how many of
-        // them are actually built. A ledger row is not cheap (four
-        // texts, two DecryptText cells, three running Behaviors),
-        // and the Repeater below is not virtualised, so the count
-        // is the cost. An album is 10 to 30 rows, which is what
-        // this was written for; a playlist is routinely hundreds
-        // and can be thousands, and the peek is reached by the
-        // pointer merely crossing the row, so an unbounded count
-        // would spend a quarter of a second of the GUI thread on a
-        // gesture nobody made on purpose. The peek builds only
-        // what its 30px sliver can show; the expansion, which the
-        // user did ask for, builds up to host.queueLedgerMax and
-        // says how many rows it is not showing.
+        // How many track rows the ledger holds, how many slots its model
+        // carries, and how many fit in the open box. A ledger row is not
+        // cheap (four texts, two DecryptText cells, three running Behaviors),
+        // so the list below builds only the rows its window and cache can
+        // show: the peek's 30px sliver holds a few, the expansion holds the
+        // setting's rows and scrolls to every track. The model keeps the full
+        // list so the tail is reachable; it is a store of empty slots (not
+        // the track array) so a live tick does not rebuild the delegates.
         readonly property int ledgerLen: (host.queueTracks[model.qid] || []).length
         // While the sliver is still CLOSING it keeps what it was
         // showing. Bound to the hover alone, the ledger emptied on
@@ -477,7 +480,12 @@ Drawer {
         // sliver, whose whole content is one line of text, was the
         // clearest case of all.
         readonly property bool ledgerHolding: qexp || peeking || qtrackAnim.running
-        readonly property int ledgerShown: qexp ? Math.min(ledgerLen, host.queueLedgerMax) : ledgerHolding ? Math.min(ledgerLen, host.queueLedgerPeek) : 0
+        // The model's slots: every track when open, the peek's few while the
+        // pointer holds the row, none for a row nobody opened.
+        readonly property int ledgerSlots: qexp ? ledgerLen : ledgerHolding ? Math.min(ledgerLen, host.queueLedgerPeek) : 0
+        // How many rows fit in the box: the setting when open, the peek's
+        // sliver while the pointer holds it.
+        readonly property int ledgerWindow: qexp ? host.queueLedgerRows : host.queueLedgerPeek
         function qtoggle() {
           // A single has no ledger to open; the card is the whole story.
           if (!expandable) {
@@ -961,6 +969,10 @@ Drawer {
               // a step.
               Layout.fillWidth: true
               Layout.bottomMargin: implicitHeight > 0.5 ? 2 : 0
+              // Reaches into the card's right padding, where the ledger's
+              // scrollbar sits clear of the rows; the rows themselves keep
+              // the card's width through qtrackCol's matching right margin.
+              Layout.rightMargin: -8
               implicitHeight: qrow.qexp ? qtrackCol.implicitHeight : (qrow.peeking ? 30 : 0)
               Behavior on implicitHeight {
                 NumberAnimation {
@@ -982,6 +994,7 @@ Drawer {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
+                anchors.rightMargin: 8
                 spacing: 3
                 Rectangle {
                   Layout.fillWidth: true
@@ -1008,23 +1021,92 @@ Drawer {
                   font.family: mono
                   font.pixelSize: 10
                 }
-                Repeater {
+                ListView {
+                  id: qLedger
+                  objectName: "qLedgerList"
+                  // The box is a fixed window of rows. The model below holds
+                  // every track, and this list builds only the rows its window
+                  // and cache can show, so the delegate count follows the
+                  // window, never the collection's length.
+                  readonly property real rowH: 15
+                  readonly property real pitch: rowH + spacing
+                  Layout.fillWidth: true
+                  Layout.preferredHeight: count === 0 ? 0 : Math.min(count, qrow.ledgerWindow) * pitch - spacing
+                  visible: count > 0
+                  clip: true
+                  spacing: 3
+                  // Two rows either side of the window: enough to cover a
+                  // wheel step without paying for rows nobody can see.
+                  cacheBuffer: 2 * pitch
+                  boundsBehavior: Flickable.StopAtBounds
+                  // The row carries state-transition Behaviors and decrypt
+                  // replays. A reused delegate would animate the track it
+                  // used to show into the one it shows now, so a newly visible
+                  // row gets a fresh delegate instead. The window and cache
+                  // still bound how many exist.
+                  reuseItems: false
+                  ScrollBar.vertical: qLedgerScroll
+                  // Open and longer than its box, it takes its own presses: a
+                  // click or a drag on the list never folds the card (the
+                  // header above it still does). A list that fits stays inert,
+                  // so a click on an album's tracks folds it as before and the
+                  // wheel passes straight to the drawer.
+                  interactive: qrow.qexp && contentHeight > height + 0.5
                   // The count, not the array: every live tick
-                  // (queueTrackState/Pct, 2 a second while an album
-                  // downloads) signals a change on host.queueTracks,
-                  // and an array model tears down and rebuilds every
-                  // row per tick. Each rebuild costs a layout-settle
-                  // frame, which reads as the open sliver vibrating
-                  // under the pointer. With the count as the model
-                  // the rows stay alive and each one's texts
-                  // re-evaluate in place.
-                  model: qrow.ledgerShown
+                  // (queueTrackState/Pct, 2 a second while an album downloads)
+                  // replaces the row's track array with a fresh same-length
+                  // one. The model is a store of empty slots that grows and
+                  // shrinks at its END, so the delegates stay alive across
+                  // those ticks and each one re-evaluates its own snapshot
+                  // (td) in place. A changed int as the model would be a
+                  // reset, which threw a scrolled list back to the top (and
+                  // rebuilt every row) whenever a track failed live or a
+                  // playlist's list grew.
+                  readonly property int wantRows: qrow.ledgerSlots
+                  model: ListModel {
+                    id: ledgerRows
+                  }
+                  // Only the difference is appended or removed. A same-length
+                  // tick never reaches here (wantRows does not change), and
+                  // even a redundant call is a no-op. Clearing and refilling
+                  // would recreate every delegate and lose the scroll.
+                  function syncRows() {
+                    var have = ledgerRows.count
+                    if (wantRows > have) {
+                      var add = []
+                      for (var i = have; i < wantRows; ++i)
+                        add.push({
+                          s: 0
+                        })
+                      ledgerRows.append(add)
+                    } else if (wantRows < have) {
+                      ledgerRows.remove(wantRows, have - wantRows)
+                    }
+                  }
+                  // A beat later, never on the spot: the instant a fold begins
+                  // the row reads neither open nor yet closing, and synced
+                  // right then the list emptied and rebuilt mid-fold.
+                  // Deferred, a flip that undoes itself in the same pass
+                  // changes nothing.
+                  onWantRowsChanged: Qt.callLater(syncRows)
+                  Component.onCompleted: syncRows()
+                  // A fold takes the list back to its first track, so the peek
+                  // it folds into starts at the top and nothing on screen
+                  // swaps under the closing card.
+                  Connections {
+                    target: qrow
+                    function onQexpChanged() {
+                      if (!qrow.qexp)
+                        qLedger.positionViewAtBeginning()
+                    }
+                  }
                   delegate: RowLayout {
                     required property int index
-                    // Depends on host.queueTracks, so each tick
-                    // refreshes this row's snapshot in place.
+                    // Depends on host.queueTracks, so each tick refreshes this
+                    // row's snapshot in place.
                     readonly property var td: (host.queueTracks[qrow.model.qid] || [])[index] || ({})
-                    Layout.fillWidth: true
+                    width: ListView.view.width
+                    height: qLedger.rowH
                     spacing: 8
                     Text {
                       textFormat: Text.PlainText
@@ -1032,7 +1114,7 @@ Drawer {
                       color: textDim
                       font.family: mono
                       font.pixelSize: 10
-                      Layout.preferredWidth: 16
+                      Layout.preferredWidth: Math.max(16, Math.ceil(ledgerDigit.advanceWidth * String(qrow.ledgerLen).length))
                       horizontalAlignment: Text.AlignRight
                     }
                     Text {
@@ -1255,20 +1337,43 @@ Drawer {
                     }
                   }
                 }
-                // The ledger is capped, so say what it is not
-                // showing rather than ending on a row that
-                // looks like the last one. Only ever seen on a
-                // playlist far larger than the drawer can list.
-                Text {
-                  objectName: "qTrackMore"
-                  textFormat: Text.PlainText
-                  readonly property int rest: qrow.ledgerLen - qrow.ledgerShown
-                  visible: qrow.qexp && rest > 0
-                  text: rest + (rest === 1 ? " more track" : " more tracks")
+              }
+              // The ledger's scrollbar: a hairline in the card's padding,
+              // beside the rows rather than over them, so the rows keep their
+              // full width and line up with the bar above. Faint at rest,
+              // brighter while the list moves or under the pointer, and only
+              // on an open list that scrolls.
+              ScrollBar {
+                id: qLedgerScroll
+                objectName: "qLedgerScroll"
+                orientation: Qt.Vertical
+                policy: ScrollBar.AlwaysOn
+                x: qtrackCol.x + qLedger.x + qLedger.width + 1
+                y: qtrackCol.y + qLedger.y
+                width: 7
+                height: qLedger.height
+                leftPadding: 3
+                rightPadding: 2
+                topPadding: 0
+                bottomPadding: 0
+                opacity: qLedger.visible && qLedger.interactive ? 1 : 0
+                visible: opacity > 0
+                Behavior on opacity {
+                  NumberAnimation {
+                    duration: 150
+                  }
+                }
+                background: null
+                contentItem: Rectangle {
+                  implicitWidth: 2
+                  radius: 1
                   color: textDim
-                  font.family: mono
-                  font.pixelSize: 10
-                  Layout.topMargin: 2
+                  opacity: qLedgerScroll.active || qLedgerScroll.hovered ? 0.85 : 0.35
+                  Behavior on opacity {
+                    NumberAnimation {
+                      duration: 150
+                    }
+                  }
                 }
               }
             }

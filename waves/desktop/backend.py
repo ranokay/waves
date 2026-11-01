@@ -253,6 +253,8 @@ from .settings.schema import (
     FLOAT_FIELDS,
     MAP_FIELDS,
     NUMBER_FIELDS,
+    QUEUE_LEDGER_ROWS_BOUNDS,
+    QUEUE_LEDGER_ROWS_DEFAULT,
     SettingsSchema,
     apple_status_actions,
     shipped_field_default,
@@ -3884,6 +3886,24 @@ def _scrub_browse_payload(payload: dict) -> dict:
     return payload
 
 
+def _bounded_queue_ledger_rows(value, default: int) -> int:
+    """The stored visible-row count, held inside its setting's range.
+
+    A hand-edited waves.json or a stray string can never size the ledger off a
+    cliff. Garbage keeps the value the caller already had.
+    """
+    lo, hi = QUEUE_LEDGER_ROWS_BOUNDS
+    if isinstance(value, bool):
+        # A boolean is not a row count; a hand-edited `true` keeps the value
+        # the caller already had rather than clamping to the floor.
+        return default
+    try:
+        n = round(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(lo, min(hi, n))
+
+
 class WavesBridge(QueueMixin, LibraryMixin, QObject):
     """The single object exposed to QML as the ``waves`` context property.
 
@@ -4007,6 +4027,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     notificationMotionChanged = Signal()  # notification_motion pref flipped; the toast stack re-reads it
     artHoverTiltChanged = Signal()  # art_hover_tilt pref flipped; Main.qml re-reads it
     videoHoverPeekChanged = Signal()  # video_hover_peek pref flipped; Main.qml re-reads it
+    queueLedgerRowsChanged = Signal()  # queue_ledger_rows pref changed; Main.qml re-reads it
     diagnosticsExported = Signal(str)  # export finished; arg = bundle path ("" = failed)
     applicationEvent = Signal("QVariantMap")
     applicationEventActionRequested = Signal(str, str)  # allowlisted UI command, provider id
@@ -12541,6 +12562,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # Resting the pointer on a video thumbnail grows a live preview
             # card with sound; off keeps thumbnails still (click to play).
             "video_hover_peek": True,
+            # How many tracks an open queue row shows before its list stops
+            # growing and scrolls inside its own box (the range lives in
+            # settings.schema, which also clamps stored values).
+            "queue_ledger_rows": QUEUE_LEDGER_ROWS_DEFAULT,
             # Notification center (Settings > Notifications). Completion
             # toasts can be turned off without losing warnings/errors; the
             # retained resolved history is capped by count and age (active
@@ -12632,6 +12657,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if provider_keyed in prefs and unified not in stored:
                     prefs[unified] = bool(prefs[provider_keyed])
             prefs.update({k: v for k, v in stored.items() if k in prefs or _is_provider_surface_pref(k)})
+            # Whole-number prefs are held inside their setting's range, so a
+            # hand-edited file can never size a surface off a cliff.
+            prefs["queue_ledger_rows"] = _bounded_queue_ledger_rows(
+                prefs["queue_ledger_rows"], QUEUE_LEDGER_ROWS_DEFAULT
+            )
         except FileNotFoundError:
             # A fresh install (or a config folder someone moved): defaults are
             # the whole answer and there is nothing to keep.
@@ -12839,6 +12869,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # comparisons see a number, so coerce against the existing default.
         if isinstance(self._waves_prefs[key], bool):
             value = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
+        elif key == "queue_ledger_rows":
+            # A whole-number setting: a hand-edited file, a float from the
+            # stepper or a stray string is held inside the offered range, and
+            # garbage keeps the value it already had.
+            value = _bounded_queue_ledger_rows(value, old)
         elif isinstance(self._waves_prefs[key], int):
             try:
                 value = int(value)
@@ -12863,6 +12898,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self.artHoverTiltChanged.emit()
         elif key == "video_hover_peek":
             self.videoHoverPeekChanged.emit()
+        elif key == "queue_ledger_rows" and value != old:
+            self.queueLedgerRowsChanged.emit()
         elif key == "notification_motion":
             self.notificationMotionChanged.emit()
         elif key in ("notify_history_max", "notify_history_days") and value != old:
