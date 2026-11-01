@@ -57,6 +57,9 @@ def test_origin_url_does_not_encode_an_already_encoded_share_name():
     # would name a share that does not exist, so the remount would always fail.
     assert netmount.origin_url("smbfs", "//nas/My%20Music") == "smb://nas/My%20Music"
     assert netmount.origin_url("smbfs", "//nas/My Music") == "smb://nas/My%20Music"
+    # An encoded delimiter stays inside its segment instead of becoming a
+    # path separator. SMB names cannot hold "/", but the encoding is explicit.
+    assert netmount.origin_url("smbfs", "//nas/My%2FMusic") == "smb://nas/My%2FMusic"
 
 
 def test_origin_url_rejects_local_disks_and_junk():

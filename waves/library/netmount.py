@@ -123,7 +123,7 @@ def origin_url(fstype: str, from_name: str) -> str:
     host, _, path = rest.partition("/")
     if not host:
         return ""
-    quoted = "/".join(urllib.parse.quote(urllib.parse.unquote(seg)) for seg in path.split("/"))
+    quoted = "/".join(urllib.parse.quote(urllib.parse.unquote(seg), safe="") for seg in path.split("/"))
     return f"{scheme}://{host}/{quoted}" if quoted else f"{scheme}://{host}"
 
 
