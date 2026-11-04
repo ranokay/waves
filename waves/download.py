@@ -290,6 +290,13 @@ class Download:
     _FILE_OPERATION_RETRIES: int = 5
     _FILE_OPERATION_RETRY_DELAY_SEC: float = 0.5
 
+    # One segment's body-read retry: three attempts in total, separated by a
+    # short fixed pause. The shared session's Retry(total=5) cannot help here
+    # (it covers connection setup, redirects and response headers only), so a
+    # body that drops mid-stream is retried by _download_segment itself.
+    _SEGMENT_ATTEMPTS: int = 3
+    _SEGMENT_RETRY_DELAY_SEC: float = 0.5
+
     # The batch pause's shared bookkeeping, defaulted on the CLASS so a Download
     # reached without __init__ (a stand-in) reads "no pause in force" rather
     # than raising. Every real instance gets its own in __init__; what the two
@@ -768,9 +775,10 @@ class Download:
         result_segments: bool = True
         dl_segment_results: list[DownloadSegmentResult] = []
 
-        # One pass: download each URL exactly once. Segment-level retries are
-        # already handled inside _download_segment (requests Retry(total=5)), so
-        # the old `while not self.progress.tasks[p_task].finished` loop that
+        # One pass: download each URL exactly once. A segment whose body drops
+        # is retried inside _download_segment (three attempts); the shared
+        # session's Retry(total=5) covers only connection setup, redirects and
+        # response headers. The old `while not self.progress.tasks[p_task].finished` loop that
         # re-submitted every URL added no real retry, only risk: a segment that
         # returns an empty but successful body (HTTP 200, 0 bytes) advances the
         # progress bar zero times, so `finished` (completed >= total) never flips
@@ -822,6 +830,11 @@ class Download:
                     # return failed by design, that's a cancellation, not
                     # corruption, so don't scream "corrupt" once per segment.
                     if not (self.event_abort.is_set() or (event_stop and event_stop.is_set())):
+                        # Class only: a requests error's message prints the CDN
+                        # URL, and fn_logger may be a plain wrapper without
+                        # .exception.
+                        if result_dl_segment.failure_class:
+                            self.fn_logger.error(f"Segment download failed: {result_dl_segment.failure_class}")
                         self.fn_logger.error("Something went wrong while downloading. File is corrupt!")
 
             # If app is terminated (CTRL+C) or item stopped
@@ -1047,12 +1060,94 @@ class Download:
             bool: True if the caller should abort (abort/stop set), False to proceed.
         """
         while not self.event_run.is_set():
-            if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
+            if self._segment_stopped(event_stop):
                 return True
             # Short timeout so a resume, abort, or stop is picked up promptly.
             self.event_run.wait(0.1)
 
+        return self._segment_stopped(event_stop)
+
+    def _segment_stopped(self, event_stop: Event | None) -> bool:
+        """True when an app abort or the item's stop is in force for this segment."""
         return self.event_abort.is_set() or bool(event_stop and event_stop.is_set())
+
+    def _wait_before_segment_retry(self, event_stop: Event | None) -> bool:
+        """Wait out one segment retry delay; True when the caller must give up.
+
+        The failed attempt's response is already closed by the time this runs,
+        so a waiting segment holds no connection from the blocking shared pool.
+        Polled in short slices like _wait_while_paused because no single event
+        covers both the app abort and the item's stop.
+        """
+        deadline = time.monotonic() + self._SEGMENT_RETRY_DELAY_SEC
+        while not self._segment_stopped(event_stop):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.event_abort.wait(min(remaining, 0.1))
+        return True
+
+    @staticmethod
+    def _segment_error_is_retryable(error: Exception) -> bool:
+        """Whether a failed attempt is worth repeating.
+
+        HTTPError is a RequestException, so test it first: a 4xx is the server's
+        answer, not a dropped connection, and is permanent. Every other
+        requests.RequestException is transient (a connection reset, read
+        timeout or chunked-encoding break). Non-requests failures (a disk
+        write, a bad path) are permanent.
+        """
+        if isinstance(error, HTTPError):
+            response = error.response
+            return response is None or response.status_code >= 500
+        return isinstance(error, requests.RequestException)
+
+    def _stream_segment_attempt(
+        self,
+        url: str,
+        path_segment: pathlib.Path,
+        block_size: int | None,
+        p_task: TaskID,
+        event_stop: Event | None,
+    ) -> tuple[bool, Exception | None]:
+        """One streamed attempt, rewriting the segment file from byte zero.
+
+        Returns ``(complete, failure)``. ``(False, None)`` means Stop/Cancel
+        interrupted the body and is not a failure to report. A raised failure
+        is returned rather than propagated, with this attempt's progress steps
+        already taken back.
+        """
+        advanced: int = 0
+        try:
+            # Create the request object with stream=True, so the content won't be loaded into memory at once.
+            # Context-manage the response: the shared pool blocks when full
+            # (pool_block=True), so a connection left to garbage collection on
+            # an early return would starve waiting segment workers.
+            with self._http.get(url, stream=True, timeout=REQUESTS_TIMEOUT_SEC) as r:
+                r.raise_for_status()
+
+                # "wb" rewrites from byte zero on every attempt, so a partial
+                # body is never appended to. If `chunk_size` is set to `None`
+                # the whole file is written at once.
+                with path_segment.open("wb") as f:
+                    for data in r.iter_content(chunk_size=block_size):
+                        # Bail out promptly on abort (Stop/Cancel or app quit)
+                        # instead of streaming the whole segment first.
+                        if self._segment_stopped(event_stop):
+                            if advanced:
+                                self.progress.advance(p_task, -advanced)
+                            return False, None
+                        f.write(data)
+                        # Advance progress bar; remember how far to take back
+                        # if this attempt fails. A relative rewind stays
+                        # correct while other segments advance the same bar.
+                        self.progress.advance(p_task)
+                        advanced += 1
+        except Exception as exc:
+            if advanced:
+                self.progress.advance(p_task, -advanced)
+            return False, exc
+        return True, None
 
     def _download_segment(
         self,
@@ -1083,54 +1178,61 @@ class Download:
         # CAUTION: This is a workaround, so BTS (LOW quality) track will work. They usually have only ONE link.
         id_segment: int = int(filename_stem) if filename_stem.isdecimal() else 0
         error: HTTPError | None = None
+        failure_class: str | None = None
+        # True when Stop/Cancel ended the fetch: quiet, no error log, no GUI emit.
+        give_up: bool = False
 
-        # If app is terminated (CTRL+C) or item stopped
-        if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
-            return DownloadSegmentResult(
-                result=False, url=url, path_segment=path_segment, id_segment=id_segment, error=error
+        # Reuse the pooled, keep-alive session built once in __init__, so
+        # segments reuse connections instead of paying a TLS handshake each.
+        for attempt in range(1, self._SEGMENT_ATTEMPTS + 1):
+            # Honor pause between attempts too, but wake promptly on
+            # resume/abort/stop instead of blocking forever.
+            if self._wait_while_paused(event_stop):
+                give_up = True
+                break
+
+            error = None
+            failure_class = None
+            complete, failure = self._stream_segment_attempt(url, path_segment, block_size, p_task, event_stop)
+            if complete:
+                result = True
+                break
+            if failure is None or self._segment_stopped(event_stop):
+                # Stop/Cancel interrupted the body, or landed while the attempt
+                # failed: either way it is not an error to log and no retry follows.
+                give_up = True
+                break
+
+            if isinstance(failure, HTTPError):
+                error = failure
+            failure_class = type(failure).__name__
+
+            # The terminal error is logged by _download_segments, which alone
+            # knows whether this segment's failure is a tolerable spurious tail.
+            if not self._segment_error_is_retryable(failure):
+                break
+            if attempt == self._SEGMENT_ATTEMPTS:
+                break
+
+            self.fn_logger.warning(
+                f"Segment fetch failed, retrying (attempt {attempt} of {self._SEGMENT_ATTEMPTS}): {failure_class}"
             )
+            if self._wait_before_segment_retry(event_stop):
+                give_up = True
+                break
 
-        # Honor pause, but wake promptly on resume/abort/stop instead of blocking forever.
-        if self._wait_while_paused(event_stop):
-            return DownloadSegmentResult(
-                result=False, url=url, path_segment=path_segment, id_segment=id_segment, error=error
-            )
-
-        # Reuse the pooled, keep-alive session built once in __init__. Retry/backoff
-        # is configured on that shared adapter, so segments reuse connections instead
-        # of paying a TLS handshake each (the old per-segment Session was the cause of
-        # the all-core CPU spike on download).
-        try:
-            # Create the request object with stream=True, so the content won't be loaded into memory at once.
-            # Context-manage the response: the shared pool blocks when full
-            # (pool_block=True), so a connection left to garbage collection on
-            # an early return would starve waiting segment workers.
-            with self._http.get(url, stream=True, timeout=REQUESTS_TIMEOUT_SEC) as r:
-                r.raise_for_status()
-
-                # Write the content to disk. If `chunk_size` is set to `None` the whole file will be written at once.
-                with path_segment.open("wb") as f:
-                    for data in r.iter_content(chunk_size=block_size):
-                        # Bail out promptly on abort (Stop/Cancel or app quit)
-                        # instead of streaming the whole segment first.
-                        if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
-                            return DownloadSegmentResult(
-                                result=False, url=url, path_segment=path_segment, id_segment=id_segment, error=error
-                            )
-                        f.write(data)
-                        # Advance progress bar.
-                        self.progress.advance(p_task)
-
-            result = True
-        except Exception:
-            self.progress.advance(p_task)
-
-        # To send the progress to the GUI, we need to emit the percentage.
-        if not progress_to_stdout:
+        # To send the progress to the GUI, we need to emit the percentage. A
+        # Stop/Cancel skips it, as it did before the retry loop existed.
+        if not give_up and not progress_to_stdout:
             self.progress_gui.item.emit(self.progress.tasks[p_task].percentage)
 
         return DownloadSegmentResult(
-            result=result, url=url, path_segment=path_segment, id_segment=id_segment, error=error
+            result=result,
+            url=url,
+            path_segment=path_segment,
+            id_segment=id_segment,
+            error=error,
+            failure_class=failure_class,
         )
 
     def extension_guess(

@@ -55,6 +55,7 @@ issue. A test enforces it.
 - 🛡️ Upgrading an Apple Music song to a higher quality, or retrying one whose tags failed to save, no longer overwrites a different song that has since taken its file name: the upgrade replaces only the song's own copy and saves beside anything else ([issue #704](https://github.com/ranokay/waves/issues/704)).
 - 🛡️ Redownloading an Apple Music song no longer overwrites a different song saved under the same file name: it replaces only the song's own copy and saves beside anything else, and a song expected as FLAC that arrives as M4A replaces its own M4A instead of saving a second copy ([issue #714](https://github.com/ranokay/waves/issues/714)).
 - 🌐 Network shares whose name contains a space, and folders mounted separately from the share they live in, now remount and relist at the folder the library actually lives in instead of failing on a double-encoded share name ([issue #723](https://github.com/ranokay/waves/issues/723)).
+- 🌐 A track whose connection drops mid-download now fetches the broken part again instead of failing the song, and the progress bar no longer counts the failed attempt ([issue #717](https://github.com/ranokay/waves/issues/717)).
 
 ## 🗂️ v0.1.32 (2026-09-28)
 
