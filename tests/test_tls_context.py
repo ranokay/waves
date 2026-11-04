@@ -12,9 +12,11 @@ from __future__ import annotations
 import ast
 import ssl
 from pathlib import Path
+from unittest.mock import Mock
 
 import certifi
 
+import waves.tls as tls_module
 from waves.tls import tls_context
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +70,18 @@ def test_the_shared_context_verifies_against_certifi():
     # prove nothing about what the packaged app trusts.
     from_certifi_only = ssl.create_default_context(cafile=certifi.where())
     assert loaded == len(from_certifi_only.get_ca_certs())
+
+
+def test_the_shared_context_is_built_from_certifi(monkeypatch):
+    # Count equality alone could pass where the system store happens to match
+    # certifi; pin the bundle the context is actually built from.
+    create_default_context = Mock(wraps=ssl.create_default_context)
+    monkeypatch.setattr(tls_module, "_context", None)
+    monkeypatch.setattr(tls_module.ssl, "create_default_context", create_default_context)
+
+    tls_context()
+
+    create_default_context.assert_called_once_with(cafile=certifi.where())
 
 
 def test_wiring_every_urlopen_in_the_app_passes_a_context():
