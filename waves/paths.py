@@ -215,6 +215,78 @@ def path_file_settings() -> str:
 _SELF_DRESSING_TOKENS = {"video_year_optional"}
 
 
+# Every name format_str_media resolves for at least one supported media type,
+# whatever the object being formatted can answer. format_path_media substitutes
+# a value and then keeps scanning the assembled result for the template's
+# remaining tokens, so a value that holds one of these as text (a playlist
+# called "Best of {artist_name}") would be read as a placeholder by a later
+# replacement, or by the second pass a collection's baked-in folder goes
+# through. The set is matched before any such value is spliced in.
+#
+# {folder_path} is absent on purpose: it is resolved ahead of this module and
+# never scanned by format_str_media, and the folder-path sanitizer already
+# spells its braces as parentheses. A test compares this set with the
+# _format_* functions' own vocabulary, so a token added there without a line
+# here fails instead of surviving in a path.
+_TEMPLATE_TOKENS: frozenset[str] = frozenset(
+    {
+        "album_artist",
+        "album_artist_id",
+        "album_artists",
+        "album_date",
+        "album_duration_minutes",
+        "album_duration_seconds",
+        "album_explicit",
+        "album_id",
+        "album_num_tracks",
+        "album_num_volumes",
+        "album_title",
+        "album_track_num",
+        "album_year",
+        "artist_name",
+        "artist_name_primary",
+        "isrc",
+        "list_pos",
+        "media_type",
+        "mix_name",
+        "playlist_duration_minutes",
+        "playlist_duration_seconds",
+        "playlist_id",
+        "playlist_name",
+        "provider_name",
+        "track_artist_id",
+        "track_duration_minutes",
+        "track_duration_seconds",
+        "track_explicit",
+        "track_id",
+        "track_quality",
+        "track_title",
+        "track_volume_num",
+        "track_volume_num_optional",
+        "track_volume_num_optional_CD",
+        "video_date",
+        "video_id",
+        "video_quality",
+        "video_year",
+        "video_year_optional",
+    }
+)
+_TOKEN_TEXT = re.compile(r"\{(\w+)\}")
+
+
+def _neutralize_tokens(value: str) -> str:
+    """``value`` with every known ``{token}`` written as ``(token)``.
+
+    The spelling folder names already use, and a shape no template match can
+    read again, so a literal token in a user-visible name stays literal.
+    Braces that are not a known token are returned exactly as written.
+    """
+    return _TOKEN_TEXT.sub(
+        lambda match: f"({match.group(1)})" if match.group(1) in _TEMPLATE_TOKENS else match.group(0),
+        value,
+    )
+
+
 # A replacement is decoration, not content: a couple of characters at most,
 # so a pasted paragraph cannot become part of every file name.
 _REPLACEMENT_MAX_LEN = 3
@@ -492,7 +564,13 @@ def format_path_media(
             if result_fmt == FORMAT_TEMPLATE_EXPLICIT:
                 value = FORMAT_TEMPLATE_EXPLICIT
             else:
-                value = sanitize_name_component(result_fmt, illegal_replacement, illegal_map, tidy_spacing)
+                # Neutralize after sanitizing: stripping an illegal character
+                # can weld a literal into a known token ("{artist:_name}" loses
+                # its colon), and the value must hold no token a later
+                # replacement or a later pass could read.
+                value = _neutralize_tokens(
+                    sanitize_name_component(result_fmt, illegal_replacement, illegal_map, tidy_spacing)
+                )
             # Self-dressing tokens carry their own separator space
             # ("[2026] "); sanitize_filename trims edge whitespace, which
             # would weld the year prefix straight onto the title. Scoped to
