@@ -18,6 +18,7 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
 import requests
 
 from waves.download import Download
@@ -151,9 +152,13 @@ class _Harness:
         return self.download._download_segment(URL, tmp_path, None, self.task, True, event_stop)
 
     def run_track(
-        self, tmp_path: pathlib.Path, urls: list[str], n_tail_spurious: int | None = None
+        self,
+        tmp_path: pathlib.Path,
+        urls: list[str],
+        n_tail_spurious: int | None = None,
+        event_stop: threading.Event | None = None,
     ) -> tuple[bool, list[DownloadSegmentResult]]:
-        return self.download._download_segments(urls, tmp_path, None, self.task, True, None, n_tail_spurious)
+        return self.download._download_segments(urls, tmp_path, None, self.task, True, event_stop, n_tail_spurious)
 
     def segment(self, tmp_path: pathlib.Path, name: str = PATH_SEGMENT) -> pathlib.Path:
         return tmp_path / name
@@ -345,41 +350,44 @@ def test_a_non_request_failure_is_not_retried_and_rewinds_its_steps(tmp_path):
     assert any("File is corrupt" in line for line in h.errors)
 
 
-def test_a_tolerated_5xx_tail_failure_logs_no_error(tmp_path):
-    """A multi-URL track's spurious 500 tail is padding: the track succeeds and
-    no segment failure is logged in red.
+@pytest.mark.parametrize(
+    ("status", "tail_gets", "n_tail_spurious"),
+    [
+        (500, 3, 1),  # proven padding, body/status failure retried
+        (404, 1, 1),  # proven padding, permanent status not retried
+        (500, 3, None),  # manifest proved nothing: legacy leniency
+    ],
+)
+def test_a_tolerated_tail_failure_logs_no_error(tmp_path, status, tail_gets, n_tail_spurious):
+    """A multi-URL track's spurious tail is padding: the track succeeds and no
+    segment failure is logged in red, whatever its status did.
     """
     urls = _urls(2)
     h = _Harness(
         routes={
             urls[0]: [_Response((b"audio",))],
-            urls[1]: [_Response(status=500) for _ in range(3)],
+            urls[1]: [_Response(status=status) for _ in range(tail_gets)],
         }
     )
 
-    ok, results = h.run_track(tmp_path, urls, n_tail_spurious=1)
+    ok, results = h.run_track(tmp_path, urls, n_tail_spurious=n_tail_spurious)
 
     assert ok is True
-    assert h.calls.count(urls[1]) == 3  # the tail's own retry budget still ran
+    assert h.calls.count(urls[1]) == tail_gets
     assert h.errors == []
     assert h.segment(tmp_path, "seg_0").read_bytes() == b"audio"
     assert any(not result.result for result in results)
 
 
-def test_a_tolerated_4xx_tail_failure_logs_no_error(tmp_path):
-    """The same tolerance applies when the padding URL answers 4xx."""
-    urls = _urls(2)
-    h = _Harness(
-        routes={
-            urls[0]: [_Response((b"audio",))],
-            urls[1]: [_Response(status=404)],
-        }
-    )
+def test_a_stopped_track_logs_no_segment_failure(tmp_path):
+    """A Stop during the failing attempt leaves the track seam silent too."""
+    event_stop = threading.Event()
+    h = _Harness([_Response((b"one",), error=_drop(), before_error=event_stop.set)])
 
-    ok, _results = h.run_track(tmp_path, urls, n_tail_spurious=1)
+    ok, _results = h.run_track(tmp_path, [URL], event_stop=event_stop)
 
-    assert ok is True
-    assert h.calls.count(urls[1]) == 1
+    assert ok is False
+    assert len(h.calls) == 1
     assert h.errors == []
 
 

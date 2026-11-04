@@ -830,12 +830,11 @@ class Download:
                     # return failed by design, that's a cancellation, not
                     # corruption, so don't scream "corrupt" once per segment.
                     if not (self.event_abort.is_set() or (event_stop and event_stop.is_set())):
-                        # Only now, where a tolerated spurious tail is ruled
-                        # out, is the failure worth an error. Class only: a
-                        # requests error's message prints the CDN URL, and
-                        # fn_logger may be a plain wrapper without .exception.
-                        if result_dl_segment.failure:
-                            self.fn_logger.error(f"Segment download failed: {result_dl_segment.failure}")
+                        # Class only: a requests error's message prints the CDN
+                        # URL, and fn_logger may be a plain wrapper without
+                        # .exception.
+                        if result_dl_segment.failure_class:
+                            self.fn_logger.error(f"Segment download failed: {result_dl_segment.failure_class}")
                         self.fn_logger.error("Something went wrong while downloading. File is corrupt!")
 
             # If app is terminated (CTRL+C) or item stopped
@@ -1193,6 +1192,7 @@ class Download:
                 break
 
             error = None
+            failure_name = None
             complete, failure = self._stream_segment_attempt(url, path_segment, block_size, p_task, event_stop)
             if complete:
                 result = True
@@ -1232,7 +1232,7 @@ class Download:
             path_segment=path_segment,
             id_segment=id_segment,
             error=error,
-            failure=failure_name,
+            failure_class=failure_name,
         )
 
     def extension_guess(
