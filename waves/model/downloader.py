@@ -39,6 +39,9 @@ class DownloadSegmentResult:
     path_segment: pathlib.Path
     id_segment: int
     error: HTTPError | None = None
+    # Class name of the terminal failure, carried to the segment pass so it can
+    # log one class-only error only for failures it does not tolerate.
+    failure: str | None = None
 
 
 @dataclass

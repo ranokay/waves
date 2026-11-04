@@ -830,6 +830,12 @@ class Download:
                     # return failed by design, that's a cancellation, not
                     # corruption, so don't scream "corrupt" once per segment.
                     if not (self.event_abort.is_set() or (event_stop and event_stop.is_set())):
+                        # Only now, where a tolerated spurious tail is ruled
+                        # out, is the failure worth an error. Class only: a
+                        # requests error's message prints the CDN URL, and
+                        # fn_logger may be a plain wrapper without .exception.
+                        if result_dl_segment.failure:
+                            self.fn_logger.error(f"Segment download failed: {result_dl_segment.failure}")
                         self.fn_logger.error("Something went wrong while downloading. File is corrupt!")
 
             # If app is terminated (CTRL+C) or item stopped
@@ -1173,6 +1179,7 @@ class Download:
         # CAUTION: This is a workaround, so BTS (LOW quality) track will work. They usually have only ONE link.
         id_segment: int = int(filename_stem) if filename_stem.isdecimal() else 0
         error: HTTPError | None = None
+        failure_name: str | None = None
         # True when Stop/Cancel ended the fetch: quiet, no error log, no GUI emit.
         give_up: bool = False
 
@@ -1198,15 +1205,13 @@ class Download:
 
             if isinstance(failure, HTTPError):
                 error = failure
-            failure_name: str = type(failure).__name__
+            failure_name = type(failure).__name__
 
-            # Class only: a requests error's message prints the CDN URL, and
-            # fn_logger may be a plain wrapper without .exception.
+            # The terminal error is logged by _download_segments, which alone
+            # knows whether this segment's failure is a tolerable spurious tail.
             if not self._segment_error_is_retryable(failure):
-                self.fn_logger.error(f"Segment download failed: {failure_name}")
                 break
             if attempt == self._SEGMENT_ATTEMPTS:
-                self.fn_logger.error(f"Segment download failed after {attempt} attempts: {failure_name}")
                 break
 
             self.fn_logger.warning(
@@ -1222,7 +1227,12 @@ class Download:
             self.progress_gui.item.emit(self.progress.tasks[p_task].percentage)
 
         return DownloadSegmentResult(
-            result=result, url=url, path_segment=path_segment, id_segment=id_segment, error=error
+            result=result,
+            url=url,
+            path_segment=path_segment,
+            id_segment=id_segment,
+            error=error,
+            failure=failure_name,
         )
 
     def extension_guess(

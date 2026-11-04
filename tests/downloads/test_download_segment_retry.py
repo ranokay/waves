@@ -73,26 +73,51 @@ class _Response:
 
 
 class _Session:
-    """The faked HTTP boundary: one scripted response per GET, in order."""
+    """The faked HTTP boundary: ordered responses, or one script per URL."""
 
-    def __init__(self, responses: list[_Response], on_get=None) -> None:
-        self.responses = responses
+    def __init__(
+        self,
+        responses: list[_Response] | None = None,
+        *,
+        routes: dict[str, list[_Response]] | None = None,
+        on_get=None,
+    ) -> None:
+        self.responses = list(responses or ())
+        self.routes = {url: list(items) for url, items in (routes or {}).items()}
         self.calls: list[str] = []
+        self._used = dict.fromkeys(self.routes, 0)
+        self._lock = threading.Lock()
         self._on_get = on_get
 
     def get(self, url: str, **_kwargs) -> _Response:
-        index = len(self.calls)
-        self.calls.append(url)
-        if index >= len(self.responses):
-            raise AssertionError("segment made a GET with no scripted response left")
+        with self._lock:
+            index = len(self.calls)
+            self.calls.append(url)
+            if self.routes:
+                used = self._used[url]
+                self._used[url] = used + 1
+                responses = self.routes[url]
+            else:
+                used = index
+                responses = self.responses
+            if used >= len(responses):
+                raise AssertionError(f"segment made an extra GET for {url}")
+            response = responses[used]
         if self._on_get is not None:
             self._on_get(index)
-        return self.responses[index]
+        return response
 
 
 class _Harness:
-    def __init__(self, responses: list[_Response], *, completed: float = 0, on_get=None) -> None:
-        self.download = Download.__new__(Download)  # bypass __init__; drive the segment method only
+    def __init__(
+        self,
+        responses: list[_Response] | None = None,
+        *,
+        routes: dict[str, list[_Response]] | None = None,
+        completed: float = 0,
+        on_get=None,
+    ) -> None:
+        self.download = Download.__new__(Download)  # bypass __init__; drive the download methods only
         self.download.settings = MagicMock()
         self.download.settings.data.downloads_simultaneous_per_track_max = 4
         self.download.event_abort = threading.Event()
@@ -101,7 +126,9 @@ class _Harness:
         self.download.fn_logger = MagicMock()
         self.download.progress = Progress()
         self.download.progress_gui = MagicMock()
-        self.download._http = _Session(responses, on_get=on_get)
+        self.download._segment_executor = None
+        self.download._segment_executor_lock = threading.Lock()
+        self.download._http = _Session(responses, routes=routes, on_get=on_get)
         self.task = self.download.progress.add_task("test", total=100, completed=completed)
 
     @property
@@ -123,8 +150,17 @@ class _Harness:
     def run(self, tmp_path: pathlib.Path, event_stop: threading.Event | None = None) -> DownloadSegmentResult:
         return self.download._download_segment(URL, tmp_path, None, self.task, True, event_stop)
 
-    def segment(self, tmp_path: pathlib.Path) -> pathlib.Path:
-        return tmp_path / PATH_SEGMENT
+    def run_track(
+        self, tmp_path: pathlib.Path, urls: list[str], n_tail_spurious: int | None = None
+    ) -> tuple[bool, list[DownloadSegmentResult]]:
+        return self.download._download_segments(urls, tmp_path, None, self.task, True, None, n_tail_spurious)
+
+    def segment(self, tmp_path: pathlib.Path, name: str = PATH_SEGMENT) -> pathlib.Path:
+        return tmp_path / name
+
+
+def _urls(count: int) -> list[str]:
+    return [f"https://cdn.example/secret-token/seg_{index}" for index in range(count)]
 
 
 def _drop(message: str = "Connection broken: IncompleteRead(8 bytes read, 2 more expected)") -> Exception:
@@ -152,17 +188,21 @@ def test_a_dropped_body_retries_and_returns_only_the_second_body(tmp_path):
 
 
 def test_every_dropped_attempt_makes_three_gets_and_logs_one_class_only_error(tmp_path):
-    """The attempt budget is three in total; the terminal error names no URL or message."""
+    """A required segment's third failure logs one class-only error; the existing
+    corrupt line for the failed track stays.
+    """
     h = _Harness([_Response((b"x" * 8,), error=_drop()) for _ in range(3)])
 
-    result = h.run(tmp_path)
+    ok, results = h.run_track(tmp_path, [URL])
 
-    assert result.result is False
+    assert ok is False
+    assert results[0].result is False
     assert len(h.calls) == 3
-    assert len(h.errors) == 1
-    assert "ChunkedEncodingError" in h.errors[0]
-    assert "secret-token" not in h.errors[0]
-    assert "IncompleteRead" not in h.errors[0]
+    class_errors = [line for line in h.errors if "ChunkedEncodingError" in line]
+    assert len(class_errors) == 1
+    assert "secret-token" not in class_errors[0]
+    assert "IncompleteRead" not in class_errors[0]
+    assert any("File is corrupt" in line for line in h.errors)
     assert h.completed == 0  # every attempt took its 8 chunks back
 
 
@@ -292,15 +332,55 @@ def test_a_non_request_failure_is_not_retried_and_rewinds_its_steps(tmp_path):
         completed=3,
     )
 
-    result = h.run(tmp_path)
+    ok, results = h.run_track(tmp_path, [URL])
 
-    assert result.result is False
-    assert result.error is None
+    assert ok is False
+    assert results[0].result is False
+    assert results[0].error is None
     assert len(h.calls) == 1
     assert h.completed == 3
-    assert len(h.errors) == 1
-    assert "OSError" in h.errors[0]
-    assert "/secret/volume" not in h.errors[0]
+    class_errors = [line for line in h.errors if "OSError" in line]
+    assert len(class_errors) == 1
+    assert "/secret/volume" not in class_errors[0]
+    assert any("File is corrupt" in line for line in h.errors)
+
+
+def test_a_tolerated_5xx_tail_failure_logs_no_error(tmp_path):
+    """A multi-URL track's spurious 500 tail is padding: the track succeeds and
+    no segment failure is logged in red.
+    """
+    urls = _urls(2)
+    h = _Harness(
+        routes={
+            urls[0]: [_Response((b"audio",))],
+            urls[1]: [_Response(status=500) for _ in range(3)],
+        }
+    )
+
+    ok, results = h.run_track(tmp_path, urls, n_tail_spurious=1)
+
+    assert ok is True
+    assert h.calls.count(urls[1]) == 3  # the tail's own retry budget still ran
+    assert h.errors == []
+    assert h.segment(tmp_path, "seg_0").read_bytes() == b"audio"
+    assert any(not result.result for result in results)
+
+
+def test_a_tolerated_4xx_tail_failure_logs_no_error(tmp_path):
+    """The same tolerance applies when the padding URL answers 4xx."""
+    urls = _urls(2)
+    h = _Harness(
+        routes={
+            urls[0]: [_Response((b"audio",))],
+            urls[1]: [_Response(status=404)],
+        }
+    )
+
+    ok, _results = h.run_track(tmp_path, urls, n_tail_spurious=1)
+
+    assert ok is True
+    assert h.calls.count(urls[1]) == 1
+    assert h.errors == []
 
 
 def test_the_failed_response_is_closed_before_the_retry_get(tmp_path):
