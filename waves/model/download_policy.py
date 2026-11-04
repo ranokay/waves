@@ -69,6 +69,10 @@ POLICY_LABELS = {
     "require_extras": "Require selected lyrics and artwork",
 }
 CROSS_PROVIDER_FIELDS = ("choose_best_provider", "recover_provider", "upgrade_provider", "enrich_provider")
+# The boolean fields of each policy layer. They live with the schema so the
+# settings load normalizes exactly the fields decode_policies reads.
+DOWNLOAD_POLICY_BOOLEAN_FIELDS = (*CROSS_PROVIDER_FIELDS, "same_provider_fallback")
+FULFILLMENT_BOOLEAN_FIELDS = ("require_extras",)
 CROSS_PROVIDER_LABELS = (
     "Automatically choose the best provider",
     "Recover failures through another provider",
@@ -117,7 +121,7 @@ def _policy_values(raw: JsonValue) -> dict[str, Scalar]:
     result: dict[str, Scalar] = {}
     for key, value in raw.items():
         if (key in POLICY_CHOICES and isinstance(value, str) and value in POLICY_CHOICES[key]) or (
-            key == "require_extras" and isinstance(value, bool)
+            key in FULFILLMENT_BOOLEAN_FIELDS and isinstance(value, bool)
         ):
             result[key] = value
         elif key == "video_max_fps" and isinstance(value, int) and not isinstance(value, bool):
@@ -145,7 +149,7 @@ def decode_policies(raw: JsonValue) -> DownloadPolicies:
             for pid, orders in operations.items()
             if isinstance(orders, dict)
         }
-    for key in (*CROSS_PROVIDER_FIELDS, "same_provider_fallback"):
+    for key in DOWNLOAD_POLICY_BOOLEAN_FIELDS:
         if isinstance(raw.get(key), bool):
             setattr(result, key, raw[key])
     for key, (minimum, maximum) in ADVANCED_BOUNDS.items():
@@ -173,10 +177,7 @@ def apply_policy_edit(policies: DownloadPolicies, key: str, value: JsonValue) ->
             and bool(parts[1])
             and parts[2] in ("audio", "lyrics", "artwork")
         )
-        or (
-            len(parts) == 1
-            and parts[0] in (*CROSS_PROVIDER_FIELDS, "same_provider_fallback", "provider_priority", *ADVANCED_BOUNDS)
-        )
+        or (len(parts) == 1 and parts[0] in (*DOWNLOAD_POLICY_BOOLEAN_FIELDS, "provider_priority", *ADVANCED_BOUNDS))
     )
     if not valid:
         return policies

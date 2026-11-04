@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import threading
 import time
+import types
 import typing
 from collections.abc import Callable
 from json import JSONDecodeError
@@ -28,6 +29,7 @@ from waves.constants import (
 from waves.http import IdleDropAdapter
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Token as ModelToken
+from waves.model.download_policy import DOWNLOAD_POLICY_BOOLEAN_FIELDS, FULFILLMENT_BOOLEAN_FIELDS
 from waves.paths import path_config_base, path_file_settings, path_file_token
 
 logger = logging.getLogger("waves.config")
@@ -628,13 +630,44 @@ def api_waits_wake_for(event) -> None:
     _api_waits.event = event
 
 
+# The words a hand-edited settings file may spell a toggle with. Case and
+# surrounding whitespace fold away; nothing else is a boolean here. Only this
+# load path is in scope: set_option keeps its own list and policy.
+_BOOLEAN_WORDS: dict[str, bool] = {
+    "true": True,
+    "1": True,
+    "yes": True,
+    "false": False,
+    "0": False,
+    "no": False,
+}
+
+
+def _boolean_word(value: str) -> bool | None:
+    """The boolean a canonical word names, or None when it names none."""
+    return _BOOLEAN_WORDS.get(value.strip().lower())
+
+
+def _boolean_field(hint) -> bool:
+    """Whether the field holds a bool directly or as ``bool | None``."""
+    if hint is bool:
+        return True
+    args = typing.get_args(hint)
+    if typing.get_origin(hint) not in (typing.Union, types.UnionType):
+        return False
+    return bool in args and all(arg is bool or arg is type(None) for arg in args)
+
+
 def _field_unusable(hint, value) -> bool:
-    """A null the field does not allow, or a value that is not a member of the enum the field holds."""
+    """A null the field does not allow, a value outside the field's enum, or
+    a boolean field holding a word the canonical six do not name."""
     if value is None:
         # Unlike upstream, this fork's models have legitimate nulls (Token's
         # logged-out credentials, the quality split's migration carriers):
         # only a null the field's own type forbids is unusable.
         return type(None) not in typing.get_args(hint)
+    if isinstance(value, str) and _boolean_field(hint):
+        return _boolean_word(value) is None
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         try:
             hint(value)
@@ -643,17 +676,73 @@ def _field_unusable(hint, value) -> bool:
     return False
 
 
+def _unusable_fields_and_boolean_rewrites(raw: dict, hints: dict) -> tuple[list[str], dict[str, bool]]:
+    """The fields to delete and the boolean words to rewrite, for one stored object."""
+    dropped: list[str] = []
+    rewritten: dict[str, bool] = {}
+    for key, value in raw.items():
+        if key not in hints:
+            continue
+        if _field_unusable(hints[key], value):
+            dropped.append(key)
+        elif isinstance(value, str) and _boolean_field(hints[key]):
+            word = _boolean_word(value)
+            if word is not None:
+                rewritten[key] = word
+    return dropped, rewritten
+
+
+def _rewrite_boolean_words(raw: dict, keys: tuple[str, ...]) -> bool:
+    """Rewrite canonical boolean words on ``keys`` in place, dropping unknown ones."""
+    changed = False
+    for key in keys:
+        value = raw.get(key)
+        if not isinstance(value, str):
+            continue
+        word = _boolean_word(value)
+        if word is None:
+            del raw[key]
+        else:
+            raw[key] = word
+        changed = True
+    return changed
+
+
+# The booleans inside download_policies. That field decodes through its own
+# function, which keeps the default for anything that is not a real boolean,
+# so the top-level walk cannot reach these toggles.
+def _normalize_policy_boolean_words(raw: dict) -> bool:
+    """Coerce hand-edited boolean words inside the nested ``download_policies``."""
+    policies = raw.get("download_policies")
+    if not isinstance(policies, dict):
+        return False
+    changed = _rewrite_boolean_words(policies, DOWNLOAD_POLICY_BOOLEAN_FIELDS)
+    shared = policies.get("shared")
+    if isinstance(shared, dict):
+        changed = _rewrite_boolean_words(shared, FULFILLMENT_BOOLEAN_FIELDS) or changed
+    providers = policies.get("providers")
+    if isinstance(providers, dict):
+        for values in providers.values():
+            if isinstance(values, dict):
+                changed = _rewrite_boolean_words(values, FULFILLMENT_BOOLEAN_FIELDS) or changed
+    return changed
+
+
 def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     """The stored JSON with every field the model could not use removed, so
-    the dataclass default fills it in and the rest of the file survives.
+    the dataclass default fills it in, and every canonical boolean word
+    rewritten to the real boolean it names.
 
-    Two shapes reached the whole-file bail-out below (settings.json moved to
-    .bak, every setting back to stock): a null value (a hand edit, a sync
+    Two shapes reached the whole-file bail-out in ``read`` (settings.json moved
+    to .bak, every setting back to stock): a null value (a hand edit, a sync
     tool, a half-merged file), which dataclasses_json keeps as None and then
-    crashes the launch in settings_apply or the migration compare, and an
-    enum member this build does not know (a rollback past a newer tier),
-    which raises out of from_json for that one field and threw away the
-    download folder, every template and every toggle with it."""
+    crashes the launch in settings_apply or the migration compare; and an enum
+    member this build does not know (a rollback past a newer tier), which
+    raises out of from_json for that one field. A boolean toggle spelled as a
+    word did not raise: the decode read any non-empty string as true, so
+    "false", "0" and "no" all switched the toggle back on. Canonical words are
+    rewritten here; any other word is dropped like any other unusable value,
+    so one bad toggle does not cost the file."""
     try:
         raw = json.loads(settings_json)
     except (JSONDecodeError, TypeError):
@@ -664,12 +753,15 @@ def _drop_unusable_fields(settings_json: str, cls_model) -> str:
         hints = typing.get_type_hints(cls_model)
     except Exception:
         return settings_json
-    dropped = [key for key, value in raw.items() if key in hints and _field_unusable(hints[key], value)]
-    if not dropped:
+    dropped, rewritten = _unusable_fields_and_boolean_rewrites(raw, hints)
+    policy_rewritten = _normalize_policy_boolean_words(raw)
+    if not dropped and not rewritten and not policy_rewritten:
         return settings_json
     for key in dropped:
         del raw[key]
-    logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
+    raw.update(rewritten)
+    if dropped:
+        logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
     return json.dumps(raw)
 
 
