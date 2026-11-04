@@ -29,10 +29,11 @@ Requests carry artist and release-title search terms, service data and
 user-chosen text, never an account id, token or local path; log lines carry
 outcomes and counts only.
 
-Pure standard library (urllib, json, sqlite3), no Qt and no tidalapi, so it
-unit tests without the GUI stack. The HTTP layer is one injectable ``fetch``
-callable returning ``(status, body)`` tuples, so tests drive the whole
-arbiter with canned responses and never touch the network or sleep.
+Standard library plus the shared certifi-backed TLS context (urllib, json,
+sqlite3), no Qt and no tidalapi, so it unit tests without the GUI stack. The
+HTTP layer is one injectable ``fetch`` callable returning ``(status, body)``
+tuples, so tests drive the whole arbiter with canned responses and never
+touch the network or sleep.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from collections.abc import Callable
 from threading import Lock
 
 from waves.metadata.matching import album_duration_tolerance, same_edition, to_year_int
+from waves.tls import tls_context
 
 logger = logging.getLogger("waves.mbarbiter")
 
@@ -304,7 +306,9 @@ class MBArbiter:
             url, headers={"User-Agent": self._ua, "Accept": "application/json"}
         )
         try:
-            with urllib.request.urlopen(req, timeout=LOOKUP_TIMEOUT_SEC) as resp:  # noqa: S310 (https, fixed host)
+            with urllib.request.urlopen(  # noqa: S310 (https, fixed host)
+                req, timeout=LOOKUP_TIMEOUT_SEC, context=tls_context()
+            ) as resp:
                 return int(resp.status), resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             return int(e.code), ""

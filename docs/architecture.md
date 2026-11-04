@@ -38,12 +38,13 @@ flowchart TD
   inherited TIDAL engine still has TIDAL-specific resolution; it is not a
   universal engine, and Apple uses its own adapter.
 - Infrastructure modules have specific contracts: `ids.py` for identity,
-  `http.py` for pooled sessions, `file_integrity.py` for streaming SHA-256,
-  `flac_verify.py` for FLAC STREAMINFO reads and the in-place signature seal,
-  `system_ffmpeg.py` for finding and probing a user-installed FFmpeg,
-  `file_locks.py` for locks the OS drops with their process,
-  `redaction.py` for privacy, and `events.py` for typed redacted application events. Do not borrow another domain's private
-  helpers for these operations.
+  `http.py` for pooled sessions, `tls.py` for the certifi-backed context
+  plain-urllib reads pass to `urlopen`, `file_integrity.py` for streaming
+  SHA-256, `flac_verify.py` for FLAC STREAMINFO reads and the in-place
+  signature seal, `system_ffmpeg.py` for finding and probing a user-installed
+  FFmpeg, `file_locks.py` for locks the OS drops with their process,
+  `redaction.py` for privacy, and `events.py` for typed redacted application
+  events. Do not borrow another domain's private helpers for these operations.
 
 This map names the current implementation, including subordinate engine contracts,
 captured queued intent and the notification-center consumer of
