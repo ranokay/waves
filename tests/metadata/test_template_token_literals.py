@@ -196,27 +196,32 @@ def _formatter_token_literals() -> set[str]:
         if not isinstance(node, ast.FunctionDef) or not node.name.startswith("_format"):
             continue
         for sub in ast.walk(node):
-            if (
-                isinstance(sub, ast.Compare)
-                and isinstance(sub.left, ast.Name)
-                and sub.left.id == "name"
-                and len(sub.ops) == 1
-                and isinstance(sub.ops[0], ast.Eq)
-                and isinstance(sub.comparators[0], ast.Constant)
-                and isinstance(sub.comparators[0].value, str)
-            ):
-                found.add(sub.comparators[0].value)
+            if not isinstance(sub, ast.Compare) or not isinstance(sub.left, ast.Name) or sub.left.id != "name":
+                continue
+            if len(sub.ops) != 1:
+                continue
+            op, comparator = sub.ops[0], sub.comparators[0]
+            if isinstance(op, ast.Eq) and isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
+                found.add(comparator.value)
+            elif isinstance(op, ast.In) and isinstance(comparator, (ast.Tuple, ast.List, ast.Set)):
+                found.update(
+                    element.value
+                    for element in comparator.elts
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str)
+                )
     return found
 
 
 def test_wiring_every_resolved_token_is_a_known_token():
     """The neutralizer's set must equal the formatter's vocabulary.
 
-    Proven behaviorally above (a known token in a value is neutralized); this
-    pin compares the set against every name the ``_format_*`` functions can
-    answer, which no runtime seam exposes. A token added to the formatter
-    without the set therefore fails here instead of silently surviving in a
-    download path.
+    ``test_a_track_title_holding_a_token_is_not_expanded_by_a_later_one`` and
+    ``test_a_token_formed_by_illegal_character_removal_is_neutralized`` prove
+    the behavior. This pin compares the set against every name the ``_format_*``
+    functions can answer, which no runtime seam exposes: ``format_str_media``
+    answers an unresolved token and one resolving to the same text identically.
+    A token added to the formatter without the set therefore fails here instead
+    of silently surviving in a download path.
     """
     assert _formatter_token_literals() == paths._TEMPLATE_TOKENS
 
