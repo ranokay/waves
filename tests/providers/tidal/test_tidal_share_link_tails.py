@@ -49,8 +49,9 @@ def test_a_bare_u_is_kept_as_an_id():
     assert get_tidal_media_id("u") == "u"
 
 
-def test_a_u_is_only_a_tail_after_a_media_id():
-    # Without an id in front, "u" is the link's own id, never a suffix to drop.
+def test_a_u_after_a_kind_is_kept_as_an_id():
+    # TIDAL appends /u after a media id; with a kind and no id in front, "u"
+    # is the link's own id, never a suffix to drop.
     assert get_tidal_media_id("https://tidal.com/browse/track/u") == "u"
     assert get_tidal_media_type("https://tidal.com/browse/track/u") == MediaType.TRACK
 
