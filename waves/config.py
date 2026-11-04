@@ -29,6 +29,7 @@ from waves.constants import (
 from waves.http import IdleDropAdapter
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Token as ModelToken
+from waves.model.download_policy import CROSS_PROVIDER_FIELDS
 from waves.paths import path_config_base, path_file_settings, path_file_token
 
 logger = logging.getLogger("waves.config")
@@ -691,6 +692,45 @@ def _unusable_fields_and_boolean_rewrites(raw: dict, hints: dict) -> tuple[list[
     return dropped, rewritten
 
 
+# The booleans inside download_policies. That field decodes through its own
+# function, which keeps the default for anything that is not a real boolean,
+# so the top-level walk cannot reach these toggles.
+_DOWNLOAD_POLICY_BOOLEAN_FIELDS: tuple[str, ...] = (*CROSS_PROVIDER_FIELDS, "same_provider_fallback")
+
+
+def _rewrite_boolean_words(raw: dict, keys: tuple[str, ...]) -> bool:
+    """Rewrite canonical boolean words on ``keys`` in place, dropping unknown ones."""
+    changed = False
+    for key in keys:
+        value = raw.get(key)
+        if not isinstance(value, str):
+            continue
+        word = _boolean_word(value)
+        if word is None:
+            del raw[key]
+        else:
+            raw[key] = word
+        changed = True
+    return changed
+
+
+def _normalize_policy_boolean_words(raw: dict) -> bool:
+    """Coerce hand-edited boolean words inside the nested ``download_policies``."""
+    policies = raw.get("download_policies")
+    if not isinstance(policies, dict):
+        return False
+    changed = _rewrite_boolean_words(policies, _DOWNLOAD_POLICY_BOOLEAN_FIELDS)
+    shared = policies.get("shared")
+    if isinstance(shared, dict):
+        changed = _rewrite_boolean_words(shared, ("require_extras",)) or changed
+    providers = policies.get("providers")
+    if isinstance(providers, dict):
+        for values in providers.values():
+            if isinstance(values, dict):
+                changed = _rewrite_boolean_words(values, ("require_extras",)) or changed
+    return changed
+
+
 def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     """The stored JSON with every field the model could not use removed, so
     the dataclass default fills it in, and every canonical boolean word
@@ -717,7 +757,8 @@ def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     except Exception:
         return settings_json
     dropped, rewritten = _unusable_fields_and_boolean_rewrites(raw, hints)
-    if not dropped and not rewritten:
+    policy_rewritten = _normalize_policy_boolean_words(raw)
+    if not dropped and not rewritten and not policy_rewritten:
         return settings_json
     for key in dropped:
         del raw[key]

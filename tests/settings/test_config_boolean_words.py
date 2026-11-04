@@ -117,3 +117,37 @@ def test_a_file_without_boolean_strings_comes_back_unchanged(tmp_path):
     assert _cfg(tmp_path).read(str(path)) is True
 
     assert path.read_text(encoding="utf-8") == text, "read's write-back left the file alone"
+
+
+def test_hand_edited_policy_boolean_words_load_as_their_boolean(tmp_path):
+    raw = json.loads(ModelSettings().to_json())
+    raw["download_policies"]["same_provider_fallback"] = "false"
+    raw["download_policies"]["choose_best_provider"] = " YES "
+    raw["download_policies"]["shared"]["require_extras"] = "1"
+    raw["download_policies"]["providers"] = {"tidal": {"require_extras": "no"}}
+    raw["download_delay_sec_min"] = 7
+
+    cfg = _read(tmp_path, raw)
+
+    policies = cfg.data.download_policies
+    assert policies.same_provider_fallback is False
+    assert policies.choose_best_provider is True
+    assert policies.shared.require_extras is True
+    assert policies.providers["tidal"]["require_extras"] is False
+    assert cfg.data.download_delay_sec_min == 7, "the rest of the file survives"
+    assert list(tmp_path.glob("settings.json*.bak")) == [], "the file is not set aside"
+
+
+def test_an_unknown_policy_boolean_word_resets_only_that_field(tmp_path):
+    raw = json.loads(ModelSettings().to_json())
+    raw["download_policies"]["same_provider_fallback"] = "false"
+    raw["download_policies"]["enrich_provider"] = "maybe"
+    raw["download_delay_sec_min"] = 7
+
+    cfg = _read(tmp_path, raw)
+
+    policies = cfg.data.download_policies
+    assert policies.same_provider_fallback is False, "the usable word still loads"
+    assert policies.enrich_provider is False, "an unrecognized word resets the field to its default"
+    assert cfg.data.download_delay_sec_min == 7, "the rest of the file survives"
+    assert list(tmp_path.glob("settings.json*.bak")) == [], "the file is not set aside"
