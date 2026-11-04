@@ -83,6 +83,7 @@ def test_malformed_input_does_not_raise_from_the_id_reader():
         ("https://tidal.com/browse/video/7/u/", "7", MediaType.VIDEO),
         ("https://tidal.com/browse/playlist/pl-1", "pl-1", MediaType.PLAYLIST),
         ("https://tidal.com/browse/playlist/pl-1/?u", "pl-1", MediaType.PLAYLIST),
+        ("https://tidal.com/browse/playlist/track/u", "track", MediaType.PLAYLIST),
         ("https://tidal.com/browse/mix/mx-1", "mx-1", MediaType.MIX),
         ("https://tidal.com/browse/mix/mx-1#top", "mx-1", MediaType.MIX),
         ("https://tidal.com/browse/artist/9", "9", MediaType.ARTIST),

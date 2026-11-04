@@ -269,6 +269,22 @@ def test_search_reads_the_provider_and_the_payload_is_the_built_rows():
     assert stub.busy == [True, False]
 
 
+def test_a_scheme_less_tidal_link_uses_provider_backed_routing():
+    # WavesBridge.search decides with _pasted_media_link(needle, self.providers),
+    # where each provider's declared hosts answer -- the branch a real paste
+    # takes. A scheme-less share link must open, not become a search.
+    provider = _provider()
+    stub = _SearchStub(provider)
+    opened: list[str] = []
+    stub._open_url = opened.append
+    url = "tidal.com/browse/track/123/u"
+
+    stub.search(url)
+
+    assert opened == [url]
+    assert provider.calls == []
+
+
 def test_a_cached_search_never_reaches_the_provider_twice():
     provider = _provider(search={"albums": [object()], "top_hit": None})
     stub = _SearchStub(provider)

@@ -55,10 +55,10 @@ def _media_link_segments(url_or_id_media: str) -> list[str]:
     A bare value with no path -- an id, or any other single token -- is one
     segment. A link's fragment and query are dropped whole -- even when they
     contain ``/`` -- so only the path decides the id and its kind. Empty
-    segments (trailing or doubled slashes) are ignored, and TIDAL's
-    share-sheet ``u`` suffix is dropped when a media id precedes it. A value
-    that carries a path must parse as an http(s) URL on a TIDAL host;
-    otherwise it yields no segments, so neither helper reports a match.
+    segments (trailing or doubled slashes) are ignored, and the share-sheet
+    ``u`` suffix is dropped when the path is ``kind/id/u``. A value that
+    carries a path must parse as an http(s) URL on a TIDAL host; otherwise it
+    yields no segments, so neither helper reports a match.
     """
     text = url_or_id_media.strip().split("#", 1)[0].split("?", 1)[0]
     if not text:
@@ -75,7 +75,7 @@ def _media_link_segments(url_or_id_media: str) -> list[str]:
     if not any(host == allowed or host.endswith(f".{allowed}") for allowed in TIDAL_LINK_HOSTS):
         return []
     segments = [segment for segment in parsed.path.split("/") if segment]
-    if len(segments) > 2 and segments[-1] == "u" and segments[-2] not in _MEDIA_KINDS:
+    if len(segments) > 2 and segments[-1] == "u" and segments[-3] in _MEDIA_KINDS:
         segments.pop()
     return segments
 
