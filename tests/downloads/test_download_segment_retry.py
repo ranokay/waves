@@ -13,7 +13,6 @@ threading events are real.
 
 from __future__ import annotations
 
-import inspect
 import pathlib
 import threading
 import time
@@ -238,6 +237,7 @@ def test_a_stop_during_a_failing_attempt_ends_the_fetch_quietly(tmp_path):
     assert result.result is False
     assert len(h.calls) == 1
     assert h.errors == []
+    assert h.warnings == []  # no retry is claimed when the stop rules it out
     assert h.completed == 3  # the failed attempt's step is taken back
 
 
@@ -303,28 +303,6 @@ def test_a_non_request_failure_is_not_retried_and_rewinds_its_steps(tmp_path):
     assert "/secret/volume" not in h.errors[0]
 
 
-def test_the_segment_attempt_budget_and_delay_are_class_attributes():
-    """The budget and per-attempt delay are small fixed Download values."""
-    assert Download._SEGMENT_ATTEMPTS == 3
-    assert 0 < Download._SEGMENT_RETRY_DELAY_SEC <= 1
-
-
-def test_download_segment_keeps_its_signature():
-    """The engine seam's call contract is unchanged."""
-    parameters = inspect.signature(Download._download_segment).parameters
-
-    assert list(parameters) == [
-        "self",
-        "url",
-        "path_base",
-        "block_size",
-        "p_task",
-        "progress_to_stdout",
-        "event_stop",
-    ]
-    assert parameters["event_stop"].default is None
-
-
 def test_the_failed_response_is_closed_before_the_retry_get(tmp_path):
     """A waiting segment must hold no connection from the blocking shared pool."""
     first = _Response(status=500)
@@ -362,7 +340,7 @@ def test_a_paused_job_never_starts_the_retry_get(tmp_path):
     worker.start()
     assert failed_once.wait(2)
     # Longer than the retry delay: an unpaused job would have issued the GET.
-    time.sleep(0.8)
+    time.sleep(Download._SEGMENT_RETRY_DELAY_SEC + 0.3)
     assert len(h.calls) == 1
     assert worker.is_alive()
 

@@ -1190,8 +1190,9 @@ class Download:
             if complete:
                 result = True
                 break
-            if failure is None:
-                # Stop/Cancel interrupted the body; it is not an error to log.
+            if failure is None or self._segment_stopped(event_stop):
+                # Stop/Cancel interrupted the body, or landed while the attempt
+                # failed: either way it is not an error to log and no retry follows.
                 give_up = True
                 break
 
@@ -1209,7 +1210,7 @@ class Download:
                 break
 
             self.fn_logger.warning(
-                f"Segment body dropped, retrying (attempt {attempt} of {self._SEGMENT_ATTEMPTS}): {failure_name}"
+                f"Segment fetch failed, retrying (attempt {attempt} of {self._SEGMENT_ATTEMPTS}): {failure_name}"
             )
             if self._wait_before_segment_retry(event_stop):
                 give_up = True
