@@ -470,6 +470,32 @@ def test_writes_reach_both_reader_paths_and_survive_a_fall_back(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
+def test_a_fall_back_keeps_every_later_read_on_the_shared_connection(tmp_path):
+    """After one reader falls back, every read from every thread answers from
+    the file the store was opened on, the one writes still go to. A valid
+    database that later appears at the path (a restore, or a sync client
+    filling the file it recreated) must not answer a later read: that reader
+    would see a store no write reaches."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("a", ["mine"])
+    _replace_store(path)
+    assert _on_fresh_thread(lambda: store.members_of("a")) == ["mine"]  # falls back
+    assert store._shared_reads is True
+
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(str(path) + suffix):
+            os.remove(str(path) + suffix)
+    restored = OwnershipStore(str(path))
+    restored.record_members_replace("a", ["restored"])
+    restored.close()
+
+    assert _on_fresh_thread(lambda: store.members_of("a")) == ["mine"]
+    store.record_members_replace("a", ["written-after"])
+    assert _on_fresh_thread(lambda: store.members_of("a")) == ["written-after"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
 def test_close_takes_a_reader_created_before_another_reader_fell_back(tmp_path):
     """The whole-file replacement makes one reader fail and hands every read to
     the shared connection, but a reader that was already open on the original
