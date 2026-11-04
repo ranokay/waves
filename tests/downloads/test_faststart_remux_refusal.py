@@ -3,15 +3,14 @@
 WHAT THIS FENCES OFF
 --------------------
 ``_faststart_remux`` writes a sibling faststart container and swaps it over the
-merged raw file. That swap used to be one bare ``os.replace`` outside the
-FFmpeg-failure guard, so a transient refusal (a Windows scanner lock, a sharing
-violation, a read-only folder) raised out of the method. The caller runs in a
-temporary directory that is cleaned on the way out, so the only complete
-download was deleted and the track landed as failed even though a playable file
-existed. The swap now rides the shared ``_retry_file_operation`` budget: a
-refusal that outlasts it keeps the raw bytes, removes the sibling, reports the
-refusal and returns the input path. A brief refusal still lands the remuxed
-file.
+merged raw file. A bare ``os.replace`` outside the FFmpeg-failure guard turns a
+transient refusal (a Windows scanner lock, a sharing violation, a read-only
+folder) into a raise, and the caller's temp directory is cleaned on the way
+out: the only complete download would be deleted and the track marked failed
+even though a playable file existed. The swap must ride the shared
+``_retry_file_operation`` budget: a refusal that outlasts it keeps the raw
+bytes, removes the sibling, reports the refusal and returns the input path. A
+brief refusal still lands the remuxed file.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ import pathlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from tidalapi.media import Track
+from downloads.fakes import make_download, make_track
 
 from waves.download import Download, StreamInfo
 
@@ -167,43 +166,15 @@ def test_a_refused_sibling_cleanup_does_not_raise(tmp_path: pathlib.Path) -> Non
     assert path_file.read_bytes() == _ORIGINAL_BYTES
 
 
-def _track() -> Track:
-    track = Track.__new__(Track)
-    track.id = 718
-    track.audio_modes = ["STEREO"]
-    track.artists = []
-    track.name = "Refused Swap"
-    track.version = None
-    return track
-
-
-def _pipeline_download(path_base: pathlib.Path) -> Download:
-    dl = Download(
-        tidal_obj=MagicMock(),
-        skip_existing=True,
-        path_base=str(path_base),
-        fn_logger=MagicMock(),
-        progress=MagicMock(),
-    )
-    dl.settings = SimpleNamespace(
-        data=SimpleNamespace(
-            path_binary_ffmpeg="ffmpeg",
-            extract_flac=False,
-            downsample_enabled=False,
-            video_convert_mp4=False,
-        )
-    )
-    return dl
-
-
 def test_a_refused_replacement_lands_the_track(tmp_path: pathlib.Path) -> None:
     """The caller returns success with the raw file, not a failed track.
 
-    Drives the real ``_perform_actual_download`` through the remux step at
-    ``waves/download.py:2953``; only the provider fetch, tagging and move are
-    faked, so a raise here is the failure the issue reports.
+    Drives the real ``_perform_actual_download`` through its remux step and its
+    real move into the library; only the provider fetch and tagging are faked,
+    so a raise or a failed track here is the failure the issue reports.
     """
-    dl = _pipeline_download(tmp_path)
+    dl = make_download(tmp_path)
+    dl.settings.data.path_binary_ffmpeg = "ffmpeg"
     path_dst = tmp_path / "Refused Swap.m4a"
     ffmpeg = _ffmpeg_writing(_REMUXED_BYTES)
     stream_info = StreamInfo(file_extension=".m4a", delivered={"audio_type": "stereo"})
@@ -212,18 +183,26 @@ def test_a_refused_replacement_lands_the_track(tmp_path: pathlib.Path) -> None:
         path_file.write_bytes(_ORIGINAL_BYTES)
         return True, path_file
 
+    replace_original = os.replace
+
+    def refuse_swap(source, destination) -> None:
+        # Refuse every attempt at the faststart sibling only; the later move to
+        # the library must still reach the real move implementation.
+        if pathlib.Path(source).name.endswith(".faststart.m4a"):
+            raise PermissionError(1, "Operation not permitted")
+        replace_original(source, destination)
+
     with (
         patch.object(Download, "_download", side_effect=fetch),
         patch.object(Download, "_handle_metadata_and_extras", return_value=None),
-        patch.object(Download, "_move_file", return_value=True),
-        patch.object(Download, "_record_name_written"),
         patch("waves.download.name_builder_item", return_value="Refused Swap"),
         patch("waves.download.FFmpeg", return_value=ffmpeg),
-        patch("waves.download.os.replace", side_effect=_refuse_replace),
+        patch("waves.download.os.replace", side_effect=refuse_swap),
         patch("waves.download.time.sleep"),
     ):
-        ok, landed = dl._perform_actual_download(_track(), path_dst, stream_info, False, None)
+        ok, landed = dl._perform_actual_download(make_track(718), path_dst, stream_info, False, None)
 
     assert ok is True
     assert landed == path_dst
+    assert path_dst.read_bytes() == _ORIGINAL_BYTES
     assert dl.fn_logger.warning.called
