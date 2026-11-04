@@ -26,6 +26,23 @@ def _track_file(tmp_path, name):
     return str(p)
 
 
+def _on_fresh_thread(fn):
+    """Run ``fn`` on a new thread (so it opens its own reader) and return its
+    result, or the exception it raised."""
+    out = {}
+
+    def run():
+        try:
+            out["r"] = fn()
+        except Exception as e:
+            out["r"] = e
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join(10)
+    return out["r"]
+
+
 @pytest.mark.parametrize(
     "tier,rank",
     [("LOW", 0), ("HIGH", 1), ("LOSSLESS", 2), ("HI_RES_LOSSLESS", 3), ("lossless", 2), (None, -1), ("bogus", -1)],
@@ -256,6 +273,267 @@ def test_membership_is_scoped_per_collection(tmp_path):
 def test_add_falsy_ids_are_skipped(tmp_path):
     store = _store(tmp_path)
     store.record_members_add("album1", ["1", "", None])
+    assert store.members_of("album1") == ["1"]
+
+
+# --------------------------------------------------------------------------- #
+# A read outlives the store file being removed, replaced or corrupted under it.
+# A thread's first read used to open the file by path, so after a replace it
+# opened a brand new empty database and every query failed with "no such table"
+# out of a Slot. A reader now opens only an existing file (read-write URI, no
+# create) and falls back to the connection every write goes to.
+# --------------------------------------------------------------------------- #
+def test_cold_reader_works_under_an_awkward_folder_name(tmp_path, caplog):
+    """The per-thread reader opens the file by URI, so a space or a '#' in the
+    config folder's path must not push it onto the fallback."""
+    folder = tmp_path / "Waves site #1"
+    folder.mkdir()
+    store = OwnershipStore(str(folder / "ownership.sqlite3"))
+    store.record_members_replace("album1", ["1", "2"])
+
+    def answer():
+        got = store.members_of("album1")
+        return got, getattr(store._readers, "reader", None) is not None
+
+    with caplog.at_level("WARNING", logger="waves.ownership"):
+        got, had_reader = _on_fresh_thread(answer)
+    assert sorted(got) == ["1", "2"]
+    assert had_reader is True, "the fresh thread fell back instead of opening its own reader"
+    assert "shared connection" not in caplog.text
+    assert store._shared_reads is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
+def test_cold_reader_survives_the_file_being_replaced(tmp_path):
+    """The file swapped for an empty one while the app runs: a thread whose
+    first read comes after that used to open the empty file and raise "no such
+    table" out of collectionOwnership on every card. It now reads what the
+    store was opened on, the file every write still goes to."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1", "2"])
+    os.remove(path)
+    open(path, "wb").close()
+    assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1", "2"]
+    # And once one reader has failed, every thread reads the same way.
+    assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1", "2"]
+    assert sorted(store.members_of("album1")) == ["1", "2"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
+def test_cold_reader_never_creates_a_missing_file(tmp_path):
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1"])
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(str(path) + suffix):
+            os.remove(str(path) + suffix)
+    assert _on_fresh_thread(lambda: store.members_of("album1")) == ["1"]
+    assert not path.exists()
+
+
+def test_members_of_reads_as_unknown_when_the_store_cannot_answer(tmp_path):
+    """Broken under the shared connection too: members_of is called from a
+    Slot, so it answers None ("never observed") instead of raising."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1"])
+    con = sqlite3.connect(str(path))
+    con.execute("DROP TABLE collection_members")
+    con.commit()
+    con.close()
+    assert store.members_of("album1") is None
+    assert _on_fresh_thread(lambda: store.members_of("album1")) is None
+
+
+def test_members_of_reads_as_unknown_when_the_file_is_corrupted_in_place(tmp_path):
+    """Not every unanswerable store raises an OperationalError: a main file
+    overwritten in place (a sync client, a restore) makes the shared connection
+    raise DatabaseError "file is not a database". members_of still reads it as
+    unknown, and the failed reader closes itself and leaves the thread-local."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", [str(i) for i in range(5000)])
+    store._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    assert store.members_of("album1") is not None  # this thread's reader caches pages
+    reader = store._readers.reader
+    assert reader is not None, "the first read did not use a per-thread reader"
+
+    data = path.read_bytes()
+    path.write_bytes(b"\x00" * len(data))
+    reader.conn.execute("PRAGMA shrink_memory")
+    store._conn.execute("PRAGMA shrink_memory")
+
+    assert store.members_of("album1") is None
+    assert store._readers.reader is None, "a failed reader was kept in the thread-local"
+    with pytest.raises(sqlite3.ProgrammingError):
+        reader.conn.execute("SELECT 1")
+    assert _on_fresh_thread(lambda: store.members_of("album1")) is None
+
+
+def test_a_reader_falling_back_warns_once_per_store(tmp_path, caplog):
+    """Four threads race the first read after a replacement: exactly one
+    warning, whichever one gets there first."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1"])
+    os.remove(path)
+    open(path, "wb").close()
+
+    start = threading.Barrier(4)
+    results = []
+
+    def read():
+        start.wait(10)
+        results.append(store.members_of("album1"))
+
+    threads = [threading.Thread(target=read) for _ in range(4)]
+    with caplog.at_level("WARNING", logger="waves.ownership"):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+    assert len(results) == 4
+    assert all(sorted(result) == ["1"] for result in results), results
+    warnings = [rec for rec in caplog.records if "shared connection" in rec.getMessage()]
+    assert len(warnings) == 1, [rec.getMessage() for rec in warnings]
+
+
+def test_an_unanswerable_members_of_warns_once_per_store(tmp_path, caplog):
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1"])
+    con = sqlite3.connect(str(path))
+    con.execute("DROP TABLE collection_members")
+    con.commit()
+    con.close()
+    with caplog.at_level("WARNING", logger="waves.ownership"):
+        assert store.members_of("album1") is None
+        assert store.members_of("album1") is None
+        assert _on_fresh_thread(lambda: store.members_of("album1")) is None
+    failed = [rec for rec in caplog.records if "members_of could not read" in rec.getMessage()]
+    assert len(failed) == 1, [rec.getMessage() for rec in failed]
+    fallbacks = [rec for rec in caplog.records if "shared connection" in rec.getMessage()]
+    assert len(fallbacks) == 1, [rec.getMessage() for rec in fallbacks]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
+def test_writes_reach_both_reader_paths_and_survive_a_fall_back(tmp_path):
+    """A reader opened BEFORE the replacement must not answer stale membership
+    once the store has fallen back: the post-fallback write goes through the
+    shared connection and every later read, on every thread, sees it."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1"])
+
+    parked = threading.Event()
+    release = threading.Event()
+    out: dict = {}
+
+    def worker():
+        out["before"] = store.members_of("album1")
+        out["reader"] = getattr(store._readers, "reader", None)
+        parked.set()
+        release.wait(10)
+        out["after"] = store.members_of("album1")
+
+    t = threading.Thread(target=worker)
+    t.start()
+    assert parked.wait(10), "the pre-replacement reader never answered"
+    try:
+        assert out["before"] == ["1"]
+        assert out["reader"] is not None, "the parked thread had no reader to test"
+
+        os.remove(path)
+        open(path, "wb").close()
+        assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1"]
+        assert store._shared_reads is True, "the failed reader never fell back"
+
+        # The write AFTER the fallback, not just before it.
+        store.record_members_replace("album1", ["2"])
+        assert store.members_of("album1") == ["2"]
+
+        def answer_after_fall_back():
+            got = store.members_of("album1")
+            return got, getattr(store._readers, "reader", None)
+
+        got, reader = _on_fresh_thread(answer_after_fall_back)
+        assert got == ["2"]
+        assert reader is None, "a fresh thread opened its own reader after the fallback"
+    finally:
+        release.set()
+        t.join(10)
+    assert out["after"] == ["2"], "the pre-replacement reader answered stale membership"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
+def test_close_takes_a_reader_created_before_another_reader_fell_back(tmp_path):
+    """The whole-file replacement makes one reader fail and hands every read to
+    the shared connection, but a reader that was already open on the original
+    file stays registered and must still be closed with the store."""
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    store.record_members_replace("album1", ["1"])
+
+    parked = threading.Event()
+    release = threading.Event()
+    captured: dict = {}
+
+    def reader():
+        assert store.members_of("album1") == ["1"]
+        captured["conn"] = store._readers.reader.conn
+        parked.set()
+        release.wait(10)
+
+    t = threading.Thread(target=reader)
+    t.start()
+    assert parked.wait(10), "the pre-fallback reader never answered"
+    try:
+        os.remove(path)
+        open(path, "wb").close()
+        assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1"]
+        assert store._shared_reads is True
+
+        store.close()
+        with pytest.raises(sqlite3.ProgrammingError):
+            captured["conn"].execute("SELECT 1")
+    finally:
+        release.set()
+        t.join(10)
+
+
+def test_an_in_memory_store_still_answers_membership():
+    store = OwnershipStore(":memory:")
+    store.record_members_replace("album1", ["1", "2"])
+    assert sorted(store.members_of("album1")) == ["1", "2"]
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        store._read("SELECT 1")
+
+
+def test_a_read_after_close_still_raises_and_members_of_reads_as_unknown(tmp_path):
+    """_read keeps sqlite's own closed error, and only members_of turns an
+    unanswerable store into the unknown state its Slot callers render."""
+    store = _store(tmp_path)
+    store.record_members_replace("album1", ["1"])
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        store._read("SELECT 1")
+    assert store.members_of("album1") is None
+
+
+def test_only_members_of_reads_a_broken_store_as_unknown(tmp_path):
+    path = tmp_path / "ownership.sqlite3"
+    store = OwnershipStore(str(path))
+    audio = _track_file(tmp_path, "song.flac")
+    store.record("123", audio, "LOSSLESS")
+    store.record_members_replace("album1", ["1"])
+    con = sqlite3.connect(str(path))
+    con.execute("DROP TABLE downloads")
+    con.commit()
+    con.close()
+    with pytest.raises(sqlite3.OperationalError):
+        store.ownership_of("123")
     assert store.members_of("album1") == ["1"]
 
 
