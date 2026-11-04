@@ -30,6 +30,7 @@ import sys
 import time
 import unicodedata
 import weakref
+from pathlib import Path
 from threading import Lock, local
 
 from waves.constants import quality_rank
@@ -393,6 +394,12 @@ class OwnershipStore:
         # holds the same registry, for the same reason.
         self._reader_refs: set = set()
         self._closed = False
+        # Set once a thread's own reader has failed (see _read): every read
+        # from then on goes through the shared connection.
+        self._shared_reads = False
+        # Set once members_of has reported an unanswerable store, so the
+        # warning for it is logged once, not on every card that asks.
+        self._members_failed = False
         # The folders ownership answers are confined to (see set_roots).
         self._roots = None
         with self._lock:
@@ -563,22 +570,58 @@ class OwnershipStore:
     def _read(self, sql: str, params: tuple = ()) -> list:
         """Run a read on this thread's own connection (see __init__). Falls
         back to the shared connection, under the lock, for an in-memory
-        store or once the store is closed (so a late reader gets sqlite's
-        own "closed" error rather than a fresh connection to nothing)."""
-        if self._path == ":memory:" or self._closed:
+        store, once the store is closed (so a late reader gets sqlite's
+        own "closed" error rather than a fresh connection to nothing), or
+        once a reader has failed.
+
+        A reader opens the file read-write but never creates it, and only
+        the constructor lays down the schema, so a file removed or replaced
+        while the app runs (a sync client, a restore, the user clearing the
+        config folder) cannot be reborn as a new empty database under a
+        read. The shared connection holds the file the store was opened on,
+        the one every write goes to, so a failing reader closes itself,
+        hands over, and that read and every later one answer from the
+        shared connection under the lock."""
+        if self._path == ":memory:" or self._closed or self._shared_reads:
             with self._lock:
                 return self._conn.execute(sql, params).fetchall()
         reader = getattr(self._readers, "reader", None)
-        if reader is None:
-            # check_same_thread off so close() can take it from the thread
-            # that is quitting. Each connection is still only ever USED by
-            # the thread it was made on, which is what the flag guards.
-            reader = _Reader(sqlite3.connect(self._path, check_same_thread=False))
-            self._readers.reader = reader
-            # discard as the callback: the entry goes the moment the owning
-            # thread does, on that thread, with no lock to wait for.
-            self._reader_refs.add(weakref.ref(reader, self._reader_refs.discard))
-        return reader.conn.execute(sql, params).fetchall()
+        try:
+            if reader is None:
+                # A URI rather than the bare path: sqlite's URI parser reads
+                # "?" as the start of its parameters, so the quoting
+                # (as_uri) keeps a space, "#" or "?" in the folder name part
+                # of the path. mode=rw opens an existing file and never
+                # creates one.
+                uri = Path(os.path.abspath(self._path)).as_uri() + "?mode=rw"
+                # check_same_thread off so close() can take it from the thread
+                # that is quitting. Each connection is still only ever USED by
+                # the thread it was made on, which is what the flag guards.
+                reader = _Reader(sqlite3.connect(uri, uri=True, check_same_thread=False))
+                self._readers.reader = reader
+                # discard as the callback: the entry goes the moment the owning
+                # thread does, on that thread, with no lock to wait for.
+                self._reader_refs.add(weakref.ref(reader, self._reader_refs.discard))
+            return reader.conn.execute(sql, params).fetchall()
+        except sqlite3.Error as e:
+            # The reader cannot use the file this thread opened (gone, or
+            # replaced by one without the schema): close it and drop it, so
+            # a later read never reuses it. The flag flips under the lock so
+            # the warning lands once per store even when several threads
+            # fail together.
+            if reader is not None:
+                self._readers.reader = None
+                with contextlib.suppress(Exception):
+                    reader.conn.close()
+            with self._lock:
+                log_once = not self._shared_reads
+                self._shared_reads = True
+            if log_once:
+                logger.warning(
+                    "ownership: a reader could not use the store file (%s); reading through the shared connection", e
+                )
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
 
     def record(
         self,
@@ -807,11 +850,25 @@ class OwnershipStore:
         user's music folder: unlike ownership_of, there is no live filesystem
         stat here, so this never risks hanging on a dropped network mount and
         is safe to call directly.
+
+        A store that cannot answer (its file broken under the shared
+        connection too) also reads as None: the cards call this from a Slot,
+        and "unknown" is a state they already show, where an exception is
+        not. sqlite3.Error, not only OperationalError: a file overwritten in
+        place raises DatabaseError "file is not a database".
         """
-        rows = self._read(
-            "SELECT track_id FROM collection_members WHERE collection_id = ?",
-            (str(collection_id),),
-        )
+        try:
+            rows = self._read(
+                "SELECT track_id FROM collection_members WHERE collection_id = ?",
+                (str(collection_id),),
+            )
+        except sqlite3.Error as e:
+            with self._lock:
+                log_once = not self._members_failed
+                self._members_failed = True
+            if log_once:
+                logger.warning("ownership: members_of could not read the store (%s)", e)
+            return None
         if not rows:
             return None
         return [r[0] for r in rows]
