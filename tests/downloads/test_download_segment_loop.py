@@ -7,10 +7,12 @@ returns HTTP 200 with an empty (0-byte) body yields no chunks and never reaches
 infinite spin, multiplying bandwidth and CPU). The single-file path carries the
 same risk when a HEAD content-length overstates the bytes actually streamed.
 
-The segment pass runs exactly once (segment-level retries already live inside
-``_download_segment`` via requests ``Retry(total=5)``), success is derived from
-the per-segment results, and the progress bar snaps to complete on success so
-the GUI still reads 100% despite the short estimate.
+The segment pass runs exactly once (a dropped body is retried inside
+``_download_segment`` by its own three-attempt loop; the shared session's
+``Retry(total=5)`` covers only connection setup, redirects and response
+headers), success is derived from the per-segment results, and the progress bar
+snaps to complete on success so the GUI still reads 100% despite the short
+estimate.
 """
 
 from __future__ import annotations
