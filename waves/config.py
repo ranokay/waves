@@ -29,7 +29,7 @@ from waves.constants import (
 from waves.http import IdleDropAdapter
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Token as ModelToken
-from waves.model.download_policy import CROSS_PROVIDER_FIELDS
+from waves.model.download_policy import DOWNLOAD_POLICY_BOOLEAN_FIELDS, FULFILLMENT_BOOLEAN_FIELDS
 from waves.paths import path_config_base, path_file_settings, path_file_token
 
 logger = logging.getLogger("waves.config")
@@ -695,12 +695,13 @@ def _unusable_fields_and_boolean_rewrites(raw: dict, hints: dict) -> tuple[list[
 # The booleans inside download_policies. That field decodes through its own
 # function, which keeps the default for anything that is not a real boolean,
 # so the top-level walk cannot reach these toggles.
-_DOWNLOAD_POLICY_BOOLEAN_FIELDS: tuple[str, ...] = (*CROSS_PROVIDER_FIELDS, "same_provider_fallback")
+def _rewrite_boolean_words(raw: dict, keys: tuple[str, ...]) -> tuple[bool, int]:
+    """Rewrite canonical boolean words on ``keys`` in place; drop unknown ones.
 
-
-def _rewrite_boolean_words(raw: dict, keys: tuple[str, ...]) -> bool:
-    """Rewrite canonical boolean words on ``keys`` in place, dropping unknown ones."""
+    Returns whether any word was handled and how many unusable words were
+    dropped."""
     changed = False
+    dropped = 0
     for key in keys:
         value = raw.get(key)
         if not isinstance(value, str):
@@ -708,27 +709,32 @@ def _rewrite_boolean_words(raw: dict, keys: tuple[str, ...]) -> bool:
         word = _boolean_word(value)
         if word is None:
             del raw[key]
+            dropped += 1
         else:
             raw[key] = word
         changed = True
-    return changed
+    return changed, dropped
 
 
-def _normalize_policy_boolean_words(raw: dict) -> bool:
+def _normalize_policy_boolean_words(raw: dict) -> tuple[bool, int]:
     """Coerce hand-edited boolean words inside the nested ``download_policies``."""
     policies = raw.get("download_policies")
     if not isinstance(policies, dict):
-        return False
-    changed = _rewrite_boolean_words(policies, _DOWNLOAD_POLICY_BOOLEAN_FIELDS)
+        return False, 0
+    changed, dropped = _rewrite_boolean_words(policies, DOWNLOAD_POLICY_BOOLEAN_FIELDS)
     shared = policies.get("shared")
     if isinstance(shared, dict):
-        changed = _rewrite_boolean_words(shared, ("require_extras",)) or changed
+        shared_changed, shared_dropped = _rewrite_boolean_words(shared, FULFILLMENT_BOOLEAN_FIELDS)
+        changed = changed or shared_changed
+        dropped += shared_dropped
     providers = policies.get("providers")
     if isinstance(providers, dict):
         for values in providers.values():
             if isinstance(values, dict):
-                changed = _rewrite_boolean_words(values, ("require_extras",)) or changed
-    return changed
+                provider_changed, provider_dropped = _rewrite_boolean_words(values, FULFILLMENT_BOOLEAN_FIELDS)
+                changed = changed or provider_changed
+                dropped += provider_dropped
+    return changed, dropped
 
 
 def _drop_unusable_fields(settings_json: str, cls_model) -> str:
@@ -757,14 +763,14 @@ def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     except Exception:
         return settings_json
     dropped, rewritten = _unusable_fields_and_boolean_rewrites(raw, hints)
-    policy_rewritten = _normalize_policy_boolean_words(raw)
+    policy_rewritten, policy_dropped = _normalize_policy_boolean_words(raw)
     if not dropped and not rewritten and not policy_rewritten:
         return settings_json
     for key in dropped:
         del raw[key]
     raw.update(rewritten)
-    if dropped:
-        logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
+    if dropped or policy_dropped:
+        logger.warning("Config: %d unusable field(s) reset to default", len(dropped) + policy_dropped)
     return json.dumps(raw)
 
 
