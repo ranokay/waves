@@ -58,6 +58,7 @@ from waves.providers.base import (
     StreamInfo,
 )
 from waves.providers.tidal_client import (
+    TIDAL_LINK_HOSTS,
     get_tidal_media_id,
     get_tidal_media_type,
     instantiate_media,
@@ -196,7 +197,7 @@ class TidalProvider(Provider):
                 "tidal_cover_file_format",
             ),
             status_kind=StatusKind.SESSION,
-            link_hosts=("tidal.com",),
+            link_hosts=TIDAL_LINK_HOSTS,
         )
 
     def __init__(self, tidal: Tidal, stream_resolver=None):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from typing import Literal, cast
+from urllib.parse import urlsplit
 
 from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
 from tidalapi.artist import Artist
@@ -33,35 +34,65 @@ def logged_in_user(session: Session) -> LoggedInUser:
     return cast(LoggedInUser, session.user)
 
 
+#: The hosts TIDAL's own share links use. The provider descriptor declares the
+#: same tuple, so address parsing here and ``Provider.accepts_url`` cannot
+#: drift apart on which host owns TIDAL links.
+TIDAL_LINK_HOSTS = ("tidal.com",)
+
+_MEDIA_KINDS: dict[str, MediaType] = {
+    "track": MediaType.TRACK,
+    "video": MediaType.VIDEO,
+    "album": MediaType.ALBUM,
+    "playlist": MediaType.PLAYLIST,
+    "mix": MediaType.MIX,
+    "artist": MediaType.ARTIST,
+}
+
+
+def _media_link_segments(url_or_id_media: str) -> list[str]:
+    """The path segments naming a TIDAL media item, share tail removed.
+
+    A bare value with no path -- an id, or any other single token -- is one
+    segment. A link's fragment and query are dropped whole -- even when they
+    contain ``/`` -- so only the path decides the id and its kind. Empty
+    segments (trailing or doubled slashes) are ignored, and the share-sheet
+    ``u`` suffix is dropped when the path is ``kind/id/u``. A value that
+    carries a path must parse as an http(s) URL on a TIDAL host; otherwise it
+    yields no segments, so neither helper reports a match.
+    """
+    text = url_or_id_media.strip().split("#", 1)[0].split("?", 1)[0]
+    if not text:
+        return []
+    if "/" not in text:
+        return [text]
+    try:
+        parsed = urlsplit(text if "://" in text else f"https://{text}")
+    except ValueError:
+        return []
+    if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
+        return []
+    host = (parsed.hostname or "").lower()
+    if not any(host == allowed or host.endswith(f".{allowed}") for allowed in TIDAL_LINK_HOSTS):
+        return []
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if len(segments) > 2 and segments[-1] == "u" and segments[-3] in _MEDIA_KINDS:
+        segments.pop()
+    return segments
+
+
 def get_tidal_media_id(url_or_id_media: str) -> str:
-
-    id_dirty = url_or_id_media.rsplit("/", 1)[-1]
-    id_media = id_dirty.rsplit("?", 1)[0]
-
-    return id_media
+    segments = _media_link_segments(url_or_id_media)
+    return segments[-1] if segments else ""
 
 
 def get_tidal_media_type(url_media: str) -> MediaType | Literal[False]:
-    result: MediaType | Literal[False] = False
-    url_split = url_media.split("/")[-2]
-
-    if len(url_split) > 1:
-        media_name = url_media.split("/")[-2]
-
-        if media_name == "track":
-            result = MediaType.TRACK
-        elif media_name == "video":
-            result = MediaType.VIDEO
-        elif media_name == "album":
-            result = MediaType.ALBUM
-        elif media_name == "playlist":
-            result = MediaType.PLAYLIST
-        elif media_name == "mix":
-            result = MediaType.MIX
-        elif media_name == "artist":
-            result = MediaType.ARTIST
-
-    return result
+    segments = _media_link_segments(url_media)
+    if len(segments) < 2:
+        return False
+    media_name = segments[-2]
+    if media_name not in _MEDIA_KINDS:
+        return False
+    return _MEDIA_KINDS[media_name]
 
 
 def search_results_all(
