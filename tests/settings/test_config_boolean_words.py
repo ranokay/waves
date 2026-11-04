@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from waves.config import BaseConfig, _drop_unusable_fields
+from waves.config import BaseConfig
 from waves.model.cfg import Settings as ModelSettings
 
 
@@ -33,7 +33,7 @@ def _read(tmp_path, raw: dict) -> BaseConfig:
     return cfg
 
 
-def test_the_briefs_hand_edit_loads_each_boolean_word(tmp_path):
+def test_hand_edited_boolean_words_load_as_their_boolean(tmp_path):
     raw = json.loads(ModelSettings().to_json())
     raw["skip_existing"] = "false"
     raw["lyrics_embed"] = "Yes"
@@ -53,12 +53,19 @@ def test_the_briefs_hand_edit_loads_each_boolean_word(tmp_path):
     [
         ("true", True),
         ("TRUE", True),
-        (" 1 ", True),
-        ("yes", True),
-        ("Yes", True),
+        (" True ", True),
         ("false", False),
         ("FALSE", False),
+        ("\tfalse\n", False),
+        ("1", True),
+        (" 1 ", True),
         ("0", False),
+        (" 0 ", False),
+        ("yes", True),
+        ("YES", True),
+        (" yes ", True),
+        ("no", False),
+        ("NO", False),
         (" no ", False),
     ],
 )
@@ -81,7 +88,6 @@ def test_an_unknown_boolean_word_resets_only_that_field(tmp_path):
 
     assert cfg.data.lyrics_embed is False, "an unrecognized word resets the field to its default"
     assert cfg.data.download_delay_sec_min == 7, "the rest of the file survives"
-    assert cfg._keep_file_untouched is False, "one bad word is not a whole-file failure"
     assert list(tmp_path.glob("settings.json*.bak")) == [], "the file is not set aside"
 
 
@@ -102,6 +108,11 @@ def test_real_booleans_and_other_field_shapes_load_as_before(tmp_path):
     assert data.format_album == "custom {track_title}"
 
 
-def test_a_file_without_boolean_strings_comes_back_unchanged():
+def test_a_file_without_boolean_strings_comes_back_unchanged(tmp_path):
+    path = tmp_path / "settings.json"
     text = ModelSettings().to_json()
-    assert _drop_unusable_fields(text, ModelSettings) == text
+    path.write_text(text, encoding="utf-8")
+
+    assert _cfg(tmp_path).read(str(path)) is True
+
+    assert path.read_text(encoding="utf-8") == text, "read's write-back left the file alone"
