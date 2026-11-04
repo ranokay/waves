@@ -1087,9 +1087,9 @@ class Download:
         """Whether a failed attempt is worth repeating.
 
         HTTPError is a RequestException, so test it first: a 4xx is the server's
-        answer, not a dropped connection, and is permanent. Any other failure
-        requests raises while streaming (connection reset, read timeout,
-        chunked-encoding break) is transient. Non-requests failures (a disk
+        answer, not a dropped connection, and is permanent. Every other
+        requests.RequestException is transient (a connection reset, read
+        timeout or chunked-encoding break). Non-requests failures (a disk
         write, a bad path) are permanent.
         """
         if isinstance(error, HTTPError):
