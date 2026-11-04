@@ -4960,6 +4960,10 @@ class Download:
         for bit identical (no re-encode). The remux writes to a sibling temp and
         only replaces the original on success, so a failed remux never loses the
         file (it stays playable in lenient players, just 0:00 in strict ones).
+        The swap is retried on the shared file-operation budget: a brief refusal
+        (a scanner lock, a sharing violation) still lands the remuxed file, and
+        a refusal that outlasts the budget keeps the raw file's original bytes,
+        drops the leftover sibling and returns the input path without raising.
 
         ``container_ext`` (``.m4a``/``.mp4``) is given explicitly because the input
         is the bare merge temp with no extension, so ffmpeg needs it to pick the
@@ -5000,7 +5004,22 @@ class Download:
 
             return path_file
 
-        os.replace(path_out, path_file)
+        def replace() -> bool:
+            os.replace(path_out, path_file)
+            return True
+
+        if not self._retry_file_operation(replace, f"replace {log_content(path_out)} -> {log_content(path_file)}"):
+            # A scanner lock or read-only folder refused the swap for the whole
+            # budget. The merged file is still complete and playable in lenient
+            # players, so keep it rather than lose the download; drop the
+            # sibling without letting a second refusal escape either.
+            self.fn_logger.warning(
+                "Container remux replacement refused; keeping the raw file "
+                f"(may report 0:00 in strict players): {log_content(path_file)}"
+            )
+            self._unlink_with_retry(path_out)
+
+            return path_file
 
         return path_file
 
