@@ -83,6 +83,8 @@ class _Session:
         routes: dict[str, list[_Response]] | None = None,
         on_get=None,
     ) -> None:
+        if responses and routes:
+            raise ValueError("script either ordered responses or per-URL routes, not both")
         self.responses = list(responses or ())
         self.routes = {url: list(items) for url, items in (routes or {}).items()}
         self.calls: list[str] = []
@@ -95,7 +97,9 @@ class _Session:
             index = len(self.calls)
             self.calls.append(url)
             if self.routes:
-                used = self._used[url]
+                used = self._used.get(url)
+                if used is None:
+                    raise AssertionError(f"segment made an unexpected GET for {url}")
                 self._used[url] = used + 1
                 responses = self.routes[url]
             else:
@@ -359,8 +363,8 @@ def test_a_non_request_failure_is_not_retried_and_rewinds_its_steps(tmp_path):
     ],
 )
 def test_a_tolerated_tail_failure_logs_no_error(tmp_path, status, tail_gets, n_tail_spurious):
-    """A multi-URL track's spurious tail is padding: the track succeeds and no
-    segment failure is logged in red, whatever its status did.
+    """A multi-URL track's spurious tail is padding: the track succeeds with no
+    segment failure logged, whatever its status did.
     """
     urls = _urls(2)
     h = _Harness(
@@ -376,7 +380,8 @@ def test_a_tolerated_tail_failure_logs_no_error(tmp_path, status, tail_gets, n_t
     assert h.calls.count(urls[1]) == tail_gets
     assert h.errors == []
     assert h.segment(tmp_path, "seg_0").read_bytes() == b"audio"
-    assert any(not result.result for result in results)
+    tail = next(result for result in results if result.url == urls[1])
+    assert tail.result is False  # tolerated, not silently successful
 
 
 def test_a_stopped_track_logs_no_segment_failure(tmp_path):
@@ -389,6 +394,23 @@ def test_a_stopped_track_logs_no_segment_failure(tmp_path):
     assert ok is False
     assert len(h.calls) == 1
     assert h.errors == []
+
+
+def test_a_stop_during_the_retry_wait_logs_no_segment_failure(tmp_path):
+    """The same silence holds when the failed attempt did name a class and the
+    Stop arrives in the wait before the retry.
+    """
+    event_stop = threading.Event()
+    timer = threading.Timer(0.05, event_stop.set)
+    h = _Harness([_Response((b"one",), error=_drop(), before_error=timer.start)])
+
+    ok, results = h.run_track(tmp_path, [URL], event_stop=event_stop)
+    timer.join(1)
+
+    assert ok is False
+    assert len(h.calls) == 1
+    assert h.errors == []
+    assert results[0].failure_class == "ChunkedEncodingError"  # the carrier was populated
 
 
 def test_the_failed_response_is_closed_before_the_retry_get(tmp_path):

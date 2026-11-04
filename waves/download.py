@@ -1178,7 +1178,7 @@ class Download:
         # CAUTION: This is a workaround, so BTS (LOW quality) track will work. They usually have only ONE link.
         id_segment: int = int(filename_stem) if filename_stem.isdecimal() else 0
         error: HTTPError | None = None
-        failure_name: str | None = None
+        failure_class: str | None = None
         # True when Stop/Cancel ended the fetch: quiet, no error log, no GUI emit.
         give_up: bool = False
 
@@ -1192,7 +1192,7 @@ class Download:
                 break
 
             error = None
-            failure_name = None
+            failure_class = None
             complete, failure = self._stream_segment_attempt(url, path_segment, block_size, p_task, event_stop)
             if complete:
                 result = True
@@ -1205,7 +1205,7 @@ class Download:
 
             if isinstance(failure, HTTPError):
                 error = failure
-            failure_name = type(failure).__name__
+            failure_class = type(failure).__name__
 
             # The terminal error is logged by _download_segments, which alone
             # knows whether this segment's failure is a tolerable spurious tail.
@@ -1215,7 +1215,7 @@ class Download:
                 break
 
             self.fn_logger.warning(
-                f"Segment fetch failed, retrying (attempt {attempt} of {self._SEGMENT_ATTEMPTS}): {failure_name}"
+                f"Segment fetch failed, retrying (attempt {attempt} of {self._SEGMENT_ATTEMPTS}): {failure_class}"
             )
             if self._wait_before_segment_retry(event_stop):
                 give_up = True
@@ -1232,7 +1232,7 @@ class Download:
             path_segment=path_segment,
             id_segment=id_segment,
             error=error,
-            failure_class=failure_name,
+            failure_class=failure_class,
         )
 
     def extension_guess(
