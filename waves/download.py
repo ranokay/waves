@@ -5000,8 +5000,7 @@ class Download:
             self.fn_logger.exception(
                 "Container remux failed; keeping the raw file (may report 0:00 in strict players)."
             )
-            with contextlib.suppress(OSError):
-                path_out.unlink()
+            self._unlink_with_retry(path_out)
 
             return path_file
 
@@ -5010,10 +5009,8 @@ class Download:
             return True
 
         if not self._retry_file_operation(operation, f"replace {log_content(path_out)} -> {log_content(path_file)}"):
-            # A scanner lock or read-only folder refused the swap for the whole
-            # budget. The merged file is still complete and playable in lenient
-            # players, so keep it rather than lose the download; drop the
-            # sibling without letting a second refusal escape either.
+            # The swap never landed: keep the complete merged file rather than
+            # lose the download. The docstring owns the cleanup contract.
             self.fn_logger.warning(
                 "Container remux replacement failed; keeping the raw file "
                 f"(may report 0:00 in strict players): {log_content(path_file)}"

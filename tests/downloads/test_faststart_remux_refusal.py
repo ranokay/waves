@@ -9,8 +9,8 @@ folder) into a raise, and the caller's temp directory is cleaned on the way
 out: the only complete download would be deleted and the track marked failed
 even though a playable file existed. The swap must ride the shared
 ``_retry_file_operation`` budget: a refusal that outlasts it keeps the raw
-bytes, removes the sibling, reports the refusal and returns the input path. A
-brief refusal still lands the remuxed file.
+bytes, removes the sibling where it can, reports the refusal and returns the
+input path. A brief refusal still lands the remuxed file.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _merged(tmp_path: pathlib.Path) -> pathlib.Path:
     return path_file
 
 
-def _refuse_replace(*_args) -> None:
+def _refuse(*_args) -> None:
     raise PermissionError(1, "Operation not permitted")
 
 
@@ -83,7 +83,7 @@ def test_a_refused_replacement_keeps_the_merged_file(tmp_path: pathlib.Path) -> 
 
     def refuse_swap(source, destination) -> None:
         attempts.append((source, destination))
-        raise PermissionError(1, "Operation not permitted")
+        _refuse()
 
     with (
         patch("waves.download.FFmpeg", return_value=ffmpeg),
@@ -113,7 +113,7 @@ def test_a_transient_refusal_lands_the_remuxed_file(tmp_path: pathlib.Path) -> N
     def refuse_once(source, destination) -> None:
         attempts.append(1)
         if len(attempts) == 1:
-            raise PermissionError(1, "Operation not permitted")
+            _refuse()
         replace_original(source, destination)
 
     with (
@@ -144,6 +144,33 @@ def test_an_ffmpeg_failure_keeps_the_merged_file(tmp_path: pathlib.Path) -> None
     assert not _sibling(path_file).exists()
 
 
+def test_an_ffmpeg_failure_retries_a_locked_partial_cleanup(tmp_path: pathlib.Path) -> None:
+    """A briefly locked partial output is still removed on the shared budget."""
+    dl = _downloader()
+    path_file = _merged(tmp_path)
+    ffmpeg = _ffmpeg_writing(b"partial bytes", failure=RuntimeError("ffmpeg failed"))
+    unlink_original = pathlib.Path.unlink
+    attempts: list[int] = []
+
+    def refuse_once(self, missing_ok=False) -> None:
+        attempts.append(1)
+        if len(attempts) == 1:
+            _refuse()
+        unlink_original(self, missing_ok=missing_ok)
+
+    with (
+        patch("waves.download.FFmpeg", return_value=ffmpeg),
+        patch.object(pathlib.Path, "unlink", refuse_once),
+        patch("waves.download.time.sleep"),
+    ):
+        result = dl._faststart_remux(path_file, ".m4a")
+
+    assert result == path_file
+    assert path_file.read_bytes() == _ORIGINAL_BYTES
+    assert not _sibling(path_file).exists()
+    assert len(attempts) == 2
+
+
 def test_a_refused_sibling_cleanup_does_not_raise(tmp_path: pathlib.Path) -> None:
     """A refused swap whose sibling cleanup is also refused still keeps the raw file."""
     dl = _downloader()
@@ -152,11 +179,11 @@ def test_a_refused_sibling_cleanup_does_not_raise(tmp_path: pathlib.Path) -> Non
     ffmpeg = _ffmpeg_writing(_REMUXED_BYTES)
 
     def refuse_unlink(_self, missing_ok=False) -> None:
-        raise PermissionError(1, "Operation not permitted")
+        _refuse()
 
     with (
         patch("waves.download.FFmpeg", return_value=ffmpeg),
-        patch("waves.download.os.replace", side_effect=_refuse_replace),
+        patch("waves.download.os.replace", side_effect=_refuse),
         patch("waves.download.time.sleep"),
         patch.object(pathlib.Path, "unlink", refuse_unlink),
     ):
@@ -189,7 +216,7 @@ def test_a_refused_replacement_lands_the_track(tmp_path: pathlib.Path) -> None:
         # Refuse every attempt at the faststart sibling only; the later move to
         # the library must still reach the real move implementation.
         if pathlib.Path(source).name.endswith(".faststart.m4a"):
-            raise PermissionError(1, "Operation not permitted")
+            _refuse()
         replace_original(source, destination)
 
     with (
@@ -200,7 +227,7 @@ def test_a_refused_replacement_lands_the_track(tmp_path: pathlib.Path) -> None:
         patch("waves.download.os.replace", side_effect=refuse_swap),
         patch("waves.download.time.sleep"),
     ):
-        ok, landed = dl._perform_actual_download(make_track(718), path_dst, stream_info, False, None)
+        ok, landed = dl._perform_actual_download(make_track("718"), path_dst, stream_info, False, None)
 
     assert ok is True
     assert landed == path_dst
