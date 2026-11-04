@@ -628,13 +628,39 @@ def api_waits_wake_for(event) -> None:
     _api_waits.event = event
 
 
+# The words a hand-edited settings file may spell a toggle with. Case and
+# surrounding whitespace fold away; nothing else is a boolean here. The live
+# set_option path keeps its own, wider list; this is the load-time contract.
+_BOOLEAN_WORDS: dict[str, bool] = {
+    "true": True,
+    "1": True,
+    "yes": True,
+    "false": False,
+    "0": False,
+    "no": False,
+}
+
+
+def _boolean_word(value: str) -> bool | None:
+    """The boolean a canonical word names, or None when it names none."""
+    return _BOOLEAN_WORDS.get(value.strip().lower())
+
+
+def _boolean_field(hint) -> bool:
+    """Whether the field holds a bool directly or as ``bool | None``."""
+    return hint is bool or bool in typing.get_args(hint)
+
+
 def _field_unusable(hint, value) -> bool:
-    """A null the field does not allow, or a value that is not a member of the enum the field holds."""
+    """A null the field does not allow, a value outside the field's enum, or
+    a boolean field holding a word the canonical six do not name."""
     if value is None:
         # Unlike upstream, this fork's models have legitimate nulls (Token's
         # logged-out credentials, the quality split's migration carriers):
         # only a null the field's own type forbids is unusable.
         return type(None) not in typing.get_args(hint)
+    if isinstance(value, str) and _boolean_field(hint):
+        return _boolean_word(value) is None
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         try:
             hint(value)
@@ -643,17 +669,36 @@ def _field_unusable(hint, value) -> bool:
     return False
 
 
+def _field_repairs(raw: dict, hints: dict) -> tuple[list[str], dict[str, bool]]:
+    """The fields to drop and the boolean words to rewrite, for one stored object."""
+    dropped: list[str] = []
+    coerced: dict[str, bool] = {}
+    for key, value in raw.items():
+        if key not in hints:
+            continue
+        if _field_unusable(hints[key], value):
+            dropped.append(key)
+        elif isinstance(value, str) and _boolean_field(hints[key]):
+            word = _boolean_word(value)
+            if word is not None:
+                coerced[key] = word
+    return dropped, coerced
+
+
 def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     """The stored JSON with every field the model could not use removed, so
     the dataclass default fills it in and the rest of the file survives.
 
-    Two shapes reached the whole-file bail-out below (settings.json moved to
+    Three shapes reached the whole-file bail-out below (settings.json moved to
     .bak, every setting back to stock): a null value (a hand edit, a sync
     tool, a half-merged file), which dataclasses_json keeps as None and then
-    crashes the launch in settings_apply or the migration compare, and an
-    enum member this build does not know (a rollback past a newer tier),
-    which raises out of from_json for that one field and threw away the
-    download folder, every template and every toggle with it."""
+    crashes the launch in settings_apply or the migration compare; an enum
+    member this build does not know (a rollback past a newer tier), which
+    raises out of from_json for that one field; and a boolean toggle spelled
+    as a word, which the decode read as true whatever the word said (so
+    "false", "0" and "no" all switched the toggle back on). Canonical boolean
+    words are rewritten to real booleans here; any other word is dropped like
+    any other unusable value, so one bad toggle does not cost the file."""
     try:
         raw = json.loads(settings_json)
     except (JSONDecodeError, TypeError):
@@ -664,12 +709,14 @@ def _drop_unusable_fields(settings_json: str, cls_model) -> str:
         hints = typing.get_type_hints(cls_model)
     except Exception:
         return settings_json
-    dropped = [key for key, value in raw.items() if key in hints and _field_unusable(hints[key], value)]
-    if not dropped:
+    dropped, coerced = _field_repairs(raw, hints)
+    if not dropped and not coerced:
         return settings_json
     for key in dropped:
         del raw[key]
-    logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
+    raw.update(coerced)
+    if dropped:
+        logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
     return json.dumps(raw)
 
 
