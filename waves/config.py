@@ -696,8 +696,8 @@ def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     the dataclass default fills it in, and every canonical boolean word
     rewritten to the real boolean it names.
 
-    Two shapes reached the whole-file bail-out below (settings.json moved to
-    .bak, every setting back to stock): a null value (a hand edit, a sync
+    Two shapes reached the whole-file bail-out in ``read`` (settings.json moved
+    to .bak, every setting back to stock): a null value (a hand edit, a sync
     tool, a half-merged file), which dataclasses_json keeps as None and then
     crashes the launch in settings_apply or the migration compare; and an enum
     member this build does not know (a rollback past a newer tier), which

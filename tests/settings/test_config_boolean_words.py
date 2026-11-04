@@ -63,6 +63,7 @@ def test_hand_edited_boolean_words_load_as_their_boolean(tmp_path):
         (" 0 ", False),
         ("yes", True),
         ("YES", True),
+        ("YeS", True),
         (" yes ", True),
         ("no", False),
         ("NO", False),
