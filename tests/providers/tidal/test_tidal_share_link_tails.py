@@ -45,8 +45,14 @@ def test_a_bare_id_is_an_id_not_a_link():
     assert get_tidal_media_type("123") is False
 
 
-def test_a_bare_u_is_not_a_share_tail():
+def test_a_bare_u_is_kept_as_an_id():
     assert get_tidal_media_id("u") == "u"
+
+
+def test_a_u_is_only_a_tail_after_a_media_id():
+    # Without an id in front, "u" is the link's own id, never a suffix to drop.
+    assert get_tidal_media_id("https://tidal.com/browse/track/u") == "u"
+    assert get_tidal_media_type("https://tidal.com/browse/track/u") == MediaType.TRACK
 
 
 @pytest.mark.parametrize(
@@ -63,7 +69,7 @@ def test_a_foreign_or_malformed_url_reports_no_kind(url):
 
 
 def test_malformed_input_does_not_raise_from_the_id_reader():
-    get_tidal_media_id("https://[bad")
+    assert get_tidal_media_id("https://[bad") == ""
 
 
 @pytest.mark.parametrize(

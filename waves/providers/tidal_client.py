@@ -34,7 +34,10 @@ def logged_in_user(session: Session) -> LoggedInUser:
     return cast(LoggedInUser, session.user)
 
 
-_TIDAL_LINK_HOST = "tidal.com"
+#: The hosts TIDAL's own share links use. The provider descriptor declares the
+#: same tuple, so address parsing here and ``Provider.accepts_url`` cannot
+#: drift apart on which host owns TIDAL links.
+TIDAL_LINK_HOSTS = ("tidal.com",)
 
 _MEDIA_KINDS: dict[str, MediaType] = {
     "track": MediaType.TRACK,
@@ -49,12 +52,13 @@ _MEDIA_KINDS: dict[str, MediaType] = {
 def _media_link_segments(url_or_id_media: str) -> list[str]:
     """The path segments naming a TIDAL media item, share tail removed.
 
-    A bare id (no path) is one segment. A link's fragment and query are
-    dropped whole -- even when they contain ``/`` -- so only the path decides
-    the id and its kind. Empty segments (trailing or doubled slashes) are
-    ignored, and TIDAL's share-sheet ``u`` suffix is dropped when a media id
-    precedes it. A foreign host, a foreign scheme or a malformed URL yields no
-    segments, so neither helper reports a match for it.
+    A bare value with no path -- an id, or any other single token -- is one
+    segment. A link's fragment and query are dropped whole -- even when they
+    contain ``/`` -- so only the path decides the id and its kind. Empty
+    segments (trailing or doubled slashes) are ignored, and TIDAL's
+    share-sheet ``u`` suffix is dropped when a media id precedes it. A value
+    that carries a path must parse as an http(s) URL on a TIDAL host;
+    otherwise it yields no segments, so neither helper reports a match.
     """
     text = url_or_id_media.strip().split("#", 1)[0].split("?", 1)[0]
     if not text:
@@ -68,10 +72,10 @@ def _media_link_segments(url_or_id_media: str) -> list[str]:
     if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
         return []
     host = (parsed.hostname or "").lower()
-    if host != _TIDAL_LINK_HOST and not host.endswith(f".{_TIDAL_LINK_HOST}"):
+    if not any(host == allowed or host.endswith(f".{allowed}") for allowed in TIDAL_LINK_HOSTS):
         return []
     segments = [segment for segment in parsed.path.split("/") if segment]
-    if len(segments) > 2 and segments[-1] == "u":
+    if len(segments) > 2 and segments[-1] == "u" and segments[-2] not in _MEDIA_KINDS:
         segments.pop()
     return segments
 
