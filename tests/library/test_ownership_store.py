@@ -40,7 +40,14 @@ def _on_fresh_thread(fn):
     t = threading.Thread(target=run)
     t.start()
     t.join(10)
+    assert not t.is_alive(), "the fresh thread never finished"
     return out["r"]
+
+
+def _replace_store(path):
+    """Swap the store file for an empty one, as a sync client or a restore can."""
+    os.remove(path)
+    open(path, "wb").close()
 
 
 @pytest.mark.parametrize(
@@ -277,11 +284,10 @@ def test_add_falsy_ids_are_skipped(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# A read outlives the store file being removed, replaced or corrupted under it.
-# A thread's first read used to open the file by path, so after a replace it
-# opened a brand new empty database and every query failed with "no such table"
-# out of a Slot. A reader now opens only an existing file (read-write URI, no
-# create) and falls back to the connection every write goes to.
+# A read outlives the store file being removed, replaced or corrupted under
+# it: a reader opens only an existing file (read-write URI, no create), and a
+# reader that cannot use the file falls back to the connection every write
+# goes to.
 # --------------------------------------------------------------------------- #
 def test_cold_reader_works_under_an_awkward_folder_name(tmp_path, caplog):
     """The per-thread reader opens the file by URI, so a space or a '#' in the
@@ -306,14 +312,12 @@ def test_cold_reader_works_under_an_awkward_folder_name(tmp_path, caplog):
 @pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
 def test_cold_reader_survives_the_file_being_replaced(tmp_path):
     """The file swapped for an empty one while the app runs: a thread whose
-    first read comes after that used to open the empty file and raise "no such
-    table" out of collectionOwnership on every card. It now reads what the
-    store was opened on, the file every write still goes to."""
+    first read comes after that still reads what the store was opened on, the
+    file every write still goes to."""
     path = tmp_path / "ownership.sqlite3"
     store = OwnershipStore(str(path))
     store.record_members_replace("album1", ["1", "2"])
-    os.remove(path)
-    open(path, "wb").close()
+    _replace_store(path)
     assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1", "2"]
     # And once one reader has failed, every thread reads the same way.
     assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1", "2"]
@@ -322,6 +326,7 @@ def test_cold_reader_survives_the_file_being_replaced(tmp_path):
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows refuses to remove a file sqlite holds open")
 def test_cold_reader_never_creates_a_missing_file(tmp_path):
+    """A reader opens only an existing file: a read cannot recreate the store."""
     path = tmp_path / "ownership.sqlite3"
     store = OwnershipStore(str(path))
     store.record_members_replace("album1", ["1"])
@@ -377,8 +382,7 @@ def test_a_reader_falling_back_warns_once_per_store(tmp_path, caplog):
     path = tmp_path / "ownership.sqlite3"
     store = OwnershipStore(str(path))
     store.record_members_replace("album1", ["1"])
-    os.remove(path)
-    open(path, "wb").close()
+    _replace_store(path)
 
     start = threading.Barrier(4)
     results = []
@@ -444,8 +448,7 @@ def test_writes_reach_both_reader_paths_and_survive_a_fall_back(tmp_path):
         assert out["before"] == ["1"]
         assert out["reader"] is not None, "the parked thread had no reader to test"
 
-        os.remove(path)
-        open(path, "wb").close()
+        _replace_store(path)
         assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1"]
         assert store._shared_reads is True, "the failed reader never fell back"
 
@@ -489,8 +492,7 @@ def test_close_takes_a_reader_created_before_another_reader_fell_back(tmp_path):
     t.start()
     assert parked.wait(10), "the pre-fallback reader never answered"
     try:
-        os.remove(path)
-        open(path, "wb").close()
+        _replace_store(path)
         assert sorted(_on_fresh_thread(lambda: store.members_of("album1"))) == ["1"]
         assert store._shared_reads is True
 

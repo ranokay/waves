@@ -575,15 +575,13 @@ class OwnershipStore:
         once a reader has failed.
 
         A reader opens the file read-write but never creates it, and only
-        the constructor lays down the schema. If the file is removed or
-        replaced while the app runs (a sync client, a restore, the user
-        clearing the config folder), a thread whose first read comes after
-        that would otherwise open a brand new empty database and fail every
-        query with "no such table", forever, out of a Slot. The shared
-        connection still holds the file the store was opened on, the one
-        every write goes to, so a failing reader closes itself, hands over,
-        and every read after that answers from the shared connection under
-        the lock."""
+        the constructor lays down the schema, so a file removed or replaced
+        while the app runs (a sync client, a restore, the user clearing the
+        config folder) cannot be reborn as a new empty database under a
+        read. The shared connection holds the file the store was opened on,
+        the one every write goes to, so a failing reader closes itself,
+        hands over, and that read and every later one answer from the
+        shared connection under the lock."""
         if self._path == ":memory:" or self._closed or self._shared_reads:
             with self._lock:
                 return self._conn.execute(sql, params).fetchall()
@@ -616,9 +614,9 @@ class OwnershipStore:
                 with contextlib.suppress(Exception):
                     reader.conn.close()
             with self._lock:
-                first = not self._shared_reads
+                log_once = not self._shared_reads
                 self._shared_reads = True
-            if first:
+            if log_once:
                 logger.warning(
                     "ownership: a reader could not use the store file (%s); reading through the shared connection", e
                 )
@@ -866,9 +864,9 @@ class OwnershipStore:
             )
         except sqlite3.Error as e:
             with self._lock:
-                first = not self._members_failed
+                log_once = not self._members_failed
                 self._members_failed = True
-            if first:
+            if log_once:
                 logger.warning("ownership: members_of could not read the store (%s)", e)
             return None
         if not rows:
