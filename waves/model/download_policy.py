@@ -177,10 +177,7 @@ def apply_policy_edit(policies: DownloadPolicies, key: str, value: JsonValue) ->
             and bool(parts[1])
             and parts[2] in ("audio", "lyrics", "artwork")
         )
-        or (
-            len(parts) == 1
-            and parts[0] in (*CROSS_PROVIDER_FIELDS, "same_provider_fallback", "provider_priority", *ADVANCED_BOUNDS)
-        )
+        or (len(parts) == 1 and parts[0] in (*DOWNLOAD_POLICY_BOOLEAN_FIELDS, "provider_priority", *ADVANCED_BOUNDS))
     )
     if not valid:
         return policies
