@@ -102,10 +102,10 @@ mise run check
    defines the prose, isolated-logic and full-gate checks.
 
 The merge stands on the local gate. Every PR to `develop` also runs `quality`
-(`mise run check`) and the Ubuntu `test-fast` group automatically; the strict
+(`mise run check`) and the Ubuntu `test-fast` group automatically, because this
+fork is public and standard GitHub-hosted runners are not metered; the strict
 matrix across Python 3.12, 3.13 and 3.14 and the macOS/Windows fast legs stay
-manual-only (`workflow_dispatch`), because this fork is public and standard
-GitHub-hosted runners are not metered. Automatic scanners (CodeQL, SonarCloud)
+manual-only (`workflow_dispatch`). Automatic scanners (CodeQL, SonarCloud)
 are advisory. Record the commands, tested head, exits, counts and review
 dispositions in the PR body, as in
 [the PR template](.github/pull_request_template.md). To run another Python
