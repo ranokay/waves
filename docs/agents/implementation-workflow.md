@@ -43,14 +43,15 @@ Dependency changes are full-gate. The light exception covers documentation and t
 
 This section owns the review policy.
 
-- **`/code-review`** for every substantive code change, including isolated logic and high-risk changes. Its Standards and Spec reviews are the whole review; request no other reviewer, bot or human. The Standards review reads [coding standards](../../CODING_STANDARDS.md), including its correctness defect classes.
+- **`/code-review`** for every substantive code change, including isolated logic and high-risk changes. Its Standards and Spec reviews are the whole human review; request no other human reviewer. The Standards review reads [coding standards](../../CODING_STANDARDS.md), including its correctness defect classes. CodeRabbit is the required bot reviewer, handled in Merge verification.
 - **No code review** for prose or docs and config policy cleanup. Supervisor or maintainer review is enough.
 - Automated CodeQL and SonarCloud remain advisory security and quality scans. They are not reviewers.
 - A behavior-changing correction after review gets `/code-review` on the delta. A prose or formatting correction does not.
+- A correction to a correction gets a verification pass: one Standards review of the new lines, and a Spec review only when the behavior changed.
 
 ## Merge verification
 
-Verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `develop`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. A failed advisory check needs a written disposition. A pending, skipped or empty review is recorded as incomplete, never claimed as coverage. Do not request routine bot reviews and do not wait for a bot quota.
+Verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `develop`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. CodeRabbit is a required reviewer: wait until the `CodeRabbit` check on the head is titled `Finished`, because GitHub also passes a required check that was skipped or rate-limited. Merging mid-review cancels the review, so wait for the check. A `Review paused` head gets `@coderabbitai review` once when the head is ready for merge; a head with no check gets `@coderabbitai full review` once; a rate-limited PR is pending and reported. CodeQL and SonarCloud stay advisory: each failed one gets a written disposition in the PR (fixed, false positive with the reason, or accepted with the reason). A pending, skipped or empty review is recorded as incomplete, never claimed as coverage.
 
 The PR body records the class gate's commands and exits on the tested head, and the `/code-review` result where the change is substantive code. Check with `gh pr view <pr> --repo ranokay/waves --json state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup`. Require `OPEN`, `isDraft: false`, base `develop`, head equal to the reviewed and tested head, `mergeable: MERGEABLE`, and `mergeStateStatus` in `CLEAN`, `UNSTABLE` or `HAS_HOOKS`. Then merge with `gh pr merge <pr> --repo ranokay/waves --squash --match-head-commit <head>`.
 
