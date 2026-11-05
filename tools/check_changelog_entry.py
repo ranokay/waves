@@ -113,16 +113,16 @@ def main() -> int:
             " if the clone is shallow), then try again."
         )
 
+    shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+    if shallow:
+        return _error("The clone is shallow; run `git fetch --unshallow origin develop`, then try again.")
+
     merge_base = _git("merge-base", BASE_REF, "HEAD")
     if merge_base.returncode != 0 or not merge_base.stdout.strip():
-        shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
-        if shallow:
-            cause = "The clone is shallow"
-            fix = "run `git fetch --unshallow origin develop`"
-        else:
-            cause = "The histories are unrelated"
-            fix = "fetch the correct base or rebase the branch onto origin/develop"
-        return _error(f"No merge-base between HEAD and {BASE_REF}. {cause}; {fix}, then try again.")
+        return _error(
+            f"No merge-base between HEAD and {BASE_REF}. The histories are unrelated;"
+            " fetch the correct base or rebase the branch onto origin/develop, then try again."
+        )
 
     base = merge_base.stdout.strip()
     changed = _git("diff", "--name-only", "--no-renames", "-z", base, "HEAD")

@@ -306,8 +306,8 @@ def test_unrelated_histories_name_the_cause_and_the_remedy(repo, monkeypatch, ca
     assert "unshallow" not in err
 
 
-def test_a_shallow_clone_names_the_cause_and_the_remedy(tmp_path, monkeypatch, capsys):
-    """A shallow clone asks for the unshallow fetch."""
+def test_a_shallow_clone_is_rejected_even_with_a_merge_base(tmp_path, monkeypatch, capsys):
+    """A shallow boundary can hide commits from the opt-out walk."""
     source = _init_repo(tmp_path / "source")
     _commit(source, "one", {"waves/shipped.py": "value = 1\n"})
     _commit(source, "two", {"waves/shipped.py": "value = 2\n"})
@@ -315,7 +315,7 @@ def test_a_shallow_clone_names_the_cause_and_the_remedy(tmp_path, monkeypatch, c
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", "--depth", "1", source.as_uri(), str(clone))
     _configure(clone)
-    _point_origin_develop_at_an_unrelated_commit(clone)
+    _git(clone, "update-ref", "refs/remotes/origin/develop", "HEAD")
 
     code, err = _run(clone, monkeypatch, capsys)
     assert code == 1
