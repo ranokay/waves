@@ -230,9 +230,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tooling invokes pinned executables with fixed argv, never a shell or user command.
+# Tooling invokes fixed executables with fixed argv, never a shell or user command.
 "tools/check_pyupgrade.py" = ["S603"]
-"tools/check_changelog_entry.py" = ["S603", "S607"]
+"tools/check_changelog_entry.py" = ["S603"]
 "tools/check_qml_format.py" = ["S603", "S607"]
 "tools/install_hooks.py" = ["S603", "S607"]
 # Disposable Git fixtures exercise real commands with an argument list.

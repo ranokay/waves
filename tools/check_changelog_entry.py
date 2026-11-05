@@ -1,4 +1,4 @@
-"""Fail when a branch changes shipped code without adding a changelog entry.
+"""Fail when a branch changes shipped code without changing CHANGELOG.md.
 
 The Unreleased section in CHANGELOG.md is the source of the next release
 notes, so a user-facing change adds its bullet in the same PR. An internal-only
@@ -12,6 +12,7 @@ check` does.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 
@@ -20,10 +21,11 @@ CHANGELOG = "CHANGELOG.md"
 SHIPPED_PREFIX = "waves/"
 OPT_OUT = "[no-changelog]"
 UNRELEASED = "## Unreleased"
+GIT = shutil.which("git") or ""
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+    return subprocess.run([GIT, *args], capture_output=True, text=True, check=False)
 
 
 def _error(message: str) -> int:
@@ -32,6 +34,9 @@ def _error(message: str) -> int:
 
 
 def main() -> int:
+    if not GIT:
+        return _error("git is not on PATH; install git and try again.")
+
     ref = _git("rev-parse", "--verify", "--quiet", BASE_REF)
     if ref.returncode != 0:
         return _error(
@@ -41,16 +46,20 @@ def main() -> int:
 
     merge_base = _git("merge-base", BASE_REF, "HEAD")
     if merge_base.returncode != 0 or not merge_base.stdout.strip():
-        return _error(
-            f"No merge-base between HEAD and {BASE_REF}. The histories are unrelated or the clone is"
-            " shallow; fetch full history with `git fetch --unshallow origin develop`, then try again."
-        )
+        shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+        if shallow:
+            cause = "The clone is shallow"
+            fix = "run `git fetch --unshallow origin develop`"
+        else:
+            cause = "The histories are unrelated"
+            fix = "fetch the correct base or rebase the branch onto origin/develop"
+        return _error(f"No merge-base between HEAD and {BASE_REF}. {cause}; {fix}, then try again.")
 
     base = merge_base.stdout.strip()
-    changed = _git("diff", "--name-only", "--no-renames", base, "HEAD")
+    changed = _git("diff", "--name-only", "--no-renames", "-z", base, "HEAD")
     if changed.returncode != 0:
         return _error(f"git diff failed: {changed.stderr.strip()}")
-    paths = [line for line in changed.stdout.splitlines() if line]
+    paths = [path for path in changed.stdout.split("\0") if path]
     if CHANGELOG in paths or not any(path.startswith(SHIPPED_PREFIX) for path in paths):
         return 0
 
@@ -61,7 +70,7 @@ def main() -> int:
         return 0
 
     return _error(
-        f"{SHIPPED_PREFIX}** changed without a {CHANGELOG} entry. Add a user-facing bullet under"
+        f"{SHIPPED_PREFIX}** changed without changing {CHANGELOG}. Add a user-facing bullet under"
         f' "{UNRELEASED}" in {CHANGELOG}, or put "{OPT_OUT}" on a line of its own in a commit message'
         " for an internal-only change."
     )

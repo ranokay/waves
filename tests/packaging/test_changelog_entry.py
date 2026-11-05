@@ -44,15 +44,22 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "repo"
+def _configure(repo: Path) -> None:
+    _git(repo, "config", "user.name", "Changelog fixture")
+    _git(repo, "config", "user.email", "fixture@example.invalid")
+    _git(repo, "config", "commit.gpgsign", "false")
+
+
+def _init_repo(root: Path) -> Path:
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
-    _git(root, "config", "user.name", "Changelog fixture")
-    _git(root, "config", "user.email", "fixture@example.invalid")
-    _git(root, "config", "commit.gpgsign", "false")
+    _configure(root)
     return root
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    return _init_repo(tmp_path / "repo")
 
 
 def _commit(repo: Path, message: str, files: dict[str, str]) -> str:
@@ -134,6 +141,14 @@ def test_a_sibling_directory_is_not_shipped(repo, monkeypatch, capsys):
     assert err == ""
 
 
+def test_a_non_ascii_path_under_waves_still_counts(repo, monkeypatch, capsys):
+    _base(repo)
+    _commit(repo, "change a non-ascii path", {"waves/café.py": "value = 2\n"})
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 1
+    assert "CHANGELOG.md" in err
+
+
 def test_a_file_moved_out_of_waves_still_counts(repo, monkeypatch, capsys):
     _base(repo)
     (repo / "elsewhere").mkdir()
@@ -152,14 +167,34 @@ def test_a_missing_origin_develop_fails_with_its_cause_and_fix(repo, monkeypatch
     assert "git fetch origin develop" in err
 
 
-def test_an_absent_merge_base_fails_instead_of_passing(repo, monkeypatch, capsys):
-    _commit(repo, "base", {"waves/shipped.py": "value = 1\n"})
+def _point_origin_develop_at_an_unrelated_commit(repo: Path) -> None:
     tree = _git(repo, "write-tree")
     unrelated = _git(repo, "commit-tree", tree, "-m", "unrelated history")
     _git(repo, "update-ref", "refs/remotes/origin/develop", unrelated)
+
+
+def test_unrelated_histories_name_the_cause_and_the_remedy(repo, monkeypatch, capsys):
+    _commit(repo, "base", {"waves/shipped.py": "value = 1\n"})
+    _point_origin_develop_at_an_unrelated_commit(repo)
     code, err = _run(repo, monkeypatch, capsys)
     assert code == 1
     assert "merge-base" in err
     assert "unrelated" in err
+    assert "rebase the branch onto origin/develop" in err
+    assert "unshallow" not in err
+
+
+def test_a_shallow_clone_names_the_cause_and_the_remedy(tmp_path, monkeypatch, capsys):
+    source = _init_repo(tmp_path / "source")
+    _commit(source, "one", {"waves/shipped.py": "value = 1\n"})
+    _commit(source, "two", {"waves/shipped.py": "value = 2\n"})
+
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", "--depth", "1", source.as_uri(), str(clone))
+    _configure(clone)
+    _point_origin_develop_at_an_unrelated_commit(clone)
+
+    code, err = _run(clone, monkeypatch, capsys)
+    assert code == 1
     assert "shallow" in err
     assert "git fetch --unshallow origin develop" in err
