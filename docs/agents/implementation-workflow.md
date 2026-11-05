@@ -57,7 +57,7 @@ The PR body records the class gate's commands and exits on the tested head, and 
 
 ## Waiting on long commands
 
-Run gates through `/Users/ranokay/.agents/tools/run gate_run -- mise run test-strict` (the receipt runner described in `/Users/ranokay/.agents/docs/agent-environment.md`). Keep the exit code and the JSON receipt path it prints: the receipt records the tested HEAD, the worktree state and whether the run was frozen. If the harness moves a long command to the background, stay in the turn and poll the log and receipt paths it printed until the receipt exists; nothing wakes a worker whose turn ended. Start a gate once per head.
+Run gates through `/Users/ranokay/.agents/tools/run gate_run -- mise run test-strict` on this owner's machine (use the equivalent `run gate_run` entry point elsewhere; the receipt runner is described in `/Users/ranokay/.agents/docs/agent-environment.md`). Keep the exit code and the JSON receipt path it prints: the receipt records the tested HEAD, the worktree state and whether the run was frozen. If the harness moves a long command to the background, stay in the turn and poll the log and receipt paths it printed until the receipt exists; nothing wakes a worker whose turn ended. Start a gate once per head.
 
 ## Evidence and session state
 

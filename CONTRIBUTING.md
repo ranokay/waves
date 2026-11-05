@@ -120,6 +120,9 @@ git commit -m "fix(domain): describe the corrected behavior" -- path/to/changed-
 git push origin name-of-your-bugfix-or-feature
 ```
 
+Run `mise run check` again after committing and before pushing: the changelog
+guard compares committed `HEAD` with its merge-base.
+
 9. Submit a pull request through the GitHub website.
 
 The full branch, check, review and merge loop lives in

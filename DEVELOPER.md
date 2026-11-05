@@ -116,8 +116,8 @@ launch. `master.yml` runs `quality` (`mise run check`) and the Ubuntu `test-fast
 group on every PR to `develop`, and runs the strict suite (`mise run test-strict`)
 on Linux for Python 3.12–3.14 plus fast-domain tests on macOS and Windows when
 dispatched by hand. The PR jobs are automatic because this fork is public, so
-standard GitHub-hosted runners are not metered; the strict suite remains the
-local merge gate. These checks do not verify live accounts or container
+standard GitHub-hosted runners are not metered; the class-specific local gate
+remains the merge gate. These checks do not verify live accounts or container
 behavior on each platform. The wrapper image is
 `linux/arm64`; x86_64 hosts require emulation, whose full-tier behavior needs
 separate live verification.
