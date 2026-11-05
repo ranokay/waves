@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [develop]
+    types: [opened, synchronize, reopened, edited]
 
 # A newer push to the same PR cancels the superseded run; a manual dispatch
 # keeps its own group so a PR run never cancels it.

@@ -376,7 +376,10 @@ def test_the_merge_gate_record_matches_the_pr_workflow():
     # test notes the same quirk); the trigger set is dispatch plus develop PRs.
     triggers = wf[True]
     assert set(triggers) == {"workflow_dispatch", "pull_request"}, triggers
-    assert triggers["pull_request"] == {"branches": ["develop"]}, triggers["pull_request"]
+    assert triggers["pull_request"] == {
+        "branches": ["develop"],
+        "types": ["opened", "synchronize", "reopened", "edited"],
+    }, triggers["pull_request"]
 
     jobs = wf["jobs"]
     pr_jobs = {job_id for job_id, job in jobs.items() if "if" not in job}
