@@ -188,10 +188,10 @@ def test_one_commits_opt_out_does_not_cover_another_shipped_change(repo, monkeyp
 def test_a_clean_merge_of_opted_out_commits_passes(repo, monkeypatch, capsys):
     """A clean merge adds no resolution change, as on a PR's merge commit."""
     _base(repo)
-    _commit(repo, "main change\n\n[no-changelog]\n", {"waves/main.py": "main\n"})
     _git(repo, "checkout", "-q", "-b", "side")
     _commit(repo, "side change\n\n[no-changelog]\n", {"waves/side.py": "side\n"})
     _git(repo, "checkout", "-q", "main")
+    _commit(repo, "main change\n\n[no-changelog]\n", {"waves/main.py": "main\n"})
     _git(repo, "merge", "--no-ff", "-m", "clean merge", "side")
     code, err = _run(repo, monkeypatch, capsys)
     assert code == 0
