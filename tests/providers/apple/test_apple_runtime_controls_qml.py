@@ -144,7 +144,8 @@ def run() -> int:
     wait_until(lambda: bool(q(button_script("appleCancelRuntimeSetup"))), 5000, message="setup cancellation visible")
     assert q(button_script("appleCancelRuntimeSetup", trigger=True))
     wait_until(lambda: not bridge.appleExecutionState()["setup_busy"], 5000, message="setup cancellation finished")
-    assert "cancelled" in states
+    # The state signal crosses from the install thread and arrives after the inflight flag drops.
+    wait_until(lambda: "cancelled" in states, 5000, message="cancelled state published")
     wait_until(
         lambda: not q(button_script("appleCancelRuntimeSetup", visible_only=False)),
         5000,
