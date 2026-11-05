@@ -395,6 +395,16 @@ def test_the_merge_gate_record_matches_the_pr_workflow():
         step for step in jobs["quality"]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
     )
     assert quality_checkout["with"]["fetch-depth"] == 0, "quality must fetch the changelog merge-base"
+    assert "github.event.pull_request.head.sha" in quality_checkout["with"]["ref"], (
+        "quality must check out the PR head, not the synthetic merge commit"
+    )
+    assert "github.event.pull_request.head.repo.full_name" in quality_checkout["with"]["repository"]
+
+    base_fetch = next(
+        step for step in jobs["quality"]["steps"] if str(step.get("name", "")).startswith("Fetch the base branch")
+    )
+    assert "github.event.pull_request.base.ref" in base_fetch["run"]
+    assert "refs/remotes/origin/" in base_fetch["run"]
 
     assert jobs["test-fast"]["runs-on"] == "ubuntu-24.04", "test-fast must be the Ubuntu job"
     for job_id in ("test", "test-fast"):

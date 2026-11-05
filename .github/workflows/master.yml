@@ -30,12 +30,22 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # The changelog guard compares HEAD with its merge-base on
-          # origin/develop; a shallow checkout has neither the ref nor the history.
+          # Run the guard on the PR head, not GitHub's synthetic merge commit:
+          # a clean synthetic merge can look like a conflict resolution when
+          # both sides edited the same file. A shallow checkout would also
+          # lack the ref and the history the guard needs.
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 0
 
       - name: Set up the environment
         uses: ./.github/actions/setup-env
+
+      - name: Fetch the base branch for the changelog guard
+        if: github.event_name == 'pull_request'
+        run: |
+          git remote set-url origin "${{ github.event.pull_request.base.repo.clone_url }}"
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
 
       - name: Run checks
         run: mise run check
