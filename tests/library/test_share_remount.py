@@ -179,6 +179,7 @@ def test_keepwarm_touch_on_a_dead_share_records_nothing(monkeypatch):
 def test_hidden_window_slows_the_keepwarm_to_every_tenth_tick(monkeypatch):
     """With nobody looking and nothing downloading, a NAS gets an idle
     stretch: nine hidden ticks skip, the tenth touches."""
+    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(backend_mod.os, "listdir", lambda p: [])
     monkeypatch.setattr(backend_mod.netmount, "mount_origin", lambda p: ("smbfs", "//u@nas/Media"))
     monkeypatch.setattr(backend_mod.redaction, "register_secret", lambda v, tag="": None)
