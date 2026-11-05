@@ -185,6 +185,48 @@ def test_one_commits_opt_out_does_not_cover_another_shipped_change(repo, monkeyp
     assert "## Unreleased" in err
 
 
+def test_a_clean_merge_of_opted_out_commits_passes(repo, monkeypatch, capsys):
+    """A clean merge adds no resolution change, as on a PR's merge commit."""
+    _base(repo)
+    _commit(repo, "main change\n\n[no-changelog]\n", {"waves/main.py": "main\n"})
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side change\n\n[no-changelog]\n", {"waves/side.py": "side\n"})
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "--no-ff", "-m", "clean merge", "side")
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 0
+    assert err == ""
+
+
+def test_a_merge_resolution_needs_its_own_opt_out(repo, monkeypatch, capsys):
+    """A conflict resolution touching waves/ is a shipped change of its own."""
+    _base(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side change\n\n[no-changelog]\n", {"waves/shipped.py": "side\n"})
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "main change\n\n[no-changelog]\n", {"waves/shipped.py": "main\n"})
+    with pytest.raises(subprocess.CalledProcessError):
+        _git(repo, "merge", "side")
+    (repo / "waves/shipped.py").write_text("resolved\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "merge resolution")
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 1
+    assert "## Unreleased" in err
+
+
+def test_an_inherited_git_dir_does_not_redirect_the_guard(repo, tmp_path, monkeypatch, capsys):
+    """GIT_DIR from the caller cannot make the guard inspect another repository."""
+    _base(repo)
+    _commit(repo, "change shipped behavior", {"waves/shipped.py": "value = 2\n"})
+    decoy = _init_repo(tmp_path / "decoy")
+    _commit(decoy, "decoy", {"waves/decoy.py": "value = 1\n"})
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 1
+    assert "## Unreleased" in err
+
+
 def test_a_sentence_mentioning_the_marker_does_not_opt_out(repo, monkeypatch, capsys):
     """The marker must be a line of its own, not prose."""
     _base(repo)
@@ -242,7 +284,7 @@ def test_a_missing_origin_develop_fails_with_its_cause_and_fix(repo, monkeypatch
     code, err = _run(repo, monkeypatch, capsys)
     assert code == 1
     assert "origin/develop" in err
-    assert "git fetch origin develop" in err
+    assert "git fetch origin 'develop:refs/remotes/origin/develop'" in err
 
 
 def _point_origin_develop_at_an_unrelated_commit(repo: Path) -> None:

@@ -13,6 +13,7 @@ check` does.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,8 @@ GIT = shutil.which("git") or ""
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
     """Run git with fixed arguments and capture its output."""
-    return subprocess.run([GIT, *args], capture_output=True, text=True, check=False)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    return subprocess.run([GIT, *args], capture_output=True, text=True, check=False, env=env)
 
 
 def _error(message: str) -> int:
@@ -57,8 +59,16 @@ def _unreleased_bullets(revision: str) -> set[str]:
 
 
 def _commit_touches_shipped(commit: str) -> bool:
-    """Whether a commit changed a path under waves/."""
-    changed = _git("diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-m", "-z", commit)
+    """Whether a non-merge commit changed a path under waves/."""
+    changed = _git("diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit)
+    if changed.returncode != 0:
+        return False
+    return any(path.startswith(SHIPPED_PREFIX) for path in _nul_paths(changed.stdout))
+
+
+def _merge_resolution_touches_shipped(commit: str) -> bool:
+    """Whether a merge commit's combined diff changed a path under waves/."""
+    changed = _git("diff-tree", "--cc", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit)
     if changed.returncode != 0:
         return False
     return any(path.startswith(SHIPPED_PREFIX) for path in _nul_paths(changed.stdout))
@@ -70,9 +80,17 @@ def _has_opt_out(message: str) -> bool:
 
 
 def _every_shipped_commit_opted_out(base: str) -> bool:
-    """Whether each non-merge commit that touches waves/ carries its own opt-out."""
-    commits = _git("rev-list", "--no-merges", f"{base}..HEAD").stdout.split()
-    shipped = [commit for commit in commits if _commit_touches_shipped(commit)]
+    """Whether each shipped change, including a merge resolution, has its own opt-out."""
+    shipped = [
+        commit
+        for commit in _git("rev-list", "--no-merges", f"{base}..HEAD").stdout.split()
+        if _commit_touches_shipped(commit)
+    ]
+    shipped += [
+        commit
+        for commit in _git("rev-list", "--merges", f"{base}..HEAD").stdout.split()
+        if _merge_resolution_touches_shipped(commit)
+    ]
     if not shipped:
         return False
     for commit in shipped:
@@ -90,8 +108,9 @@ def main() -> int:
     ref = _git("rev-parse", "--verify", "--quiet", BASE_REF)
     if ref.returncode != 0:
         return _error(
-            f"{BASE_REF} is not available in this checkout. Run `git fetch origin develop`"
-            " (and fetch full history if the clone is shallow), then try again."
+            f"{BASE_REF} is not available in this checkout. Run"
+            " `git fetch origin 'develop:refs/remotes/origin/develop'` (and fetch full history"
+            " if the clone is shallow), then try again."
         )
 
     merge_base = _git("merge-base", BASE_REF, "HEAD")
