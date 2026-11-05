@@ -13,7 +13,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 **This repo is a fork — pin every `gh` call to it**: `--repo ranokay/waves` (or `GH_REPO=ranokay/waves`). Left to infer the repo from the remotes, `gh` resolves to the upstream parent (`iamprivacy/Waves`, the `upstream` remote) and the call silently targets the wrong repository — PR creation then fails with "No commits between develop and …" against a branch that does not exist there (seen on issue #23's PR). The parent is the right target only for `/sync-upstream`'s reads.
 
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42 --repo ranokay/waves` and fall back to `gh issue view 42 --repo ranokay/waves`.
 
 ## When a skill says "publish to the issue tracker"
 
@@ -29,7 +29,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 - **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --repo ranokay/waves --label wayfinder:map`.
 - **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Sub-issues are the map's only child list; the map body carries no checklist. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). A `Blocked by: #<n>` line in the child body is a readable copy of those edges, never a replacement. A ticket is unblocked when every blocker is closed.
+- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/ranokay/waves/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/ranokay/waves/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). A `Blocked by: #<n>` line in the child body is a readable copy of those edges, never a replacement. A ticket is unblocked when every blocker is closed.
 - **Frontier query**: `gh api repos/ranokay/waves/issues/<map>/sub_issues` lists the map's children in order. The next one is the first that is open, labelled `ready-for-agent`, unassigned, and has `issue_dependencies_summary.blocked_by` of 0.
-- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+- **Claim**: `gh issue edit <n> --repo ranokay/waves --add-assignee @me`, the session's first write.
+- **Resolve**: `gh issue comment <n> --repo ranokay/waves --body "<answer>"`, then `gh issue close <n> --repo ranokay/waves`, then append a context pointer (gist + link) to the map's Decisions-so-far.
