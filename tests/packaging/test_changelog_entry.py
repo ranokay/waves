@@ -212,6 +212,56 @@ def test_a_clean_merge_of_a_shared_waves_file_passes(repo, monkeypatch, capsys):
     assert err == ""
 
 
+def test_an_auto_merged_waves_path_is_not_a_conflict(repo, monkeypatch, capsys):
+    """An informational auto-merge record is not a waves resolution."""
+    _commit(
+        repo,
+        "base",
+        {"waves/shared.py": "alpha\nbeta\ngamma\n", "docs/note.txt": "base\n"},
+    )
+    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(
+        repo,
+        "side change\n\n[no-changelog]\n",
+        {"waves/shared.py": "alpha-side\nbeta\ngamma\n", "docs/note.txt": "side\n"},
+    )
+    _git(repo, "checkout", "-q", "main")
+    _commit(
+        repo,
+        "main change\n\n[no-changelog]\n",
+        {"waves/shared.py": "alpha\nbeta\ngamma-main\n", "docs/note.txt": "main\n"},
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        _git(repo, "merge", "side")
+    (repo / "docs/note.txt").write_text("resolved\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "merge resolution")
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 0
+    assert err == ""
+
+
+def test_a_clean_merge_edit_matching_one_parent_needs_an_opt_out(repo, monkeypatch, capsys):
+    """A clean merge edited to a parent's waves version is still a resolution."""
+    _base(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(
+        repo,
+        "side change\n\n[no-changelog]\n",
+        {"waves/shipped.py": "side\n", "waves/other.py": "side-other\n"},
+    )
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "main change\n\n[no-changelog]\n", {"docs/note.txt": "main\n"})
+    _git(repo, "merge", "--no-ff", "--no-commit", "side")
+    (repo / "waves/shipped.py").write_text("value = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "clean merge")
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 1
+    assert "## Unreleased" in err
+
+
 def test_a_non_conflicted_waves_edit_in_a_conflicted_merge_needs_an_opt_out(repo, monkeypatch, capsys):
     """A manual waves edit during a merge conflict elsewhere is a resolution."""
     _commit(

@@ -71,23 +71,22 @@ def _merge_resolution_touches_shipped(commit: str) -> bool:
     """Whether a merge commit adds a resolution change under waves/."""
     parents = _git("rev-list", "--parents", "-n", "1", commit).stdout.split()[1:]
     if len(parents) == 2:
-        merged = _git("merge-tree", "--write-tree", "--name-only", "-z", parents[0], parents[1])
+        merged = _git("merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", parents[0], parents[1])
         merged_tree = merged.stdout.split("\0")[0].strip() if merged.stdout else ""
         valid_tree = len(merged_tree) in (40, 64) and all(char in "0123456789abcdef" for char in merged_tree)
         actual = _git("rev-parse", f"{commit}^{{tree}}")
-        if merged.returncode == 1:
-            if valid_tree and actual.returncode == 0:
-                resolved = _git("diff", "--name-only", "--no-renames", "-z", merged_tree, actual.stdout.strip())
-                if resolved.returncode == 0 and any(
-                    path.startswith(SHIPPED_PREFIX) for path in _nul_paths(resolved.stdout)
-                ):
+        if merged.returncode in (0, 1) and valid_tree and actual.returncode == 0:
+            resolved = _git("diff", "--name-only", "--no-renames", "-z", merged_tree, actual.stdout.strip())
+            if resolved.returncode == 0:
+                if any(path.startswith(SHIPPED_PREFIX) for path in _nul_paths(resolved.stdout)):
                     return True
+                if merged.returncode == 0:
+                    return False
+        if merged.returncode == 1 and valid_tree:
             conflicts = {
                 token.strip() for token in merged.stdout.split("\0") if token.strip().startswith(SHIPPED_PREFIX)
             }
             return bool(conflicts)
-        if merged.returncode == 0 and actual.returncode == 0 and valid_tree and merged_tree == actual.stdout.strip():
-            return False
 
     changed = _git("diff-tree", "--cc", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit)
     if changed.returncode != 0:
