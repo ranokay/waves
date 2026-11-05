@@ -58,9 +58,9 @@ issue. A test enforces it.
 - 🌐 A track whose connection drops mid-download now fetches the broken part again instead of failing the song, and the progress bar no longer counts the failed attempt ([issue #717](https://github.com/ranokay/waves/issues/717)).
 - 🛟 A download whose final file switch is refused by a scanner lock or a read-only folder now keeps the downloaded track and reports it as saved instead of failing with no file left ([issue #718](https://github.com/ranokay/waves/issues/718)).
 - 🔗 TIDAL share links ending in `/u`, a trailing slash, a query or a fragment now open the track, album, playlist or artist they name ([issue #719](https://github.com/ranokay/waves/issues/719)).
-- 🏷️ Playlist and track names that contain a literal template token such as `{artist_name}` keep it as written, shown in parentheses the way folder names already show braces, instead of expanding it into another artist or track ([issue #720](https://github.com/ranokay/waves/issues/720)).
+- 🏷️ Playlist and track names that contain a literal template token such as `{artist_name}` now save it as `(artist_name)`, the way folder names already show braces, instead of expanding it into another artist or track ([issue #720](https://github.com/ranokay/waves/issues/720)).
 - 🎚️ Settings hand-edited to use `"false"`, `0` or `no` now load as off instead of switching the toggle back on, and an unknown word resets only that setting ([issue #721](https://github.com/ranokay/waves/issues/721)).
-- 🗃️ Library ownership checks now keep reading after the ownership store file is replaced or removed while Waves runs, falling back to the store's open connection instead of failing library cards, and an unreadable store reads as unknown ([issue #724](https://github.com/ranokay/waves/issues/724)).
+- 🗃️ Library cards keep loading after the file Waves uses to remember which songs you own is replaced or removed while the app is running, instead of erroring ([issue #724](https://github.com/ranokay/waves/issues/724)).
 - 🔐 MusicBrainz lookups now verify HTTPS against the certificate bundle Waves ships, so a packaged build no longer fails certificate checks on a Mac that lacks the build machine's certificate setup ([issue #725](https://github.com/ranokay/waves/issues/725)).
 
 ## 🗂️ v0.1.32 (2026-09-28)
