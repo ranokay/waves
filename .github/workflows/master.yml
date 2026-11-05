@@ -53,7 +53,7 @@ jobs:
         uses: ./.github/actions/setup-env
 
       - name: Install the Qt runtime libraries the collected tests load
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
+        uses: ./.github/actions/install-qt-runtime
 
       - name: Test (fast group)
         run: mise run test-fast
@@ -78,7 +78,7 @@ jobs:
       # without them; every test module that imports PySide6 failed at
       # collection here. The release build installs the same set.
       - name: Install the Qt runtime libraries the offscreen tests load
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
+        uses: ./.github/actions/install-qt-runtime
 
       - name: Test (strict group)
         run: mise run test-strict

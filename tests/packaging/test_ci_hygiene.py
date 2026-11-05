@@ -393,9 +393,15 @@ def test_the_merge_gate_record_matches_the_pr_workflow():
     )
     assert quality_checkout["with"]["fetch-depth"] == 0, "quality must fetch the changelog merge-base"
 
+    assert jobs["test-fast"]["runs-on"] == "ubuntu-24.04", "test-fast must be the Ubuntu job"
+    for job_id in ("test", "test-fast"):
+        uses = {str(step.get("uses", "")) for step in jobs[job_id]["steps"]}
+        assert "./.github/actions/install-qt-runtime" in uses, f"{job_id} lost the Qt runtime install"
+
     contributing = CONTRIBUTING.read_text()
-    assert "pull_request" in contributing
-    assert "test-fast" in contributing
+    assert "`workflow_dispatch`" in contributing
+    assert "`quality`" in contributing
+    assert "`test-fast`" in contributing
 
 
 def test_the_ty_warning_baseline_is_scoped_to_its_documented_files():

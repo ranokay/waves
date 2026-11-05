@@ -1,0 +1,9 @@
+name: "install-qt-runtime"
+description: "Install the Ubuntu system libraries the offscreen Qt tests link."
+
+runs:
+  using: composite
+  steps:
+    - name: Install the Qt runtime libraries
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
+      shell: bash
