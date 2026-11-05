@@ -80,6 +80,11 @@ jobs:
       - name: Install the Qt runtime libraries the offscreen tests load
         uses: ./.github/actions/install-qt-runtime
 
+      # The ffmpeg-marked tests need the real binary; test-fast excludes them,
+      # but the strict group runs them and this job is the Linux full gate.
+      - name: Install ffmpeg for the ffmpeg-marked tests
+        run: sudo apt-get install -y -qq --no-install-recommends ffmpeg
+
       - name: Test (strict group)
         run: mise run test-strict
 
