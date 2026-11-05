@@ -162,7 +162,7 @@ summary for current counts; they change as coverage grows.
 | fast (excludes qml, ffmpeg, slow, integration, account markers) | `mise run test-fast`                       | < 1 min           |
 | quick QML (excludes slow and integration scenarios)             | `mise run test-qml`                        | < 5 min           |
 | default (all but live accounts)                                 | `mise run test` or `mise run test-default` | < 10 min          |
-| strict (comprehensive group, required Qt)                       | `mise run test-strict`                     | < 10 min          |
+| strict (comprehensive group, required Qt)                       | `mise run test-strict`                     | ~20–25 min        |
 | FFmpeg                                                          | `mise run test-ffmpeg`                     | < 1 min           |
 | live accounts (opt-in credentials, never CI)                    | `mise run test-account`                    | service-dependent |
 

@@ -56,7 +56,7 @@ The PR body records the class gate's commands and exits on the tested head, and 
 
 ## Waiting on long commands
 
-A command that runs for minutes (`mise run test-strict`, a build) starts once in the background, and the harness reports its exit. Do other work or wait for that report.
+Run gates through `/Users/ranokay/.agents/tools/run gate_run -- mise run test-strict` (the receipt runner described in `/Users/ranokay/.agents/docs/agent-environment.md`). Keep the exit code and the JSON receipt path it prints: the receipt records the tested HEAD, the worktree state and whether the run was frozen. If the harness moves a long command to the background, stay in the turn and poll the log and receipt paths it printed until the receipt exists; nothing wakes a worker whose turn ended. Start a gate once per head.
 
 ## Evidence and session state
 
