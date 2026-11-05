@@ -5,7 +5,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 ## Conventions
 
 - **Create an issue**: `gh issue create --repo ranokay/waves --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --repo ranokay/waves --comments` for the body and comments, or `gh issue view <number> --repo ranokay/waves --json number,title,body,labels,state,comments` for a structured read. `--comments` and `--json` are mutually exclusive.
+- **Read an issue**: use `gh issue view <number> --repo ranokay/waves --json number,title,body,labels,state,comments` for agent or script reads; `gh issue view <number> --repo ranokay/waves --comments` is for interactive terminal output. `--comments` and `--json` are mutually exclusive.
 - **List issues**: `gh issue list --repo ranokay/waves --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --repo ranokay/waves --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --repo ranokay/waves --add-label "..."` / `--remove-label "..."`
@@ -21,7 +21,7 @@ Create a GitHub issue.
 
 ## When a skill says "fetch the relevant ticket"
 
-Run `gh issue view <number> --repo ranokay/waves --comments`.
+Run `gh issue view <number> --repo ranokay/waves --json number,title,body,labels,state,comments`.
 
 ## Wayfinding operations
 
