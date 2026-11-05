@@ -212,6 +212,23 @@ def test_a_clean_merge_of_a_shared_waves_file_passes(repo, monkeypatch, capsys):
     assert err == ""
 
 
+def test_a_conflict_resolved_to_one_parent_still_needs_an_opt_out(repo, monkeypatch, capsys):
+    """Choosing one parent's version at a conflict is still a resolution."""
+    _base(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side change\n\n[no-changelog]\n", {"waves/shipped.py": "side\n"})
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "main change\n\n[no-changelog]\n", {"waves/shipped.py": "main\n"})
+    with pytest.raises(subprocess.CalledProcessError):
+        _git(repo, "merge", "side")
+    (repo / "waves/shipped.py").write_text("main\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "merge resolution")
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 1
+    assert "## Unreleased" in err
+
+
 def test_a_merge_resolution_needs_its_own_opt_out(repo, monkeypatch, capsys):
     """A conflict resolution touching waves/ is a shipped change of its own."""
     _base(repo)

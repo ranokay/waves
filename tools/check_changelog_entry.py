@@ -72,10 +72,18 @@ def _merge_resolution_touches_shipped(commit: str) -> bool:
     parents = _git("rev-list", "--parents", "-n", "1", commit).stdout.split()[1:]
     if len(parents) == 2:
         merged = _git("merge-tree", "--write-tree", parents[0], parents[1])
+        if merged.returncode == 1:
+            conflicts = {
+                line.rsplit("\t", 1)[-1]
+                for line in merged.stdout.splitlines()
+                if "\t" in line and line.rsplit("\t", 1)[-1].startswith(SHIPPED_PREFIX)
+            }
+            return bool(conflicts)
         actual = _git("rev-parse", f"{commit}^{{tree}}")
         if merged.returncode == 0 and actual.returncode == 0:
             merged_tree = merged.stdout.splitlines()[0].strip() if merged.stdout.strip() else ""
-            if merged_tree == actual.stdout.strip():
+            valid_tree = len(merged_tree) in (40, 64) and all(char in "0123456789abcdef" for char in merged_tree)
+            if valid_tree and merged_tree == actual.stdout.strip():
                 return False
 
     changed = _git("diff-tree", "--cc", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit)
