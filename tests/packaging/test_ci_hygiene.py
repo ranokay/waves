@@ -1,7 +1,7 @@
 """The update hygiene stays wired: Dependabot targets develop and scans the
 composite actions, the release build carries Nuitka's build tree between
-runs, the contributor gate record matches the manual test workflow, and the
-Python classifiers name only the versions that workflow tests.
+runs, the contributor gate record matches the PR and manual test workflow,
+and the Python classifiers name only the versions that workflow tests.
 
 Dependabot reads the PEP 621 metadata and uv.lock through the "pip" ecosystem;
 the ignored names are the pins that move by hand (docs/dependency-updates.md).
@@ -367,16 +367,35 @@ def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
     assert all(native.exists() for native in natives)
 
 
-def test_the_merge_gate_record_matches_the_manual_workflow():
-    """The test workflow must stay dispatch-only, and the contributor record
-    must name the manual mechanism it uses (one stable token, not a phrase
-    suite: rewording the surrounding sentence is not a regression)."""
+def test_the_merge_gate_record_matches_the_pr_workflow():
+    """A PR to develop runs quality and test-fast; the strict matrix and the
+    macOS/Windows legs stay dispatch-only. The contributor record must name the
+    automatic pair."""
     wf = _master_workflow()
     # YAML 1.1 reads the `on:` key as boolean True (the wrapper-image pins
-    # test notes the same quirk); the trigger set must stay dispatch-only.
-    assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
+    # test notes the same quirk); the trigger set is dispatch plus develop PRs.
+    triggers = wf[True]
+    assert set(triggers) == {"workflow_dispatch", "pull_request"}, triggers
+    assert triggers["pull_request"] == {"branches": ["develop"]}, triggers["pull_request"]
 
-    assert "workflow_dispatch" in CONTRIBUTING.read_text()
+    jobs = wf["jobs"]
+    pr_jobs = {job_id for job_id, job in jobs.items() if "if" not in job}
+    assert pr_jobs == {"quality", "test-fast"}, pr_jobs
+    dispatch_only = {job_id: job.get("if") for job_id, job in jobs.items() if job_id not in pr_jobs}
+    assert set(dispatch_only) == {"test", "test-macos", "test-windows"}, dispatch_only
+    assert set(dispatch_only.values()) == {"github.event_name == 'workflow_dispatch'"}, dispatch_only
+
+    assert wf["concurrency"]["cancel-in-progress"] is True
+    assert "github.event.pull_request.number" in wf["concurrency"]["group"]
+
+    quality_checkout = next(
+        step for step in jobs["quality"]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
+    )
+    assert quality_checkout["with"]["fetch-depth"] == 0, "quality must fetch the changelog merge-base"
+
+    contributing = CONTRIBUTING.read_text()
+    assert "pull_request" in contributing
+    assert "test-fast" in contributing
 
 
 def test_the_ty_warning_baseline_is_scoped_to_its_documented_files():

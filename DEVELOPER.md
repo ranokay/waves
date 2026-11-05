@@ -112,9 +112,13 @@ can build the Linux leg matching its arch, not the macOS/Windows legs.
 
 The release workflow smoke-launches all macOS bundles and the Linux/Windows
 x64 bundles offscreen; Linux/Windows arm64 artifacts are built without a
-launch. `master.yml`, dispatched by hand, runs the strict suite (`mise run test-strict`) on Linux for Python 3.12–3.14
-and fast-domain tests on macOS and Windows. These checks do not verify live
-accounts or container behavior on each platform. The wrapper image is
+launch. `master.yml` runs `quality` (`mise run check`) and the Ubuntu `test-fast`
+group on every PR to `develop`, and runs the strict suite (`mise run test-strict`)
+on Linux for Python 3.12–3.14 plus fast-domain tests on macOS and Windows when
+dispatched by hand. The PR jobs are automatic because this fork is public, so
+standard GitHub-hosted runners are not metered; the strict suite remains the
+local merge gate. These checks do not verify live accounts or container
+behavior on each platform. The wrapper image is
 `linux/arm64`; x86_64 hosts require emulation, whose full-tier behavior needs
 separate live verification.
 
