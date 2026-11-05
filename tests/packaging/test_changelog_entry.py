@@ -198,6 +198,20 @@ def test_a_clean_merge_of_opted_out_commits_passes(repo, monkeypatch, capsys):
     assert err == ""
 
 
+def test_a_clean_merge_of_a_shared_waves_file_passes(repo, monkeypatch, capsys):
+    """A clean merge of one shared file adds no resolution hunk."""
+    _commit(repo, "base", {"waves/shared.py": "alpha\nbeta\ngamma\n"})
+    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side change\n\n[no-changelog]\n", {"waves/shared.py": "alpha-side\nbeta\ngamma\n"})
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "main change\n\n[no-changelog]\n", {"waves/shared.py": "alpha\nbeta\ngamma-main\n"})
+    _git(repo, "merge", "--no-ff", "-m", "clean merge", "side")
+    code, err = _run(repo, monkeypatch, capsys)
+    assert code == 0
+    assert err == ""
+
+
 def test_a_merge_resolution_needs_its_own_opt_out(repo, monkeypatch, capsys):
     """A conflict resolution touching waves/ is a shipped change of its own."""
     _base(repo)
