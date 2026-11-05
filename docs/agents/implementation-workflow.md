@@ -19,7 +19,7 @@ The branch guard is commit-only. A conflicted upstream synchronization merge con
 3. **Format, then check.** Run `mise run fmt`, review its diff, then `mise run check`. `check` and commit hooks are read-only.
 4. **Review.** Run `/code-review` as the Review section below says. Every finding is fixed or explicitly refuted, with the disposition in the PR.
 5. **Gate.** Run the class's gate once on the final SHA. A code correction after the gate reruns the class gate. A prose-only correction may record the delta instead.
-6. **Open the PR.** Base it on `develop`, link the issue with `Closes #<n>`, and follow `.github/pull_request_template.md`.
+6. **Open the PR.** Base it on `develop`, link the issue with `Closes #<n>`, and follow `.github/pull_request_template.md`. A user-facing change adds its bullet under `## Unreleased` in `CHANGELOG.md` in the same PR; an internal-only change puts `[no-changelog]` on a line of its own in a commit message.
 7. **Merge.** Verify the live PR as the next section says. A finding that arrives after merge becomes a separate corrective PR; it never rewrites merged history.
 8. **Close out.** The PR's `Closes #<n>` auto-closes the issue.
 9. **Clean up.** Delete the issue branch and any worktree this run created. Leave branches and worktrees that other sessions own.

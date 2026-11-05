@@ -53,6 +53,9 @@ def checkout(tmp_path):
     succeeds(tmp_path, "git", "config", "commit.gpgsign", "false")
     succeeds(tmp_path, "git", "add", ".")
     succeeds(tmp_path, "git", "commit", "-qm", "Fixture")
+    # The changelog guard compares committed HEAD with origin/develop, and this
+    # disposable repo has no remote of its own.
+    succeeds(tmp_path, "git", "update-ref", "refs/remotes/origin/develop", "HEAD")
     succeeds(tmp_path, "uv", "sync", "--locked", "--all-extras")
     return tmp_path
 
