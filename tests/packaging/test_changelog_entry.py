@@ -306,8 +306,8 @@ def test_unrelated_histories_name_the_cause_and_the_remedy(repo, monkeypatch, ca
     assert "unshallow" not in err
 
 
-def test_a_shallow_clone_is_rejected_even_with_a_merge_base(tmp_path, monkeypatch, capsys):
-    """A shallow boundary can hide commits from the opt-out walk."""
+def test_a_shallow_clone_without_a_merge_base_names_the_unshallow_fix(tmp_path, monkeypatch, capsys):
+    """An unrelated base in a shallow clone asks for the unshallow fetch."""
     source = _init_repo(tmp_path / "source")
     _commit(source, "one", {"waves/shipped.py": "value = 1\n"})
     _commit(source, "two", {"waves/shipped.py": "value = 2\n"})
@@ -315,9 +315,21 @@ def test_a_shallow_clone_is_rejected_even_with_a_merge_base(tmp_path, monkeypatc
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", "--depth", "1", source.as_uri(), str(clone))
     _configure(clone)
-    _git(clone, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _point_origin_develop_at_an_unrelated_commit(clone)
 
     code, err = _run(clone, monkeypatch, capsys)
     assert code == 1
     assert "shallow" in err
     assert "git fetch --unshallow origin develop" in err
+
+
+def test_a_shallow_boundary_inside_the_range_is_detected(repo, monkeypatch):
+    """A boundary inside origin/develop..HEAD makes the opt-out walk incomplete."""
+    _base(repo)
+    commit = _commit(repo, "change shipped behavior", {"waves/shipped.py": "value = 2\n"})
+    base = _git(repo, "rev-parse", "refs/remotes/origin/develop")
+    shown = Path(_git(repo, "rev-parse", "--git-path", "shallow"))
+    shallow = shown if shown.is_absolute() else repo / shown
+    shallow.write_text(commit + "\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert _tool_module()._shallow_boundary_in_range(base)

@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 BASE_REF = "origin/develop"
 CHANGELOG = "CHANGELOG.md"
@@ -74,6 +75,25 @@ def _merge_resolution_touches_shipped(commit: str) -> bool:
     return any(path.startswith(SHIPPED_PREFIX) for path in _nul_paths(changed.stdout))
 
 
+def _is_ancestor(commit: str, revision: str) -> bool:
+    """Whether commit is an ancestor of revision."""
+    return _git("merge-base", "--is-ancestor", commit, revision).returncode == 0
+
+
+def _shallow_boundary_in_range(base: str) -> bool:
+    """Whether the shallow boundary is inside base..HEAD, where history is incomplete."""
+    shown = _git("rev-parse", "--git-path", "shallow")
+    if shown.returncode != 0:
+        return False
+    path = Path(shown.stdout.strip())
+    if not path.is_file():
+        return False
+    return any(
+        _is_ancestor(commit, "HEAD") and not _is_ancestor(commit, base)
+        for commit in path.read_text(encoding="utf-8").split()
+    )
+
+
 def _has_opt_out(message: str) -> bool:
     """Whether the commit message has [no-changelog] on a line of its own."""
     return any(line.strip() == OPT_OUT for line in message.splitlines())
@@ -113,18 +133,22 @@ def main() -> int:
             " if the clone is shallow), then try again."
         )
 
-    shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
-    if shallow:
-        return _error("The clone is shallow; run `git fetch --unshallow origin develop`, then try again.")
-
     merge_base = _git("merge-base", BASE_REF, "HEAD")
     if merge_base.returncode != 0 or not merge_base.stdout.strip():
+        shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+        if shallow:
+            return _error("The clone is shallow; run `git fetch --unshallow origin develop`, then try again.")
         return _error(
             f"No merge-base between HEAD and {BASE_REF}. The histories are unrelated;"
             " fetch the correct base or rebase the branch onto origin/develop, then try again."
         )
 
     base = merge_base.stdout.strip()
+    if _shallow_boundary_in_range(base):
+        return _error(
+            "The shallow boundary falls inside origin/develop..HEAD; run"
+            " `git fetch --unshallow origin develop`, then try again."
+        )
     changed = _git("diff", "--name-only", "--no-renames", "-z", base, "HEAD")
     if changed.returncode != 0:
         return _error(f"git diff failed: {changed.stderr.strip()}")
