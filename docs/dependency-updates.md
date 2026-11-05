@@ -135,7 +135,9 @@ record the results in the owning issue or PR.
 
 ## Reviewing a Dependabot PR
 
-- The test workflow is manual-only, so no check on the PR runs the tests. A
+- A PR to `develop` runs `quality` and the Ubuntu `test-fast` group
+  automatically, because this fork is public and standard GitHub-hosted runners
+  are not metered; the test workflow's strict matrix is still manual-only. A
   dependency change is full-gate: run `mise run check` and
   `mise run test-strict` locally (or dispatch `master.yml`) before merging.
   The gate matrix is in

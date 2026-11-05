@@ -112,9 +112,13 @@ can build the Linux leg matching its arch, not the macOS/Windows legs.
 
 The release workflow smoke-launches all macOS bundles and the Linux/Windows
 x64 bundles offscreen; Linux/Windows arm64 artifacts are built without a
-launch. `master.yml`, dispatched by hand, runs the strict suite (`mise run test-strict`) on Linux for Python 3.12–3.14
-and fast-domain tests on macOS and Windows. These checks do not verify live
-accounts or container behavior on each platform. The wrapper image is
+launch. `master.yml` runs `quality` (`mise run check`) and the Ubuntu `test-fast`
+group on every PR to `develop`, and runs the strict suite (`mise run test-strict`)
+on Linux for Python 3.12–3.14 plus fast-domain tests on macOS and Windows when
+dispatched by hand. The PR jobs are automatic because this fork is public, so
+standard GitHub-hosted runners are not metered; the class-specific local gate
+remains the merge gate. These checks do not verify live accounts or container
+behavior on each platform. The wrapper image is
 `linux/arm64`; x86_64 hosts require emulation, whose full-tier behavior needs
 separate live verification.
 
@@ -162,7 +166,7 @@ summary for current counts; they change as coverage grows.
 | fast (excludes qml, ffmpeg, slow, integration, account markers) | `mise run test-fast`                       | < 1 min           |
 | quick QML (excludes slow and integration scenarios)             | `mise run test-qml`                        | < 5 min           |
 | default (all but live accounts)                                 | `mise run test` or `mise run test-default` | < 10 min          |
-| strict (comprehensive group, required Qt)                       | `mise run test-strict`                     | < 10 min          |
+| strict (comprehensive group, required Qt)                       | `mise run test-strict`                     | ~20–25 min        |
 | FFmpeg                                                          | `mise run test-ffmpeg`                     | < 1 min           |
 | live accounts (opt-in credentials, never CI)                    | `mise run test-account`                    | service-dependent |
 

@@ -1,12 +1,22 @@
 name: master
 
-# Manual only. The merge gate is the strict suite run locally on the frozen
-# SHA (docs/agents/implementation-workflow.md), so no push or PR starts this
-# test run. Run it from the Actions tab when a second opinion from hosted
-# runners is wanted. The automatic checks on a PR are security and quality
-# scanners (CodeQL, SonarCloud), not this suite.
+# Pull requests to `develop` run the cheap automatic checks: `quality`
+# (`mise run check`) and `test-fast` on Ubuntu. The strict matrix and the
+# macOS/Windows fast tests are heavier and stay manual-only (`workflow_dispatch`);
+# the strict suite on the frozen SHA remains the local merge gate
+# (docs/agents/implementation-workflow.md). The PR jobs run automatically
+# because this fork is public, so standard GitHub-hosted runners are not metered.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened, edited]
+
+# A newer push to the same PR cancels the superseded run; a manual dispatch
+# keeps its own group so a PR run never cancels it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # These jobs only read the repo (lint, test); grant the token no more than
 # read access. Raise per-job if a job ever needs to write.
@@ -19,14 +29,48 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Run the guard on the PR head, not GitHub's synthetic merge commit:
+          # a clean synthetic merge can look like a conflict resolution when
+          # both sides edited the same file. A shallow checkout would also
+          # lack the ref and the history the guard needs.
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 0
 
       - name: Set up the environment
         uses: ./.github/actions/setup-env
 
+      - name: Fetch the base branch for the changelog guard
+        if: github.event_name == 'pull_request'
+        run: |
+          git remote set-url origin "${{ github.event.pull_request.base.repo.clone_url }}"
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
+
       - name: Run checks
         run: mise run check
 
+  # Pytest collects every test module before applying `-m`, and nine test
+  # modules plus tests/support/bridge_stub.py import PySide6 at top level, so
+  # the fast group still loads Qt. Offscreen Qt links libEGL and friends, which
+  # ubuntu-24.04 does not ship; install the same set as the strict job below.
+  test-fast:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-env
+
+      - name: Install the Qt runtime libraries the collected tests load
+        uses: ./.github/actions/install-qt-runtime
+
+      - name: Test (fast group)
+        run: mise run test-fast
+
   test:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -45,18 +89,24 @@ jobs:
       # without them; every test module that imports PySide6 failed at
       # collection here. The release build installs the same set.
       - name: Install the Qt runtime libraries the offscreen tests load
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
+        uses: ./.github/actions/install-qt-runtime
+
+      # The ffmpeg-marked tests need the real binary; test-fast excludes them,
+      # but the strict group runs them and this job is the Linux full gate.
+      - name: Install ffmpeg for the ffmpeg-marked tests
+        run: sudo apt-get install -y -qq --no-install-recommends ffmpeg
 
       - name: Test (strict group)
         run: mise run test-strict
 
-  # The fast group is interpreter-only (no Qt), so these legs need no Qt
-  # runtime libraries: the PySide6 wheels are self-contained on macOS and
-  # Windows. One Python (the repo default, 3.13) per family keeps the run
-  # short; the full 3.12/3.13/3.14 x strict matrix stays on Linux.
-  # Scope decision on #439: test-fast, manual dispatch (test-qml is a one-line
-  # follow-up per job if GUI signal on these families is wanted).
+  # These family legs stay manual (`workflow_dispatch`): the fast group collects
+  # modules that import PySide6, but the macOS and Windows wheels are
+  # self-contained, so no extra system libraries are needed here. One Python
+  # (the repo default, 3.13) per family keeps the run short; the full
+  # 3.12/3.13/3.14 x strict matrix stays on Linux, and the PR job is Ubuntu
+  # test-fast.
   test-macos:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - name: Check out
@@ -69,6 +119,7 @@ jobs:
         run: mise run test-fast
 
   test-windows:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     steps:
       - name: Check out

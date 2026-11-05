@@ -19,7 +19,7 @@ The branch guard is commit-only. A conflicted upstream synchronization merge con
 3. **Format, then check.** Run `mise run fmt`, review its diff, then `mise run check`. `check` and commit hooks are read-only.
 4. **Review.** Run `/code-review` as the Review section below says. Every finding is fixed or explicitly refuted, with the disposition in the PR.
 5. **Gate.** Run the class's gate once on the final SHA. A code correction after the gate reruns the class gate. A prose-only correction may record the delta instead.
-6. **Open the PR.** Base it on `develop`, link the issue with `Closes #<n>`, and follow `.github/pull_request_template.md`.
+6. **Open the PR.** Base it on `develop`, link the issue with `Closes #<n>`, and follow `.github/pull_request_template.md`. A user-facing change adds its bullet under `## Unreleased` in `CHANGELOG.md` in the same PR. For an internal-only change under `waves/`, put `[no-changelog]` on a line of its own in every commit that touches `waves/`.
 7. **Merge.** Verify the live PR as the next section says. A finding that arrives after merge becomes a separate corrective PR; it never rewrites merged history.
 8. **Close out.** The PR's `Closes #<n>` auto-closes the issue.
 9. **Clean up.** Delete the issue branch and any worktree this run created. Leave branches and worktrees that other sessions own.
@@ -43,20 +43,21 @@ Dependency changes are full-gate. The light exception covers documentation and t
 
 This section owns the review policy.
 
-- **`/code-review`** for every substantive code change, including isolated logic and high-risk changes. Its Standards and Spec reviews are the whole review; request no other reviewer, bot or human. The Standards review reads [coding standards](../../CODING_STANDARDS.md), including its correctness defect classes.
+- **`/code-review`** for every substantive code change, including isolated logic and high-risk changes. Its Standards and Spec reviews are the whole human review; request no other human reviewer. The Standards review reads [coding standards](../../CODING_STANDARDS.md), including its correctness defect classes. CodeRabbit is the required bot reviewer, handled in Merge verification.
 - **No code review** for prose or docs and config policy cleanup. Supervisor or maintainer review is enough.
 - Automated CodeQL and SonarCloud remain advisory security and quality scans. They are not reviewers.
 - A behavior-changing correction after review gets `/code-review` on the delta. A prose or formatting correction does not.
+- A correction to a correction gets a verification pass: one Standards review of the new lines, and a Spec review only when the behavior changed.
 
 ## Merge verification
 
-Verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `develop`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. A failed advisory check needs a written disposition. A pending, skipped or empty review is recorded as incomplete, never claimed as coverage. Do not request routine bot reviews and do not wait for a bot quota.
+Verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `develop`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. CodeRabbit is a required reviewer: wait until the `CodeRabbit` check on the head is titled `Finished`, because GitHub also passes a required check that was skipped or rate-limited. Merging mid-review cancels the review, so wait for the check. A `Review paused` head gets `@coderabbitai review` once when the head is ready for merge; a head with no check gets `@coderabbitai full review` once; a rate-limited PR is pending and reported. CodeQL and SonarCloud stay advisory: each failed one gets a written disposition in the PR (fixed, false positive with the reason, or accepted with the reason). A pending, skipped or empty review is recorded as incomplete, never claimed as coverage.
 
 The PR body records the class gate's commands and exits on the tested head, and the `/code-review` result where the change is substantive code. Check with `gh pr view <pr> --repo ranokay/waves --json state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup`. Require `OPEN`, `isDraft: false`, base `develop`, head equal to the reviewed and tested head, `mergeable: MERGEABLE`, and `mergeStateStatus` in `CLEAN`, `UNSTABLE` or `HAS_HOOKS`. Then merge with `gh pr merge <pr> --repo ranokay/waves --squash --match-head-commit <head>`.
 
 ## Waiting on long commands
 
-A command that runs for minutes (`mise run test-strict`, a build) starts once in the background, and the harness reports its exit. Do other work or wait for that report.
+Run gates through `/Users/ranokay/.agents/tools/run gate_run -- mise run test-strict` on this owner's machine (use the equivalent `run gate_run` entry point elsewhere; the receipt runner is described in `/Users/ranokay/.agents/docs/agent-environment.md`). Keep the exit code and the JSON receipt path it prints: the receipt records the tested HEAD, the worktree state and whether the run was frozen. If the harness moves a long command to the background, stay in the turn and poll the log and receipt paths it printed until the receipt exists; nothing wakes a worker whose turn ended. Start a gate once per head.
 
 ## Evidence and session state
 

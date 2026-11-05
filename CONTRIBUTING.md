@@ -101,13 +101,15 @@ mise run check
    [the gate matrix](docs/agents/implementation-workflow.md#gate-matrix). It
    defines the prose, isolated-logic and full-gate checks.
 
-The merge stands on the local gate. There is no per-push test gate:
-`master.yml` is manual-only (`workflow_dispatch`). Automatic scanners (CodeQL,
-SonarCloud) are advisory. Record the commands, tested head, exits, counts and
-review dispositions in the PR body, as in
-[the PR template](.github/pull_request_template.md). The manual workflow covers
-the strict group across Python 3.12, 3.13 and 3.14. To run another version
-locally, re-sync the venv onto it first:
+The merge stands on the local gate. Every PR to `develop` also runs `quality`
+(`mise run check`) and the Ubuntu `test-fast` group automatically, because this
+fork is public and standard GitHub-hosted runners are not metered; the strict
+matrix across Python 3.12, 3.13 and 3.14 and the macOS/Windows fast legs stay
+manual-only (`workflow_dispatch`). Automatic scanners (CodeQL, SonarCloud)
+are advisory. Record the commands, tested head, exits, counts and review
+dispositions in the PR body, as in
+[the PR template](.github/pull_request_template.md). To run another Python
+version locally, re-sync the venv onto it first:
 `uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
 
 8. Commit your changes and push your branch to GitHub:
@@ -117,6 +119,9 @@ git add path/to/changed-file.py path/to/new-file.py
 git commit -m "fix(domain): describe the corrected behavior" -- path/to/changed-file.py path/to/new-file.py
 git push origin name-of-your-bugfix-or-feature
 ```
+
+Run `mise run check` again after committing and before pushing: the changelog
+guard compares committed `HEAD` with its merge-base.
 
 9. Submit a pull request through the GitHub website.
 

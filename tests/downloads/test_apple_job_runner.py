@@ -1051,6 +1051,7 @@ def test_a_first_ensure_that_errors_after_holding_fetches_with_the_row_resumed(t
     assert fetched_under == [{"status": "running", "reason": "", "line": _LINE}], "the fetch ran under a Held row"
 
 
+@pytest.mark.ffmpeg
 def test_a_revoked_album_publishes_no_playlist(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import _AppleAborted
@@ -1116,6 +1117,7 @@ def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
     assert summary == ""
 
 
+@pytest.mark.ffmpeg
 @pytest.mark.parametrize("skip_existing", [True, False])
 def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch, skip_existing):
     """#693: with the row's "Skip existing" off, a copy the ownership ledger
@@ -1162,6 +1164,7 @@ def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch
         assert not Path("/music/Album Folder/Xtal.m4a").exists()
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkeypatch):
     """#693: fetching again into the folder that holds this track's own copy
     replaces it in place, never a numbered duplicate beside it."""
@@ -1199,6 +1202,7 @@ def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkey
     assert len(provider.fetched) == 2, "the second run fetched again"
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monkeypatch):
     """#693: when another track holds the template name, this track's own copy
     sits at a numbered name; fetching again replaces that copy, never _02."""
@@ -1277,6 +1281,7 @@ def _skip_off_setup(tmp_path, monkeypatch):
     return provider, base, _bind(_stub(base, provider))
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_path, monkeypatch):
     """The ledger proves only that its path exists: a sibling that took the
     recorded name after this track's copy went keeps its file."""
@@ -1295,6 +1300,7 @@ def test_skip_existing_off_never_replaces_a_sibling_at_a_stale_recorded_name(tmp
     assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monkeypatch):
     """A legacy stereo row whose whole-track query answers the Dolby Atmos
     record leaves that copy alone."""
@@ -1318,6 +1324,7 @@ def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monk
     assert len(provider.fetched) == 1
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp_path, monkeypatch):
     """The ledger records the real path; a download root reached through a
     symlink still names the same folder, so the own copy is replaced, under the
@@ -1352,6 +1359,7 @@ def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp
     assert [e["path"] for e in relay.events if e["status"] == "done"] == [str(base / "Aphex Twin" / "Xtal_01.m4a")]
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path, monkeypatch):
     """A copy whose tag write failed is still this track's: unchanged since the
     check, it is replaced in place rather than numbered beside."""
@@ -1367,6 +1375,7 @@ def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path
     assert len(provider.fetched) == 1
 
 
+@pytest.mark.ffmpeg
 def test_skip_existing_off_never_replaces_a_song_moved_in_during_the_fetch(tmp_path, monkeypatch):
     """The untagged copy checked before the fetch is gone by the swap: another
     untagged song took its name meanwhile, and keeps it."""

@@ -15,9 +15,15 @@ from support.paths import REPO_ROOT
 pytestmark = pytest.mark.integration
 
 
+def inherited_env() -> dict[str, str]:
+    """Inherit the caller's environment without repository-location Git variables."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def run(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """Run a fixture command with an isolated Git configuration."""
     env = {
-        **os.environ,
+        **inherited_env(),
         "UV_PROJECT_ENVIRONMENT": str(repo / ".venv"),
         "UV_NO_SYNC": "1",
         "UV_OFFLINE": "1",
@@ -31,6 +37,7 @@ def run(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> subp
 
 
 def succeeds(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run a fixture command and fail the test when it exits non-zero."""
     result = run(repo, *args)
     assert result.returncode == 0, result.stdout + result.stderr
     return result
@@ -38,8 +45,9 @@ def succeeds(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def checkout(tmp_path):
+    """A disposable copy of the tracked tree with its own Git identity."""
     # Copy tracked inputs from the working tree so this also tests an uncommitted change.
-    paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=REPO_ROOT).decode().split("\0")
+    paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=REPO_ROOT, env=inherited_env()).decode().split("\0")
     paths += ["hk.pkl", *[str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "tools").glob("*.py")]]
     for name in paths:
         source = REPO_ROOT / name
@@ -53,11 +61,15 @@ def checkout(tmp_path):
     succeeds(tmp_path, "git", "config", "commit.gpgsign", "false")
     succeeds(tmp_path, "git", "add", ".")
     succeeds(tmp_path, "git", "commit", "-qm", "Fixture")
+    # The changelog guard compares committed HEAD with origin/develop, and this
+    # disposable repo has no remote of its own.
+    succeeds(tmp_path, "git", "update-ref", "refs/remotes/origin/develop", "HEAD")
     succeeds(tmp_path, "uv", "sync", "--locked", "--all-extras")
     return tmp_path
 
 
 def snapshot(repo: Path) -> tuple[dict[str, str], bytes]:
+    """Hash every tracked or untracked file plus the index tree."""
     paths = succeeds(repo, "git", "ls-files", "--cached", "--others", "--exclude-standard", "-z").stdout
     files = {
         name.decode(): hashlib.sha256((repo / os.fsdecode(name)).read_bytes()).hexdigest()

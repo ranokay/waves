@@ -75,6 +75,9 @@ hooks {
     stage = false
     stash = "none"
     steps = (linters) {
+      // Committed changes only, and deliberately not in the pre-commit hook:
+      // a commit must be possible before its changelog bullet exists.
+      ["changelog-entry"] { check = python + "python tools/check_changelog_entry.py" }
       ["lock"] { check = "uv lock --check" }
       ["ty"] { check = "bash tools/typecheck.sh" }
       ["deptry"] { check = python + "deptry ." }
