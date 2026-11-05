@@ -14,6 +14,7 @@ check` does.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ CHANGELOG = "CHANGELOG.md"
 SHIPPED_PREFIX = "waves/"
 OPT_OUT = "[no-changelog]"
 UNRELEASED = "## Unreleased"
+MIN_GIT = (2, 38)
 GIT = shutil.which("git") or ""
 
 
@@ -37,6 +39,22 @@ def _error(message: str) -> int:
     """Print a failure message and return the check's failure code."""
     print(message, file=sys.stderr)
     return 1
+
+
+def _git_version_supported() -> bool:
+    """Whether the installed Git provides merge-tree --write-tree."""
+    version = _git("--version")
+    match = re.search(r"git version (\d+)\.(\d+)", version.stdout)
+    return version.returncode == 0 and bool(match) and (int(match[1]), int(match[2])) >= MIN_GIT
+
+
+def _git_prerequisite_error() -> str | None:
+    """The missing-Git error, or None when the toolchain is usable."""
+    if not GIT:
+        return "git is not on PATH; install git and try again."
+    if not _git_version_supported():
+        return "git 2.38 or newer is required for merge-tree --write-tree; upgrade git and try again."
+    return None
 
 
 def _nul_paths(output: str) -> list[str]:
@@ -141,8 +159,9 @@ def _every_shipped_commit_opted_out(base: str) -> bool:
 
 def main() -> int:
     """Run the changelog entry guard from the repository root."""
-    if not GIT:
-        return _error("git is not on PATH; install git and try again.")
+    prerequisite = _git_prerequisite_error()
+    if prerequisite:
+        return _error(prerequisite)
 
     ref = _git("rev-parse", "--verify", "--quiet", BASE_REF)
     if ref.returncode != 0:

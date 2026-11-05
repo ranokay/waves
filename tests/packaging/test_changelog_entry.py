@@ -92,6 +92,18 @@ def _run(repo: Path, monkeypatch, capsys) -> tuple[int, str]:
     return code, capsys.readouterr().err
 
 
+def test_an_old_git_fails_with_upgrade_guidance(monkeypatch, capsys):
+    """merge-tree --write-tree needs Git 2.38 or newer."""
+    module = _tool_module()
+
+    def old_git(*args):
+        return subprocess.CompletedProcess(["git", *args], 0, "git version 2.34.1\n", "")
+
+    monkeypatch.setattr(module, "_git", old_git)
+    assert module.main() == 1
+    assert "2.38" in capsys.readouterr().err
+
+
 def test_a_waves_change_with_an_unreleased_bullet_passes(repo, monkeypatch, capsys):
     """A new bullet under Unreleased satisfies the guard."""
     _base(repo)
