@@ -948,6 +948,30 @@ def _carry_across_containers(old, new) -> int:
     return carried
 
 
+def _is_io_failure(exc: BaseException) -> bool:
+    """Whether mutagen failed to READ the file, not to parse it.
+
+    An I/O failure is an OSError, or a MutagenError wrapping one (args[0] or
+    __cause__), as with a missing file or a permission denial. Everything else
+    is a parse failure: the bytes are not a container mutagen can read.
+    """
+    if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+        return True
+    return bool(exc.args) and isinstance(exc.args[0], OSError)
+
+
+def _open_for_carry(path):
+    """``mutagen.File`` for the carry-over: None when the bytes cannot be parsed
+    (no recoverable tags), but the I/O failure itself when the file cannot be
+    read, so a strict caller aborts before replacing anything."""
+    try:
+        return mutagen.File(path)
+    except Exception as exc:
+        if _is_io_failure(exc):
+            raise
+        return None
+
+
 def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa: C901 - one tag family at a time
     """Keep the user's own tags on the file replacing ``path_old``.
 
@@ -963,16 +987,19 @@ def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa
     Comment, Composer, Grouping) by name. Container-specific fields with no
     safe counterpart, such as a rating or a mood atom, are not guessed: they
     stay on the old container rather than being written as a false value.
-    ``strict=True`` raises when either file cannot be read or saved, so the
-    caller can abort before replacing the old file.
+    ``strict=True`` raises when either file cannot be READ (an I/O failure:
+    a missing file, a permission denial) or saved, so the caller aborts before
+    replacing the old file. A file mutagen cannot PARSE (a damaged or truncated
+    container) has no recoverable tags: it carries nothing and returns 0, even
+    under ``strict=True``, so a damaged own copy can still be replaced.
     """
     try:
-        old = mutagen.File(path_old)
-        new = mutagen.File(path_new)
+        old = _open_for_carry(path_old)
+        new = _open_for_carry(path_new)
         if old is None or new is None:
-            # An unidentifiable container has no tag block to carry; that is
-            # not a user-tag failure. A read error is different: it raises
-            # below, so strict callers abort before replacing the old file.
+            # A container mutagen cannot parse has no tag block to carry; that
+            # is not a user-tag failure. An I/O failure never gets here: it
+            # raised in _open_for_carry, so strict callers abort first.
             return 0
         if old.tags is None:
             # An untagged own copy (a failed tag write, a user's bare file)

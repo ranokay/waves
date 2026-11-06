@@ -9,6 +9,7 @@ import mutagen.flac
 import mutagen.mp3
 import mutagen.mp4
 import pytest
+from mutagen import MutagenError
 from mutagen.id3 import TXXX
 
 from waves.metadata.tags import (
@@ -178,7 +179,9 @@ def test_a_strict_read_failure_aborts_instead_of_dropping_tags(tmp_path, monkeyp
 
     def unreadable(path):
         if str(path) == str(failing):
-            raise OSError("the network mount went away")
+            # mutagen wraps an I/O failure in MutagenError(OSError), as it does
+            # for a missing file or a permission denial.
+            raise MutagenError(PermissionError(13, "Permission denied", str(path)))
         return real_file(path)
 
     monkeypatch.setattr(tags_module.mutagen, "File", unreadable)
@@ -202,5 +205,16 @@ def test_an_unidentifiable_container_still_carries_nothing(tmp_path, monkeypatch
         "File",
         lambda path: None if str(path) == str(old) else real_file(path),
     )
+
+    assert carry_over_tags(old, new, strict=True) == 0
+
+
+@pytest.mark.parametrize("name", ["damaged.flac", "damaged.mp3", "empty.flac"])
+def test_a_damaged_file_carries_nothing_and_the_replacement_proceeds(tmp_path, name):
+    """mutagen cannot parse the bytes: there are no recoverable tags, so the
+    carry returns 0 even under strict=True and the replacement goes ahead."""
+    old = tmp_path / name
+    old.write_bytes(b"" if name.startswith("empty") else b"not an audio container at all" * 8)
+    new = _flac(tmp_path, "new.flac")
 
     assert carry_over_tags(old, new, strict=True) == 0
