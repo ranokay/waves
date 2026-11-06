@@ -38,6 +38,12 @@ issue. A test enforces it.
 
 - 🍎 Apple Music downloads land in the cookies tier: with a cookies export set in Settings under Providers, Apple Music, one click downloads an Apple album, playlist or song in AAC 256 (Dolby Atmos where the Atmos toggle asks and the track carries it) through the normal queue, ownership and library machinery ([issue #28](https://github.com/ranokay/waves/issues/28)).
 
+- 🏷️ Tags and folders now default to the original catalog item when Download With picks a matched offer from another provider; a missing field fills only from a consistent match, while codec, quality, catalog IDs and the file's own delivery provenance always describe what was actually downloaded ([issue #596](https://github.com/ranokay/waves/issues/596)).
+- 🔁 Existing Versions follow one captured policy per download: Keep existing (default), Replace Waves-owned, or Keep both with a readable provider/quality/type suffix and a collision counter. Replace only touches a Waves-owned file whose audio still matches; unowned, uncertain or externally edited files are kept and shown as KEPT BOTH ([issue #596](https://github.com/ranokay/waves/issues/596)).
+- ⏫ The Chooser can upgrade an existing Waves-owned Version through a matched provider offer when "Upgrade existing Waves-owned Versions through another provider" is on: it verifies the delivered file really improves before replacing it, and any failure leaves the old file and its record intact ([issue #596](https://github.com/ranokay/waves/issues/596)).
+- 🏷️ A replacement keeps the tags you added, such as genre and comment, while Waves' own ID, audio-type and technical tags always come from the new file ([issue #55](https://github.com/iamprivacy/Waves/issues/55)).
+- ⏭️ Keeping an existing file below the requested minimum now reports KEPT instead of claiming the download was fulfilled ([issue #596](https://github.com/ranokay/waves/issues/596)).
+
 ### 🔧 Changed
 
 - 🔊 With "Download Dolby Atmos" on, one click now saves both the stereo and Dolby Atmos versions as separate queue rows (the Atmos row is badged ATMOS and lands in the new "Dolby Atmos files" subfolder by default, blank places it alongside), each with its own ownership, progress, cancel and retry, and the button settles only when every enabled version is owned; Atmos-only tracks still fetch Atmos alone, and every file now carries a WAVES_AUDIO_TYPE tag so recognition never sniffs codecs ([issue #29](https://github.com/ranokay/waves/issues/29)).

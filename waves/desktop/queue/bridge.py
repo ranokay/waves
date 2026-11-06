@@ -913,7 +913,9 @@ class QueueMixin:
         # clamp there takes the higher of the two), but an undercounting poller
         # is a poller that cannot be reasoned about.
         consumed = sum(
-            1 for r in reg.values() if r.get("status") in ("done", "failed", "cancelled", "unavailable", "skipped")
+            1
+            for r in reg.values()
+            if r.get("status") in ("done", "failed", "cancelled", "unavailable", "skipped", "retained", "protected")
         )
         running = sum(float(r.get("pct", 0.0)) for r in reg.values() if r.get("status") == "running")
         smooth = min(100.0, (consumed * 100.0 + running) / total)

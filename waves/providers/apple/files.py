@@ -58,6 +58,9 @@ def format_apple_path(
     illegal_replacement: str = "",
     illegal_map: dict[str, str] | None = None,
     provider_name: str = "Apple Music",
+    quality: str = "",
+    audio_type: str = "",
+    facts: dict[str, str] | None = None,
 ) -> str:
     """A settings template rendered for one Apple track, sanitized per token."""
 
@@ -118,7 +121,13 @@ def format_apple_path(
         # Provider separation: "" renders the token as "" so the segment
         # collapses away for templates that omit it.
         "provider_name": provider_name,
+        "quality": quality,
+        "audio_type": audio_type,
     }
+    # Descriptive provenance overlays only the tokens it names; ordering
+    # tokens stay the delivered track's, so collection order is untouched.
+    if facts:
+        values.update(facts)
 
     def replace(match: re.Match) -> str:
         token = match.group(1)

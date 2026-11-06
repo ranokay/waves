@@ -6,11 +6,14 @@ import mutagen.mp4
 from mutagen import flac, id3, mp4
 from mutagen.id3 import (
     APIC,
+    COMM,
     TALB,
     TBPM,
     TCOM,
+    TCON,
     TCOP,
     TDRC,
+    TIT1,
     TIT2,
     TKEY,
     TPE1,
@@ -108,6 +111,37 @@ GENERIC_ALBUM_ARTIST_ID_TAG = "WAVES_ALBUM_ARTIST_ID"
 # falls back to the codec sniff for files from before it existed, so a file
 # is never misread because its container shares an extension.
 GENERIC_AUDIO_TYPE_TAG = "WAVES_AUDIO_TYPE"
+
+# Tags that describe the OLD audio or the OLD delivery, never the song: a
+# replacement copy must not inherit them (matched as a lowercase substring).
+# The WAVES_* family is checked by prefix below, so the fork's provenance tags
+# and catalog ids always come from the delivered file.
+_TAGS_NOT_CARRIED = (
+    "replaygain",
+    "encoder",
+    "encodedby",
+    "encoded by",
+    "\xa9too",
+    "encoding params",
+    "itunnorm",
+    "itunsmpb",
+    "itunpgap",
+    "isrc",
+    "upc",
+    "barcode",
+)
+_TAGS_OLD_WINS = frozenset({"genre", "\xa9gen", "tcon"})
+_TAG_PREFIXES_NEVER_CARRIED = ("waves_",)
+
+# The common user fields mapped across containers (M4A <-> FLAC <-> MP3).
+# Anything container-specific that has no counterpart is reported as not
+# carried; it is never copied by a guessed name.
+_CROSS_CONTAINER_TAGS = {
+    "genre": (("genre", "GENRE", "\xa9gen", "TCON"), {"flac": "GENRE", "mp4": "\xa9gen", "mp3": "TCON"}),
+    "comment": (("comment", "COMMENT", "\xa9cmt", "COMM"), {"flac": "COMMENT", "mp4": "\xa9cmt", "mp3": "COMM"}),
+    "composer": (("composer", "COMPOSER", "\xa9wrt", "TCOM"), {"flac": "COMPOSER", "mp4": "\xa9wrt", "mp3": "TCOM"}),
+    "grouping": (("grouping", "GROUPING", "\xa9grp", "TIT1"), {"flac": "GROUPING", "mp4": "\xa9grp", "mp3": "TIT1"}),
+}
 AUDIO_TYPE_STEREO = "stereo"
 AUDIO_TYPE_ATMOS = "atmos"
 
@@ -843,3 +877,122 @@ class Metadata:
         keys_to_delete = [key for key, value in self.m.tags.items() if self._is_empty_tag(value)]
         for key in keys_to_delete:
             del self.m.tags[key]
+
+
+def _tag_never_carried(key) -> bool:
+    lowered = str(key).lower()
+    if any(lowered.startswith(prefix) for prefix in _TAG_PREFIXES_NEVER_CARRIED):
+        return True
+    return any(mark in lowered for mark in _TAGS_NOT_CARRIED)
+
+
+def _tag_text(tags, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        try:
+            value = tags.get(key)
+        except Exception:  # noqa: S112 - a container that cannot get a key has no value
+            continue
+        if value is None:
+            continue
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if hasattr(value, "text"):
+            value = value.text
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "ignore")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _set_cross_container_tag(handle, container: str, field: str, text: str) -> None:
+    if handle.tags is None:
+        handle.add_tags()
+    if container == "mp3":
+        frame = (
+            COMM(encoding=3, lang="eng", desc="", text=text)
+            if field == "COMM"
+            else {"TCON": TCON, "TCOM": TCOM, "TIT1": TIT1}[field](encoding=3, text=text)
+        )
+        handle.tags.add(frame)
+    else:
+        handle.tags[field] = text
+
+
+def _carry_across_containers(old, new) -> int:
+    """Copy the common user fields between different container tag schemes."""
+    container = "flac" if isinstance(new, mutagen.flac.FLAC) else "mp4" if isinstance(new, mutagen.mp4.MP4) else "mp3"
+    carried = 0
+    for source_keys, destinations in _CROSS_CONTAINER_TAGS.values():
+        text = _tag_text(old.tags, source_keys)
+        if not text:
+            continue
+        destination = destinations[container]
+        try:
+            existing = _tag_text(new.tags, (destination,))
+        except Exception:
+            existing = ""
+        if existing:
+            continue
+        _set_cross_container_tag(new, container, destination, text)
+        carried += 1
+    if carried:
+        new.save()
+    return carried
+
+
+def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa: C901 - one tag family at a time
+    """Keep the user's own tags on the file replacing ``path_old``.
+
+    Waves writes the tags it knows and leaves the rest alone, so a Genre, a
+    Comment, a rating or a mood the user typed into the old file has no
+    counterpart in the new one and a replacement threw it away (upstream
+    iamprivacy/Waves#55). Only tags the new file LACKS are carried, with the
+    old copy's Genre winning; the fresh writer's fields stay. Every WAVES_*
+    tag, catalog id, ISRC, UPC, codec/quality and encoder/ReplayGain tag is
+    never carried: those describe the delivered file.
+
+    Different containers (M4A -> FLAC) carry the common user fields (Genre,
+    Comment, Composer, Grouping) by name. Container-specific fields with no
+    safe counterpart, such as a rating or a mood atom, are not guessed: they
+    stay on the old container rather than being written as a false value.
+    ``strict=True`` raises when either file cannot be read or saved, so the
+    caller can abort before replacing the old file.
+    """
+    try:
+        old = mutagen.File(path_old)
+        new = mutagen.File(path_new)
+        if old is None or new is None:
+            if strict:
+                raise MetadataUnreadable(path_old)  # noqa: TRY301 - the caller aborts before commit
+            return 0
+        if old.tags is None:
+            # An untagged own copy (a failed tag write, a user's bare file)
+            # has nothing to carry; that is not a failure.
+            return 0
+        if new.tags is None:
+            new.add_tags()
+        if not isinstance(new.tags, type(old.tags)):
+            return _carry_across_containers(old, new)
+        carried = 0
+        for key in list(old.tags.keys()):
+            lowered = str(key).lower()
+            if _tag_never_carried(key):
+                continue
+            if key in new.tags and lowered not in _TAGS_OLD_WINS:
+                continue
+            value = old.tags[key]
+            if Metadata._is_empty_tag(value) or (key in new.tags and new.tags[key] == value):
+                continue
+            new.tags[key] = value
+            carried += 1
+        if carried:
+            new.save()
+    except Exception as exc:
+        if strict:
+            raise MetadataUnreadable(path_old) from exc
+        return 0
+    return carried

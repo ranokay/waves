@@ -22,6 +22,36 @@ def capture(data, **changes):
     )
 
 
+def test_skip_existing_off_captures_the_internal_refresh_own_value():
+    data = Settings(skip_existing=False)
+
+    intent = capture(data)
+
+    assert intent.policy.duplicates == "refresh_own"
+
+
+def test_an_explicit_duplicate_choice_wins_over_the_skip_existing_toggle():
+    data = Settings(skip_existing=False)
+    data.download_policies = apply_policy_edit(
+        data.download_policies, "download_policies.shared.duplicates", "keep_both"
+    )
+
+    intent = capture(data)
+
+    assert intent.policy.duplicates == "keep_both"
+
+
+def test_a_retry_keeps_the_captured_duplicate_policy():
+    data = Settings(skip_existing=False)
+    old = capture(data)
+    data.skip_existing = True
+    data.download_policies = apply_policy_edit(
+        data.download_policies, "download_policies.shared.duplicates", "replace_owned"
+    )
+
+    assert old.policy.duplicates == "refresh_own"
+
+
 def test_provider_overrides_inherit_and_can_return_to_shared_rules():
     data = Settings()
     data.download_policies = apply_policy_edit(

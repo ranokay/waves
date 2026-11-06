@@ -288,6 +288,10 @@ _ADDED_COLUMNS = (
     # fetched Atmos whatever the setting said. The button path holds only the
     # record, and without this it ranked such a copy stale with Atmos off.
     ("atmos_only", "INTEGER NOT NULL DEFAULT 0"),
+    # The tag-independent digest of the AUDIO Waves wrote (waves.metadata.digest):
+    # a replacement may only touch a copy whose audio still matches. Null on a
+    # row written before the column existed, which reads as uncertain.
+    ("audio_digest", "TEXT"),
 )
 
 
@@ -296,7 +300,7 @@ _ADDED_COLUMNS = (
 # select it in this order, so the batch answer is the single answer.
 _OWNERSHIP_COLUMNS = (
     "path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,"
-    " sample_rate, codecs, recorded_at, requested_rank, ceiling_rank, degraded_tries, atmos_only"
+    " sample_rate, codecs, recorded_at, requested_rank, ceiling_rank, degraded_tries, atmos_only, audio_digest"
 )
 
 
@@ -318,7 +322,7 @@ def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
     width."""
     for row in rows:
         path, tier, rank, mode, atype = row[:5]
-        depth, rate, codecs, recorded_at, requested, ceiling, degraded, atmos_only = row[-8:]
+        depth, rate, codecs, recorded_at, requested, ceiling, degraded, atmos_only, digest = row[-9:]
         if not path:
             continue
         if roots is not None and not any(path_under(path, r) for r in roots):
@@ -339,6 +343,7 @@ def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
                 "ceiling_rank": ceiling,
                 "degraded_tries": degraded,
                 "atmos_only": bool(atmos_only),
+                "audio_digest": digest,
             }
     return None
 
@@ -420,6 +425,7 @@ class OwnershipStore:
                        ceiling_rank   INTEGER NOT NULL DEFAULT -1,
                        degraded_tries INTEGER NOT NULL DEFAULT 0,
                        atmos_only   INTEGER NOT NULL DEFAULT 0,
+                       audio_digest TEXT,
                        PRIMARY KEY (track_id, path)
                    )""")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_track ON downloads(track_id)")
@@ -639,6 +645,7 @@ class OwnershipStore:
         ceiling_rank: int = -1,
         degraded: bool = False,
         atmos_only: bool = False,
+        audio_digest: str | None = None,
     ) -> int:
         """Record that ``track_id`` was written to ``path`` at ``quality_tier``.
 
@@ -662,6 +669,43 @@ class OwnershipStore:
             int: This row's consecutive degraded-delivery count after the
                 write, so the caller can report which attempt this was.
         """
+        row = self._row(
+            track_id,
+            path,
+            quality_tier,
+            audio_mode=audio_mode,
+            audio_type=audio_type,
+            bit_depth=bit_depth,
+            sample_rate=sample_rate,
+            codecs=codecs,
+            user_id=user_id,
+            requested_rank=requested_rank,
+            ceiling_rank=ceiling_rank,
+            degraded=degraded,
+            atmos_only=atmos_only,
+            audio_digest=audio_digest,
+        )
+        with self._lock:
+            return self._write_locked(row)
+
+    @staticmethod
+    def _row(
+        track_id: str,
+        path: str,
+        quality_tier: str | None,
+        *,
+        audio_mode: str | None,
+        audio_type: str | None,
+        bit_depth: int | None,
+        sample_rate: int | None,
+        codecs: str | None,
+        user_id: str | None,
+        requested_rank: int,
+        ceiling_rank: int,
+        degraded: bool,
+        atmos_only: bool,
+        audio_digest: str | None,
+    ) -> tuple:
         tier = (quality_tier or "").upper() or None
         # One spelling on the row, whoever calls: a bare id is tidal's (the
         # spec's legacy rule), so the store's key can never fork per caller.
@@ -669,7 +713,7 @@ class OwnershipStore:
         # Explicit type wins; a mode-only caller still lands typed via the
         # fallback, so every new row carries what per-version gates filter on.
         atype = normalize_audio_type(audio_type, audio_mode)
-        row = (
+        return (
             str(track_id),
             str(path),
             tier,
@@ -685,43 +729,100 @@ class OwnershipStore:
             int(ceiling_rank),
             1 if degraded else 0,
             1 if atmos_only else 0,
+            audio_digest,
+        )
+
+    def _write_locked(self, row: tuple) -> int:
+        """Upsert one row and return its degraded count. Caller holds the lock."""
+        self._conn.execute(
+            """INSERT INTO downloads
+                   (track_id, path, quality_tier, quality_rank, audio_mode, audio_type,
+                    bit_depth, sample_rate, codecs, user_id, recorded_at,
+                    requested_rank, ceiling_rank, degraded_tries, atmos_only, audio_digest)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(track_id, path) DO UPDATE SET
+                   quality_tier = excluded.quality_tier,
+                   quality_rank = excluded.quality_rank,
+                   audio_mode   = COALESCE(excluded.audio_mode, downloads.audio_mode),
+                   audio_type   = COALESCE(excluded.audio_type, downloads.audio_type),
+                   bit_depth    = excluded.bit_depth,
+                   sample_rate  = excluded.sample_rate,
+                   codecs       = excluded.codecs,
+                   user_id      = excluded.user_id,
+                   recorded_at  = excluded.recorded_at,
+                   requested_rank = excluded.requested_rank,
+                   ceiling_rank   = excluded.ceiling_rank,
+                   atmos_only     = excluded.atmos_only,
+                   audio_digest   = excluded.audio_digest,
+                   degraded_tries = CASE
+                       WHEN excluded.degraded_tries > 0 THEN downloads.degraded_tries + 1
+                       ELSE 0
+                   END""",
+            row,
+        )
+        self._conn.commit()
+        # Read back under the same lock, so the caller can say how many
+        # attempts this makes without a second query racing another
+        # worker's write (and without ownership_of's disk check, which
+        # would stat a network mount for a file just written here).
+        got = self._conn.execute(
+            "SELECT degraded_tries FROM downloads WHERE track_id = ? AND path = ?",
+            (row[0], row[1]),
+        ).fetchone()
+        return int(got[0]) if got else 0
+
+    def record_replacement(
+        self,
+        origin_id: str,
+        origin_path: str,
+        delivered_id: str,
+        delivered_path: str,
+        quality_tier: str | None = None,
+        *,
+        audio_mode: str | None = None,
+        audio_type: str | None = None,
+        bit_depth: int | None = None,
+        sample_rate: int | None = None,
+        codecs: str | None = None,
+        user_id: str | None = None,
+        requested_rank: int = -1,
+        ceiling_rank: int = -1,
+        audio_digest: str | None = None,
+    ) -> int:
+        """Retire the origin row and record the delivering file in one commit.
+
+        A cross-provider replacement changes which provider owns the path.
+        The old row must stop claiming it and the new row must describe the
+        delivered bytes, or two providers would answer ownership for one file.
+        """
+        row = self._row(
+            delivered_id,
+            delivered_path,
+            quality_tier,
+            audio_mode=audio_mode,
+            audio_type=audio_type,
+            bit_depth=bit_depth,
+            sample_rate=sample_rate,
+            codecs=codecs,
+            user_id=user_id,
+            requested_rank=requested_rank,
+            ceiling_rank=ceiling_rank,
+            degraded=False,
+            atmos_only=False,
+            audio_digest=audio_digest,
         )
         with self._lock:
-            self._conn.execute(
-                """INSERT INTO downloads
-                       (track_id, path, quality_tier, quality_rank, audio_mode, audio_type,
-                        bit_depth, sample_rate, codecs, user_id, recorded_at,
-                        requested_rank, ceiling_rank, degraded_tries, atmos_only)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(track_id, path) DO UPDATE SET
-                       quality_tier = excluded.quality_tier,
-                       quality_rank = excluded.quality_rank,
-                       audio_mode   = COALESCE(excluded.audio_mode, downloads.audio_mode),
-                       audio_type   = COALESCE(excluded.audio_type, downloads.audio_type),
-                       bit_depth    = excluded.bit_depth,
-                       sample_rate  = excluded.sample_rate,
-                       codecs       = excluded.codecs,
-                       user_id      = excluded.user_id,
-                       recorded_at  = excluded.recorded_at,
-                       requested_rank = excluded.requested_rank,
-                       ceiling_rank   = excluded.ceiling_rank,
-                       atmos_only     = excluded.atmos_only,
-                       degraded_tries = CASE
-                           WHEN excluded.degraded_tries > 0 THEN downloads.degraded_tries + 1
-                           ELSE 0
-                       END""",
-                row,
-            )
-            self._conn.commit()
-            # Read back under the same lock, so the caller can say how many
-            # attempts this makes without a second query racing another
-            # worker's write (and without ownership_of's disk check, which
-            # would stat a network mount for a file just written here).
-            got = self._conn.execute(
-                "SELECT degraded_tries FROM downloads WHERE track_id = ? AND path = ?",
-                (str(track_id), str(path)),
-            ).fetchone()
-        return int(got[0]) if got else 0
+            try:
+                self._conn.execute(
+                    "DELETE FROM downloads WHERE track_id = ? AND path = ?",
+                    (namespaced_id(origin_id), str(origin_path)),
+                )
+                return self._write_locked(row)
+            except Exception:
+                # The DELETE and the INSERT are one ownership transaction: a
+                # failed insert must not leave the origin row retired.
+                self._conn.rollback()
+                raise
 
     def adopt(self, track_id: str, path: str) -> bool:
         """Record a file the engine found already on disk (no stream was

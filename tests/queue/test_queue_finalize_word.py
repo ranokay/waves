@@ -250,3 +250,21 @@ def test_delivery_is_announced_before_the_post_processing_delay(tmp_path):
 
 def test_a_failed_download_is_never_announced_delivered(tmp_path):
     assert _run_item(tmp_path, success=False) == ["download", "post"]
+
+
+def test_retained_and_protected_rows_are_settled_outcomes():
+    """The two duplicate-policy outcomes reach the row the drawer reads.
+
+    ``test_queue_unavailable_word.py`` drives the real drawer and asserts the
+    rendered KEPT and KEPT BOTH words.
+    """
+    b = _LifecycleStub()
+    b._own_pool = SimpleNamespace(start=lambda _worker: None)
+
+    b._track_lifecycle(1, {"id": "9", "status": "retained", "reason": "below the minimum"})
+    b._track_lifecycle(1, {"id": "10", "status": "protected", "reason": "not a proven own copy"})
+
+    assert b._jobs.tracks[1]["9"]["status"] == "retained"
+    assert b._jobs.tracks[1]["9"]["reason"] == "below the minimum"
+    assert b._jobs.tracks[1]["10"]["status"] == "protected"
+    assert b._jobs.tracks[1]["10"]["reason"] == "not a proven own copy"

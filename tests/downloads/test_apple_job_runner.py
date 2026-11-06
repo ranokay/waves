@@ -1132,7 +1132,7 @@ def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch
     provider = _FakeProvider(fixture=staged)
     asked = []
 
-    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None):
+    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None, **kwargs):
         asked.append(track_id)
         return "skip", {"path": "/music/Album Folder/Xtal.m4a"}
 
@@ -1223,7 +1223,7 @@ def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monke
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
     owned: list = []
 
-    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None):
+    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None, **kwargs):
         return ("skip", {"path": str(owned[0])}) if owned else (None, None)
 
     monkeypatch.setattr(runner, "gate_track", ledger)
@@ -3575,3 +3575,101 @@ def test_chooser_engine_pin_is_distinct_from_a_provider_auto_choice(tmp_path):
     assert all("engine" not in row["askToggles"] for row in stub._queue)
     assert all("engine" not in spec.chooser_toggles for spec in stub._jobs.specs.values())
     assert provider.engine_selection == "auto"
+
+
+def _policy_run(stub, policy, qid=1, signals=None):
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: policy
+    hooks.job_skip_existing = lambda _qid: policy == "keep_existing"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    return runner.run_apple_job(
+        hooks,
+        qid,
+        spec,
+        _song_resource(),
+        signals=signals or _Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+
+def test_apple_keep_both_lands_beside_with_the_readable_suffix(tmp_path, monkeypatch):
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    names = sorted(path.name for path in base.rglob("*.m4a"))
+    assert len(names) == 2
+    assert "Xtal.m4a" in names
+    assert any(name.startswith("Xtal [Apple Music") for name in names)
+    assert existing.read_bytes() != b""
+
+
+def test_apple_replace_owned_protects_an_untagged_file(tmp_path, monkeypatch):
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    before = existing.read_bytes()
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(existing)}))
+
+    assert _policy_run(stub, "replace_owned") == ""
+
+    assert existing.read_bytes() == before
+    assert len(list(base.rglob("*.m4a"))) == 2
+
+
+def test_apple_replace_owned_replaces_a_proven_unchanged_copy(tmp_path, monkeypatch):
+    from waves.metadata.digest import audio_digest
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    _write_item_id(existing, "apple:song-1")
+    before = existing.read_bytes()
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("force", {"path": str(existing), "audio_digest": audio_digest(existing)}),
+    )
+
+    assert _policy_run(stub, "replace_owned") == ""
+
+    assert len(list(base.rglob("*.m4a"))) == 1
+    assert existing.read_bytes() != before
+
+
+def test_apple_keep_existing_below_the_minimum_retains_without_a_fetch(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    relay = _Relay()
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("retain", {"path": str(existing), "quality_rank": 1, "quality_tier": "HIGH"}),
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_existing"
+    hooks.job_quality_strategy = lambda _qid: "minimum_required"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded)"
+    assert provider.fetched == []
+    assert any(event["status"] == "retained" for event in relay.events)

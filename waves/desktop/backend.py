@@ -126,7 +126,11 @@ from waves.library.ownership import (
 from waves.library.ownership import (
     record_names_a_broken_copy as _record_names_a_broken_copy,
 )
+from waves.library.placement import RETAINED_REASON, claim_meets_minimum, retains_below_minimum
+from waves.library.upgrade import UpgradePlan
+from waves.metadata.digest import audio_digest, digest_matches
 from waves.metadata.naming import name_builder_album_artist, name_builder_artist, name_builder_title
+from waves.metadata.provenance import origin_facts as _provenance_origin_facts
 from waves.metadata.tags import normalize_audio_type_tag
 from waves.model.cfg import (
     METADATA_TAG_FLAGS,
@@ -173,6 +177,7 @@ from waves.providers.apple.files import (
 )
 from waves.providers.apple.runner import AppleJobHooks, _JobOptions
 from waves.providers.base import validate_row
+from waves.providers.catalog_offers import DeliveryFacts
 from waves.providers.search_merge import fold_search_groups
 from waves.providers.tidal_client import quality_audio_highest
 from waves.providers.tidal_folders import FOLDER_PATH_TOKEN, apply_folder_path
@@ -1454,7 +1459,19 @@ class _TrackedDownload(Download):
         ceiling = _advertised_ceiling(media)
         self._stamp_learned_ceiling(media_id, rec, ceiling)
         current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), ceiling)
-        return ("skip" if current else "force"), rec
+        if current:
+            return "skip", rec
+        if retains_below_minimum(
+            self._duplicate_policy,
+            self._quality_strategy,
+            int(rec.get("quality_rank", -1)),
+            self._target_rank,
+        ):
+            # Keep existing + a required minimum: the copy is below the ask
+            # and this policy never replaces. Keep it and say so; never force
+            # a fetch that would overwrite it with an equal-or-lower delivery.
+            return "retain", rec
+        return "force", rec
 
     def _stamp_learned_ceiling(self, media_id, rec: dict, ceiling: int | None) -> None:
         """Write a ceiling read off the track onto a record that has none (see
@@ -1573,6 +1590,16 @@ class _TrackedDownload(Download):
                 "kind": "own",
                 "tier": tier_word,
             }
+        if verdict == "retain":
+            return "retain", {
+                "kind": "own",
+                "tier": _delivered_word(
+                    (rec or {}).get("quality_tier"),
+                    audio_type=(rec or {}).get("audio_type"),
+                    audio_mode=(rec or {}).get("audio_mode"),
+                ),
+                "reason": RETAINED_REASON,
+            }
         # Dual-download rows never consult the version-blind library claim (a
         # stereo file does not satisfy an Atmos row, and vice versa); legacy
         # single rows keep it (toggle-off, byte-identical).
@@ -1590,7 +1617,11 @@ class _TrackedDownload(Download):
             if claim:
                 # A claim that hands back the presence verdict names the local
                 # copy's class (hires / lossless / high / low); a bare True is
-                # a claim that has no more to say.
+                # a claim that has no more to say. A required minimum the
+                # claim cannot meet is not a skip: the bulk gate may only
+                # skip a copy that satisfies the request.
+                if self._quality_strategy == "minimum_required" and not claim_meets_minimum(claim, self._target_rank):
+                    return None, {}
                 local = claim.get("local_class", "") if isinstance(claim, dict) else ""
                 return "skip", {"kind": "claim", "tier": _tier_word(str(local or ""))}
         return verdict, {}
@@ -1625,6 +1656,31 @@ class _TrackedDownload(Download):
                 event["owned"] = str(detail.get("kind") or "own")
                 if detail.get("tier"):
                     event["quality"] = detail["tier"]
+            relay.track_event.emit(event)
+        return True, ""
+
+    def _emit_retained(self, media, detail: dict | None = None):
+        """Report an existing copy kept because it is below the required
+        minimum. No stream was fetched and nothing was recorded: the outcome
+        is retained/skipped, never a fulfilled download."""
+        with self._outcome_lock:
+            self.ok_count += 1
+            self.skip_count += 1
+        relay = self._track_signals
+        if relay is not None:
+            event = {
+                "id": str(getattr(media, "waves_identity_id", None) or media.id),
+                "title": name_builder_title(media),
+                "num": int(getattr(media, "track_num", 0) or 0),
+                "vol": int(getattr(media, "volume_num", 1) or 1),
+                "duration": _fmt_duration(getattr(media, "duration", 0)),
+                "status": "retained",
+                "owned": "own",
+                "reason": str((detail or {}).get("reason") or RETAINED_REASON),
+            }
+            tier = (detail or {}).get("tier")
+            if tier:
+                event["quality"] = tier
             relay.track_event.emit(event)
         return True, ""
 
@@ -1664,6 +1720,19 @@ class _TrackedDownload(Download):
             return
         with self._delivered_lock:
             self._delivered.pop(self._delivered_key(media), None)
+
+    def _note_retained(self, media, reason) -> None:
+        """Engine hook: the existing copy was kept. Thread-local because items()
+        fans one job's tracks out on a pool."""
+        self._tls.outcome = ("retained", str(reason))
+
+    def _note_protected(self, media, reason) -> None:
+        """Engine hook: the new copy landed beside a protected file."""
+        self._tls.outcome = ("protected", str(reason))
+
+    def _note_upgraded(self, media, origin_id, origin_path) -> None:
+        """Engine hook: a verified replacement committed over the origin copy."""
+        self._tls.replaced = (str(origin_id), str(origin_path))
 
     def _note_delivered(self, media) -> None:
         """Engine hook (download.py): the file and its sidecars are on disk,
@@ -1743,6 +1812,8 @@ class _TrackedDownload(Download):
         verdict, detail = self._claim_decision(media, use_kwargs.get("file_template"), placement)
         if verdict == "skip":
             return self._emit_skip(media, detail)
+        if verdict == "retain":
+            return self._emit_retained(media, detail)
         force = self._force_download() if verdict == "force" else contextlib.nullcontext()
         relay = self._track_signals
         if relay is None or media is None or getattr(media, "id", None) is None:
@@ -1783,6 +1854,8 @@ class _TrackedDownload(Download):
         # item's task under. Thread-local: items() fans item() out on a pool and
         # the hook fires deep inside the engine, on this same thread.
         self._tls.row_key = base["id"]
+        self._tls.outcome = None
+        self._tls.replaced = None
         try:
             with force:
                 ok, path = super().item(*args, media=media, event_stop=event_stop, **use_kwargs)
@@ -1804,9 +1877,22 @@ class _TrackedDownload(Download):
         # write_count (so an album of nothing but refusals cannot report a
         # clean done over an empty folder).
         refused = self._take_unavailable() and not ok
+        outcome = getattr(self._tls, "outcome", None)
+        replaced = getattr(self._tls, "replaced", None)
         if refused:
             status = "unavailable"
             self._note_refusal()
+        elif outcome and outcome[0] == "retained":
+            # The existing copy was kept (below the minimum, a failed
+            # carry-over or an upgrade that did not prove itself). Handled,
+            # but no write: retained/skipped, never fulfilled.
+            status = "retained"
+            with self._outcome_lock:
+                self.ok_count += 1
+                self.skip_count += 1
+        elif outcome and outcome[0] == "protected" and ok:
+            status = "protected"
+            self._note_outcome(True)
         else:
             status = "done" if ok else ("cancelled" if aborted else "failed")
             self._note_outcome(ok)
@@ -1814,11 +1900,19 @@ class _TrackedDownload(Download):
             quality = self._delivered.pop(self._delivered_key(media), None)
         event = {**base, "status": status}
         # Carry the final path + delivered quality only for a real, successful
-        # write, so the bridge records ownership from reality. A skip has no
-        # captured quality and is deliberately not recorded here.
-        if status == "done" and quality is not None and path:
+        # write, so the bridge records ownership from reality. A skip or a
+        # retained copy has no captured quality and is deliberately not
+        # recorded here.
+        if status in ("done", "protected") and quality is not None and path:
             event["path"] = str(path)
             event["quality"] = quality
+        if status == "protected" and outcome:
+            event["reason"] = outcome[1]
+        if replaced:
+            event["replaced"] = {"origin_id": replaced[0], "origin_path": replaced[1]}
+            # The engine already committed the ownership replacement with the
+            # file; the event must not record it a second time.
+            event["recorded"] = True
         relay.track_event.emit(event)
         return ok, path
 
@@ -3060,6 +3154,9 @@ def _capture_request(
     if not isinstance(data, CfgSettings):
         return None
     prefs = getattr(bridge, "_waves_pref_bool", None)
+    raw = dict(toggles or {})
+    origin = raw.get("origin_facts")
+    upgrade = raw.get("upgrade")
     intent = capture_intent(
         data,
         provider_id,
@@ -3069,14 +3166,17 @@ def _capture_request(
         audio_type=audio_type,
         toggles=_chooser_asset_pins(toggles),
         engine_pin=engine_pin,
-        provider_pin=str((toggles or {}).get("provider_pin") or ""),
-        allow_fallback=bool((toggles or {}).get("allow_fallback", False)),
-        allow_provider_fallback=(toggles or {}).get("allow_provider_fallback"),
-        allow_engine_fallback=(toggles or {}).get("allow_engine_fallback"),
+        provider_pin=str(raw.get("provider_pin") or ""),
+        allow_fallback=bool(raw.get("allow_fallback", False)),
+        allow_provider_fallback=raw.get("allow_provider_fallback"),
+        allow_engine_fallback=raw.get("allow_engine_fallback"),
         clean_album_artist=prefs("clean_album_artist") if callable(prefs) else False,
         library_bulk_skip=bridge._library_bulk_skip_on(),
+        origin_facts=origin if isinstance(origin, dict) else None,
+        origin_consistent=bool(raw.get("origin_consistent", False)),
+        upgrade=upgrade if isinstance(upgrade, dict) else None,
     )
-    return dataclasses.replace(intent, origin_media_id=str((toggles or {}).get("origin_media_id") or media_id))
+    return dataclasses.replace(intent, origin_media_id=str(raw.get("origin_media_id") or media_id))
 
 
 def _chooser_asset_pins(toggles: dict | None) -> dict[str, bool]:
@@ -11081,6 +11181,53 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         else:
             self.applicationEventActionRequested.emit("open_settings", provider_id)
 
+    def _upgrade_plan_for(self, origin_id: str, provider_id: str, media_id: str, selected, offer):
+        """The captured opt-in upgrade plan, or None when it does not qualify.
+
+        Only a Chooser download of a matched offer from another provider can
+        reach this. The origin Version must be a Waves-owned row whose audio
+        still matches its digest, and the offer's probed evidence must
+        demonstrate a strict ADR 0001 improvement for every requested family.
+        """
+        from waves.providers.catalog_offers import compare_quality, requested_audio, satisfies
+
+        if offer.kind != "track" or not offer.match.automatic_eligible:
+            return None
+        if provider_id == provider_of_id(origin_id):
+            return None
+        try:
+            rec = self._ownership.ownership_of(origin_id, audio_type=selected.audio_type or None)
+        except Exception:
+            logger.debug("Upgrade ownership lookup failed", exc_info=True)
+            return None
+        if not rec or not rec.get("path") or not rec.get("audio_digest"):
+            return None
+        if not digest_matches(rec.get("audio_digest"), str(rec["path"])):
+            return None
+        recorded = DeliveryFacts(
+            tier=tier_from_word(rec.get("quality_tier")),
+            audio_type=str(rec.get("audio_type") or ""),
+            codec=str(rec.get("codecs") or ""),
+            bit_depth=rec.get("bit_depth"),
+            sample_rate=rec.get("sample_rate"),
+        )
+        families = requested_audio(selected)
+        facts = tuple(offer.evidence.probed)
+        if not all(
+            any(satisfies(fact, family) and compare_quality(fact, recorded) == 1 for fact in facts)
+            for family in families
+        ):
+            return None
+        return UpgradePlan(
+            origin_id=origin_id,
+            origin_path=str(rec["path"]),
+            audio_type=str(selected.audio_type or ""),
+            recorded=recorded,
+            delivered_provider=provider_id,
+            delivered_media_id=media_id,
+            origin_digest=str(rec["audio_digest"]),
+        )
+
     @Slot(int, str, str, str, "QVariant", result=bool)
     def downloadCatalogOffer(self, request_id: int, provider_id: str, tier: str, audio_type: str, toggles) -> bool:
         """Enqueue only the current identified offer; retain origin and separate pins."""
@@ -11125,8 +11272,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             toggles = toggles.toVariant()
         pins = dict(toggles) if isinstance(toggles, dict) else {}
         pins["origin_media_id"] = origin_id
+        snapshot = self._catalog_offer_snapshot[1]
+        origin_identity = getattr(snapshot, "origin", None)
+        if origin_identity is not None:
+            pins["origin_facts"] = _provenance_origin_facts(origin_identity)
+            pins["origin_consistent"] = bool(offer.match.automatic_eligible)
+        data = getattr(getattr(self, "settings", None), "data", None)
+        policies = getattr(data, "download_policies", None)
+        if getattr(policies, "upgrade_provider", False) and provider_id != provider_of_id(origin_id):
+            plan = self._upgrade_plan_for(origin_id, provider_id, media_id, selected, offer)
+            if plan is not None:
+                pins["upgrade"] = json.loads(plan.to_json())
+            else:
+                self._set_status("No upgrade applied: the existing Version is not a proven improvement.")
         if provider_id == provider_of_id(origin_id):
-            media_id = self._catalog_offer_snapshot[1].selection.media_id
+            media_id = snapshot.selection.media_id
         self.downloadWithChooser(media_id, offer.kind, tier, audio_type, pins)
         return True
 
@@ -11480,9 +11640,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # settled too: there is nothing left to wait for, and a row left at zero
         # would read as still pending for the rest of the job. So is a track a
         # setting kept out: the engine has already moved past it.
-        if ev["status"] in ("done", "skipped", "unavailable"):
+        if ev["status"] in ("done", "skipped", "unavailable", "retained", "protected"):
             row["pct"] = 100.0
-        if ev["status"] == "done":
+        if ev["status"] in ("done", "protected") and not ev.get("recorded"):
             # A finished track just proved the download folder writable: feed
             # the reachability gate's liveness window (cheap, no I/O). Only
             # when it landed under the CURRENT setting: a job still writing to
@@ -11543,19 +11703,42 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # below on every ordinary download below the ceiling.
             requested_rank = int(quality.get("requested_rank", -1))
             degraded = ceiling >= 0 and 0 <= delivered < ceiling and delivered < requested_rank
-            tries = self._ownership.record(
-                str(ev.get("id")),
-                real,
-                quality.get("tier"),
-                audio_type=quality.get("audio_type"),
-                audio_mode=quality.get("audio_mode"),
-                bit_depth=quality.get("bit_depth"),
-                sample_rate=quality.get("sample_rate"),
-                codecs=quality.get("codecs"),
-                requested_rank=requested_rank,
-                ceiling_rank=ceiling,
-                degraded=degraded,
-            )
+            digest = audio_digest(real)
+            replaced = ev.get("replaced") or {}
+            if replaced.get("origin_id") and replaced.get("origin_path"):
+                # A verified cross-provider replacement: the origin row must
+                # stop claiming the path and the delivering row must describe
+                # the new file, in one transaction.
+                tries = self._ownership.record_replacement(
+                    str(replaced["origin_id"]),
+                    str(replaced["origin_path"]),
+                    str(ev.get("id")),
+                    real,
+                    quality.get("tier"),
+                    audio_type=quality.get("audio_type"),
+                    audio_mode=quality.get("audio_mode"),
+                    bit_depth=quality.get("bit_depth"),
+                    sample_rate=quality.get("sample_rate"),
+                    codecs=quality.get("codecs"),
+                    requested_rank=requested_rank,
+                    ceiling_rank=ceiling,
+                    audio_digest=digest,
+                )
+            else:
+                tries = self._ownership.record(
+                    str(ev.get("id")),
+                    real,
+                    quality.get("tier"),
+                    audio_type=quality.get("audio_type"),
+                    audio_mode=quality.get("audio_mode"),
+                    bit_depth=quality.get("bit_depth"),
+                    sample_rate=quality.get("sample_rate"),
+                    codecs=quality.get("codecs"),
+                    requested_rank=requested_rank,
+                    ceiling_rank=ceiling,
+                    degraded=degraded,
+                    audio_digest=digest,
+                )
             # The file was written this instant, so assert the cache entry
             # directly (no stat needed) and let QML flip the button. The
             # next TTL refresh reconciles against the store's full row set.
@@ -13582,6 +13765,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         skip_existing: bool | None = None,
     ) -> Download:
         data = request_intent.settings_data() if request_intent else self.settings.data
+        policy = (request_intent.policy.duplicates if request_intent else "") or "keep_existing"
+        upgrade_plan = UpgradePlan.from_json(request_intent.upgrade_json) if request_intent else None
         progress_gui = ProgressBars(
             item=signals.item,
             item_name=signals.item_name,
@@ -13598,7 +13783,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 tidal_obj=self.tidal,
                 path_base=data.download_base_path,
                 fn_logger=logger,
-                skip_existing=data.skip_existing if skip_existing is None else skip_existing,
+                # The captured duplicate policy is the engine's skip rule; the
+                # legacy setting only supplied the derived value at capture.
+                skip_existing=(policy == "keep_existing")
+                if request_intent
+                else (data.skip_existing if skip_existing is None else skip_existing),
                 progress=Progress(),
                 progress_gui=progress_gui,
                 event_abort=event_abort or self._event_abort,
@@ -13625,7 +13814,21 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 audio_type=audio_type,
                 base_template=base_template,
                 chooser_toggles=chooser_toggles,
-                **({"settings_data": data} if request_intent else {}),
+                **(
+                    {
+                        "settings_data": data,
+                        "duplicate_policy": policy,
+                        "quality_strategy": request_intent.policy.quality_strategy,
+                        "metadata_source": request_intent.policy.metadata_source,
+                        "organization_source": request_intent.policy.organization_source,
+                        "origin_facts": request_intent.origin_facts(),
+                        "origin_consistent": request_intent.origin_consistent,
+                        "upgrade_plan": upgrade_plan,
+                        "record_replacement": getattr(self._ownership, "record_replacement", None),
+                    }
+                    if request_intent
+                    else {}
+                ),
             )
         self._warn_if_ffmpeg_missing(dl)
         return dl
@@ -15228,6 +15431,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             job_quality=lambda qid: self._job_quality(qid) if hasattr(self, "_job_quality") else None,
             job_audio_type=lambda qid: self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else None,
             job_skip_existing=self._job_skip_existing if hasattr(self, "_job_skip_existing") else None,
+            job_duplicate_policy=lambda qid: intent.policy.duplicates if intent else "",
+            job_quality_strategy=lambda qid: intent.policy.quality_strategy if intent else "best_available",
+            job_metadata_source=lambda qid: intent.policy.metadata_source if intent else "origin",
+            job_organization_source=lambda qid: intent.policy.organization_source if intent else "origin",
+            job_origin_facts=lambda qid: intent.origin_facts() if intent else {},
+            job_origin_consistent=lambda qid: bool(intent.origin_consistent) if intent else False,
+            job_upgrade=lambda qid: UpgradePlan.from_json(intent.upgrade_json) if intent else None,
+            record_replacement=(
+                self._ownership.record_replacement
+                if hasattr(self, "_ownership") and hasattr(self._ownership, "record_replacement")
+                else None
+            ),
             ownership=lambda: getattr(self, "_ownership", None),
             redownload_overrides=lambda: self._redownload_overrides,
             library_claim_overrides=lambda: self._library_claim_overrides,
