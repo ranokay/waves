@@ -112,3 +112,19 @@ def test_every_shipped_default_token_is_documented_in_app():
         template = getattr(d, field, "")
         for token in re.findall(r"\{([a-z0-9_]+)\}", template):
             assert token in documented, f"{{{token}}} (in {field}) is missing from the in-app token reference"
+
+
+def test_quality_and_audio_type_are_documented_and_previewed():
+    from settings.fakes import schema_stub
+
+    from waves.desktop.backend import WavesBridge
+
+    stub = schema_stub()
+    stub._template_sample = WavesBridge._template_sample.__get__(stub)
+
+    tokens = {item["token"] for group in WavesBridge.pathTemplateTokens(stub) for item in group["tokens"]}
+    assert "{quality}" in tokens
+    assert "{audio_type}" in tokens
+
+    preview = WavesBridge.previewPathTemplate(stub, "track", "{quality}/{audio_type}/{track_title}")
+    assert "LOSSLESS/stereo/" in preview

@@ -723,6 +723,8 @@ _TEMPLATE_TOKENS = [
     ("track_explicit", "Extras", "“ (Explicit)”, or nothing when clean"),
     ("album_explicit", "Extras", "Same, for the album"),
     ("track_quality", "Extras", "Audio quality tag"),
+    ("quality", "Extras", "Requested audio rung (the path is rendered before the stream answers)"),
+    ("audio_type", "Extras", "Requested audio type: stereo or atmos"),
     ("video_quality", "Extras", "Video quality (video paths)"),
     ("media_type", "Extras", "ALBUM, EP or SINGLE"),
     ("track_id", "IDs & durations", "TIDAL track id"),
@@ -1185,6 +1187,8 @@ class _TrackedDownload(Download):
         self.ok_count = 0
         self.write_count = 0
         self.skip_count = 0
+        self.retained_count = 0
+        self.protected_count = 0
         self.fail_count = 0
         # Items TIDAL itself refuses to stream (allow_streaming false), tallied
         # apart from fail_count because they are not a failure of this app and
@@ -1373,6 +1377,19 @@ class _TrackedDownload(Download):
             getattr(media, "audio_modes", None), getattr(self, "_audio_type", None), default_type
         )
 
+    def _get_stream_info(self, media):
+        """Capture the delivered facts for any provider's StreamInfo.
+
+        TIDAL's own resolver records them from its engine answer; a provider
+        that answers the neutral StreamInfo directly (the shared seam) gets
+        the same ownership record through this fallback.
+        """
+        info = super()._get_stream_info(media)
+        if info is not None and getattr(info, "delivered", None) and getattr(media, "id", None) is not None:
+            with self._delivered_lock:
+                self._delivered.setdefault(self._delivered_key(media), dict(info.delivered))
+        return info
+
     def _get_media_urls(self, media, stream_info=None):
         """Capture that a video is really being fetched, as a side effect. Videos
         never pass through _get_track_stream_info, so without this the completion
@@ -1458,8 +1475,10 @@ class _TrackedDownload(Download):
         # would really deliver on.
         ceiling = _advertised_ceiling(media)
         self._stamp_learned_ceiling(media_id, rec, ceiling)
-        current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), ceiling)
-        if current:
+        # An Atmos copy of an Atmos-wanting job is current whatever the tier
+        # says: there is only one Atmos to get, and it must still skip rather
+        # than be read as a below-minimum stereo copy.
+        if self._wants_atmos(media) and _record_is_atmos(rec):
             return "skip", rec
         if retains_below_minimum(
             self._duplicate_policy,
@@ -1468,9 +1487,13 @@ class _TrackedDownload(Download):
             self._target_rank,
         ):
             # Keep existing + a required minimum: the copy is below the ask
-            # and this policy never replaces. Keep it and say so; never force
-            # a fetch that would overwrite it with an equal-or-lower delivery.
+            # and this policy never replaces. Checked BEFORE copy_is_current:
+            # a ceiling-capped or settled-degraded copy can read "current"
+            # below the requested minimum, and that must still report retained.
             return "retain", rec
+        current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), ceiling)
+        if current:
+            return "skip", rec
         return "force", rec
 
     def _stamp_learned_ceiling(self, media_id, rec: dict, ceiling: int | None) -> None:
@@ -1666,6 +1689,7 @@ class _TrackedDownload(Download):
         with self._outcome_lock:
             self.ok_count += 1
             self.skip_count += 1
+            self.retained_count += 1
         relay = self._track_signals
         if relay is not None:
             event = {
@@ -1892,6 +1916,8 @@ class _TrackedDownload(Download):
                 self.skip_count += 1
         elif outcome and outcome[0] == "protected" and ok:
             status = "protected"
+            with self._outcome_lock:
+                self.protected_count += 1
             self._note_outcome(True)
         else:
             status = "done" if ok else ("cancelled" if aborted else "failed")
@@ -2001,6 +2027,30 @@ def _collection_incomplete_reason(
             return f"not available on TIDAL anymore ({_tracks_word(unavailable_count)})"
         return "no tracks were downloaded"
     return None
+
+
+def _assert_own_cache(bridge, tid: str, rec: dict) -> None:
+    """Assert one delivered copy in the button cache, version key too."""
+    with bridge._own_lock:
+        bridge._own_cache[tid] = (time.monotonic(), rec)
+        try:
+            vkey = "atmos" if _record_is_atmos(rec) else "stereo"
+            bridge._own_cache[f"{tid}|{vkey}"] = (time.monotonic(), rec)
+        except Exception:
+            logger.debug("Could not assert the versioned ownership cache", exc_info=True)
+        bridge._evict_own_cache_locked()
+
+
+def _kept_note(retained_count: int, protected_count: int) -> str:
+    """The trailing clause naming kept copies on a finished job, empty when
+    there were none. Kept is a handled outcome, not a write; saying so at job
+    level stops an all-retained run from reading as a plain success."""
+    parts = []
+    if retained_count > 0:
+        parts.append(f"{_tracks_word(retained_count)} kept")
+    if protected_count > 0:
+        parts.append(f"{_tracks_word(protected_count)} kept both")
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 def _unavailable_note(unavailable_count: int) -> str:
@@ -4272,6 +4322,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     _catalogEvent = Signal(object)
     _searchEvent = Signal(object)
     _catalogOffersEvent = Signal(object)
+    # The opt-in upgrade plan is computed on a worker (ownership stat + audio
+    # digest) and hops back here before the Chooser dispatch.
+    _catalogUpgradeReady = Signal(object)
     # requestId, neutral offer dicts: current Chooser evidence after queued
     # context validation; cancelled requests never fire.
     catalogOffersLoaded = Signal(int, "QVariantList")
@@ -4415,6 +4468,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._catalog_offer_generation = 0
         self._catalog_offer_cache = OfferEvidenceCache()
         self._catalogOffersEvent.connect(self._on_catalog_offers, Qt.ConnectionType.QueuedConnection)
+        self._catalogUpgradeReady.connect(self._on_catalog_upgrade_ready, Qt.ConnectionType.QueuedConnection)
         # Apple's download ask surface (clicks, retries, standalone fetches,
         # job bodies) is this bridge's own machinery, attached to the seam
         # here: every download path dispatches through the id's provider
@@ -11195,8 +11249,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return None
         if provider_id == provider_of_id(origin_id):
             return None
+        if selected.audio_type == "both":
+            # One plan per Version is not representable in a single intent;
+            # the captured duplicate policy decides for both rows instead.
+            return None
+        effective_type = str(selected.audio_type or "")
         try:
-            rec = self._ownership.ownership_of(origin_id, audio_type=selected.audio_type or None)
+            rec = self._ownership.ownership_of(origin_id, audio_type=effective_type or None)
         except Exception:
             logger.debug("Upgrade ownership lookup failed", exc_info=True)
             return None
@@ -11204,6 +11263,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return None
         if not digest_matches(rec.get("audio_digest"), str(rec["path"])):
             return None
+        if not effective_type:
+            effective_type = str(rec.get("audio_type") or "stereo")
         recorded = DeliveryFacts(
             tier=tier_from_word(rec.get("quality_tier")),
             audio_type=str(rec.get("audio_type") or ""),
@@ -11211,7 +11272,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             bit_depth=rec.get("bit_depth"),
             sample_rate=rec.get("sample_rate"),
         )
-        families = requested_audio(selected)
+        effective_selected = dataclasses.replace(selected, audio_type=effective_type)
+        families = requested_audio(effective_selected)
         facts = tuple(offer.evidence.probed)
         if not all(
             any(satisfies(fact, family) and compare_quality(fact, recorded) == 1 for fact in facts)
@@ -11221,7 +11283,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         return UpgradePlan(
             origin_id=origin_id,
             origin_path=str(rec["path"]),
-            audio_type=str(selected.audio_type or ""),
+            audio_type=effective_type,
             recorded=recorded,
             delivered_provider=provider_id,
             delivered_media_id=media_id,
@@ -11259,8 +11321,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             tier=tier_from_word(tier) or offer.selected.tier,
             audio_type=audio_type or offer.selected.audio_type,
         )
+        if not selected.audio_type and offer.evidence.probed:
+            probed_types = {fact.audio_type for fact in offer.evidence.probed if fact.audio_type}
+            if len(probed_types) == 1:
+                selected = dataclasses.replace(selected, audio_type=probed_types.pop())
         if offer.evidence.effective_state() == EvidenceState.UNAVAILABLE or (
             offer.evidence.effective_state() == EvidenceState.AVAILABLE
+            and selected.audio_type != "both"
             and not all(
                 any(satisfies(fact, family, video=offer.kind == "video") for fact in offer.evidence.probed)
                 for family in ((selected,) if offer.kind == "video" else requested_audio(selected))
@@ -11274,21 +11341,48 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         pins["origin_media_id"] = origin_id
         snapshot = self._catalog_offer_snapshot[1]
         origin_identity = getattr(snapshot, "origin", None)
-        if origin_identity is not None:
+        # Same-provider output stays byte-identical to a plain click: only a
+        # matched offer from another provider has a separate origin to overlay.
+        if origin_identity is not None and provider_id != provider_of_id(origin_id):
             pins["origin_facts"] = _provenance_origin_facts(origin_identity)
             pins["origin_consistent"] = bool(offer.match.automatic_eligible)
         data = getattr(getattr(self, "settings", None), "data", None)
         policies = getattr(data, "download_policies", None)
         if getattr(policies, "upgrade_provider", False) and provider_id != provider_of_id(origin_id):
-            plan = self._upgrade_plan_for(origin_id, provider_id, media_id, selected, offer)
-            if plan is not None:
-                pins["upgrade"] = json.loads(plan.to_json())
+            # The plan needs an ownership stat and an audio digest: never on
+            # the GUI thread. A worker proves it, then the queued handler
+            # revalidates the offer before dispatching.
+            payload = (request_id, provider_id, media_id, offer.kind, tier, audio_type, pins)
+
+            def work(payload=payload, offer=offer, selected=selected, media_id=media_id):
+                plan = self._upgrade_plan_for(origin_id, provider_id, media_id, selected, offer)
+                self._catalogUpgradeReady.emit((payload, plan))
+
+            pool = getattr(self, "threadpool", None)
+            if pool is None:
+                self._on_catalog_upgrade_ready((payload, None))
             else:
-                self._set_status("No upgrade applied: the existing Version is not a proven improvement.")
+                self._set_status("Checking the existing Version for an upgrade…")
+                pool.start(Worker(work))
+            return True
         if provider_id == provider_of_id(origin_id):
             media_id = snapshot.selection.media_id
         self.downloadWithChooser(media_id, offer.kind, tier, audio_type, pins)
         return True
+
+    @Slot(object)
+    def _on_catalog_upgrade_ready(self, payload) -> None:
+        """GUI hop for the worker-computed upgrade plan."""
+        (request_id, provider_id, media_id, kind, tier, audio_type, pins), plan = payload
+        offer = self._current_chooser_offer(request_id, provider_id)
+        if offer is None or offer.evidence.effective_state() == "stale":
+            self._set_status("Catalog context changed; check offers again.")
+            return
+        if plan is not None:
+            pins["upgrade"] = json.loads(plan.to_json())
+        else:
+            self._set_status("No upgrade applied: the existing Version is not a proven improvement.")
+        self.downloadWithChooser(media_id, kind, tier, audio_type, pins)
 
     @Slot("QVariant")
     def saveChooserDefaults(self, values) -> None:
@@ -11439,6 +11533,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         for key in ("provider_pin", "origin_media_id"):
             if key in incoming:
                 pins[key] = str(incoming[key])
+        # Provenance and the opt-in upgrade are captured request data, not
+        # boolean queue toggles: they ride the pins to _capture_request and
+        # are filtered out of the row's askToggles by _chooser_asset_pins.
+        for key in ("origin_facts", "upgrade"):
+            if key in incoming and isinstance(incoming[key], dict):
+                pins[key] = incoming[key]
+        if "origin_consistent" in incoming:
+            pins["origin_consistent"] = bool(incoming["origin_consistent"])
         for key in _CHOOSER_TOGGLE_KEYS:
             if key in incoming:
                 pins[key] = bool(incoming[key])
@@ -11642,7 +11744,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # setting kept out: the engine has already moved past it.
         if ev["status"] in ("done", "skipped", "unavailable", "retained", "protected"):
             row["pct"] = 100.0
-        if ev["status"] in ("done", "protected") and not ev.get("recorded"):
+        if ev["status"] in ("done", "protected"):
             # A finished track just proved the download folder writable: feed
             # the reachability gate's liveness window (cheap, no I/O). Only
             # when it landed under the CURRENT setting: a job still writing to
@@ -11705,25 +11807,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             degraded = ceiling >= 0 and 0 <= delivered < ceiling and delivered < requested_rank
             digest = audio_digest(real)
             replaced = ev.get("replaced") or {}
-            if replaced.get("origin_id") and replaced.get("origin_path"):
-                # A verified cross-provider replacement: the origin row must
-                # stop claiming the path and the delivering row must describe
-                # the new file, in one transaction.
-                tries = self._ownership.record_replacement(
-                    str(replaced["origin_id"]),
-                    str(replaced["origin_path"]),
-                    str(ev.get("id")),
-                    real,
-                    quality.get("tier"),
-                    audio_type=quality.get("audio_type"),
-                    audio_mode=quality.get("audio_mode"),
-                    bit_depth=quality.get("bit_depth"),
-                    sample_rate=quality.get("sample_rate"),
-                    codecs=quality.get("codecs"),
-                    requested_rank=requested_rank,
-                    ceiling_rank=ceiling,
-                    audio_digest=digest,
-                )
+            recorded = bool(ev.get("recorded"))
+            if recorded:
+                # The engine committed the replacement with its own store
+                # transaction; this pass only refreshes the button cache and
+                # publishes the ownership change.
+                tries = 0
             else:
                 tries = self._ownership.record(
                     str(ev.get("id")),
@@ -11742,7 +11831,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # The file was written this instant, so assert the cache entry
             # directly (no stat needed) and let QML flip the button. The
             # next TTL refresh reconciles against the store's full row set.
-            if degraded:
+            if degraded and not recorded:
                 logger.info(
                     "track %s: TIDAL advertised a better master than it delivered (attempt %d of %d); %s",
                     ev.get("id"),
@@ -11768,19 +11857,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 "ceiling_rank": ceiling,
                 "degraded_tries": tries,
             }
-            with self._own_lock:
-                tid_done = str(ev.get("id"))
-                self._own_cache[tid_done] = (time.monotonic(), rec)
-                # Assert the Version's own key too, so dual buttons flip the
-                # instant their half lands (no stat, no TTL wait). The whole
-                # above reconciles to the best surviving copy on the next
-                # refresh; the Versions below are exact.
-                try:
-                    vkey = "atmos" if _record_is_atmos(rec) else "stereo"
-                    self._own_cache[f"{tid_done}|{vkey}"] = (time.monotonic(), rec)
-                except Exception:
-                    logger.debug("Could not assert the versioned ownership cache", exc_info=True)
-                self._evict_own_cache_locked()
+            _assert_own_cache(self, str(ev.get("id")), rec)
+            if recorded and replaced.get("origin_id"):
+                origin = str(replaced["origin_id"])
+                with self._own_lock:
+                    for key in (origin, f"{origin}|stereo", f"{origin}|atmos"):
+                        self._own_cache.pop(key, None)
+                self.ownershipChanged.emit(origin)
             self.ownershipChanged.emit(str(ev.get("id")))
             # Cross to the GUI thread (queued): when the library IS the download
             # folder, the landed file means the scan index is stale, so the
@@ -13785,7 +13868,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 fn_logger=logger,
                 # The captured duplicate policy is the engine's skip rule; the
                 # legacy setting only supplied the derived value at capture.
-                skip_existing=(policy == "keep_existing")
+                skip_existing=(policy == "keep_existing" and upgrade_plan is None)
                 if request_intent
                 else (data.skip_existing if skip_existing is None else skip_existing),
                 progress=Progress(),
@@ -16655,7 +16738,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         # status line says so rather than leaving the user to
                         # count the files. The queue's own track rows name
                         # which ones.
-                        self._set_status(f"Finished {name}{_unavailable_note(dl.unavailable_count)}")
+                        self._set_status(
+                            f"Finished {name}"
+                            f"{_unavailable_note(dl.unavailable_count)}"
+                            f"{_kept_note(getattr(dl, 'retained_count', 0), getattr(dl, 'protected_count', 0))}"
+                        )
                         devlog.done("download", f"done {type_media} id={media_id}", devlog.clock() - t0)
             except Exception as exc:
                 if job_abort.is_set():
@@ -22577,6 +22664,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # The samples are TIDAL-shaped objects, so the provider token
             # previews as the TIDAL folder.
             "provider_name": provider_folder_name(CTX_TIDAL),
+            "quality": QualityTier.LOSSLESS.value,
+            "audio_type": "stereo",
         }
         pad = int(d.album_track_num_pad_min)
         try:
@@ -22624,7 +22713,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 groups[group].append({"token": "{" + tok + "}", "sample": _SAMPLE_FOLDER_PATH + "/", "desc": desc})
                 continue
             for media, lp, lt in ((trk, 4, 23), (alb, 0, 0), (pl, 0, 0), (mx, 0, 0), (vid, 0, 0)):
-                value = format_str_media(tok, media, 1, lp, lt, provider_name=provider_folder_name(CTX_TIDAL))
+                value = format_str_media(
+                    tok,
+                    media,
+                    1,
+                    lp,
+                    lt,
+                    provider_name=provider_folder_name(CTX_TIDAL),
+                    quality=QualityTier.LOSSLESS.value,
+                    audio_type="stereo",
+                )
                 if value != tok:
                     sample = value
                     break

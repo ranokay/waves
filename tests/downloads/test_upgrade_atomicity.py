@@ -52,7 +52,7 @@ def test_eligibility_requires_a_demonstrated_same_type_improvement():
 def test_same_container_commit_replaces_and_records(tmp_path):
     origin = tmp_path / "Song.ogg"
     origin.write_bytes(b"old bytes")
-    staged = tmp_path / "staged.ogg"
+    staged = tmp_path / "staged"
     staged.write_bytes(b"new bytes")
     recorded: list = []
 
@@ -62,6 +62,7 @@ def test_same_container_commit_replaces_and_records(tmp_path):
         _delivered(),
         place=lambda source, final: pathlib.Path(source).replace(final) or True,
         record=lambda final: recorded.append(pathlib.Path(final)),
+        final_suffix=".ogg",
     )
 
     assert result.ok and result.path == origin
@@ -73,7 +74,7 @@ def test_same_container_commit_replaces_and_records(tmp_path):
 def test_a_record_failure_restores_the_origin_file(tmp_path):
     origin = tmp_path / "Song.ogg"
     origin.write_bytes(b"old bytes")
-    staged = tmp_path / "staged.ogg"
+    staged = tmp_path / "staged"
     staged.write_bytes(b"new bytes")
 
     def fail(_final):
@@ -85,6 +86,7 @@ def test_a_record_failure_restores_the_origin_file(tmp_path):
         _delivered(),
         place=lambda source, final: pathlib.Path(source).replace(final) or True,
         record=fail,
+        final_suffix=".ogg",
     )
 
     assert not result.ok
@@ -94,7 +96,7 @@ def test_a_record_failure_restores_the_origin_file(tmp_path):
 def test_a_hard_link_refusal_falls_back_to_a_same_folder_copy(tmp_path, monkeypatch):
     origin = tmp_path / "Song.ogg"
     origin.write_bytes(b"old bytes")
-    staged = tmp_path / "staged.ogg"
+    staged = tmp_path / "staged"
     staged.write_bytes(b"new bytes")
 
     def no_link(*_args, **_kwargs):
@@ -108,6 +110,7 @@ def test_a_hard_link_refusal_falls_back_to_a_same_folder_copy(tmp_path, monkeypa
         _delivered(),
         place=lambda source, final: pathlib.Path(source).replace(final) or True,
         record=lambda final: None,
+        final_suffix=".ogg",
     )
 
     assert result.ok and origin.read_bytes() == b"new bytes"
@@ -116,7 +119,7 @@ def test_a_hard_link_refusal_falls_back_to_a_same_folder_copy(tmp_path, monkeypa
 def test_when_no_backup_can_be_made_the_upgrade_aborts(tmp_path, monkeypatch):
     origin = tmp_path / "Song.ogg"
     origin.write_bytes(b"old bytes")
-    staged = tmp_path / "staged.ogg"
+    staged = tmp_path / "staged"
     staged.write_bytes(b"new bytes")
 
     monkeypatch.setattr("waves.library.upgrade.os.link", lambda *_a, **_k: (_ for _ in ()).throw(OSError()))
@@ -128,6 +131,7 @@ def test_when_no_backup_can_be_made_the_upgrade_aborts(tmp_path, monkeypatch):
         _delivered(),
         place=lambda source, final: pathlib.Path(source).replace(final) or True,
         record=lambda final: None,
+        final_suffix=".ogg",
     )
 
     assert not result.ok
@@ -137,7 +141,7 @@ def test_when_no_backup_can_be_made_the_upgrade_aborts(tmp_path, monkeypatch):
 def test_a_cross_container_commit_lands_the_new_extension_and_removes_the_old(tmp_path):
     origin = tmp_path / "Song.ogg"
     origin.write_bytes(b"old bytes")
-    staged = tmp_path / "staged.m4a"
+    staged = tmp_path / "staged"
     staged.write_bytes(b"new bytes")
 
     result = commit_upgrade(
@@ -146,6 +150,7 @@ def test_a_cross_container_commit_lands_the_new_extension_and_removes_the_old(tm
         _delivered(),
         place=lambda source, final: pathlib.Path(source).replace(final) or True,
         record=lambda final: None,
+        final_suffix=".m4a",
     )
 
     assert result.ok
@@ -154,10 +159,57 @@ def test_a_cross_container_commit_lands_the_new_extension_and_removes_the_old(tm
     assert not origin.exists()
 
 
+def test_an_occupied_cross_container_final_is_never_overwritten(tmp_path):
+    origin = tmp_path / "Song.ogg"
+    origin.write_bytes(b"old bytes")
+    sibling = tmp_path / "Song.m4a"
+    sibling.write_bytes(b"another track")
+    staged = tmp_path / "staged"
+    staged.write_bytes(b"new bytes")
+
+    result = commit_upgrade(
+        staged,
+        _plan(origin),
+        _delivered(),
+        place=lambda source, final: pathlib.Path(source).replace(final) or True,
+        record=lambda final: None,
+        final_suffix=".m4a",
+    )
+
+    assert not result.ok
+    assert origin.read_bytes() == b"old bytes"
+    assert sibling.read_bytes() == b"another track"
+
+
+def test_a_place_that_raises_before_writing_leaves_the_final_alone(tmp_path):
+    origin = tmp_path / "Song.ogg"
+    origin.write_bytes(b"old bytes")
+    sibling = tmp_path / "Song.m4a"
+    sibling.write_bytes(b"another track")
+    staged = tmp_path / "staged"
+    staged.write_bytes(b"new bytes")
+
+    def fail(_source, _final):
+        raise OSError("share dropped")
+
+    result = commit_upgrade(
+        staged,
+        _plan(origin),
+        _delivered(),
+        place=fail,
+        record=lambda final: None,
+        final_suffix=".m4a",
+    )
+
+    assert not result.ok
+    assert origin.read_bytes() == b"old bytes"
+    assert sibling.read_bytes() == b"another track"
+
+
 def test_a_changed_origin_refuses_the_commit(tmp_path):
     origin = tmp_path / "Song.ogg"
     origin.write_bytes(b"old bytes")
-    staged = tmp_path / "staged.ogg"
+    staged = tmp_path / "staged"
     staged.write_bytes(b"new bytes")
     plan = _plan(origin)
     origin.write_bytes(b"the user edited the audio")
@@ -168,6 +220,7 @@ def test_a_changed_origin_refuses_the_commit(tmp_path):
         _delivered(),
         place=lambda source, final: pathlib.Path(source).replace(final) or True,
         record=lambda final: None,
+        final_suffix=".ogg",
     )
 
     assert not result.ok

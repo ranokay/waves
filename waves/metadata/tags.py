@@ -881,7 +881,11 @@ class Metadata:
 
 def _tag_never_carried(key) -> bool:
     lowered = str(key).lower()
-    if any(lowered.startswith(prefix) for prefix in _TAG_PREFIXES_NEVER_CARRIED):
+    # The container prefixes put WAVES_* behind "TXXX:" (MP3) or
+    # "----:com.apple.iTunes:" (MP4); compare the bare tag name so every
+    # container's provenance tag is refused, not only FLAC's.
+    bare = lowered.rsplit(":", 1)[-1]
+    if any(bare.startswith(prefix) for prefix in _TAG_PREFIXES_NEVER_CARRIED):
         return True
     return any(mark in lowered for mark in _TAGS_NOT_CARRIED)
 
@@ -963,11 +967,18 @@ def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa
     caller can abort before replacing the old file.
     """
     try:
-        old = mutagen.File(path_old)
-        new = mutagen.File(path_new)
+        try:
+            old = mutagen.File(path_old)
+        except Exception:
+            old = None
+        try:
+            new = mutagen.File(path_new)
+        except Exception:
+            new = None
         if old is None or new is None:
-            if strict:
-                raise MetadataUnreadable(path_old)  # noqa: TRY301 - the caller aborts before commit
+            # An unidentifiable container has no tag block to carry; that is
+            # not a user-tag failure. A readable file whose tags cannot be
+            # copied still raises below.
             return 0
         if old.tags is None:
             # An untagged own copy (a failed tag write, a user's bare file)

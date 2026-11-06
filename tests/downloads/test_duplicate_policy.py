@@ -157,3 +157,49 @@ def test_keep_both_name_honours_a_claimed_full_path(tmp_path):
 
     assert claimed is not None
     assert claimed.name == "Song [Tidal LOSSLESS stereo] [2].flac"
+
+
+def test_a_redownload_replaces_the_own_copy_under_keep_both(tmp_path):
+    from waves.metadata.digest import audio_digest
+
+    destination = tmp_path / "Song.ogg"
+    destination.write_bytes(b"own copy")
+    digest = audio_digest(destination)
+    dl = make_download(tmp_path)
+    dl._duplicate_policy = "keep_both"
+    dl._force_redownload = True
+    dl._ownership_of = lambda *_a, **_k: {
+        "path": str(destination),
+        "quality_rank": 2,
+        "audio_digest": digest,
+        "audio_type": "stereo",
+    }
+
+    picked, claim = dl._claim_destination(destination, "42", media=make_track("42"))
+
+    assert picked == destination
+    assert claim is not None
+    assert dl._tls.placement.action == "replace"
+
+
+def test_keep_both_names_the_delivered_tier_not_the_ask(tmp_path):
+    from waves.constants import QualityTier
+
+    destination = tmp_path / "Song.ogg"
+    destination.write_bytes(b"existing")
+    dl = make_download(tmp_path)
+    dl._duplicate_policy = "keep_both"
+    dl._pinned_tier = QualityTier.HI_RES_LOSSLESS
+    dl._ownership_of = lambda *_a, **_k: None
+
+    picked, _claim = dl._claim_destination(
+        destination,
+        "42",
+        media=make_track("42"),
+        delivered_tier="LOSSLESS",
+        delivered_audio_type="stereo",
+    )
+
+    assert picked is not None
+    assert "LOSSLESS" in picked.name
+    assert "HI_RES" not in picked.name

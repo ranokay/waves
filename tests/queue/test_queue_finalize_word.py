@@ -268,3 +268,44 @@ def test_retained_and_protected_rows_are_settled_outcomes():
     assert b._jobs.tracks[1]["9"]["reason"] == "below the minimum"
     assert b._jobs.tracks[1]["10"]["status"] == "protected"
     assert b._jobs.tracks[1]["10"]["reason"] == "not a proven own copy"
+
+
+def test_an_upgrade_refreshes_both_ids_and_clears_the_origin_cache(tmp_path):
+    """The engine committed the replacement; the bridge still has to flip the
+    origin and delivering buttons and refresh the library badge."""
+    b = _LifecycleStub()
+    b._own_pool = SimpleNamespace(start=lambda worker: worker.run())
+    b._own_cache = {
+        "tidal:1": (0.0, {}),
+        "tidal:1|stereo": (0.0, {}),
+        "tidal:1|atmos": (0.0, {}),
+    }
+    b._own_lock = Lock()
+    b._evict_own_cache_locked = lambda: None
+    b._note_download_base_ok = lambda _base: None
+    b._record_ownership = backend.WavesBridge._record_ownership.__get__(b)
+    b._ownership = SimpleNamespace(record=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not re-record")))
+    b.settings = SimpleNamespace(data=SimpleNamespace(symlink_to_track=False, download_base_path=str(tmp_path)))
+    b.ownershipChanged = _Signal()
+    b._downloadRecorded = _Signal()
+    path = tmp_path / "Song.ogg"
+    path.write_bytes(b"new bytes")
+
+    b._track_lifecycle(
+        1,
+        {
+            "id": "apple:42",
+            "status": "done",
+            "path": str(path),
+            "quality": {"tier": "LOSSLESS", "audio_type": "stereo"},
+            "replaced": {"origin_id": "tidal:1", "origin_path": str(tmp_path / "old.ogg")},
+            "recorded": True,
+        },
+    )
+
+    assert "tidal:1" not in b._own_cache
+    assert "tidal:1|stereo" not in b._own_cache
+    assert "tidal:1|atmos" not in b._own_cache
+    assert "apple:42" in b._own_cache
+    assert [call[0] for call in b.ownershipChanged.calls] == ["tidal:1", "apple:42"]
+    assert b._downloadRecorded.calls

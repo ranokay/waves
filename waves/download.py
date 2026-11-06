@@ -2238,7 +2238,9 @@ class Download:
         path_landed: pathlib.Path | None = self._landed_by_this_run(path_media_dst, media_id, owned_ids)
 
         if path_landed is not None:
-            self.fn_logger.debug(f"Download skipped, since this item already landed at '{log_content(path_landed)}'.")
+            self.fn_logger.debug(
+                f"Destination already holds this item's own copy, so this pass wrote nothing: '{log_content(path_landed)}'"
+            )
 
             return path_landed
 
@@ -2257,7 +2259,9 @@ class Download:
         if not occupant_id or occupant_id not in owned_ids:
             return None
 
-        self.fn_logger.debug(f"Download skipped, since this item already landed at '{log_content(path_media_dst)}'.")
+        self.fn_logger.debug(
+            f"Destination already holds this item's own copy, so this pass wrote nothing: '{log_content(path_media_dst)}'"
+        )
 
         return path_media_dst
 
@@ -2441,6 +2445,8 @@ class Download:
         owned_ids: set[str] | None = None,
         fetch_is_atmos: bool | None = None,
         media=None,
+        delivered_tier: str = "",
+        delivered_audio_type: str = "",
     ) -> tuple[pathlib.Path, str | None]:
         """Pick this download's final name and hold it, in one locked step.
 
@@ -2470,9 +2476,22 @@ class Download:
         """
         if media is None:
             media = getattr(getattr(self, "_tls", None), "claim_media", None)
+        if not delivered_tier:
+            delivered_tier = str(getattr(getattr(self, "_tls", None), "claim_delivered_tier", "") or "")
+        if not delivered_audio_type:
+            delivered_audio_type = str(getattr(getattr(self, "_tls", None), "claim_delivered_audio_type", "") or "")
         with self._names_reserved_lock:
             taken = self._names_unavailable_to(media_id)
-            placement = self._claim_placement(path_media_dst, media_id, owned_ids, fetch_is_atmos, media, taken)
+            placement = self._claim_placement(
+                path_media_dst,
+                media_id,
+                owned_ids,
+                fetch_is_atmos,
+                media,
+                taken,
+                delivered_tier,
+                delivered_audio_type,
+            )
             if placement is None:
                 return path_media_dst, None
             path_media_unique, decision = placement
@@ -2489,7 +2508,25 @@ class Download:
 
             return path_media_unique, name_reserved
 
-    def _claim_placement(
+    def _own_path_for(self, media, version: str | None) -> pathlib.Path | None:
+        """The ownership record's path, when the store names one."""
+        media_id = download_identity_id(media)
+        ownership_of = getattr(self, "_ownership_of", None)
+        if not media_id or ownership_of is None:
+            return None
+        try:
+            rec = ownership_of(media_id, audio_type=version) if version else ownership_of(media_id)
+        except TypeError:
+            try:
+                rec = ownership_of(media_id)
+            except Exception:
+                return None
+        except Exception:
+            return None
+        path = str((rec or {}).get("path") or "")
+        return pathlib.Path(path) if path else None
+
+    def _claim_placement(  # noqa: C901 - one branch per captured policy
         self,
         path_media_dst: pathlib.Path,
         media_id: str,
@@ -2497,6 +2534,8 @@ class Download:
         fetch_is_atmos: bool | None,
         media,
         taken: set[str],
+        delivered_tier: str = "",
+        delivered_audio_type: str = "",
     ) -> tuple[pathlib.Path, PlacementDecision] | None:
         """The name this duplicate policy claims, or None when none is free."""
         if media is not None and self._is_upgrade_target(media):
@@ -2504,6 +2543,37 @@ class Download:
             if str(target) in taken:
                 return None
             return target, PlacementDecision("replace", overwrite=True)
+        version = self._pinned_audio_type
+        if version is None and fetch_is_atmos is not None:
+            version = "atmos" if fetch_is_atmos else "stereo"
+        if media is not None and self._duplicate_policy in ("replace_owned", "keep_both", "refresh_own"):
+            own = self._own_path_for(media, version)
+            if own is not None and own.parent == path_media_dst.parent:
+                path_media_dst = own
+        if getattr(self, "_force_redownload", False) and media is not None:
+            # An explicit Redownload replaces this track's own copy in place
+            # under every policy, exactly as it did before the policy existed.
+            decision = decide_placement(
+                "refresh_own",
+                self._existing_copy_at(
+                    path_media_dst,
+                    media,
+                    version,
+                    self._target_rank,
+                    bool(fetch_is_atmos),
+                ),
+            )
+            if decision.action == "replace":
+                if str(path_media_dst) in taken:
+                    return None
+                return path_media_dst, PlacementDecision("replace", overwrite=True)
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
         if media is None or self._duplicate_policy == "keep_existing":
             path_media_unique = path_file_uniquify(
                 path_media_dst,
@@ -2532,8 +2602,8 @@ class Download:
             candidate = keep_both_name(
                 path_media_dst,
                 provider=self._provider_folder(),
-                quality=self._quality_token(),
-                audio_type=version or "",
+                quality=delivered_tier or self._quality_token(),
+                audio_type=delivered_audio_type or version or "",
                 taken=taken,
             )
             return (candidate, decision) if candidate is not None else None
@@ -3357,11 +3427,14 @@ class Download:
             # can only make the claim step aside from an Atmos file, never
             # replace one.
             fetch_is_atmos: bool = fetch_version == AudioType.ATMOS
+            delivered_facts = self._delivered_facts(stream_info)
             path_media_asked: pathlib.Path = path_media_dst
             tls = getattr(self, "_tls", None)
             if tls is None:
                 tls = self._tls = local()
             tls.claim_media = media
+            tls.claim_delivered_tier = str(getattr(delivered_facts.tier, "value", delivered_facts.tier) or "")
+            tls.claim_delivered_audio_type = delivered_facts.audio_type or fetch_version or ""
             path_media_dst, name_reserved = self._claim_destination(
                 path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos
             )
@@ -3399,18 +3472,20 @@ class Download:
                 self._note_skipped_after_stream(media)
                 self._note_retained(media, UPGRADE_RETAINED_REASON)
                 return True, pathlib.Path(self._upgrade_plan.origin_path)
-            if self._quality_strategy == "minimum_required" and self._pinned_tier is not None:
-                delivered_facts = self._delivered_facts(stream_info)
-                if quality_rank(delivered_facts.tier) < quality_rank(self._pinned_tier):
-                    if check_file_exists(path_media_dst, extension_ignore=False):
-                        # The delivery cannot meet the minimum: keep the copy
-                        # already there rather than replace it with a lower one.
-                        self._note_skipped_after_stream(media)
-                        self._note_retained(media, RETAINED_REASON)
-                        return True, path_media_dst
-                    self.fn_logger.warning(
-                        "The delivery is below the requested minimum; the file is kept and reported as such."
-                    )
+            if (
+                self._quality_strategy == "minimum_required"
+                and self._pinned_tier is not None
+                and quality_rank(delivered_facts.tier) < quality_rank(self._pinned_tier)
+            ):
+                if check_file_exists(path_media_dst, extension_ignore=False):
+                    # The delivery cannot meet the minimum: keep the copy
+                    # already there rather than replace it with a lower one.
+                    self._note_skipped_after_stream(media)
+                    self._note_retained(media, RETAINED_REASON)
+                    return True, path_media_dst
+                self.fn_logger.warning(
+                    "The delivery is below the requested minimum; the file is kept and reported as such."
+                )
             if placement.action == "replace":
                 overwrite = True
             elif placement.action == "keep_both" or self._duplicate_policy in ("replace_owned", "keep_both"):
@@ -3443,10 +3518,15 @@ class Download:
                     media, tmp_path_file, path_media_dst, is_parent_album, stream_info
                 )
 
-                if placement.action == "replace" and check_file_exists(path_media_dst, extension_ignore=False):
-                    # The old copy's own tags survive the replacement. A
-                    # carry-over failure aborts before the swap: the existing
-                    # file and its row stay exactly as they were.
+                replacing_own = check_file_exists(path_media_dst, extension_ignore=False) and (
+                    placement.action == "replace"
+                    or self._is_own_copy(path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos)
+                )
+                if replacing_own:
+                    # The old copy's own tags survive the replacement, whether
+                    # this is the policy's replace, a stale-copy upgrade or an
+                    # explicit Redownload. A carry-over failure aborts before
+                    # the swap: the existing file and its row stay as they were.
                     try:
                         carry_over_tags(path_media_dst, tmp_path_file, strict=True)
                     except Exception:
@@ -3456,15 +3536,25 @@ class Download:
                         return True, path_media_dst
 
                 if upgrade_target:
-                    delivered_facts = self._delivered_facts(stream_info)
+                    origin_path = pathlib.Path(self._upgrade_plan.origin_path)
+                    delivered_suffix = str(stream_info.file_extension or origin_path.suffix)
+                    same_container = delivered_suffix.lower() == origin_path.suffix.lower()
                     result = commit_upgrade(
                         tmp_path_file,
                         self._upgrade_plan,
                         delivered_facts,
                         place=lambda staged, final: self._move_file(
-                            staged, final, overwrite=True, occupant_is_own=lambda _path: True
+                            staged,
+                            final,
+                            overwrite=same_container,
+                            occupant_is_own=(
+                                (lambda candidate: digest_matches(self._upgrade_plan.origin_digest, candidate))
+                                if same_container
+                                else None
+                            ),
                         ),
                         record=lambda final: self._record_upgraded(media, final, stream_info),
+                        final_suffix=delivered_suffix,
                     )
                     if result.ok and result.path is not None:
                         self._note_stage(media, cum["move"])

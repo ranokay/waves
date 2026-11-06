@@ -122,13 +122,17 @@ def commit_upgrade(  # noqa: C901 - verify, place, record and restore in one com
     *,
     place,
     record,
+    final_suffix: str = "",
 ) -> UpgradeResult:
     """Place a verified replacement and record it, restoring on any failure.
 
     ``place(staged, final)`` must be atomic (a rename/swap, never a partial
     write under the final name). ``record(final)`` must write the ownership
-    replacement transactionally. A failure in either restores the origin file
-    and leaves the row untouched; the caller drops the staged bytes.
+    replacement transactionally. ``final_suffix`` is the delivered container's
+    extension; the staged temp file may have no extension at all. A failure in
+    either restores the origin file and leaves the row untouched; the caller
+    drops the staged bytes. A cross-container final name that already holds a
+    file is never overwritten or deleted: the upgrade reports retained.
     """
     if not upgrade_eligible(plan, delivered):
         return UpgradeResult(False, None, "The delivery did not prove an upgrade")
@@ -137,14 +141,19 @@ def commit_upgrade(  # noqa: C901 - verify, place, record and restore in one com
         # The file changed after the plan was captured: never overwrite a
         # copy that is no longer the one the user consented to replace.
         return UpgradeResult(False, None, "The existing copy changed")
-    final = origin if staged.suffix.lower() == origin.suffix.lower() else origin.with_suffix(staged.suffix)
+    suffix = final_suffix or staged.suffix
+    final = origin if suffix.lower() == origin.suffix.lower() else origin.with_suffix(suffix)
+    if final != origin and final.exists():
+        return UpgradeResult(False, None, "The replacement name is occupied")
     backup: pathlib.Path | None = None
     if final == origin:
         backup = _make_backup(origin)
         if backup is None:
             return UpgradeResult(False, None, "Could not back up the existing file")
+    placed = False
     try:
-        if not place(staged, final):
+        placed = bool(place(staged, final))
+        if not placed:
             return UpgradeResult(False, None, "The replacement could not be placed")
         record(final)
     except Exception as exc:
@@ -152,7 +161,7 @@ def commit_upgrade(  # noqa: C901 - verify, place, record and restore in one com
             with contextlib.suppress(OSError):
                 os.replace(backup, origin)
             backup = None
-        elif final != origin:
+        elif placed and final != origin:
             with contextlib.suppress(OSError):
                 final.unlink()
         return UpgradeResult(False, None, str(exc) or "The replacement could not be committed")

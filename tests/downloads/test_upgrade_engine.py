@@ -72,7 +72,7 @@ def _run(td, media, origin, *, delivered):
         codecs=str(delivered.get("codecs") or ""),
         file_extension=".ogg",
     )
-    staged = pathlib.Path(str(origin)).with_name("staged.ogg")
+    staged = pathlib.Path(str(origin)).with_name("staged")
     staged.write_bytes(b"new bytes")
 
     def place(source, final, **_kwargs):
@@ -164,3 +164,30 @@ def test_an_upgrade_without_an_ownership_callback_refuses_to_commit(tmp_path):
         pass
     else:
         raise AssertionError("an upgrade without an ownership callback must not report success")
+
+
+def test_a_forced_keep_existing_replacement_carries_tags(tmp_path, monkeypatch):
+    import waves.download as download_module
+
+    origin = tmp_path / "Song.ogg"
+    origin.write_bytes(b"old bytes")
+    td, media = _tracked(tmp_path, plan=None, record_replacement=None)
+    td._duplicate_policy = "keep_existing"
+    td._force_redownload = True
+    td._ownership_of = lambda *_a, **_k: {
+        "path": str(origin),
+        "quality_rank": 2,
+        "audio_digest": audio_digest(origin),
+        "audio_type": "stereo",
+    }
+    called: list = []
+    monkeypatch.setattr(
+        download_module,
+        "carry_over_tags",
+        lambda *args, **kwargs: called.append((args, kwargs)) or 0,
+    )
+
+    ok, landed = _run(td, media, origin, delivered=_delivered())
+
+    assert ok and landed == origin
+    assert called and called[0][1]["strict"] is True

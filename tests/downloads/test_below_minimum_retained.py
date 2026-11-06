@@ -52,3 +52,56 @@ def test_a_bulk_claim_meeting_the_minimum_still_skips():
     claim = {"local_class": "hires"}
 
     assert _gate(owned=None, claim=lambda media: claim)._claim_decision(_track())[0] == "skip"
+
+
+def test_a_ceiling_capped_copy_still_reports_retained():
+    owned = {
+        "path": "/music/Song.flac",
+        "quality_rank": 2,
+        "quality_tier": "LOSSLESS",
+        "ceiling_rank": 2,
+    }
+    media = _track()
+    media.media_metadata_tags = ["LOSSLESS"]
+
+    verdict, _detail = _gate(owned=owned)._claim_decision(media)
+
+    assert verdict == "retain"
+
+
+def test_a_settled_degraded_copy_still_reports_retained():
+    owned = {
+        "path": "/music/Song.flac",
+        "quality_rank": 2,
+        "quality_tier": "LOSSLESS",
+        "ceiling_rank": 3,
+        "degraded_tries": 2,
+    }
+
+    verdict, _detail = _gate(owned=owned)._claim_decision(_track())
+
+    assert verdict == "retain"
+
+
+def test_an_atmos_copy_on_the_atmos_rule_still_skips():
+    owned = {
+        "path": "/music/Song.m4a",
+        "quality_rank": 1,
+        "quality_tier": "HIGH",
+        "audio_type": "atmos",
+    }
+    media = _track()
+    media.audio_modes = ["DOLBY_ATMOS"]
+    dl = _gate(owned=owned)
+    dl._audio_type = "atmos"
+
+    verdict, _detail = dl._claim_decision(media)
+
+    assert verdict == "skip"
+
+
+def test_the_job_note_names_kept_and_kept_both():
+    from waves.desktop.backend import _kept_note
+
+    assert _kept_note(2, 1) == " (2 tracks kept, 1 track kept both)"
+    assert _kept_note(0, 0) == ""
