@@ -3860,3 +3860,23 @@ def test_apple_keep_both_names_the_delivered_tier_not_the_ask(tmp_path, monkeypa
     names = [path.name for path in base.rglob("*.m4a")]
     assert any("[Apple Music HIGH" in name for name in names)
     assert not any("HI_RES" in name for name in names)
+
+
+def test_an_album_summary_names_kept_copies(tmp_path, monkeypatch):
+    provider = _FakeProvider(fixture=None)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("retain", {"path": "/music/Song.m4a"}))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded) (1 track kept)"
+    assert provider.fetched == []
