@@ -9,7 +9,7 @@ choice still proceeds, with a visible note and no plan.
 from __future__ import annotations
 
 from dataclasses import replace
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 from support.bridge_stub import BridgeStub
 
@@ -76,9 +76,9 @@ def _host(offer, *, origin=None, record=None, upgrade=True, path=None):
     b._chooser_ask_for = lambda pid, tier: (tier, tier) if tier in ("HIGH", "LOSSLESS", "") else None
     b._chooser_normalize_audio = lambda audio, pid: audio if audio in ("stereo", "both", "") else None
     b.downloadWithChooser = lambda *args: b.calls.append(args)
-    b._current_chooser_offer = WavesBridge._current_chooser_offer.__get__(b)
-    b._upgrade_plan_for = WavesBridge._upgrade_plan_for.__get__(b)
-    b._on_catalog_upgrade_ready = WavesBridge._on_catalog_upgrade_ready.__get__(b)
+    b._current_chooser_offer = MethodType(WavesBridge._current_chooser_offer, b)
+    b._upgrade_plan_for = MethodType(WavesBridge._upgrade_plan_for, b)
+    b._on_catalog_upgrade_ready = MethodType(WavesBridge._on_catalog_upgrade_ready, b)
 
     class _SyncPool:
         def start(self, worker):
@@ -355,7 +355,7 @@ def test_the_real_chooser_chain_captures_provenance_and_upgrade(tmp_path):
         _queue=[],
     )
     b._set_status = lambda _text: None
-    b._chooser_toggle_pins = WavesBridge._chooser_toggle_pins.__get__(b)
+    b._chooser_toggle_pins = MethodType(WavesBridge._chooser_toggle_pins, b)
     b._chooser_provider_of = lambda _mid: "apple"
     b._chooser_ask_for = lambda _pid, tier: (tier, tier) if tier in ("LOSSLESS", "") else None
     b._chooser_normalize_audio = lambda audio, _pid: audio if audio in ("stereo", "both", "") else None
@@ -367,7 +367,7 @@ def test_the_real_chooser_chain_captures_provenance_and_upgrade(tmp_path):
     b._current_chooser_offer = WavesBridge._current_chooser_offer.__get__(b)
     b._upgrade_plan_for = WavesBridge._upgrade_plan_for.__get__(b)
     b._on_catalog_upgrade_ready = WavesBridge._on_catalog_upgrade_ready.__get__(b)
-    b.downloadWithChooser = WavesBridge.downloadWithChooser.__get__(b)
+    b.downloadWithChooser = MethodType(WavesBridge.downloadWithChooser, b)
     b.captured = None
 
     class _SyncPool:

@@ -16,7 +16,7 @@ silently follows along; customized templates are never touched.
 from __future__ import annotations
 
 from datetime import datetime
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 from support.bridge_stub import BridgeStub
 from tidalapi import Video
@@ -120,7 +120,7 @@ def test_quality_and_audio_type_are_documented_and_previewed():
     from waves.desktop.backend import WavesBridge
 
     stub = schema_stub()
-    stub._template_sample = WavesBridge._template_sample.__get__(stub)
+    stub._template_sample = MethodType(WavesBridge._template_sample, stub)
 
     tokens = {item["token"] for group in WavesBridge.pathTemplateTokens(stub) for item in group["tokens"]}
     assert "{quality}" in tokens

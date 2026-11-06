@@ -1,3 +1,4 @@
+import logging
 import pathlib
 
 import mutagen.flac
@@ -26,6 +27,8 @@ from mutagen.id3 import (
 )
 
 from waves.ids import DEFAULT_PROVIDER, namespaced_id
+
+logger = logging.getLogger("waves.tags")
 
 
 def sniff_image_format(data: bytes) -> str:
@@ -890,12 +893,21 @@ def _tag_never_carried(key) -> bool:
     return any(mark in lowered for mark in _TAGS_NOT_CARRIED)
 
 
+def _read_tag(tags, key):
+    """A container's value for ``key``, or None. Expected lookup misses are
+    quiet; any other failure is logged so a tag problem stays observable."""
+    try:
+        return tags.get(key)
+    except (KeyError, TypeError, ValueError):
+        return None
+    except Exception:
+        logger.warning("could not read tag %s; skipping it", key, exc_info=True)
+        return None
+
+
 def _tag_text(tags, keys: tuple[str, ...]) -> str:
     for key in keys:
-        try:
-            value = tags.get(key)
-        except Exception:  # noqa: S112 - a container that cannot get a key has no value
-            continue
+        value = _read_tag(tags, key)
         if value is None:
             continue
         if isinstance(value, list):
@@ -935,10 +947,7 @@ def _carry_across_containers(old, new) -> int:
         if not text:
             continue
         destination = destinations[container]
-        try:
-            existing = _tag_text(new.tags, (destination,))
-        except Exception:
-            existing = ""
+        existing = _tag_text(new.tags, (destination,))
         if existing:
             continue
         _set_cross_container_tag(new, container, destination, text)

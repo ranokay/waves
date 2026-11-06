@@ -69,7 +69,7 @@ def test_a_failed_delivered_insert_keeps_the_origin_row(tmp_path, monkeypatch):
     new = _file(tmp_path / "Song.m4a", b"new audio")
     store.record("tidal:1", str(old), "LOSSLESS", audio_digest="old")
 
-    def fail(_row):
+    def fail(_row, **_kwargs):
         raise sqlite3.OperationalError("disk full")
 
     monkeypatch.setattr(store, "_write_locked", fail)

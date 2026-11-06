@@ -732,8 +732,12 @@ class OwnershipStore:
             audio_digest,
         )
 
-    def _write_locked(self, row: tuple) -> int:
-        """Upsert one row and return its degraded count. Caller holds the lock."""
+    def _write_locked(self, row: tuple, *, commit: bool = True) -> int:
+        """Upsert one row and return its degraded count. Caller holds the lock.
+
+        ``commit=False`` leaves the write to the caller's transaction (the
+        replacement pairs a retire with an insert in one commit).
+        """
         self._conn.execute(
             """INSERT INTO downloads
                    (track_id, path, quality_tier, quality_rank, audio_mode, audio_type,
@@ -760,7 +764,8 @@ class OwnershipStore:
                    END""",
             row,
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         # Read back under the same lock, so the caller can say how many
         # attempts this makes without a second query racing another
         # worker's write (and without ownership_of's disk check, which
@@ -817,12 +822,14 @@ class OwnershipStore:
                     "DELETE FROM downloads WHERE track_id = ? AND path = ?",
                     (namespaced_id(origin_id), str(origin_path)),
                 )
-                return self._write_locked(row)
+                degraded = self._write_locked(row, commit=False)
+                self._conn.commit()
             except Exception:
                 # The DELETE and the INSERT are one ownership transaction: a
                 # failed insert must not leave the origin row retired.
                 self._conn.rollback()
                 raise
+            return degraded
 
     def adopt(self, track_id: str, path: str) -> bool:
         """Record a file the engine found already on disk (no stream was

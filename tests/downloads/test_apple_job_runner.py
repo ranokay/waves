@@ -363,7 +363,7 @@ def _bind(stub):
     return stub
 
 
-def _tone(path: Path):
+def _tone(path: Path, codec: str = "aac"):
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
         [
             _ffmpeg(),
@@ -375,7 +375,7 @@ def _tone(path: Path):
             "-i",
             "sine=frequency=440:duration=1",
             "-c:a",
-            "aac",
+            codec,
             str(path),
         ],
         check=True,
@@ -3593,6 +3593,7 @@ def _policy_run(stub, policy, qid=1, signals=None):
     )
 
 
+@pytest.mark.ffmpeg
 def test_apple_keep_both_lands_beside_with_the_readable_suffix(tmp_path, monkeypatch):
     _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
     existing = base / "Aphex Twin" / "Xtal.m4a"
@@ -3609,6 +3610,7 @@ def test_apple_keep_both_lands_beside_with_the_readable_suffix(tmp_path, monkeyp
     assert existing.read_bytes() != b""
 
 
+@pytest.mark.ffmpeg
 def test_apple_replace_owned_protects_an_untagged_file(tmp_path, monkeypatch):
     _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
     existing = base / "Aphex Twin" / "Xtal.m4a"
@@ -3623,6 +3625,7 @@ def test_apple_replace_owned_protects_an_untagged_file(tmp_path, monkeypatch):
     assert len(list(base.rglob("*.m4a"))) == 2
 
 
+@pytest.mark.ffmpeg
 def test_apple_replace_owned_replaces_a_proven_unchanged_copy(tmp_path, monkeypatch):
     from waves.metadata.digest import audio_digest
 
@@ -3644,6 +3647,7 @@ def test_apple_replace_owned_replaces_a_proven_unchanged_copy(tmp_path, monkeypa
     assert existing.read_bytes() != before
 
 
+@pytest.mark.ffmpeg
 def test_apple_keep_existing_below_the_minimum_retains_without_a_fetch(tmp_path, monkeypatch):
     provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
     existing = base / "Aphex Twin" / "Xtal.m4a"
@@ -3724,6 +3728,7 @@ def test_apple_settled_degraded_copy_still_reports_retained():
     assert verdict == "retain"
 
 
+@pytest.mark.ffmpeg
 def test_apple_atmos_copy_on_the_atmos_rule_still_skips():
     rec = {"path": "/music/Song.m4a", "quality_rank": 1, "quality_tier": "HIGH", "audio_type": "atmos"}
     provider = SimpleNamespace(
@@ -3757,15 +3762,14 @@ def _guess_miss_setup(tmp_path, monkeypatch):
     def extract(hooks, staged):
         workdir = tempfile.mkdtemp(dir=tmp_path)
         out = Path(workdir) / "x.flac"
-        subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture)
-            [_ffmpeg(), "-y", "-v", "error", "-i", str(staged), "-c:a", "flac", str(out)], check=True
-        )
+        _tone(out, "flac")
         return out, workdir
 
     monkeypatch.setattr(runner, "extract_flac", extract)
     return base, stub
 
 
+@pytest.mark.ffmpeg
 def test_apple_keep_both_guess_miss_keeps_the_sibling_and_readable_suffix(tmp_path, monkeypatch):
     base, stub = _guess_miss_setup(tmp_path, monkeypatch)
     sibling = base / "Aphex Twin" / "Xtal.flac"
@@ -3779,6 +3783,7 @@ def test_apple_keep_both_guess_miss_keeps_the_sibling_and_readable_suffix(tmp_pa
     assert any("[Apple Music" in path.name and path.suffix == ".flac" for path in base.rglob("*.flac"))
 
 
+@pytest.mark.ffmpeg
 def test_apple_replace_owned_guess_miss_never_replaces_an_unproven_copy(tmp_path, monkeypatch):
     base, stub = _guess_miss_setup(tmp_path, monkeypatch)
     sibling = base / "Aphex Twin" / "Xtal.flac"
@@ -3792,6 +3797,7 @@ def test_apple_replace_owned_guess_miss_never_replaces_an_unproven_copy(tmp_path
     assert sibling.read_bytes() == b"SIBLING-FLAC"
 
 
+@pytest.mark.ffmpeg
 def test_apple_replace_owned_free_corrected_name_is_not_protected(tmp_path, monkeypatch):
     _base, stub = _guess_miss_setup(tmp_path, monkeypatch)
     monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
@@ -3803,6 +3809,7 @@ def test_apple_replace_owned_free_corrected_name_is_not_protected(tmp_path, monk
     assert done and done[-1]["status"] == "done"
 
 
+@pytest.mark.ffmpeg
 def test_apple_redownload_replaces_the_own_copy_under_keep_both(tmp_path, monkeypatch):
     from waves.metadata.digest import audio_digest
 
@@ -3831,6 +3838,7 @@ def test_apple_redownload_replaces_the_own_copy_under_keep_both(tmp_path, monkey
     assert mutagen.mp4.MP4(str(existing))["\xa9gen"] == ["Shoegaze"]
 
 
+@pytest.mark.ffmpeg
 def test_apple_keep_both_names_the_delivered_tier_not_the_ask(tmp_path, monkeypatch):
     provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
     existing = base / "Aphex Twin" / "Xtal.m4a"

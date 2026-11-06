@@ -56,20 +56,12 @@ def _flac(tmp_path, name, *, genre="", comment="", item_id="", audio_type="", le
     return path
 
 
-def _m4a(
-    tmp_path, name, *, genre="", comment="", composer="", grouping="", item_id="", tidal_id="", audio_type=""
-) -> object:
+def _m4a(tmp_path, name, *, atoms=None, item_id="", tidal_id="", audio_type="") -> object:
     path = tmp_path / name
     _tone(path, "-c:a", "aac")
     handle = mutagen.mp4.MP4(str(path))
-    if genre:
-        handle["\xa9gen"] = genre
-    if comment:
-        handle["\xa9cmt"] = comment
-    if composer:
-        handle["\xa9wrt"] = composer
-    if grouping:
-        handle["\xa9grp"] = grouping
+    for atom, value in (atoms or {}).items():
+        handle[atom] = value
     if item_id:
         handle[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] = item_id.encode("utf-8")
     if tidal_id:
@@ -96,7 +88,11 @@ def test_same_container_keeps_user_tags_and_delivered_provenance(tmp_path):
 
 
 def test_cross_container_carries_the_common_user_fields(tmp_path):
-    old = _m4a(tmp_path, "old.m4a", genre="Ambient", comment="keep me", composer="Composer", grouping="Group")
+    old = _m4a(
+        tmp_path,
+        "old.m4a",
+        atoms={"\xa9gen": "Ambient", "\xa9cmt": "keep me", "\xa9wrt": "Composer", "\xa9grp": "Group"},
+    )
     new = _flac(tmp_path, "new.flac")
 
     carried = carry_over_tags(old, new)

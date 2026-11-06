@@ -89,8 +89,13 @@ class UpgradeResult:
 
 
 def upgrade_eligible(plan: UpgradePlan, delivered: DeliveryFacts) -> bool:
-    """Whether the delivered facts demonstrably beat the recorded ones."""
-    if plan.audio_type and delivered.audio_type and delivered.audio_type != plan.audio_type:
+    """Whether the delivered facts demonstrably beat the recorded ones.
+
+    The planned and delivered audio types must both be known and equal: a
+    delivery that does not say what audio it is cannot be proven the same
+    audio type the plan was made for.
+    """
+    if not plan.audio_type or delivered.audio_type != plan.audio_type:
         return False
     return compare_quality(delivered, plan.recorded) == 1
 

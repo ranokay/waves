@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pathlib
 from threading import Event, Lock, local
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from support.bridge_stub import BridgeStub
@@ -283,7 +283,7 @@ def test_an_upgrade_refreshes_both_ids_and_clears_the_origin_cache(tmp_path):
     b._own_lock = Lock()
     b._evict_own_cache_locked = lambda: None
     b._note_download_base_ok = lambda _base: None
-    b._record_ownership = backend.WavesBridge._record_ownership.__get__(b)
+    b._record_ownership = MethodType(backend.WavesBridge._record_ownership, b)
     b._ownership = SimpleNamespace(record=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not re-record")))
     b.settings = SimpleNamespace(data=SimpleNamespace(symlink_to_track=False, download_base_path=str(tmp_path)))
     b.ownershipChanged = _Signal()
