@@ -3880,3 +3880,21 @@ def test_an_album_summary_names_kept_copies(tmp_path, monkeypatch):
 
     assert summary == " (already downloaded) (1 track kept)"
     assert provider.fetched == []
+
+
+def test_apple_tierless_copy_is_not_below_minimum():
+    rec = {"path": "/music/Song.m4a", "quality_rank": -1}
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: None)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "skip"

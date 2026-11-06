@@ -41,7 +41,10 @@ def retains_below_minimum(policy: str, strategy: str, recorded_rank: int, target
     The one rule both engines' pre-fetch gates ask; a best-available policy
     keeps its historical same-provider upgrade behaviour instead.
     """
-    return policy == "keep_existing" and strategy == "minimum_required" and int(recorded_rank) < int(target_rank)
+    rank = int(recorded_rank)
+    # A negative rank is a tier-less copy (a video, an adopted row) with no
+    # quality concept: it cannot be below a minimum.
+    return policy == "keep_existing" and strategy == "minimum_required" and rank >= 0 and rank < int(target_rank)
 
 
 @dataclass(frozen=True)

@@ -2396,7 +2396,9 @@ class Download:
             same_version=same_version,
             unchanged=unchanged,
             current=current,
-            minimum_met=rank >= int(target_rank),
+            # A negative rank is a tier-less copy with no quality concept: it
+            # cannot be below a minimum (same rule as retains_below_minimum).
+            minimum_met=rank < 0 or rank >= int(target_rank),
         )
 
     def _placement_decision(

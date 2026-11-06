@@ -105,3 +105,11 @@ def test_the_job_note_names_kept_and_kept_both():
 
     assert _kept_note(2, 1) == " (2 tracks kept, 1 track kept both)"
     assert _kept_note(0, 0) == ""
+
+
+def test_a_tierless_copy_is_not_below_minimum():
+    owned = {"path": "/music/Song.mp4", "quality_rank": -1}
+
+    verdict, _detail = _gate(owned=owned)._claim_decision(_track())
+
+    assert verdict == "skip"

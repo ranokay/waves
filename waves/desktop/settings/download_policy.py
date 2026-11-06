@@ -35,7 +35,7 @@ def policy_fields(policies: DownloadPolicies, provider_id: str = "") -> list[dic
                 {
                     "value": word,
                     "label": (
-                        "Keep existing (follows Skip existing)"
+                        "Follow Skip existing"
                         if name == "duplicates" and not word
                         else word.replace("_", " ").capitalize()
                         if word

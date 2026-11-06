@@ -538,3 +538,13 @@ def test_saved_explicit_engine_selection_stays_pinned_after_defaults_change(tmp_
             EnginePolicy(intent.engine_priority, intent.engine_pin, intent.same_provider_fallback),
             EngineFacts(),
         )
+
+
+def test_the_default_duplicate_label_only_says_it_follows_skip_existing():
+    from waves.desktop.settings.download_policy import policy_fields
+
+    rows = policy_fields(Settings().download_policies)
+    row = next(r for r in rows if r["key"] == "download_policies.shared.duplicates")
+    labels = {option["value"]: option["label"] for option in row["options"]}
+
+    assert labels[""] == "Follow Skip existing"

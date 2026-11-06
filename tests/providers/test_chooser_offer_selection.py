@@ -92,38 +92,21 @@ def test_non_ready_offer_refuses_dispatch(provider, readiness):
     assert b.statuses
 
 
-def test_probed_stereo_cannot_silently_replace_explicit_atmos():
-    item = replace(
-        offer(),
-        selected=OfferConstraints(audio_type="atmos"),
-        evidence=AvailabilityEvidence(
-            state=EvidenceState.AVAILABLE,
-            probed=(DeliveryFacts(tier=QualityTier.HIGH, audio_type="stereo", codec="aac"),),
-        ),
-    )
-    b = host(item)
-    b._chooser_normalize_audio = lambda value, pid: value
-    assert not WavesBridge.downloadCatalogOffer(b, 7, "apple", "HIGH", "atmos", {})
-    assert not b.calls
-    assert "selected delivery" in b.statuses[-1]
-
-
-def test_a_dual_request_with_stereo_evidence_dispatches_without_an_upgrade():
-    item = replace(
-        offer(),
-        selected=OfferConstraints(audio_type="both"),
-        evidence=AvailabilityEvidence(
-            state=EvidenceState.AVAILABLE,
-            probed=(DeliveryFacts(tier=QualityTier.HIGH, audio_type="stereo", codec="aac"),),
-        ),
-    )
-    b = host(item)
-    b._chooser_normalize_audio = lambda value, pid: value
-
-    assert WavesBridge.downloadCatalogOffer(b, 7, "apple", "HIGH", "both", {})
-
-    assert b.calls
-    assert "upgrade" not in b.calls[0][4]
+def test_probed_stereo_cannot_silently_replace_explicit_atmos_or_dual():
+    for audio in ("atmos", "both"):
+        item = replace(
+            offer(),
+            selected=OfferConstraints(audio_type=audio),
+            evidence=AvailabilityEvidence(
+                state=EvidenceState.AVAILABLE,
+                probed=(DeliveryFacts(tier=QualityTier.HIGH, audio_type="stereo", codec="aac"),),
+            ),
+        )
+        b = host(item)
+        b._chooser_normalize_audio = lambda value, pid: value
+        assert not WavesBridge.downloadCatalogOffer(b, 7, "apple", "HIGH", audio, {})
+        assert not b.calls
+        assert "selected delivery" in b.statuses[-1]
 
 
 def test_fallback_consents_relax_only_the_selected_dimension():

@@ -203,3 +203,18 @@ def test_keep_both_names_the_delivered_tier_not_the_ask(tmp_path):
     assert picked is not None
     assert "LOSSLESS" in picked.name
     assert "HI_RES" not in picked.name
+
+
+def test_a_tierless_owned_copy_meets_any_minimum_in_the_download_engine(tmp_path):
+    destination = tmp_path / "Song.mp4"
+    destination.write_bytes(b"old video")
+    dl = make_download(tmp_path)
+    dl._duplicate_policy = "keep_existing"
+    dl._quality_strategy = "minimum_required"
+    dl._ownership_of = lambda *_a, **_k: {"path": str(destination), "quality_rank": -1}
+
+    existing = dl._existing_copy_at(destination, make_track("42"), None, 3, False)
+
+    assert existing is not None
+    assert existing.minimum_met is True
+    assert decide_placement("keep_existing", existing, minimum_required=True).action != "retain"

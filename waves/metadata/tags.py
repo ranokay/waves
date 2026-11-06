@@ -967,18 +967,12 @@ def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa
     caller can abort before replacing the old file.
     """
     try:
-        try:
-            old = mutagen.File(path_old)
-        except Exception:
-            old = None
-        try:
-            new = mutagen.File(path_new)
-        except Exception:
-            new = None
+        old = mutagen.File(path_old)
+        new = mutagen.File(path_new)
         if old is None or new is None:
             # An unidentifiable container has no tag block to carry; that is
-            # not a user-tag failure. A readable file whose tags cannot be
-            # copied still raises below.
+            # not a user-tag failure. A read error is different: it raises
+            # below, so strict callers abort before replacing the old file.
             return 0
         if old.tags is None:
             # An untagged own copy (a failed tag write, a user's bare file)

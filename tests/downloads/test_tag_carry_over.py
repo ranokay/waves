@@ -164,3 +164,43 @@ def test_mp3_waves_item_id_is_never_carried(tmp_path):
     keys = {str(key).lower() for key in handle.tags}
     assert not any("waves" in key for key in keys)
     assert read_item_id(new) == ""
+
+
+@pytest.mark.parametrize("fail_on", ["old", "new"])
+def test_a_strict_read_failure_aborts_instead_of_dropping_tags(tmp_path, monkeypatch, fail_on):
+    import waves.metadata.tags as tags_module
+
+    old = _flac(tmp_path, "old.flac", genre="Shoegaze")
+    new = _flac(tmp_path, "new.flac")
+    before = old.read_bytes()
+    real_file = tags_module.mutagen.File
+    failing = old if fail_on == "old" else new
+
+    def unreadable(path):
+        if str(path) == str(failing):
+            raise OSError("the network mount went away")
+        return real_file(path)
+
+    monkeypatch.setattr(tags_module.mutagen, "File", unreadable)
+
+    with pytest.raises(MetadataUnreadable):
+        carry_over_tags(old, new, strict=True)
+
+    assert old.read_bytes() == before
+    assert mutagen.flac.FLAC(str(old))["GENRE"] == ["Shoegaze"]
+
+
+def test_an_unidentifiable_container_still_carries_nothing(tmp_path, monkeypatch):
+    import waves.metadata.tags as tags_module
+
+    old = _flac(tmp_path, "old.flac", genre="Shoegaze")
+    new = _flac(tmp_path, "new.flac")
+    real_file = tags_module.mutagen.File
+
+    monkeypatch.setattr(
+        tags_module.mutagen,
+        "File",
+        lambda path: None if str(path) == str(old) else real_file(path),
+    )
+
+    assert carry_over_tags(old, new, strict=True) == 0

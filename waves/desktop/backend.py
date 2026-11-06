@@ -1914,6 +1914,7 @@ class _TrackedDownload(Download):
             with self._outcome_lock:
                 self.ok_count += 1
                 self.skip_count += 1
+                self.retained_count += 1
         elif outcome and outcome[0] == "protected" and ok:
             status = "protected"
             with self._outcome_lock:
@@ -11327,7 +11328,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 selected = dataclasses.replace(selected, audio_type=probed_types.pop())
         if offer.evidence.effective_state() == EvidenceState.UNAVAILABLE or (
             offer.evidence.effective_state() == EvidenceState.AVAILABLE
-            and selected.audio_type != "both"
             and not all(
                 any(satisfies(fact, family, video=offer.kind == "video") for fact in offer.evidence.probed)
                 for family in ((selected,) if offer.kind == "video" else requested_audio(selected))

@@ -269,6 +269,7 @@ def test_both_audio_type_captures_no_upgrade_plan(tmp_path):
                     bit_depth=24,
                     sample_rate=96000,
                 ),
+                DeliveryFacts(tier=QualityTier.HIGH, audio_type="atmos", codec="eac3"),
             )
         ),
         selected=OfferConstraints(tier=QualityTier.LOSSLESS, audio_type="both"),
