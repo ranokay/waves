@@ -634,7 +634,9 @@ class Metadata:
             raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags["COPYRIGHT"] = self.copy_right
-        if self.write_composer:
+        # An empty composer is no value from the delivery: it must not blank a
+        # composer the user's own tags carried over.
+        if self.write_composer and self.composer:
             self.m.tags["COMPOSER"] = self.composer
         if self.write_isrc:
             self.m.tags["ISRC"] = self.isrc
@@ -698,7 +700,7 @@ class Metadata:
             raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags.add(TCOP(encoding=3, text=self.copy_right))
-        if self.write_composer:
+        if self.write_composer and self.composer:
             self.m.tags.add(TCOM(encoding=3, text=self.composer))
         if self.write_isrc:
             self.m.tags.add(TSRC(encoding=3, text=self.isrc))
@@ -766,7 +768,7 @@ class Metadata:
             raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags["cprt"] = self.copy_right
-        if self.write_composer:
+        if self.write_composer and self.composer:
             self.m.tags["\xa9wrt"] = self.composer
         if self.write_isrc:
             self.m.tags["isrc"] = self.isrc
@@ -964,13 +966,15 @@ def _carry_across_containers(old, new) -> int:
         # receiving another container's frames.
         return 0
     carried = 0
-    for source_keys, destinations in _CROSS_CONTAINER_TAGS.values():
+    for name, (source_keys, destinations) in _CROSS_CONTAINER_TAGS.items():
         text = _tag_text(old.tags, source_keys)
         if not text:
             continue
         destination = destinations[container]
         existing = _tag_text(new.tags, (destination,))
-        if existing:
+        # The user's Genre wins over the new file's, as it does in the same-
+        # container carry (_TAGS_OLD_WINS); other fields keep the new value.
+        if existing and name != "genre":
             continue
         _set_cross_container_tag(new, container, destination, text)
         carried += 1

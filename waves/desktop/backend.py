@@ -1476,10 +1476,9 @@ class _TrackedDownload(Download):
         ceiling = _advertised_ceiling(media)
         self._stamp_learned_ceiling(media_id, rec, ceiling)
         # An Atmos copy of an Atmos-wanting job is current whatever the tier
-        # says: there is only one Atmos to get, and it must still skip rather
-        # than be read as a below-minimum stereo copy.
-        if self._wants_atmos(media) and _record_is_atmos(rec):
-            return "skip", rec
+        # says (there is only one Atmos to get). That is freshness, not a
+        # minimum: the retention check still runs first.
+        atmos_current = bool(self._wants_atmos(media) and _record_is_atmos(rec))
         if retains_below_minimum(
             self._duplicate_policy,
             self._quality_strategy,
@@ -1488,10 +1487,10 @@ class _TrackedDownload(Download):
         ):
             # Keep existing + a required minimum: the copy is below the ask
             # and this policy never replaces. Checked BEFORE copy_is_current:
-            # a ceiling-capped or settled-degraded copy can read "current"
-            # below the requested minimum, and that must still report retained.
+            # a ceiling-capped, settled-degraded or Atmos copy below the minimum
+            # must still report retained.
             return "retain", rec
-        current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), ceiling)
+        current = atmos_current or _copy_is_current(rec, self._target_rank, self._wants_atmos(media), ceiling)
         if current:
             return "skip", rec
         return "force", rec
@@ -2328,6 +2327,14 @@ _CHOOSER_TOGGLE_KEYS = (
     "metadata_cover_embed",
     "cover_album_file",
 )
+
+
+class _VerifiedPins(dict):
+    """Chooser pins a verified bridge path built: a catalog offer after its
+    checks, an upgrade plan after it is proven, or a parked click. Only Python
+    code constructs one. The QML slot receives plain values, so a caller
+    cannot supply an upgrade plan or origin facts through it."""
+
 
 # A per-item quality choice can also hold "DEFAULT": the one non-tier that
 # pins the Settings tier on a track whose album carries a different choice
@@ -11377,7 +11384,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return True
         if provider_id == provider_of_id(origin_id):
             media_id = snapshot.selection.media_id
-        self.downloadWithChooser(media_id, offer.kind, tier, audio_type, pins)
+        self.downloadWithChooser(media_id, offer.kind, tier, audio_type, _VerifiedPins(pins))
         return True
 
     @Slot(object)
@@ -11392,7 +11399,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             pins["upgrade"] = json.loads(plan.to_json())
         else:
             self._set_status("No upgrade applied: the existing Version is not a proven improvement.")
-        self.downloadWithChooser(media_id, kind, tier, audio_type, pins)
+        self.downloadWithChooser(media_id, kind, tier, audio_type, _VerifiedPins(pins))
 
     @Slot("QVariant")
     def saveChooserDefaults(self, values) -> None:
@@ -11533,6 +11540,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 values = values.toVariant()
             except Exception:
                 values = None
+        verified = isinstance(values, _VerifiedPins)
         incoming = values if isinstance(values, dict) else {}
         pins: dict = {}
         for key in ("allow_fallback", "allow_provider_fallback", "allow_engine_fallback"):
@@ -11540,17 +11548,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 pins[key] = bool(incoming[key])
         if "engine" in incoming:
             pins["engine"] = str(incoming["engine"]).strip().lower()
-        for key in ("provider_pin", "origin_media_id"):
-            if key in incoming:
-                pins[key] = str(incoming[key])
-        # Provenance and the opt-in upgrade are captured request data, not
-        # boolean queue toggles: they ride the pins to _capture_request and
-        # are filtered out of the row's askToggles by _chooser_asset_pins.
-        for key in ("origin_facts", "upgrade"):
-            if key in incoming and isinstance(incoming[key], dict):
-                pins[key] = incoming[key]
-        if "origin_consistent" in incoming:
-            pins["origin_consistent"] = bool(incoming["origin_consistent"])
+        if "provider_pin" in incoming:
+            pins["provider_pin"] = str(incoming["provider_pin"])
+        # The origin, the origin's identity and the opt-in upgrade are captured
+        # request data set by the verified paths only: a caller's values never
+        # reach the pins. They ride the pins to _capture_request.
+        if verified:
+            if "origin_media_id" in incoming:
+                pins["origin_media_id"] = str(incoming["origin_media_id"])
+            for key in ("origin_facts", "upgrade"):
+                if key in incoming and isinstance(incoming[key], dict):
+                    pins[key] = incoming[key]
+            if "origin_consistent" in incoming:
+                pins["origin_consistent"] = bool(incoming["origin_consistent"])
         for key in _CHOOSER_TOGGLE_KEYS:
             if key in incoming:
                 pins[key] = bool(incoming[key])
@@ -18021,7 +18031,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         parked = self._chooser_take_refetch(bucket, media_id)
         if parked is not None:
             kind, tier_word, audio_word, toggles = parked
-            self.downloadWithChooser(media_id, kind, tier_word, audio_word, toggles)
+            self.downloadWithChooser(media_id, kind, tier_word, audio_word, _VerifiedPins(toggles or {}))
             return
         dispatch = {
             "album": self.downloadAlbum,

@@ -2624,6 +2624,17 @@ class Download:
                 is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
             )
             return (path_media_unique, decision) if path_media_unique is not None else None
+        # A plain download is free only if no sibling holds this name: a claimed
+        # name steps around to its numbered variant, never to a shared one.
+        name_key = name_comparison_key(path_media_dst.name)
+        if any(name_comparison_key(pathlib.Path(held).name) == name_key for held in taken):
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
         return path_media_dst, decision
 
     def _release_name(self, name_reserved: str) -> None:
@@ -3889,7 +3900,9 @@ class Download:
             # alone would hand a colliding stranger's file to this track: the
             # audio just downloaded is unlinked and the playlist entry points
             # at somebody else's track.
-            overwrite: bool = not self.skip_existing
+            # Keep both never overwrites: a file that appeared at the name meanwhile
+            # is stepped around, whatever the legacy skip-existing toggle says.
+            overwrite: bool = not self.skip_existing and self._duplicate_policy != "keep_both"
             name_reserved: str | None = None
             media_id: str = download_identity_id(media)
 

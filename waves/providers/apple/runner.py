@@ -2150,7 +2150,16 @@ def deliver_track(
         origin_consistent,
         delivered_title=str(row.get("title") or ""),
     )
-    path_values = path_facts(resolved_facts) if organization_source == "origin" and origin_facts else None
+    # The folder is organized by the organization source, not the metadata
+    # source: resolve the path facts on their own axis.
+    organization_facts = resolve_track_facts(
+        facts,
+        origin_facts,
+        organization_source,
+        origin_consistent,
+        delivered_title=str(row.get("title") or ""),
+    )
+    path_values = path_facts(organization_facts) if organization_source == "origin" and origin_facts else None
     relative = track_relative(
         hooks,
         row,

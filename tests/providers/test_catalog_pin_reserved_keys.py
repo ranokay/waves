@@ -54,3 +54,16 @@ def test_a_toggle_map_cannot_inject_an_upgrade_plan_or_origin_facts():
     pins = b.calls[0][4]
     assert "upgrade" not in pins
     assert "origin_facts" not in pins
+
+
+def test_the_public_toggle_parser_drops_caller_upgrade_plans_but_keeps_verified_ones():
+    from waves.desktop.backend import _VerifiedPins
+
+    forged = {"upgrade": {"forged": True}, "origin_facts": {"album": "x"}, "origin_media_id": "tidal:9"}
+
+    public = WavesBridge._chooser_toggle_pins(BridgeStub(), dict(forged))
+    verified = WavesBridge._chooser_toggle_pins(BridgeStub(), _VerifiedPins(forged))
+
+    assert "upgrade" not in public and "origin_facts" not in public and "origin_media_id" not in public
+    assert verified["upgrade"] == {"forged": True}
+    assert verified["origin_facts"] == {"album": "x"}

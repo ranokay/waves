@@ -284,7 +284,8 @@ def test_an_upgrade_refreshes_both_ids_and_clears_the_origin_cache(tmp_path):
     b._evict_own_cache_locked = lambda: None
     b._note_download_base_ok = lambda _base: None
     b._record_ownership = MethodType(backend.WavesBridge._record_ownership, b)
-    b._ownership = SimpleNamespace(record=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not re-record")))
+    record_calls = []
+    b._ownership = SimpleNamespace(record=lambda *_a, **_k: record_calls.append((_a, _k)))
     b.settings = SimpleNamespace(data=SimpleNamespace(symlink_to_track=False, download_base_path=str(tmp_path)))
     b.ownershipChanged = _Signal()
     b._downloadRecorded = _Signal()
@@ -309,3 +310,4 @@ def test_an_upgrade_refreshes_both_ids_and_clears_the_origin_cache(tmp_path):
     assert "apple:42" in b._own_cache
     assert [call[0] for call in b.ownershipChanged.calls] == ["tidal:1", "apple:42"]
     assert b._downloadRecorded.calls
+    assert not record_calls

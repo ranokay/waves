@@ -83,7 +83,7 @@ def test_a_settled_degraded_copy_still_reports_retained():
     assert verdict == "retain"
 
 
-def test_an_atmos_copy_on_the_atmos_rule_still_skips():
+def test_an_atmos_copy_below_the_minimum_is_retained_not_skipped():
     owned = {
         "path": "/music/Song.m4a",
         "quality_rank": 1,
@@ -95,9 +95,10 @@ def test_an_atmos_copy_on_the_atmos_rule_still_skips():
     dl = _gate(owned=owned)
     dl._audio_type = "atmos"
 
-    verdict, _detail = dl._claim_decision(media)
+    verdict, detail = dl._claim_decision(media)
 
-    assert verdict == "skip"
+    assert verdict == "retain"
+    assert "minimum" in detail["reason"].lower()
 
 
 def test_the_job_note_names_kept_and_kept_both():
