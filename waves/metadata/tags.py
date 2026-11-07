@@ -970,7 +970,9 @@ def _carry_across_containers(old, new) -> int:
         text = _tag_text(old.tags, source_keys)
         if not text:
             continue
-        destination = destinations[container]
+        destination = destinations.get(container)
+        if destination is None:
+            continue
         existing = _tag_text(new.tags, (destination,))
         # The user's Genre wins over the new file's, as it does in the same-
         # container carry (_TAGS_OLD_WINS); other fields keep the new value.
