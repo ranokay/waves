@@ -1,3 +1,4 @@
+import logging
 import pathlib
 
 import mutagen.flac
@@ -6,11 +7,14 @@ import mutagen.mp4
 from mutagen import flac, id3, mp4
 from mutagen.id3 import (
     APIC,
+    COMM,
     TALB,
     TBPM,
     TCOM,
+    TCON,
     TCOP,
     TDRC,
+    TIT1,
     TIT2,
     TKEY,
     TPE1,
@@ -23,6 +27,8 @@ from mutagen.id3 import (
 )
 
 from waves.ids import DEFAULT_PROVIDER, namespaced_id
+
+logger = logging.getLogger("waves.tags")
 
 
 def sniff_image_format(data: bytes) -> str:
@@ -108,6 +114,40 @@ GENERIC_ALBUM_ARTIST_ID_TAG = "WAVES_ALBUM_ARTIST_ID"
 # falls back to the codec sniff for files from before it existed, so a file
 # is never misread because its container shares an extension.
 GENERIC_AUDIO_TYPE_TAG = "WAVES_AUDIO_TYPE"
+
+# Tags that describe the OLD audio or the OLD delivery, never the song: a
+# replacement copy must not inherit them (matched as a lowercase substring).
+# The WAVES_* family is checked by prefix below, so the fork's provenance tags
+# and catalog ids always come from the delivered file.
+_TAGS_NOT_CARRIED = (
+    "replaygain",
+    "encoder",
+    "encodedby",
+    "encoded by",
+    "\xa9too",
+    "encoding params",
+    "itunnorm",
+    "itunsmpb",
+    "itunpgap",
+    "isrc",
+    "upc",
+    "barcode",
+)
+_TAGS_OLD_WINS = frozenset({"genre", "\xa9gen", "tcon"})
+_TAG_PREFIXES_NEVER_CARRIED = ("waves_",)
+# ID3 frames that describe the delivery by frame id (the encoder and the ISRC),
+# matched exactly so a user's frame that merely contains these letters is kept.
+_ID3_FRAMES_NEVER_CARRIED = frozenset({"tenc", "tsrc"})
+
+# The common user fields mapped across containers (M4A <-> FLAC <-> MP3).
+# Anything container-specific that has no counterpart is reported as not
+# carried; it is never copied by a guessed name.
+_CROSS_CONTAINER_TAGS = {
+    "genre": (("genre", "GENRE", "\xa9gen", "TCON"), {"flac": "GENRE", "mp4": "\xa9gen", "mp3": "TCON"}),
+    "comment": (("comment", "COMMENT", "\xa9cmt", "COMM"), {"flac": "COMMENT", "mp4": "\xa9cmt", "mp3": "COMM"}),
+    "composer": (("composer", "COMPOSER", "\xa9wrt", "TCOM"), {"flac": "COMPOSER", "mp4": "\xa9wrt", "mp3": "TCOM"}),
+    "grouping": (("grouping", "GROUPING", "\xa9grp", "TIT1"), {"flac": "GROUPING", "mp4": "\xa9grp", "mp3": "TIT1"}),
+}
 AUDIO_TYPE_STEREO = "stereo"
 AUDIO_TYPE_ATMOS = "atmos"
 
@@ -594,7 +634,9 @@ class Metadata:
             raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags["COPYRIGHT"] = self.copy_right
-        if self.write_composer:
+        # An empty composer is no value from the delivery: it must not blank a
+        # composer the user's own tags carried over.
+        if self.write_composer and self.composer:
             self.m.tags["COMPOSER"] = self.composer
         if self.write_isrc:
             self.m.tags["ISRC"] = self.isrc
@@ -613,12 +655,13 @@ class Metadata:
         self.m.tags["ALBUMARTIST"] = self.albumartist
         self.m.tags["ARTIST"] = self.artists
         self._set_flac_custom_tags()
-        self.m.tags["TRACKNUMBER"] = str(self.tracknumber)
+        # 0 means the track number is unknown: write nothing, as TRACKTOTAL does.
+        self.m.tags["TRACKNUMBER"] = str(self.tracknumber) if self.tracknumber > 0 else ""
         # 0 means the count is unknown (the album summary carried none):
         # write nothing rather than "of 1" beside a real track number.
         # cleanup_tags drops the empty value before the file is saved.
         self.m.tags["TRACKTOTAL"] = str(self.totaltrack) if self.totaltrack > 0 else ""
-        self.m.tags["DISCNUMBER"] = str(self.discnumber)
+        self.m.tags["DISCNUMBER"] = str(self.discnumber) if self.discnumber > 0 else ""
         # 0 means the volume count is unknown: write nothing rather than
         # "of 0", mirroring TRACKTOTAL above. cleanup_tags drops the empty
         # value before the file is saved.
@@ -657,7 +700,7 @@ class Metadata:
             raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags.add(TCOP(encoding=3, text=self.copy_right))
-        if self.write_composer:
+        if self.write_composer and self.composer:
             self.m.tags.add(TCOM(encoding=3, text=self.composer))
         if self.write_isrc:
             self.m.tags.add(TSRC(encoding=3, text=self.isrc))
@@ -725,7 +768,7 @@ class Metadata:
             raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags["cprt"] = self.copy_right
-        if self.write_composer:
+        if self.write_composer and self.composer:
             self.m.tags["\xa9wrt"] = self.composer
         if self.write_isrc:
             self.m.tags["isrc"] = self.isrc
@@ -843,3 +886,182 @@ class Metadata:
         keys_to_delete = [key for key, value in self.m.tags.items() if self._is_empty_tag(value)]
         for key in keys_to_delete:
             del self.m.tags[key]
+
+
+def _tag_never_carried(key) -> bool:
+    lowered = str(key).lower()
+    # The container prefixes put WAVES_* behind "TXXX:" (MP3) or
+    # "----:com.apple.iTunes:" (MP4); compare the bare tag name so every
+    # container's provenance tag is refused, not only FLAC's.
+    bare = lowered.rsplit(":", 1)[-1]
+    if any(bare.startswith(prefix) for prefix in _TAG_PREFIXES_NEVER_CARRIED):
+        return True
+    if bare in _ID3_FRAMES_NEVER_CARRIED:
+        return True
+    return any(mark in lowered for mark in _TAGS_NOT_CARRIED)
+
+
+def _read_tag(tags, key):
+    """A container's value for ``key``, or None. Expected lookup misses are
+    quiet; any other failure is logged so a tag problem stays observable.
+
+    An ID3 tag block keys a COMM frame by language and description, so a plain
+    get() misses it; getall() returns every frame of that id.
+    """
+    try:
+        if hasattr(tags, "getall"):
+            frames = tags.getall(key)
+            return frames[0] if frames else None
+        return tags.get(key)
+    except (KeyError, TypeError, ValueError):
+        return None
+    except Exception:
+        logger.warning("could not read tag %s; skipping it", key, exc_info=True)
+        return None
+
+
+def _tag_text(tags, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = _read_tag(tags, key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if hasattr(value, "text"):
+            value = value.text
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "ignore")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _set_cross_container_tag(handle, container: str, field: str, text: str) -> None:
+    if handle.tags is None:
+        handle.add_tags()
+    if container == "mp3":
+        frame = (
+            COMM(encoding=3, lang="eng", desc="", text=text)
+            if field == "COMM"
+            else {"TCON": TCON, "TCOM": TCOM, "TIT1": TIT1}[field](encoding=3, text=text)
+        )
+        handle.tags.add(frame)
+    else:
+        handle.tags[field] = text
+
+
+def _carry_across_containers(old, new) -> int:
+    """Copy the common user fields between different container tag schemes."""
+    if isinstance(new, mutagen.flac.FLAC):
+        container = "flac"
+    elif isinstance(new, mutagen.mp4.MP4):
+        container = "mp4"
+    elif isinstance(new, mutagen.mp3.MP3):
+        container = "mp3"
+    else:
+        # A container with no mapping (Ogg, WAV, ...) carries nothing rather than
+        # receiving another container's frames.
+        return 0
+    carried = 0
+    for name, (source_keys, destinations) in _CROSS_CONTAINER_TAGS.items():
+        text = _tag_text(old.tags, source_keys)
+        if not text:
+            continue
+        destination = destinations.get(container)
+        if destination is None:
+            continue
+        existing = _tag_text(new.tags, (destination,))
+        # The user's Genre wins over the new file's, as it does in the same-
+        # container carry (_TAGS_OLD_WINS); other fields keep the new value.
+        if existing and name != "genre":
+            continue
+        _set_cross_container_tag(new, container, destination, text)
+        carried += 1
+    if carried:
+        new.save()
+    return carried
+
+
+def _is_io_failure(exc: BaseException) -> bool:
+    """Whether mutagen failed to READ the file, not to parse it.
+
+    An I/O failure is an OSError, or a MutagenError wrapping one (args[0] or
+    __cause__), as with a missing file or a permission denial. Everything else
+    is a parse failure: the bytes are not a container mutagen can read.
+    """
+    if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+        return True
+    return bool(exc.args) and isinstance(exc.args[0], OSError)
+
+
+def _open_for_carry(path):
+    """``mutagen.File`` for the carry-over: None when the bytes cannot be parsed
+    (no recoverable tags), but the I/O failure itself when the file cannot be
+    read, so a strict caller aborts before replacing anything."""
+    try:
+        return mutagen.File(path)
+    except Exception as exc:
+        if _is_io_failure(exc):
+            raise
+        return None
+
+
+def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa: C901 - one tag family at a time
+    """Keep the user's own tags on the file replacing ``path_old``.
+
+    Waves writes the tags it knows and leaves the rest alone, so a Genre, a
+    Comment, a rating or a mood the user typed into the old file has no
+    counterpart in the new one and a replacement threw it away (upstream
+    iamprivacy/Waves#55). Only tags the new file LACKS are carried, with the
+    old copy's Genre winning; the fresh writer's fields stay. Every WAVES_*
+    tag, catalog id, ISRC, UPC, codec/quality and encoder/ReplayGain tag is
+    never carried: those describe the delivered file.
+
+    Different containers (M4A -> FLAC) carry the common user fields (Genre,
+    Comment, Composer, Grouping) by name. Container-specific fields with no
+    safe counterpart, such as a rating or a mood atom, are not guessed: they
+    stay on the old container rather than being written as a false value.
+    ``strict=True`` raises when either file cannot be READ (an I/O failure:
+    a missing file, a permission denial) or saved, so the caller aborts before
+    replacing the old file. A file mutagen cannot PARSE (a damaged or truncated
+    container) has no recoverable tags: it carries nothing and returns 0, even
+    under ``strict=True``, so a damaged own copy can still be replaced.
+    """
+    try:
+        old = _open_for_carry(path_old)
+        new = _open_for_carry(path_new)
+        if old is None or new is None:
+            # A container mutagen cannot parse has no tag block to carry; that
+            # is not a user-tag failure. An I/O failure never gets here: it
+            # raised in _open_for_carry, so strict callers abort first.
+            return 0
+        if old.tags is None:
+            # An untagged own copy (a failed tag write, a user's bare file)
+            # has nothing to carry; that is not a failure.
+            return 0
+        if new.tags is None:
+            new.add_tags()
+        if not isinstance(new.tags, type(old.tags)):
+            return _carry_across_containers(old, new)
+        carried = 0
+        for key in list(old.tags.keys()):
+            lowered = str(key).lower()
+            if _tag_never_carried(key):
+                continue
+            if key in new.tags and lowered not in _TAGS_OLD_WINS:
+                continue
+            value = old.tags[key]
+            if Metadata._is_empty_tag(value) or (key in new.tags and new.tags[key] == value):
+                continue
+            new.tags[key] = value
+            carried += 1
+        if carried:
+            new.save()
+    except Exception as exc:
+        if strict:
+            raise MetadataUnreadable(path_old) from exc
+        return 0
+    return carried

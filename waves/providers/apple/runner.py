@@ -49,9 +49,22 @@ from waves.events import (
     Lifecycle,
     application_event,
 )
-from waves.library.ownership import copy_is_current, record_names_a_broken_copy
+from waves.library.ownership import copy_is_current, record_is_atmos, record_names_a_broken_copy
+from waves.library.placement import (
+    CARRY_OVER_FAILED_REASON,
+    RETAINED_REASON,
+    UPGRADE_RETAINED_REASON,
+    ExistingCopy,
+    decide_placement,
+    keep_both_name,
+    retains_below_minimum,
+)
+from waves.library.upgrade import UpgradePlan, commit_upgrade, upgrade_eligible
+from waves.metadata.digest import audio_digest, digest_matches
 from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
+from waves.metadata.provenance import path_facts, resolve_track_facts
 from waves.metadata.tags import (
+    carry_over_tags,
     normalize_audio_type_tag,
     occupant_is_own,
     occupant_is_version,
@@ -60,6 +73,7 @@ from waves.metadata.tags import (
     sniff_image_format,
 )
 from waves.model.cfg import cover_sidecar_format, wants_both_default
+from waves.paths import check_file_exists
 from waves.providers.apple import engine as apple_engine
 from waves.providers.apple.engine import (
     AppleCredential,
@@ -112,9 +126,18 @@ from waves.providers.apple.supervision import (
 )
 from waves.providers.apple.workdirs import make_workdir
 from waves.providers.base import AudioType, RefusalKind
+from waves.providers.catalog_offers import DeliveryFacts
 from waves.system_ffmpeg import probe_was_slow, working_system_ffmpeg
 
 logger = logging.getLogger("waves.providers.apple.runner")
+
+
+class _AppleRetained(Exception):
+    """An existing copy was kept: below the minimum, or a replacement aborted."""
+
+    def __init__(self, reason: str = "") -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class _AppleSetupRequired(Exception):
@@ -244,6 +267,15 @@ class AppleJobHooks:
     job_audio_type: Callable[[int], Any] = _quality_none
     # The row's pinned "Skip existing"; None reads the job's settings.
     job_skip_existing: Callable[[int], bool] | None = None
+    # The captured duplicate/provenance policy and optional upgrade plan.
+    job_duplicate_policy: Callable[[int], str] = lambda qid: ""
+    job_quality_strategy: Callable[[int], str] = lambda qid: "best_available"
+    job_metadata_source: Callable[[int], str] = lambda qid: "origin"
+    job_organization_source: Callable[[int], str] = lambda qid: "origin"
+    job_origin_facts: Callable[[int], dict] = lambda qid: {}
+    job_origin_consistent: Callable[[int], bool] = lambda qid: False
+    job_upgrade: Callable[[int], Any] = lambda qid: None
+    record_replacement: Callable[..., int] | None = None
     ownership: Callable[[], Any] = _none
     redownload_overrides: Callable[[], set] = _empty_set
     library_claim_overrides: Callable[[], set] = _empty_set
@@ -294,6 +326,16 @@ class AppleJobHooks:
 
 
 # --------------------------------------------------------------------------
+
+
+def _kept_note(retained: int, protected: int) -> str:
+    """The trailing clause naming kept copies on a finished Apple job."""
+    parts = []
+    if retained > 0:
+        parts.append(f"{retained} track{'s' if retained != 1 else ''} kept")
+    if protected > 0:
+        parts.append(f"{protected} track{'s' if protected != 1 else ''} kept both")
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 def _classified_failure(hooks: AppleJobHooks, exc: BaseException) -> Failure:
@@ -569,6 +611,9 @@ def relative_path(
     list_total: int = 0,
     num_volumes: int = 1,
     isrc: str = "",
+    quality: str = "",
+    audio_type: str = "",
+    facts: dict[str, str] | None = None,
 ) -> str:
     """One Apple destination from the settings' template.
 
@@ -593,6 +638,9 @@ def relative_path(
         illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
         illegal_map=getattr(data, "filename_illegal_map", None),
         provider_name=provider_folder_name(CTX_APPLE),
+        quality=quality,
+        audio_type=audio_type,
+        facts=facts,
     )
 
 
@@ -606,6 +654,9 @@ def track_relative(
     list_total: int,
     num_volumes: int,
     facts_isrc: str = "",
+    quality: str = "",
+    audio_type: str = "",
+    facts: dict[str, str] | None = None,
 ) -> str:
     """One Apple track's template path, without base dir or extension."""
     if type_media == "playlist":
@@ -624,6 +675,9 @@ def track_relative(
         list_total=list_total if type_media == "playlist" else 0,
         num_volumes=num_volumes,
         isrc=facts_isrc,
+        quality=quality,
+        audio_type=audio_type,
+        facts=facts,
     )
 
 
@@ -1531,7 +1585,15 @@ def _owned_record(hooks: AppleJobHooks, track_id: str, want_type: str | None) ->
 
 
 def gate_track(
-    hooks: AppleJobHooks, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
+    hooks: AppleJobHooks,
+    provider,
+    track_id: str,
+    requested_rank: int,
+    force: bool,
+    audio_type: str | None = None,
+    *,
+    duplicate_policy: str = "keep_existing",
+    quality_strategy: str = "best_available",
 ) -> tuple[str | None, dict | None]:
     """Ownership verdict plus the record it was read from. Without ``force``:
     'skip' when an owned copy is current, 'force' when owned but stale or
@@ -1584,7 +1646,21 @@ def gate_track(
                 ceiling = None
     except Exception:
         ceiling = None
-    current = copy_is_current(rec, requested_rank, wants, ceiling)
+    # An Atmos copy of an Atmos-wanting job is current whatever the tier
+    # says; it must not read as a below-minimum stereo copy. It still goes
+    # through the untagged-copy retry below.
+    if retains_below_minimum(
+        duplicate_policy,
+        quality_strategy,
+        int((rec or {}).get("quality_rank", -1)),
+        requested_rank,
+    ):
+        # Checked before copy_is_current: a ceiling-capped, settled-degraded or
+        # Atmos copy below the requested minimum is reported retained, never
+        # skipped as current.
+        return "retain", rec
+    atmos_current = bool(wants and record_is_atmos(rec))
+    current = atmos_current or copy_is_current(rec, requested_rank, wants, ceiling)
     if current:
         # A tag write that failed leaves an owned but untagged file: retry
         # tagging instead of skipping forever. Unreadable stays skipped.
@@ -2033,10 +2109,19 @@ def deliver_track(
     force: bool,
     owned_path: str | None,
     job_abort,
+    owned_digest: str = "",
+    owned_rank: int = -1,
     signals=None,
     options: _JobOptions | None = None,
     qid: int = 0,
     redownload: bool = False,
+    duplicate_policy: str = "keep_existing",
+    quality_strategy: str = "best_available",
+    metadata_source: str = "origin",
+    organization_source: str = "origin",
+    origin_facts: dict | None = None,
+    origin_consistent: bool = False,
+    upgrade_plan: UpgradePlan | None = None,
 ) -> dict:
     """Fetch, verify, place, tag and sidecar one Apple track.
 
@@ -2058,6 +2143,23 @@ def deliver_track(
     raw_id = track_id.removeprefix(f"{CTX_APPLE}:")
     raw = provider.get_object("track", raw_id)
     facts = provider.track_facts(raw)
+    resolved_facts = resolve_track_facts(
+        facts,
+        origin_facts,
+        metadata_source,
+        origin_consistent,
+        delivered_title=str(row.get("title") or ""),
+    )
+    # The folder is organized by the organization source, not the metadata
+    # source: resolve the path facts on their own axis.
+    organization_facts = resolve_track_facts(
+        facts,
+        origin_facts,
+        organization_source,
+        origin_consistent,
+        delivered_title=str(row.get("title") or ""),
+    )
+    path_values = path_facts(organization_facts) if organization_source == "origin" and origin_facts else None
     relative = track_relative(
         hooks,
         row,
@@ -2068,9 +2170,12 @@ def deliver_track(
         list_total,
         num_volumes,
         facts_isrc=str(facts.get("isrc") or ""),
+        quality=str(getattr(requested_tier, "value", requested_tier) or ""),
+        audio_type=str(getattr(audio_type, "value", audio_type) or ""),
+        facts=path_values,
     )
     data = hooks.settings().data
-    skip_existing = job_skip_existing(hooks, qid)
+    skip_existing = duplicate_policy == "keep_existing"
     base = pathlib.Path(str(data.download_base_path)).expanduser()
     # Lossless stereo lands as FLAC; the true extension is
     # only known after the fetch, so guess here and correct per attempt
@@ -2121,18 +2226,86 @@ def deliver_track(
     # That copy under the template's spelling of the folder, so every file this
     # job lands shares one spelling (the collection playlist groups by folder).
     owned_dest = exact.parent / pathlib.Path(str(owned_path)).name if owned_here else None
-    if force:
+    upgrade_target = bool(upgrade_plan) and upgrade_plan.delivered_media_id == track_id
+    # Only Replace reads the digest; hashing a copy for other policies is wasted
+    # work on every track.
+    recorded_unchanged = duplicate_policy == "replace_owned" and bool(
+        owned_path and owned_digest and digest_matches(owned_digest, owned_path)
+    )
+
+    def _replaceable(path: pathlib.Path) -> bool:
+        return bool(
+            recorded_unchanged
+            and owned_path
+            and path == pathlib.Path(owned_path)
+            and occupant_is_own(path, {track_id}, version_hint)
+        )
+
+    def _keep_both_or_free() -> pathlib.Path:
+        candidate = keep_both_name(
+            exact,
+            provider="Apple Music",
+            quality=str(getattr(requested_tier, "value", requested_tier) or ""),
+            audio_type=str(getattr(audio_type, "value", audio_type) or ""),
+        )
+        return candidate or pick_destination(base, relative, guess_ext_value)
+
+    def _existing_for(path: pathlib.Path, *, rank: int = -1) -> ExistingCopy | None:
+        if not path.exists():
+            return None
+        return ExistingCopy(
+            path=str(path),
+            owned=_replaceable(path),
+            same_item=occupant_is_own(path, {track_id}, version_hint),
+            same_version=occupant_is_version(path, version_hint),
+            unchanged=(recorded_unchanged if owned_path and path == pathlib.Path(str(owned_path)) else None),
+            # Keep existing has always skipped this track's own copy (tagged
+            # or untagged) without a fetch; only another track's file is a
+            # collision to step around.
+            current=(occupant_is_own(path, {track_id}, version_hint) if duplicate_policy == "keep_existing" else False),
+            minimum_met=rank >= requested_rank if rank >= 0 else True,
+        )
+
+    def _placement(path: pathlib.Path, *, rank: int = -1):
+        return decide_placement(
+            duplicate_policy,
+            _existing_for(path, rank=rank),
+            minimum_required=quality_strategy == "minimum_required",
+        )
+
+    protected_reason = ""
+    if upgrade_target:
+        dest = pathlib.Path(upgrade_plan.origin_path)
+    elif force:
         dest = exact
-    elif owned_dest is not None:
+    elif (duplicate_policy == "refresh_own" and owned_dest is not None) or (
+        duplicate_policy == "replace_owned" and owned_dest is not None and recorded_unchanged
+    ):
         dest = owned_dest
-    elif exact.exists() and occupant_is_own(exact, {track_id}, version_hint):
-        if skip_existing:
-            raise _AppleSkipped()
-        # "Skip existing" off fetches again and replaces this track's own copy
-        # in place (the placement re-proves it), never a numbered duplicate.
-        dest = exact
     else:
-        dest = pick_destination(base, relative, guess_ext_value)
+        candidate = owned_dest if owned_dest is not None else exact
+        decision = _placement(candidate, rank=owned_rank if owned_dest == candidate else -1)
+        if decision.action == "retain":
+            raise _AppleRetained(decision.reason or RETAINED_REASON)
+        if decision.action == "skip":
+            raise _AppleSkipped()
+        if decision.action == "replace":
+            dest = candidate
+        elif decision.action == "keep_both":
+            dest = (
+                keep_both_name(
+                    candidate,
+                    provider="Apple Music",
+                    quality=str(getattr(requested_tier, "value", requested_tier) or ""),
+                    audio_type=str(getattr(audio_type, "value", audio_type) or ""),
+                )
+                or pick_destination(base, relative, guess_ext_value)
+                if decision.readable_suffix
+                else pick_destination(base, relative, guess_ext_value)
+            )
+            protected_reason = decision.reason
+        else:
+            dest = candidate
     attempt = 0
     last_encoded: str | None = None
     last_staged: pathlib.Path | None = None
@@ -2224,6 +2397,29 @@ def deliver_track(
                 return owned_identity is not None and _file_identity(path_occupied) == owned_identity
 
             exact_true = base / f"{relative}{want_ext}"
+            delivered_info = getattr(info, "delivered", None) or {}
+            delivered_tier_word = str(
+                delivered_info.get("tier") or getattr(requested_tier, "value", requested_tier) or ""
+            )
+            delivered_type_word = str(
+                delivered_info.get("audio_type") or getattr(audio_type, "value", audio_type) or ""
+            )
+            if (
+                not force
+                and not upgrade_target
+                and dest != exact
+                and (protected_reason or duplicate_policy == "keep_both")
+            ):
+                # The pre-stream name was chosen before the delivery facts
+                # were known; name the copy after what was actually delivered.
+                renamed = keep_both_name(
+                    exact,
+                    provider="Apple Music",
+                    quality=delivered_tier_word,
+                    audio_type=delivered_type_word,
+                )
+                if renamed is not None:
+                    dest = renamed
             if force:
                 # Replace the copy THIS track owns, not whatever holds the
                 # template path: two distinct tracks can render to one relative
@@ -2247,17 +2443,31 @@ def deliver_track(
                 else:
                     dest = pick_destination(base, relative, want_ext)
                 dest.parent.mkdir(parents=True, exist_ok=True)
-            elif dest.suffix != want_ext:
-                # Same Version-and-id gate as the pre-stream skip, with the
-                # stream's own answer (known by now): a file of the OTHER
-                # Version, or of a different track, at this name is not this
-                # fetch's copy.
-                if exact_true.exists() and occupant_is_own(exact_true, {track_id}, delivered_version):
-                    if skip_existing:
-                        raise _AppleSkipped()  # noqa: TRY301
+            elif not upgrade_target and dest.suffix != want_ext:
+                # The guess missed: re-ask the SAME policy at the true
+                # extension. Keep both keeps its readable suffix, Replace
+                # still needs the digest proof, and a free corrected name is
+                # not reported as protected.
+                decision = _placement(exact_true)
+                if decision.action == "retain":
+                    raise _AppleRetained(decision.reason or RETAINED_REASON)  # noqa: TRY301
+                if decision.action == "skip":
+                    raise _AppleSkipped()  # noqa: TRY301
+                if decision.action == "replace":
                     dest = exact_true
+                elif decision.action == "keep_both":
+                    if decision.readable_suffix:
+                        dest = keep_both_name(
+                            exact_true,
+                            provider="Apple Music",
+                            quality=delivered_tier_word,
+                            audio_type=delivered_type_word,
+                        ) or pick_destination(base, relative, want_ext)
+                    else:
+                        dest = pick_destination(base, relative, want_ext)
+                    protected_reason = decision.reason
                 else:
-                    dest = pick_destination(base, relative, want_ext)
+                    dest = exact_true
             verify_staged(hooks, staged, expect_atmos=atmos, verified_probe=carried_probe)
             if job_abort.is_set():
                 raise _AppleAborted()  # noqa: TRY301
@@ -2274,7 +2484,85 @@ def deliver_track(
             # must not be replaced (DL-03). Every placement, an explicit
             # REDOWNLOAD's included, replaces only an own copy proven at the
             # swap and otherwise steps aside to a numbered name.
-            try:
+            replaced: dict | None = None
+            if quality_strategy == "minimum_required" and requested_tier is not None:
+                delivered_tier = (getattr(info, "delivered", None) or {}).get("tier")
+                if quality_rank(delivered_tier) < quality_rank(requested_tier):
+                    # Retain only a copy this delivery would replace: this
+                    # track's own copy at the resolved name, or under Keep
+                    # existing any file at the name. Another track's file
+                    # under Keep both or Replace is not retained here.
+                    kept_own = owned_dest is not None and owned_dest.exists() and duplicate_policy != "keep_both"
+                    kept_any = duplicate_policy == "keep_existing" and exact.exists()
+                    if kept_own or kept_any:
+                        _drop_hold()
+                        raise _AppleRetained(RETAINED_REASON)  # noqa: TRY301 - caller reports retained
+            if upgrade_target:
+                delivered_facts = DeliveryFacts(
+                    tier=tier_from_word((getattr(info, "delivered", None) or {}).get("tier")),
+                    audio_type=str((getattr(info, "delivered", None) or {}).get("audio_type") or version_hint or ""),
+                    codec=str(getattr(info, "codecs", "") or ""),
+                    bit_depth=(getattr(info, "delivered", None) or {}).get("bit_depth"),
+                    sample_rate=(getattr(info, "delivered", None) or {}).get("sample_rate"),
+                )
+                if not digest_matches(upgrade_plan.origin_digest, upgrade_plan.origin_path) or not upgrade_eligible(
+                    upgrade_plan, delivered_facts
+                ):
+                    _drop_hold()
+                    raise _AppleRetained(UPGRADE_RETAINED_REASON)  # noqa: TRY301 - caller reports retained
+                record_replacement = hooks.record_replacement
+                if record_replacement is None:
+                    _drop_hold()
+                    raise _AppleRetained(UPGRADE_RETAINED_REASON)  # noqa: TRY301 - caller reports retained
+                if check_file_exists(pathlib.Path(upgrade_plan.origin_path)):
+                    try:
+                        carry_over_tags(upgrade_plan.origin_path, staged, strict=True)
+                    except Exception:
+                        _drop_hold()
+                        raise _AppleRetained(CARRY_OVER_FAILED_REASON) from None
+                result = commit_upgrade(
+                    staged,
+                    upgrade_plan,
+                    delivered_facts,
+                    place=lambda staged_path, final: place_file(
+                        staged_path,
+                        final,
+                        occupant_is_own=lambda occupant: digest_matches(upgrade_plan.origin_digest, occupant),
+                    ),
+                    record=lambda final, facts=delivered_facts, record_fn=record_replacement: record_fn(
+                        upgrade_plan.origin_id,
+                        upgrade_plan.origin_path,
+                        track_id,
+                        str(final),
+                        str(getattr(facts.tier, "value", facts.tier) or "") or None,
+                        audio_type=facts.audio_type or version_hint or None,
+                        bit_depth=facts.bit_depth,
+                        sample_rate=facts.sample_rate,
+                        codecs=facts.codec,
+                        audio_digest=audio_digest(final),
+                    ),
+                    final_suffix=want_ext,
+                )
+                if not result.ok or result.path is None:
+                    _drop_hold()
+                    raise _AppleRetained(UPGRADE_RETAINED_REASON)  # noqa: TRY301 - caller reports retained
+                dest = result.path
+                replaced = {"origin_id": upgrade_plan.origin_id, "origin_path": upgrade_plan.origin_path}
+                placed = True
+            else:
+                if dest.exists():
+                    own_target = (
+                        (owned_dest is not None and dest == owned_dest)
+                        or (bool(owned_path) and dest == pathlib.Path(str(owned_path)))
+                        or (recorded is not None and dest == recorded)
+                        or (force and dest == exact and occupant_is_own(dest, {track_id}, version_hint))
+                    )
+                    if own_target:
+                        try:
+                            carry_over_tags(dest, staged, strict=True)
+                        except Exception:
+                            _drop_hold()
+                            raise _AppleRetained(CARRY_OVER_FAILED_REASON) from None
                 placed = place_file(
                     staged,
                     dest,
@@ -2288,10 +2576,9 @@ def deliver_track(
                 if not placed:
                     dest = pick_destination(base, relative, want_ext)
                     placed = place_file(staged, dest, occupant_is_own=_occupant_is_this_items_own)
-            finally:
-                if flac_tmpdir is not None:
-                    with contextlib.suppress(OSError):
-                        shutil.rmtree(flac_tmpdir, ignore_errors=True)
+            if flac_tmpdir is not None:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(flac_tmpdir, ignore_errors=True)
             if not placed:
                 # A writer that keeps taking every name the item is offered:
                 # nothing may replace it, so the item fails with the move's
@@ -2502,10 +2789,10 @@ def deliver_track(
     # The source-URL tag honors its preference like the TIDAL path: off
     # means no catalog URL lands in the file. Nothing past the tag call
     # reads facts, so the scrubbed copy stays local to it.
-    tag_facts = facts_without_share_url(data, facts)
+    tag_facts = facts_without_share_url(data, resolved_facts)
     tag_ok = tag_apple_file(
         dest,
-        title=str(row.get("title") or ""),
+        title=str(resolved_facts.get("title") or row.get("title") or ""),
         facts=tag_facts,
         lyrics_synced=lyrics_synced if embed_lyrics else "",
         lyrics_unsynced=lyrics_unsynced if embed_lyrics else "",
@@ -2590,6 +2877,9 @@ def deliver_track(
     return {
         "path": str(dest),
         "tagged": bool(tag_ok),
+        "status": "protected" if protected_reason else "done",
+        **({"reason": protected_reason} if protected_reason else {}),
+        **({"replaced": replaced} if replaced else {}),
         "quality": {
             "tier": tier,
             "audio_mode": "DOLBY_ATMOS" if atmos else "STEREO",
@@ -2648,7 +2938,16 @@ def run_apple_job(
     if job_version not in ("stereo", "atmos"):
         job_version = "stereo"
     ask_tier = hooks.job_quality(qid)
-    skip_existing = job_skip_existing(hooks, qid)
+    duplicate_policy = str(hooks.job_duplicate_policy(qid) or "")
+    if not duplicate_policy:
+        # A job without a captured intent keeps the legacy toggle's meaning.
+        duplicate_policy = "keep_existing" if job_skip_existing(hooks, qid) else "refresh_own"
+    quality_strategy = str(hooks.job_quality_strategy(qid) or "best_available")
+    metadata_source = str(hooks.job_metadata_source(qid) or "origin")
+    organization_source = str(hooks.job_organization_source(qid) or "origin")
+    origin_facts = hooks.job_origin_facts(qid) or {}
+    origin_consistent = bool(hooks.job_origin_consistent(qid))
+    upgrade_plan = hooks.job_upgrade(qid)
     requested_rank = target_rank(hooks, ask_tier)
     if ask_tier is None:
         # A row that pinned nothing (legacy or unreadable) fetches at the
@@ -2708,6 +3007,7 @@ def run_apple_job(
             return " (already downloaded)"
     num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
     ok = fail = skipped = unavailable = quarantined = 0
+    retained = protected = 0
     last_failure: Failure | None = None
     failed_names: list[str] = []
     landed: list = []
@@ -2784,16 +3084,32 @@ def run_apple_job(
                 "expected": expected_word,
             }
         )
-        verdict, gate_rec = gate_track(hooks, provider, track_id, requested_rank, force, audio_type=job_atype)
-        if not skip_existing and not force:
-            # With "Skip existing" off nothing owned skips: the track fetches
+        gate_kwargs = {}
+        if duplicate_policy != "keep_existing" or quality_strategy != "best_available":
+            gate_kwargs = {"duplicate_policy": duplicate_policy, "quality_strategy": quality_strategy}
+        verdict, gate_rec = gate_track(
+            hooks,
+            provider,
+            track_id,
+            requested_rank,
+            force,
+            audio_type=job_atype,
+            **gate_kwargs,
+        )
+        if duplicate_policy != "keep_existing" and not force:
+            # Replace / Keep both / refresh-own never skip: the track fetches
             # whatever the ledger holds. The record still tells the placement
-            # where this track's own copy sits, so one in this job's folder is
-            # replaced instead of numbered beside.
+            # where this track's own copy sits.
             verdict = None
         if verdict == "skip":
             skipped += 1
             signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
+            emit_progress(signals, collection, pos, total, media_id, qid)
+            continue
+        if verdict == "retain":
+            skipped += 1
+            retained += 1
+            signals.track_event.emit({"id": track_id, "status": "retained", "owned": "own", "reason": RETAINED_REASON})
             emit_progress(signals, collection, pos, total, media_id, qid)
             continue
         # Integrity skip-list (spec §6.3): bulk runs auto-skip quarantined
@@ -2832,6 +3148,8 @@ def run_apple_job(
         # copy and the old file would stay behind.
         track_force = force or verdict == "force"
         owned_path = str((gate_rec or {}).get("path") or "") or None
+        owned_digest = str((gate_rec or {}).get("audio_digest") or "")
+        owned_rank = int((gate_rec or {}).get("quality_rank", -1))
         attempts = 0
         credential_holds = 0
         try:
@@ -2854,11 +3172,20 @@ def run_apple_job(
                         ceiling_rank=ceiling_rank,
                         force=track_force,
                         owned_path=owned_path,
+                        owned_digest=owned_digest,
+                        owned_rank=owned_rank,
                         job_abort=job_abort,
                         signals=signals,
                         options=options,
                         qid=qid,
                         redownload=force,
+                        duplicate_policy=duplicate_policy,
+                        quality_strategy=quality_strategy,
+                        metadata_source=metadata_source,
+                        organization_source=organization_source,
+                        origin_facts=origin_facts,
+                        origin_consistent=origin_consistent,
+                        upgrade_plan=upgrade_plan,
                     )
                     break
                 except Exception as exc:
@@ -2954,6 +3281,14 @@ def run_apple_job(
             logger.info("Apple track unavailable: %s", exc)
             emit_progress(signals, collection, pos, total, media_id, qid)
             continue
+        except _AppleRetained as exc:
+            skipped += 1
+            retained += 1
+            signals.track_event.emit(
+                {"id": track_id, "status": "retained", "owned": "own", "reason": str(exc.reason or RETAINED_REASON)}
+            )
+            emit_progress(signals, collection, pos, total, media_id, qid)
+            continue
         except _AppleSkipped:
             skipped += 1
             signals.track_event.emit({"id": track_id, "status": "skipped"})
@@ -2992,6 +3327,8 @@ def run_apple_job(
             emit_progress(signals, collection, pos, total, media_id, qid)
             continue
         ok += 1
+        if str(delivered.get("status") or "done") == "protected":
+            protected += 1
         landed.append(pathlib.Path(delivered["path"]))
         # A landed track proves the credential its own fetch needed, and only
         # that one: an ALAC landing cannot report a cookies-broken export
@@ -3012,16 +3349,22 @@ def run_apple_job(
         except Exception:
             logger.debug("Could not clear the Apple skip-list", exc_info=True)
         tagged = bool(delivered.get("tagged", True))
-        signals.track_event.emit(
-            {
-                "id": track_id,
-                "status": "done",
-                "path": delivered["path"],
-                "quality": delivered["quality"],
-                "tagged": tagged,
-                **({} if tagged else {"reason": "saved, tags failed"}),
-            }
-        )
+        status = str(delivered.get("status") or "done")
+        event = {
+            "id": track_id,
+            "status": status,
+            "path": delivered["path"],
+            "quality": delivered["quality"],
+            "tagged": tagged,
+        }
+        if delivered.get("reason"):
+            event["reason"] = str(delivered["reason"])
+        elif not tagged:
+            event["reason"] = "saved, tags failed"
+        if delivered.get("replaced"):
+            event["replaced"] = delivered["replaced"]
+            event["recorded"] = True
+        signals.track_event.emit(event)
         emit_progress(signals, collection, pos, total, media_id, qid)
     if revoked:
         # A revoked context publishes nothing more, playlist included: the
@@ -3055,7 +3398,7 @@ def run_apple_job(
     # relay exactly once.
     if total == 1 and not collection:
         if ok or skipped:
-            return "" if ok else " (already downloaded)"
+            return ("" if ok else " (already downloaded)") + _kept_note(retained, protected)
         if unavailable:
             raise _AppleJobIncomplete(
                 "not available on Apple Music anymore",
@@ -3096,8 +3439,8 @@ def run_apple_job(
             ),
         )
     if skipped and not ok:
-        return " (already downloaded)"
-    return ""
+        return " (already downloaded)" + _kept_note(retained, protected)
+    return _kept_note(retained, protected)
 
 
 def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:

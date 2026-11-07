@@ -156,3 +156,21 @@ def test_a_single_real_write_keeps_the_job_green():
         dl.item(media=_media())
     assert dl.write_count == 1
     assert _incomplete_predicate(dl) is False
+
+
+def test_a_post_stream_retained_copy_counts_as_kept(tmp_path):
+    """The engine can retain after the stream (below the minimum, a failed
+    carry-over, an unproven upgrade). That path must feed the same kept tally
+    the pre-fetch gate feeds, or the job settles as a plain success."""
+    dl, relay = _make_tracked()
+
+    def retained(self, *args, **kwargs):
+        dl._tls.outcome = ("retained", "below the requested minimum")
+        return True, str(tmp_path / "song.flac")
+
+    with patch.object(Download, "item", retained):
+        ok, _ = dl.item(media=_media())
+
+    assert ok is True
+    assert dl.retained_count == 1
+    assert _statuses(relay)[-1] == "retained"

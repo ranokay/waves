@@ -46,8 +46,10 @@ LEDGER = [
     ("5", "Underdog", "skipped"),
     ("6", "3 Hour Drive", "unavailable"),
     ("7", "Show Me Love", "failed"),
+    ("8", "Kept Copy", "retained"),
+    ("9", "Protected Copy", "protected"),
 ]
-WANT = "COMPLETED | UNAVAILABLE | COMPLETED | UNAVAILABLE | IN LIBRARY | UNAVAILABLE | FAILED"
+WANT = "COMPLETED | UNAVAILABLE | COMPLETED | UNAVAILABLE | IN LIBRARY | UNAVAILABLE | FAILED | KEPT | KEPT BOTH"
 
 
 @pytest.mark.qml
@@ -176,6 +178,11 @@ def _run_scenario() -> int:
         bad.append(f"UNAVAILABLE is painted the same as FAILED ({colors!r})")
     if seen.get("UNAVAILABLE") == seen.get("COMPLETED"):
         bad.append(f"UNAVAILABLE is painted the same as COMPLETED ({colors!r})")
+    bad.extend(
+        f"{kept} is missing or painted like FAILED ({colors!r})"
+        for kept in ("KEPT", "KEPT BOTH")
+        if seen.get(kept) is None or seen.get(kept) == seen.get("FAILED")
+    )
 
     # 3. A refused track is settled, not still pending: a row left at zero reads
     #    as work in flight for the rest of the job and stalls the album's bar.

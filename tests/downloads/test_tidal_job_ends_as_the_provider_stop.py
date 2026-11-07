@@ -207,3 +207,34 @@ def test_a_tidal_job_nobody_stopped_still_finishes():
     assert stub.downloadState.emits[-1] == ("m1", "done")
     assert stub.statuses[-1].startswith("Finished Track")
     assert stub._redownload_overrides == stub._library_claim_overrides == set()
+
+
+class _CollectionDownload:
+    """An album run whose counters say two tracks landed and two were kept."""
+
+    path_base = ""
+    unavailable_count = 0
+    list_unavailable = False
+    list_item_count = 2
+    write_count = ok_count = 2
+    fail_count = 0
+    retained_count = 1
+    protected_count = 1
+
+    def __init__(self, stub) -> None:
+        self.settings = stub.settings
+
+    def items(self, **kwargs) -> None:
+        return None
+
+
+def test_an_album_status_line_names_kept_and_kept_both():
+    stub = _Stub("nowhere")
+    stub.dl = _CollectionDownload(stub)
+    stub._queue[0].update({"type": "album", "name": "Album"})
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", None)
+
+    with patch.object(backend, "_ProgressSignals", return_value=object()):
+        WavesBridge._start_job(stub, 1, spec)
+
+    assert stub.statuses[-1] == "Finished Album (1 track kept, 1 track kept both)"

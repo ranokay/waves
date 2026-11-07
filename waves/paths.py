@@ -244,6 +244,7 @@ _TEMPLATE_TOKENS: frozenset[str] = frozenset(
         "album_track_num",
         "album_year",
         "artist_name",
+        "audio_type",
         "artist_name_primary",
         "isrc",
         "list_pos",
@@ -254,6 +255,7 @@ _TEMPLATE_TOKENS: frozenset[str] = frozenset(
         "playlist_id",
         "playlist_name",
         "provider_name",
+        "quality",
         "track_artist_id",
         "track_duration_minutes",
         "track_duration_seconds",
@@ -506,6 +508,9 @@ def format_path_media(
     illegal_replacement: str = "",
     illegal_map: dict[str, str] | None = None,
     provider_name: str = "",
+    quality: str = "",
+    audio_type: str = "",
+    facts: dict[str, str] | None = None,
 ) -> str:
     """Formats a media path string using a template and media attributes.
 
@@ -546,17 +551,26 @@ def format_path_media(
 
     for _matchNum, match in enumerate(matches, start=1):
         template_str = match.group()
-        result_fmt = format_str_media(
-            match.group(1),
-            media,
-            album_track_num_pad_min,
-            list_pos,
-            list_total,
-            delimiter_artist=delimiter_artist,
-            delimiter_album_artist=delimiter_album_artist,
-            use_primary_album_artist=use_primary_album_artist,
-            provider_name=provider_name,
-        )
+        token = match.group(1)
+        if facts is not None and token in facts:
+            # A provenance overlay: the token's value comes from the origin
+            # facts instead of the delivered media object. Empty is a real
+            # value (the segment collapses), never "not my token".
+            result_fmt = str(facts[token] or "")
+        else:
+            result_fmt = format_str_media(
+                token,
+                media,
+                album_track_num_pad_min,
+                list_pos,
+                list_total,
+                delimiter_artist=delimiter_artist,
+                delimiter_album_artist=delimiter_album_artist,
+                use_primary_album_artist=use_primary_album_artist,
+                provider_name=provider_name,
+                quality=quality,
+                audio_type=audio_type,
+            )
 
         if result_fmt != match.group(1):
             # Sanitize here, in case of the filename has slashes or something, which will be recognized later as a directory separator.
@@ -623,6 +637,8 @@ def format_str_media(
     delimiter_album_artist: str = ", ",
     use_primary_album_artist: bool = False,
     provider_name: str = "",
+    quality: str = "",
+    audio_type: str = "",
 ) -> str:
     """Formats a string for media attributes based on the provided name.
 
@@ -667,6 +683,8 @@ def format_str_media(
                 delimiter_album_artist=delimiter_album_artist,
                 use_primary_album_artist=use_primary_album_artist,
                 provider_name=provider_name,
+                quality=quality,
+                audio_type=audio_type,
             )
             if result is not None:
                 return result
@@ -682,17 +700,27 @@ def format_str_media(
 
 
 def _format_provider(
-    name: str, media: Track | Album | Playlist | UserPlaylist | Video | Mix, *_args, provider_name: str = "", **kwargs
+    name: str,
+    media: Track | Album | Playlist | UserPlaylist | Video | Mix,
+    *_args,
+    provider_name: str = "",
+    quality: str = "",
+    audio_type: str = "",
+    **kwargs,
 ) -> str | None:
-    """Handle the provider-separation token.
+    """Handle the delivery-provenance tokens.
 
     Returns "" (my token, empty value) rather than None ("not my token")
-    when the name asks but no provider was passed, so the segment collapses
-    away instead of leaving a literal {provider_name} in the folder name
-    (the {isrc} token's contract).
+    when the name asks but no value was passed, so the segment collapses
+    away instead of leaving a literal token in the folder name (the {isrc}
+    token's contract).
     """
     if name == "provider_name":
         return provider_name or ""
+    if name == "quality":
+        return quality or ""
+    if name == "audio_type":
+        return audio_type or ""
     return None
 
 

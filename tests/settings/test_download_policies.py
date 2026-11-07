@@ -3,6 +3,7 @@
 import json
 from dataclasses import FrozenInstanceError, replace
 from threading import Event, Lock
+from types import MethodType
 
 import pytest
 from providers.apple.test_apple_engine_routing import FakeEngine, audio
@@ -20,6 +21,36 @@ def capture(data, **changes):
     return capture_intent(
         data, "apple", "album", "apple:album-1", tier="LOSSLESS", audio_type=None, toggles={}, **changes
     )
+
+
+def test_skip_existing_off_captures_the_internal_refresh_own_value():
+    data = Settings(skip_existing=False)
+
+    intent = capture(data)
+
+    assert intent.policy.duplicates == "refresh_own"
+
+
+def test_an_explicit_duplicate_choice_wins_over_the_skip_existing_toggle():
+    data = Settings(skip_existing=False)
+    data.download_policies = apply_policy_edit(
+        data.download_policies, "download_policies.shared.duplicates", "keep_both"
+    )
+
+    intent = capture(data)
+
+    assert intent.policy.duplicates == "keep_both"
+
+
+def test_a_later_policy_edit_does_not_change_a_captured_intent():
+    data = Settings(skip_existing=False)
+    old = capture(data)
+    data.skip_existing = True
+    data.download_policies = apply_policy_edit(
+        data.download_policies, "download_policies.shared.duplicates", "replace_owned"
+    )
+
+    assert old.policy.duplicates == "refresh_own"
 
 
 def test_provider_overrides_inherit_and_can_return_to_shared_rules():
@@ -213,7 +244,7 @@ def test_real_enqueue_and_retry_keep_original_single_audio_row_and_full_intent(m
 
     preferences = {"library_enabled": False, "library_bulk_skip": True}
     bridge._waves_pref_bool = lambda key: preferences.get(key, False)
-    bridge._library_bulk_skip_on = LibraryMixin._library_bulk_skip_on.__get__(bridge)
+    bridge._library_bulk_skip_on = MethodType(LibraryMixin._library_bulk_skip_on, bridge)
     bridge._skip_existing_on = lambda: True  # "Skip existing" on, its default
     obj = _track()
     assert bridge._download(obj, "track", "Song", "Original/{track_title}", False, "t1")
@@ -508,3 +539,19 @@ def test_saved_explicit_engine_selection_stays_pinned_after_defaults_change(tmp_
             EnginePolicy(intent.engine_priority, intent.engine_pin, intent.same_provider_fallback),
             EngineFacts(),
         )
+
+
+def test_the_default_duplicate_label_only_says_it_follows_skip_existing():
+    from waves.desktop.settings.download_policy import policy_fields
+
+    rows = policy_fields(Settings().download_policies)
+    row = next(r for r in rows if r["key"] == "download_policies.shared.duplicates")
+    labels = {option["value"]: option["label"] for option in row["options"]}
+
+    assert labels[""] == "Follow Skip existing"
+
+
+def test_a_saved_refresh_own_is_dropped_so_it_cannot_override_skip_existing():
+    policies = decode_policies({"shared": {"duplicates": "refresh_own"}})
+
+    assert policies.shared.duplicates == ""

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pathlib
 from threading import Event, Lock, local
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from support.bridge_stub import BridgeStub
@@ -72,7 +72,7 @@ class _LifecycleStub(BridgeStub):
         self.queueTrackState = _Signal()
         self._emit_queue = lambda: None
         for name in ("_track_lifecycle", "_queue_item", "_queue_mark_changed"):
-            setattr(self, name, getattr(backend.WavesBridge, name).__get__(self, _LifecycleStub))
+            setattr(self, name, MethodType(getattr(backend.WavesBridge, name), self))
 
 
 def test_note_stage_emits_running_with_fraction():
@@ -250,3 +250,64 @@ def test_delivery_is_announced_before_the_post_processing_delay(tmp_path):
 
 def test_a_failed_download_is_never_announced_delivered(tmp_path):
     assert _run_item(tmp_path, success=False) == ["download", "post"]
+
+
+def test_retained_and_protected_rows_are_settled_outcomes():
+    """The two duplicate-policy outcomes reach the row the drawer reads.
+
+    ``test_queue_unavailable_word.py`` drives the real drawer and asserts the
+    rendered KEPT and KEPT BOTH words.
+    """
+    b = _LifecycleStub()
+    b._own_pool = SimpleNamespace(start=lambda _worker: None)
+
+    b._track_lifecycle(1, {"id": "9", "status": "retained", "reason": "below the minimum"})
+    b._track_lifecycle(1, {"id": "10", "status": "protected", "reason": "not a proven own copy"})
+
+    assert b._jobs.tracks[1]["9"]["status"] == "retained"
+    assert b._jobs.tracks[1]["9"]["reason"] == "below the minimum"
+    assert b._jobs.tracks[1]["10"]["status"] == "protected"
+    assert b._jobs.tracks[1]["10"]["reason"] == "not a proven own copy"
+
+
+def test_an_upgrade_refreshes_both_ids_and_clears_the_origin_cache(tmp_path):
+    """The engine committed the replacement; the bridge still has to flip the
+    origin and delivering buttons and refresh the library badge."""
+    b = _LifecycleStub()
+    b._own_pool = SimpleNamespace(start=lambda worker: worker.run())
+    b._own_cache = {
+        "tidal:1": (0.0, {}),
+        "tidal:1|stereo": (0.0, {}),
+        "tidal:1|atmos": (0.0, {}),
+    }
+    b._own_lock = Lock()
+    b._evict_own_cache_locked = lambda: None
+    b._note_download_base_ok = lambda _base: None
+    b._record_ownership = MethodType(backend.WavesBridge._record_ownership, b)
+    record_calls = []
+    b._ownership = SimpleNamespace(record=lambda *_a, **_k: record_calls.append((_a, _k)))
+    b.settings = SimpleNamespace(data=SimpleNamespace(symlink_to_track=False, download_base_path=str(tmp_path)))
+    b.ownershipChanged = _Signal()
+    b._downloadRecorded = _Signal()
+    path = tmp_path / "Song.ogg"
+    path.write_bytes(b"new bytes")
+
+    b._track_lifecycle(
+        1,
+        {
+            "id": "apple:42",
+            "status": "done",
+            "path": str(path),
+            "quality": {"tier": "LOSSLESS", "audio_type": "stereo"},
+            "replaced": {"origin_id": "tidal:1", "origin_path": str(tmp_path / "old.ogg")},
+            "recorded": True,
+        },
+    )
+
+    assert "tidal:1" not in b._own_cache
+    assert "tidal:1|stereo" not in b._own_cache
+    assert "tidal:1|atmos" not in b._own_cache
+    assert "apple:42" in b._own_cache
+    assert [call[0] for call in b.ownershipChanged.calls] == ["tidal:1", "apple:42"]
+    assert b._downloadRecorded.calls
+    assert not record_calls

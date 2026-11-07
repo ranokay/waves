@@ -1,6 +1,6 @@
 # 0011: fulfillment follows captured intent and evidenced catalog offers
 
-- Status: accepted; persisted policies, queued intent and catalog identity implemented, cross-provider fulfillment planned
+- Status: accepted; persisted policies, queued intent, catalog identity, provenance, duplicate handling and the Chooser-only cross-provider Version upgrade implemented; automatic provider selection/recovery and main-button cross-provider routing remain planned (#595)
 - Decided: 2026-10-03
 - Scope: request policy, identity, collections, files and asset provenance
 
@@ -127,3 +127,23 @@ keep consent specific to the operation.
   verified finished work through recovery.
 - The Chooser follows [ADR 0012](0012-composable-provider-surfaces.md); failures,
   substitutions and incomplete results follow [ADR 0013](0013-redacted-event-lifecycle.md).
+- Descriptive provenance defaults to the origin; a missing origin field is
+  filled from the delivered item only for a consistent match. Catalog ids,
+  ISRC/UPC, codec, quality and delivery provenance always describe the file
+  actually written.
+- Duplicate handling is one captured policy per batch: Keep existing (default),
+  Replace Waves-owned, or Keep both. Replace and the opt-in upgrade touch only
+  a confidently Waves-owned copy whose tag-independent audio digest still
+  matches; unowned, uncertain and externally modified files are protected and
+  reported. Skip existing off keeps its historical identity answer as the
+  internal `refresh_own` value. A replacement carries the user's own tags.
+- The cross-provider upgrade is reachable from the Chooser only, for a track
+  offer whose matched origin Version is owned, unchanged and demonstrably
+  improved by the probed delivery. The delivered file verifies the improvement
+  before the commit; any failure leaves the origin file and its ownership row
+  intact. A main-button scan across providers needs #595's routing and is not
+  part of this flow.
+- A cross-container upgrade lands the delivered extension and removes the
+  superseded origin file only after the new file verifies and the ownership
+  replacement commits. The delivering provider's row then owns the path; the
+  origin provider's row no longer claims it.
