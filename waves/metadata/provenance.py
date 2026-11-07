@@ -60,6 +60,14 @@ def origin_facts(identity: Any) -> dict:
     return {}
 
 
+def _whole_number(value: Any, default: int) -> int:
+    """A track or volume number as an int; an unknown one takes the default."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -157,8 +165,8 @@ def resolve_track_facts(  # noqa: C901 - one field-by-field provenance rule
     album["num_tracks"] = pick(track_count, album.get("num_tracks"))
     # UPC and the remaining technical fields describe the delivered release.
     result["album"] = album
-    result["track_num"] = pick(track.get("track_num"), result.get("track_num"))
-    result["volume_num"] = pick(track.get("volume_num"), result.get("volume_num"))
+    result["track_num"] = _whole_number(pick(track.get("track_num"), result.get("track_num")), 0)
+    result["volume_num"] = _whole_number(pick(track.get("volume_num"), result.get("volume_num")), 1)
     result["release_date"] = pick(track.get("release_date"), result.get("release_date"))
     explicit = track.get("explicit")
     result["explicit"] = explicit if explicit is not None else (result.get("explicit") if consistent else False)

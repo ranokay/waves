@@ -41,7 +41,7 @@ def test_an_explicit_duplicate_choice_wins_over_the_skip_existing_toggle():
     assert intent.policy.duplicates == "keep_both"
 
 
-def test_a_retry_keeps_the_captured_duplicate_policy():
+def test_a_later_policy_edit_does_not_change_a_captured_intent():
     data = Settings(skip_existing=False)
     old = capture(data)
     data.skip_existing = True
@@ -548,3 +548,9 @@ def test_the_default_duplicate_label_only_says_it_follows_skip_existing():
     labels = {option["value"]: option["label"] for option in row["options"]}
 
     assert labels[""] == "Follow Skip existing"
+
+
+def test_a_saved_refresh_own_is_dropped_so_it_cannot_override_skip_existing():
+    policies = decode_policies({"shared": {"duplicates": "refresh_own"}})
+
+    assert policies.shared.duplicates == ""

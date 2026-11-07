@@ -1647,10 +1647,10 @@ def gate_track(
     except Exception:
         ceiling = None
     # An Atmos copy of an Atmos-wanting job is current whatever the tier
-    # says; it must skip, not read as a below-minimum stereo copy.
-    if wants and record_is_atmos(rec):
-        return "skip", rec
-    if retains_below_minimum(
+    # says; it must not read as a below-minimum stereo copy. It still goes
+    # through the untagged-copy retry below.
+    atmos_current = bool(wants and record_is_atmos(rec))
+    if not atmos_current and retains_below_minimum(
         duplicate_policy,
         quality_strategy,
         int((rec or {}).get("quality_rank", -1)),
@@ -1660,7 +1660,7 @@ def gate_track(
         # copy can read current below the requested minimum and must still be
         # reported retained.
         return "retain", rec
-    current = copy_is_current(rec, requested_rank, wants, ceiling)
+    current = atmos_current or copy_is_current(rec, requested_rank, wants, ceiling)
     if current:
         # A tag write that failed leaves an owned but untagged file: retry
         # tagging instead of skipping forever. Unreadable stays skipped.
@@ -2218,7 +2218,11 @@ def deliver_track(
     # job lands shares one spelling (the collection playlist groups by folder).
     owned_dest = exact.parent / pathlib.Path(str(owned_path)).name if owned_here else None
     upgrade_target = bool(upgrade_plan) and upgrade_plan.delivered_media_id == track_id
-    recorded_unchanged = bool(owned_path and owned_digest and digest_matches(owned_digest, owned_path))
+    # Only Replace reads the digest; hashing a copy for other policies is wasted
+    # work on every track.
+    recorded_unchanged = duplicate_policy == "replace_owned" and bool(
+        owned_path and owned_digest and digest_matches(owned_digest, owned_path)
+    )
 
     def _replaceable(path: pathlib.Path) -> bool:
         return bool(
@@ -2475,8 +2479,13 @@ def deliver_track(
             if quality_strategy == "minimum_required" and requested_tier is not None:
                 delivered_tier = (getattr(info, "delivered", None) or {}).get("tier")
                 if quality_rank(delivered_tier) < quality_rank(requested_tier):
-                    existing = owned_dest if owned_dest is not None else exact
-                    if existing.exists():
+                    # Retain only a copy this delivery would replace: this
+                    # track's own copy at the resolved name, or under Keep
+                    # existing any file at the name. Another track's file
+                    # under Keep both or Replace is not retained here.
+                    kept_own = owned_dest is not None and owned_dest.exists()
+                    kept_any = duplicate_policy == "keep_existing" and exact.exists()
+                    if kept_own or kept_any:
                         _drop_hold()
                         raise _AppleRetained(RETAINED_REASON)  # noqa: TRY301 - caller reports retained
             if upgrade_target:

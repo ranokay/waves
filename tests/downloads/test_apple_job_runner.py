@@ -3611,6 +3611,41 @@ def test_apple_keep_both_lands_beside_with_the_readable_suffix(tmp_path, monkeyp
 
 
 @pytest.mark.ffmpeg
+def test_a_below_minimum_delivery_is_not_retained_for_another_tracks_file_under_keep_both(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    original = provider.resolve_stream
+
+    def below_minimum(raw, tier, audio_type):
+        info = original(raw, tier, audio_type)
+        info.delivered["tier"] = QualityTier.LOSSLESS.value
+        return info
+
+    provider.resolve_stream = below_minimum
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_both"
+    hooks.job_quality_strategy = lambda _qid: "minimum_required"
+    hooks.job_quality = lambda _qid: QualityTier.HI_RES_LOSSLESS
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert "kept" not in summary
+    assert len(list(base.rglob("*.m4a"))) == 2
+
+
+@pytest.mark.ffmpeg
 def test_apple_replace_owned_protects_an_untagged_file(tmp_path, monkeypatch):
     _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
     existing = base / "Aphex Twin" / "Xtal.m4a"
@@ -3728,7 +3763,6 @@ def test_apple_settled_degraded_copy_still_reports_retained():
     assert verdict == "retain"
 
 
-@pytest.mark.ffmpeg
 def test_apple_atmos_copy_on_the_atmos_rule_still_skips():
     rec = {"path": "/music/Song.m4a", "quality_rank": 1, "quality_tier": "HIGH", "audio_type": "atmos"}
     provider = SimpleNamespace(

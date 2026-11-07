@@ -112,10 +112,15 @@ def test_an_untagged_old_copy_carries_nothing_and_is_not_a_failure(tmp_path):
     assert carry_over_tags(old, new, strict=True) == 0
 
 
-def test_a_strict_carry_over_failure_raises_before_commit(tmp_path):
+def test_a_strict_carry_over_failure_raises_before_commit(tmp_path, monkeypatch):
     old = _flac(tmp_path, "old.flac", genre="Shoegaze")
     new = _flac(tmp_path, "new.flac")
-    new.chmod(0o444)
+
+    def refuse_to_save(self, *_args, **_kwargs):
+        # Deterministic on every runner: a file mode is ignored by root.
+        raise PermissionError(13, "Permission denied", str(self.filename))
+
+    monkeypatch.setattr(mutagen.flac.FLAC, "save", refuse_to_save)
 
     with pytest.raises(MetadataUnreadable):
         carry_over_tags(old, new, strict=True)

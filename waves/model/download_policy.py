@@ -53,10 +53,8 @@ POLICY_CHOICES: dict[str, tuple[str, ...]] = {
     "duplicates": ("", "keep_existing", "replace_owned", "keep_both"),
 }
 # ``refresh_own`` is the internal value the legacy "Skip existing off" toggle
-# captures. It is never offered as a choice: it keeps that toggle's historical
-# identity answer (an untagged own copy is still this track's) and adds tag
-# carry-over. The strict "owned and unchanged" rule belongs to Replace only.
-INTERNAL_DUPLICATE_POLICIES = ("refresh_own",)
+# captures at request time (see capture_intent). It is never a saved setting:
+# a stored value would override Skip existing, so decode_policies drops it.
 POLICY_LABELS = {
     "quality_strategy": "Quality strategy",
     "audio_type": "Audio type override",
@@ -125,11 +123,9 @@ def _policy_values(raw: JsonValue) -> dict[str, Scalar]:
         return {}
     result: dict[str, Scalar] = {}
     for key, value in raw.items():
-        if (
-            key in POLICY_CHOICES
-            and isinstance(value, str)
-            and (value in POLICY_CHOICES[key] or (key == "duplicates" and value in INTERNAL_DUPLICATE_POLICIES))
-        ) or (key in FULFILLMENT_BOOLEAN_FIELDS and isinstance(value, bool)):
+        if (key in POLICY_CHOICES and isinstance(value, str) and value in POLICY_CHOICES[key]) or (
+            key in FULFILLMENT_BOOLEAN_FIELDS and isinstance(value, bool)
+        ):
             result[key] = value
         elif key == "video_max_fps" and isinstance(value, int) and not isinstance(value, bool):
             result[key] = max(0, min(value, 240))

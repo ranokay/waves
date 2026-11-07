@@ -76,5 +76,12 @@ def test_a_failed_delivered_insert_keeps_the_origin_row(tmp_path, monkeypatch):
 
     with pytest.raises(sqlite3.OperationalError):
         store.record_replacement("tidal:1", str(old), "apple:42", str(new), "HI_RES_LOSSLESS")
+    # A later write on the same connection commits whatever the failed
+    # replacement left pending, so the origin row's survival is read from disk.
+    monkeypatch.undo()
+    store.record("tidal:2", str(_file(tmp_path / "Other.flac")), "LOSSLESS")
 
-    assert store.ownership_of("tidal:1") is not None
+    survivors = sqlite3.connect(str(tmp_path / "own.db")).execute(
+        "SELECT path FROM downloads WHERE track_id = ?", ("tidal:1",)
+    )
+    assert survivors.fetchall(), "the origin row was retired by a failed replacement"

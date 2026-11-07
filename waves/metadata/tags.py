@@ -135,6 +135,9 @@ _TAGS_NOT_CARRIED = (
 )
 _TAGS_OLD_WINS = frozenset({"genre", "\xa9gen", "tcon"})
 _TAG_PREFIXES_NEVER_CARRIED = ("waves_",)
+# ID3 frames that describe the delivery by frame id (the encoder and the ISRC),
+# matched exactly so a user's frame that merely contains these letters is kept.
+_ID3_FRAMES_NEVER_CARRIED = frozenset({"tenc", "tsrc"})
 
 # The common user fields mapped across containers (M4A <-> FLAC <-> MP3).
 # Anything container-specific that has no counterpart is reported as not
@@ -890,13 +893,22 @@ def _tag_never_carried(key) -> bool:
     bare = lowered.rsplit(":", 1)[-1]
     if any(bare.startswith(prefix) for prefix in _TAG_PREFIXES_NEVER_CARRIED):
         return True
+    if bare in _ID3_FRAMES_NEVER_CARRIED:
+        return True
     return any(mark in lowered for mark in _TAGS_NOT_CARRIED)
 
 
 def _read_tag(tags, key):
     """A container's value for ``key``, or None. Expected lookup misses are
-    quiet; any other failure is logged so a tag problem stays observable."""
+    quiet; any other failure is logged so a tag problem stays observable.
+
+    An ID3 tag block keys a COMM frame by language and description, so a plain
+    get() misses it; getall() returns every frame of that id.
+    """
     try:
+        if hasattr(tags, "getall"):
+            frames = tags.getall(key)
+            return frames[0] if frames else None
         return tags.get(key)
     except (KeyError, TypeError, ValueError):
         return None
@@ -940,7 +952,16 @@ def _set_cross_container_tag(handle, container: str, field: str, text: str) -> N
 
 def _carry_across_containers(old, new) -> int:
     """Copy the common user fields between different container tag schemes."""
-    container = "flac" if isinstance(new, mutagen.flac.FLAC) else "mp4" if isinstance(new, mutagen.mp4.MP4) else "mp3"
+    if isinstance(new, mutagen.flac.FLAC):
+        container = "flac"
+    elif isinstance(new, mutagen.mp4.MP4):
+        container = "mp4"
+    elif isinstance(new, mutagen.mp3.MP3):
+        container = "mp3"
+    else:
+        # A container with no mapping (Ogg, WAV, ...) carries nothing rather than
+        # receiving another container's frames.
+        return 0
     carried = 0
     for source_keys, destinations in _CROSS_CONTAINER_TAGS.values():
         text = _tag_text(old.tags, source_keys)

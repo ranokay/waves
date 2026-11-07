@@ -11338,6 +11338,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if hasattr(toggles, "toVariant"):
             toggles = toggles.toVariant()
         pins = dict(toggles) if isinstance(toggles, dict) else {}
+        # Keys the bridge owns: an upgrade plan or origin facts arrive only
+        # from the verified path below, never from the QML toggle map.
+        for owned_key in ("upgrade", "origin_facts", "origin_consistent", "origin_media_id"):
+            pins.pop(owned_key, None)
         pins["origin_media_id"] = origin_id
         snapshot = self._catalog_offer_snapshot[1]
         origin_identity = getattr(snapshot, "origin", None)
@@ -11355,7 +11359,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             payload = (request_id, provider_id, media_id, offer.kind, tier, audio_type, pins)
 
             def work(payload=payload, offer=offer, selected=selected, media_id=media_id):
-                plan = self._upgrade_plan_for(origin_id, provider_id, media_id, selected, offer)
+                try:
+                    plan = self._upgrade_plan_for(origin_id, provider_id, media_id, selected, offer)
+                except Exception:
+                    # A failed plan is no upgrade, never a dropped download: the
+                    # queued handler dispatches the plain download with no plan.
+                    logger.warning("upgrade planning failed; downloading without an upgrade", exc_info=True)
+                    plan = None
                 self._catalogUpgradeReady.emit((payload, plan))
 
             pool = getattr(self, "threadpool", None)
@@ -11805,15 +11815,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # below on every ordinary download below the ceiling.
             requested_rank = int(quality.get("requested_rank", -1))
             degraded = ceiling >= 0 and 0 <= delivered < ceiling and delivered < requested_rank
-            digest = audio_digest(real)
             replaced = ev.get("replaced") or {}
             recorded = bool(ev.get("recorded"))
             if recorded:
                 # The engine committed the replacement with its own store
                 # transaction; this pass only refreshes the button cache and
-                # publishes the ownership change.
+                # publishes the ownership change, so no digest is read here.
                 tries = 0
             else:
+                digest = audio_digest(real)
                 tries = self._ownership.record(
                     str(ev.get("id")),
                     real,

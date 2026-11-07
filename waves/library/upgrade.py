@@ -55,6 +55,8 @@ class UpgradePlan:
             return None
         try:
             raw = json.loads(text)
+            if not isinstance(raw, dict):
+                return None
             recorded = raw.get("recorded") or {}
             return cls(
                 origin_id=str(raw.get("origin_id") or ""),

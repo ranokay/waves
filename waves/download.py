@@ -481,6 +481,9 @@ class Download:
 
             provider = TidalProvider(tidal_obj)
         self.provider = provider
+        # Per-thread claim context (see _claim_destination): every pool thread
+        # gets its own, so a parallel track never reads another track's values.
+        self._tls = local()
 
         self.skip_existing = skip_existing
         self.fn_logger = fn_logger
@@ -2387,7 +2390,9 @@ class Download:
         unchanged = (
             digest_matches((rec or {}).get("audio_digest"), path_media_dst) if owned and occupant_exists else None
         )
-        current = _copy_is_current(rec, target_rank, wants_atmos, ceiling) if rec else False
+        # Only the track's own record can make the occupant current: another
+        # track's file at this name is never this track's current copy.
+        current = _copy_is_current(rec, target_rank, wants_atmos, ceiling) if owned else False
         rank = int((rec or {}).get("quality_rank", -1))
         return ExistingCopy(
             path=str(path_media_dst),
@@ -3473,6 +3478,8 @@ class Download:
             if upgrade_target and not digest_matches(self._upgrade_plan.origin_digest, self._upgrade_plan.origin_path):
                 self._note_skipped_after_stream(media)
                 self._note_retained(media, UPGRADE_RETAINED_REASON)
+                if name_reserved is not None:
+                    self._release_name(name_reserved)
                 return True, pathlib.Path(self._upgrade_plan.origin_path)
             if (
                 self._quality_strategy == "minimum_required"
@@ -3484,6 +3491,8 @@ class Download:
                     # already there rather than replace it with a lower one.
                     self._note_skipped_after_stream(media)
                     self._note_retained(media, RETAINED_REASON)
+                    if name_reserved is not None:
+                        self._release_name(name_reserved)
                     return True, path_media_dst
                 self.fn_logger.warning(
                     "The delivery is below the requested minimum; the file is kept and reported as such."
@@ -3917,6 +3926,10 @@ class Download:
                 if tls is None:
                     tls = self._tls = local()
                 tls.claim_media = media
+                # This move has no delivery of its own: a previous item's
+                # delivered facts on this thread must not name it.
+                tls.claim_delivered_tier = ""
+                tls.claim_delivered_audio_type = ""
                 path_media_dst, name_reserved = self._claim_destination(
                     path_media_dst, media_id, owned_item_ids(media), _file_audio_mode_is_atmos(path_media_src)
                 )
