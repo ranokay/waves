@@ -364,9 +364,9 @@ def test_the_real_chooser_chain_captures_provenance_and_upgrade(tmp_path):
     b._library_bulk_skip_on = lambda: True
     b._playlist_template = lambda _mid: "{track_title}"
     b._chooser_confirm_status = lambda *_a: None
-    b._current_chooser_offer = WavesBridge._current_chooser_offer.__get__(b)
-    b._upgrade_plan_for = WavesBridge._upgrade_plan_for.__get__(b)
-    b._on_catalog_upgrade_ready = WavesBridge._on_catalog_upgrade_ready.__get__(b)
+    b._current_chooser_offer = MethodType(WavesBridge._current_chooser_offer, b)
+    b._upgrade_plan_for = MethodType(WavesBridge._upgrade_plan_for, b)
+    b._on_catalog_upgrade_ready = MethodType(WavesBridge._on_catalog_upgrade_ready, b)
     b.downloadWithChooser = MethodType(WavesBridge.downloadWithChooser, b)
     b.captured = None
 
@@ -431,7 +431,7 @@ def test_a_same_provider_offer_captures_no_origin_overlay(tmp_path):
     )
     b.statuses = []
     b._set_status = b.statuses.append
-    b._chooser_toggle_pins = WavesBridge._chooser_toggle_pins.__get__(b)
+    b._chooser_toggle_pins = MethodType(WavesBridge._chooser_toggle_pins, b)
     b._chooser_provider_of = lambda _mid: "tidal"
     b._chooser_ask_for = lambda _pid, tier: (tier, tier) if tier in ("LOSSLESS", "") else None
     b._chooser_normalize_audio = lambda audio, _pid: audio if audio in ("stereo", "") else None
@@ -440,10 +440,10 @@ def test_a_same_provider_offer_captures_no_origin_overlay(tmp_path):
     b._library_bulk_skip_on = lambda: True
     b._playlist_template = lambda _mid: "{track_title}"
     b._chooser_confirm_status = lambda *_a: None
-    b._current_chooser_offer = WavesBridge._current_chooser_offer.__get__(b)
-    b._upgrade_plan_for = WavesBridge._upgrade_plan_for.__get__(b)
-    b._on_catalog_upgrade_ready = WavesBridge._on_catalog_upgrade_ready.__get__(b)
-    b.downloadWithChooser = WavesBridge.downloadWithChooser.__get__(b)
+    b._current_chooser_offer = MethodType(WavesBridge._current_chooser_offer, b)
+    b._upgrade_plan_for = MethodType(WavesBridge._upgrade_plan_for, b)
+    b._on_catalog_upgrade_ready = MethodType(WavesBridge._on_catalog_upgrade_ready, b)
+    b.downloadWithChooser = MethodType(WavesBridge.downloadWithChooser, b)
     b.captured = None
 
     def capture_download(obj, kind, name, template, collection, media_id, **kwargs):

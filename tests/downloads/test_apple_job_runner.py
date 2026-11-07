@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from threading import Event, Lock, Thread
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 from support.bridge_stub import BridgeStub
@@ -356,10 +356,10 @@ def _bind(stub):
         "_apple_wrapper_signed_in",
         "_apple_job_hooks",
     ):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
     # Per-provider option + template-flag readers used by the bound bodies.
     for name in ("_psetting", "_tag_write_flags"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
     return stub
 
 
@@ -629,7 +629,7 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
     stub._jobs.aborts = {7: Event()}
     stub._jobs.dls = {7: object()}
     for name in ("_finish_job", "_apple_job_hooks"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
     spec = SimpleNamespace(
         kind="track",
         file_template="{artist_name}/{track_title}",
@@ -2628,8 +2628,8 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     provider.resolve_stream = flaky
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub._apple_clear_session_expired = MethodType(WavesBridge._apple_clear_session_expired, stub)
     emitted = []
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     stub._set_status = lambda *args: None
@@ -2679,7 +2679,7 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
     )
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
     held = []
     monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
@@ -2728,7 +2728,7 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     )
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
@@ -2821,8 +2821,8 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     provider.wrapper_url = "http://127.0.0.1:1234"  # the guest tier is set up, its session expired
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub._apple_clear_session_expired = MethodType(WavesBridge._apple_clear_session_expired, stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
@@ -2897,7 +2897,7 @@ def test_a_credential_that_keeps_reading_recovered_ends_at_setup(tmp_path, monke
     provider.resolve_stream = _always_broken
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()

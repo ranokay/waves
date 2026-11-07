@@ -72,7 +72,7 @@ class _LifecycleStub(BridgeStub):
         self.queueTrackState = _Signal()
         self._emit_queue = lambda: None
         for name in ("_track_lifecycle", "_queue_item", "_queue_mark_changed"):
-            setattr(self, name, getattr(backend.WavesBridge, name).__get__(self, _LifecycleStub))
+            setattr(self, name, MethodType(getattr(backend.WavesBridge, name), self))
 
 
 def test_note_stage_emits_running_with_fraction():

@@ -1,6 +1,7 @@
 """The QML toggle map cannot inject bridge-owned pins into a catalog download."""
 
 from dataclasses import replace
+from types import MethodType
 
 from support.bridge_stub import BridgeStub
 
@@ -39,7 +40,7 @@ def _host():
     b._chooser_ask_for = lambda pid, tier: (tier, tier) if tier in ("HIGH", "") else None
     b._chooser_normalize_audio = lambda audio, pid: audio if audio in ("stereo", "") else None
     b.downloadWithChooser = lambda *args: b.calls.append(args)
-    b._current_chooser_offer = WavesBridge._current_chooser_offer.__get__(b)
+    b._current_chooser_offer = MethodType(WavesBridge._current_chooser_offer, b)
     return b
 
 
