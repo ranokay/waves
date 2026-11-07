@@ -3763,7 +3763,7 @@ def test_apple_settled_degraded_copy_still_reports_retained():
     assert verdict == "retain"
 
 
-def test_apple_atmos_copy_on_the_atmos_rule_still_skips():
+def test_apple_atmos_copy_below_the_minimum_is_retained_not_skipped():
     rec = {"path": "/music/Song.m4a", "quality_rank": 1, "quality_tier": "HIGH", "audio_type": "atmos"}
     provider = SimpleNamespace(
         get_object=lambda *_a: SimpleNamespace(),
@@ -3782,7 +3782,7 @@ def test_apple_atmos_copy_on_the_atmos_rule_still_skips():
         quality_strategy="minimum_required",
     )
 
-    assert verdict == "skip"
+    assert verdict == "retain"
 
 
 def _guess_miss_setup(tmp_path, monkeypatch):

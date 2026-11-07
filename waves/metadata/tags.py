@@ -653,12 +653,13 @@ class Metadata:
         self.m.tags["ALBUMARTIST"] = self.albumartist
         self.m.tags["ARTIST"] = self.artists
         self._set_flac_custom_tags()
-        self.m.tags["TRACKNUMBER"] = str(self.tracknumber)
+        # 0 means the track number is unknown: write nothing, as TRACKTOTAL does.
+        self.m.tags["TRACKNUMBER"] = str(self.tracknumber) if self.tracknumber > 0 else ""
         # 0 means the count is unknown (the album summary carried none):
         # write nothing rather than "of 1" beside a real track number.
         # cleanup_tags drops the empty value before the file is saved.
         self.m.tags["TRACKTOTAL"] = str(self.totaltrack) if self.totaltrack > 0 else ""
-        self.m.tags["DISCNUMBER"] = str(self.discnumber)
+        self.m.tags["DISCNUMBER"] = str(self.discnumber) if self.discnumber > 0 else ""
         # 0 means the volume count is unknown: write nothing rather than
         # "of 0", mirroring TRACKTOTAL above. cleanup_tags drops the empty
         # value before the file is saved.

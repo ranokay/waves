@@ -1649,17 +1649,17 @@ def gate_track(
     # An Atmos copy of an Atmos-wanting job is current whatever the tier
     # says; it must not read as a below-minimum stereo copy. It still goes
     # through the untagged-copy retry below.
-    atmos_current = bool(wants and record_is_atmos(rec))
-    if not atmos_current and retains_below_minimum(
+    if retains_below_minimum(
         duplicate_policy,
         quality_strategy,
         int((rec or {}).get("quality_rank", -1)),
         requested_rank,
     ):
-        # Checked before copy_is_current: a ceiling-capped or settled-degraded
-        # copy can read current below the requested minimum and must still be
-        # reported retained.
+        # Checked before copy_is_current: a ceiling-capped, settled-degraded or
+        # Atmos copy below the requested minimum is reported retained, never
+        # skipped as current.
         return "retain", rec
+    atmos_current = bool(wants and record_is_atmos(rec))
     current = atmos_current or copy_is_current(rec, requested_rank, wants, ceiling)
     if current:
         # A tag write that failed leaves an owned but untagged file: retry
@@ -2483,7 +2483,7 @@ def deliver_track(
                     # track's own copy at the resolved name, or under Keep
                     # existing any file at the name. Another track's file
                     # under Keep both or Replace is not retained here.
-                    kept_own = owned_dest is not None and owned_dest.exists()
+                    kept_own = owned_dest is not None and owned_dest.exists() and duplicate_policy != "keep_both"
                     kept_any = duplicate_policy == "keep_existing" and exact.exists()
                     if kept_own or kept_any:
                         _drop_hold()

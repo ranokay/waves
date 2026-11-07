@@ -58,6 +58,8 @@ class UpgradePlan:
             if not isinstance(raw, dict):
                 return None
             recorded = raw.get("recorded") or {}
+            if not isinstance(recorded, dict):
+                return None
             return cls(
                 origin_id=str(raw.get("origin_id") or ""),
                 origin_path=str(raw.get("origin_path") or ""),
