@@ -2626,8 +2626,8 @@ class Download:
             return (path_media_unique, decision) if path_media_unique is not None else None
         # A plain download is free only if no sibling holds this name: a claimed
         # name steps around to its numbered variant, never to a shared one.
-        name_key = name_comparison_key(path_media_dst.name)
-        if any(name_comparison_key(pathlib.Path(held).name) == name_key for held in taken):
+        path_key = name_comparison_key(str(path_media_dst))
+        if any(name_comparison_key(str(held)) == path_key for held in taken):
             path_media_unique = path_file_uniquify(
                 path_media_dst,
                 names_taken=taken,

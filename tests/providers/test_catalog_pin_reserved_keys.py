@@ -64,6 +64,8 @@ def test_the_public_toggle_parser_drops_caller_upgrade_plans_but_keeps_verified_
     public = WavesBridge._chooser_toggle_pins(BridgeStub(), dict(forged))
     verified = WavesBridge._chooser_toggle_pins(BridgeStub(), _VerifiedPins(forged))
 
-    assert "upgrade" not in public and "origin_facts" not in public and "origin_media_id" not in public
+    assert "upgrade" not in public
+    assert "origin_facts" not in public
+    assert "origin_media_id" not in public
     assert verified["upgrade"] == {"forged": True}
     assert verified["origin_facts"] == {"album": "x"}
