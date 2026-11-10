@@ -52,6 +52,9 @@ POLICY_CHOICES: dict[str, tuple[str, ...]] = {
     "lyrics_source": ("fulfillment", "origin"),
     "duplicates": ("", "keep_existing", "replace_owned", "keep_both"),
 }
+# ``refresh_own`` is the internal value the legacy "Skip existing off" toggle
+# captures at request time (see capture_intent). It is never a saved setting:
+# a stored value would override Skip existing, so decode_policies drops it.
 POLICY_LABELS = {
     "quality_strategy": "Quality strategy",
     "audio_type": "Audio type override",
@@ -231,6 +234,14 @@ class DownloadIntent:
     base_template: str = ""
     # The source remains distinct when the Chooser selects a matched offer.
     origin_media_id: str = ""
+    # Descriptive origin facts (waves.metadata.provenance.origin_facts), JSON.
+    # Empty for a plain click: origin and fulfillment are the same item.
+    origin_facts_json: str = ""
+    # Whether the origin/candidate comparison had no missing or conflicting
+    # facts. Only then may a missing origin field be filled from fulfillment.
+    origin_consistent: bool = False
+    # The captured opt-in upgrade plan (waves.library.upgrade.UpgradePlan), JSON.
+    upgrade_json: str = ""
 
     def settings_data(self) -> Settings:
         from waves.model.cfg import Settings
@@ -241,6 +252,9 @@ class DownloadIntent:
     def skip_existing(self) -> bool:
         """The "Skip existing" setting this request was captured with."""
         return bool(json.loads(self.settings_json).get("skip_existing", True))
+
+    def origin_facts(self) -> dict:
+        return json.loads(self.origin_facts_json) if self.origin_facts_json else {}
 
 
 # Setup is deliberately read live, never retained in a queue snapshot.
@@ -274,6 +288,9 @@ def capture_intent(
     allow_engine_fallback: bool | None = None,
     clean_album_artist: bool = False,
     library_bulk_skip: bool = True,
+    origin_facts: dict | None = None,
+    origin_consistent: bool = False,
+    upgrade: dict | None = None,
 ) -> DownloadIntent:
     rules = data.download_policies
     policy = rules.effective(provider_id)
@@ -289,7 +306,11 @@ def capture_intent(
         payload["quality_video"] = policy.video_quality
     for key, value in toggles.items():
         payload[f"{provider_id}_{key}"] = value
-    duplicates = policy.duplicates or ("keep_existing" if data.skip_existing else "keep_both")
+    # One captured policy per batch. The legacy toggle only supplies the
+    # derived value; an explicit policy choice wins. Skip-existing off keeps
+    # its historical identity answer as ``refresh_own`` (never ``keep_both``,
+    # which would strew a suffixed copy beside every legacy row).
+    duplicates = policy.duplicates or ("keep_existing" if data.skip_existing else "refresh_own")
     policy = replace(
         policy,
         audio_type=payload["default_audio_type"],
@@ -320,4 +341,9 @@ def capture_intent(
         clean_album_artist,
         library_bulk_skip,
         json.dumps(payload),
+        "",
+        "",
+        json.dumps(origin_facts) if origin_facts else "",
+        bool(origin_consistent),
+        json.dumps(upgrade) if upgrade else "",
     )

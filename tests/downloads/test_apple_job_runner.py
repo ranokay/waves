@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from threading import Event, Lock, Thread
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 from support.bridge_stub import BridgeStub
@@ -356,14 +356,14 @@ def _bind(stub):
         "_apple_wrapper_signed_in",
         "_apple_job_hooks",
     ):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
     # Per-provider option + template-flag readers used by the bound bodies.
     for name in ("_psetting", "_tag_write_flags"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
     return stub
 
 
-def _tone(path: Path):
+def _tone(path: Path, codec: str = "aac"):
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
         [
             _ffmpeg(),
@@ -375,7 +375,7 @@ def _tone(path: Path):
             "-i",
             "sine=frequency=440:duration=1",
             "-c:a",
-            "aac",
+            codec,
             str(path),
         ],
         check=True,
@@ -629,7 +629,7 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
     stub._jobs.aborts = {7: Event()}
     stub._jobs.dls = {7: object()}
     for name in ("_finish_job", "_apple_job_hooks"):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
     spec = SimpleNamespace(
         kind="track",
         file_template="{artist_name}/{track_title}",
@@ -1132,7 +1132,7 @@ def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch
     provider = _FakeProvider(fixture=staged)
     asked = []
 
-    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None):
+    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None, **kwargs):
         asked.append(track_id)
         return "skip", {"path": "/music/Album Folder/Xtal.m4a"}
 
@@ -1223,7 +1223,7 @@ def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monke
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
     owned: list = []
 
-    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None):
+    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None, **kwargs):
         return ("skip", {"path": str(owned[0])}) if owned else (None, None)
 
     monkeypatch.setattr(runner, "gate_track", ledger)
@@ -2628,8 +2628,8 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     provider.resolve_stream = flaky
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub._apple_clear_session_expired = MethodType(WavesBridge._apple_clear_session_expired, stub)
     emitted = []
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     stub._set_status = lambda *args: None
@@ -2679,7 +2679,7 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
     )
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
     held = []
     monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
@@ -2728,7 +2728,7 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     )
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
@@ -2821,8 +2821,8 @@ def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch,
     provider.wrapper_url = "http://127.0.0.1:1234"  # the guest tier is set up, its session expired
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
-    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub._apple_clear_session_expired = MethodType(WavesBridge._apple_clear_session_expired, stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
@@ -2897,7 +2897,7 @@ def test_a_credential_that_keeps_reading_recovered_ends_at_setup(tmp_path, monke
     provider.resolve_stream = _always_broken
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
     hooks = stub._apple_job_hooks()
@@ -3575,3 +3575,368 @@ def test_chooser_engine_pin_is_distinct_from_a_provider_auto_choice(tmp_path):
     assert all("engine" not in row["askToggles"] for row in stub._queue)
     assert all("engine" not in spec.chooser_toggles for spec in stub._jobs.specs.values())
     assert provider.engine_selection == "auto"
+
+
+def _policy_run(stub, policy, qid=1, signals=None):
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: policy
+    hooks.job_skip_existing = lambda _qid: policy == "keep_existing"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    return runner.run_apple_job(
+        hooks,
+        qid,
+        spec,
+        _song_resource(),
+        signals=signals or _Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_both_lands_beside_with_the_readable_suffix(tmp_path, monkeypatch):
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    names = sorted(path.name for path in base.rglob("*.m4a"))
+    assert len(names) == 2
+    assert "Xtal.m4a" in names
+    assert any(name.startswith("Xtal [Apple Music") for name in names)
+    assert existing.read_bytes() != b""
+
+
+@pytest.mark.ffmpeg
+def test_a_below_minimum_delivery_is_not_retained_for_another_tracks_file_under_keep_both(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    original = provider.resolve_stream
+
+    def below_minimum(raw, tier, audio_type):
+        info = original(raw, tier, audio_type)
+        info.delivered["tier"] = QualityTier.LOSSLESS.value
+        return info
+
+    provider.resolve_stream = below_minimum
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_both"
+    hooks.job_quality_strategy = lambda _qid: "minimum_required"
+    hooks.job_quality = lambda _qid: QualityTier.HI_RES_LOSSLESS
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert "kept" not in summary
+    assert len(list(base.rglob("*.m4a"))) == 2
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_protects_an_untagged_file(tmp_path, monkeypatch):
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    before = existing.read_bytes()
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(existing)}))
+
+    assert _policy_run(stub, "replace_owned") == " (1 track kept both)"
+
+    assert existing.read_bytes() == before
+    assert len(list(base.rglob("*.m4a"))) == 2
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_replaces_a_proven_unchanged_copy(tmp_path, monkeypatch):
+    from waves.metadata.digest import audio_digest
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    _write_item_id(existing, "apple:song-1")
+    before = existing.read_bytes()
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("force", {"path": str(existing), "audio_digest": audio_digest(existing)}),
+    )
+
+    assert _policy_run(stub, "replace_owned") == ""
+
+    assert len(list(base.rglob("*.m4a"))) == 1
+    assert existing.read_bytes() != before
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_existing_below_the_minimum_retains_without_a_fetch(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    relay = _Relay()
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("retain", {"path": str(existing), "quality_rank": 1, "quality_tier": "HIGH"}),
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_existing"
+    hooks.job_quality_strategy = lambda _qid: "minimum_required"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded) (1 track kept)"
+    assert provider.fetched == []
+    assert any(event["status"] == "retained" for event in relay.events)
+
+
+def _gate_hooks(rec):
+    return runner.AppleJobHooks(
+        ownership=lambda: SimpleNamespace(ownership_of=lambda *_a, **_k: rec),
+        settings=lambda: SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo")),
+    )
+
+
+def test_apple_ceiling_capped_copy_still_reports_retained():
+    rec = {"path": "/music/Song.m4a", "quality_rank": 2, "quality_tier": "LOSSLESS", "ceiling_rank": 2}
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: 2)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "retain"
+
+
+def test_apple_settled_degraded_copy_still_reports_retained():
+    rec = {
+        "path": "/music/Song.m4a",
+        "quality_rank": 2,
+        "quality_tier": "LOSSLESS",
+        "ceiling_rank": 3,
+        "degraded_tries": 2,
+    }
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: None)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "retain"
+
+
+def test_apple_atmos_copy_below_the_minimum_is_retained_not_skipped():
+    rec = {"path": "/music/Song.m4a", "quality_rank": 1, "quality_tier": "HIGH", "audio_type": "atmos"}
+    provider = SimpleNamespace(
+        get_object=lambda *_a: SimpleNamespace(),
+        advertised_ceiling=lambda *_a: None,
+        has_atmos=lambda _obj: True,
+    )
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="atmos",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "retain"
+
+
+def _guess_miss_setup(tmp_path, monkeypatch):
+    import tempfile
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".m4a")
+    monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
+    monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
+
+    def extract(hooks, staged):
+        workdir = tempfile.mkdtemp(dir=tmp_path)
+        out = Path(workdir) / "x.flac"
+        _tone(out, "flac")
+        return out, workdir
+
+    monkeypatch.setattr(runner, "extract_flac", extract)
+    return base, stub
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_both_guess_miss_keeps_the_sibling_and_readable_suffix(tmp_path, monkeypatch):
+    base, stub = _guess_miss_setup(tmp_path, monkeypatch)
+    sibling = base / "Aphex Twin" / "Xtal.flac"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"SIBLING-FLAC")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    assert sibling.read_bytes() == b"SIBLING-FLAC"
+    assert any("[Apple Music" in path.name and path.suffix == ".flac" for path in base.rglob("*.flac"))
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_guess_miss_never_replaces_an_unproven_copy(tmp_path, monkeypatch):
+    base, stub = _guess_miss_setup(tmp_path, monkeypatch)
+    sibling = base / "Aphex Twin" / "Xtal.flac"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"SIBLING-FLAC")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, {"path": str(sibling)}))
+
+    # The unproven copy is protected, and the kept-both copy says so.
+    assert _policy_run(stub, "replace_owned") == " (1 track kept both)"
+
+    assert sibling.read_bytes() == b"SIBLING-FLAC"
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_free_corrected_name_is_not_protected(tmp_path, monkeypatch):
+    _base, stub = _guess_miss_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    relay = _Relay()
+
+    assert _policy_run(stub, "replace_owned", signals=relay) == ""
+
+    done = [event for event in relay.events if event["status"] in ("done", "protected")]
+    assert done and done[-1]["status"] == "done"
+
+
+@pytest.mark.ffmpeg
+def test_apple_redownload_replaces_the_own_copy_under_keep_both(tmp_path, monkeypatch):
+    from waves.metadata.digest import audio_digest
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    _write_item_id(existing, "apple:song-1")
+    import mutagen.mp4
+
+    tagged = mutagen.mp4.MP4(str(existing))
+    tagged["\xa9gen"] = "Shoegaze"
+    tagged.save()
+    before = existing.read_bytes()
+    stub._redownload_overrides = {"apple:song-1"}
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("force", {"path": str(existing), "audio_digest": audio_digest(existing)}),
+    )
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    assert len(list(base.rglob("*.m4a"))) == 1
+    assert existing.read_bytes() != before
+    assert mutagen.mp4.MP4(str(existing))["\xa9gen"] == ["Shoegaze"]
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_both_names_the_delivered_tier_not_the_ask(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    provider.resolve_stream = lambda raw, tier, audio_type: SimpleNamespace(
+        local_file=str(provider.fixture),
+        delivered={"tier": "HIGH", "audio_type": str(audio_type)},
+        codecs="mp4a.40.2",
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_both"
+    hooks.job_quality = lambda _qid: "HI_RES_LOSSLESS"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    names = [path.name for path in base.rglob("*.m4a")]
+    assert any("[Apple Music HIGH" in name for name in names)
+    assert not any("HI_RES" in name for name in names)
+
+
+def test_an_album_summary_names_kept_copies(tmp_path, monkeypatch):
+    provider = _FakeProvider(fixture=None)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("retain", {"path": "/music/Song.m4a"}))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded) (1 track kept)"
+    assert provider.fetched == []
+
+
+def test_apple_tierless_copy_is_not_below_minimum():
+    rec = {"path": "/music/Song.m4a", "quality_rank": -1}
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: None)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "skip"

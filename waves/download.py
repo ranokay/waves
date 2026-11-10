@@ -20,7 +20,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent import futures
 from dataclasses import dataclass
-from threading import Event, Lock
+from threading import Event, Lock, local
 from uuid import uuid4
 
 import m3u8
@@ -56,6 +56,7 @@ from waves.constants import (
     QualityVideo,
     cover_file_dimension,
     provider_folder_name,
+    quality_rank,
     tier_from_word,
     wants_atmos_delivery,
 )
@@ -63,12 +64,26 @@ from waves.errors import MediaMissing
 from waves.flac_verify import seal_file
 from waves.http import pooled_session
 from waves.ids import credited_artist_ids, download_identity_id, owned_item_ids
+from waves.library.ownership import copy_is_current as _copy_is_current
+from waves.library.placement import (
+    CARRY_OVER_FAILED_REASON,
+    RETAINED_REASON,
+    UPGRADE_RETAINED_REASON,
+    ExistingCopy,
+    PlacementDecision,
+    decide_placement,
+    keep_both_name,
+)
+from waves.library.upgrade import UpgradePlan, commit_upgrade
 from waves.metadata.camelot import format_initial_key
+from waves.metadata.digest import audio_digest, digest_matches
 from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
 from waves.metadata.naming import name_builder_item, name_builder_title
+from waves.metadata.provenance import album_path_facts, path_facts, resolve_track_facts
 from waves.metadata.tags import (
     Metadata,
     MetadataUnreadable,
+    carry_over_tags,
     normalize_audio_type_tag,
     occupant_is_version,
     read_file_audio_type,
@@ -96,6 +111,7 @@ from waves.playlists import populate_playlists
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress, TaskID
 from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
+from waves.providers.catalog_offers import DeliveryFacts
 from waves.providers.tidal_client import instantiate_media, items_results_all
 from waves.redaction import content as log_content
 from waves.system_ffmpeg import working_system_ffmpeg
@@ -314,6 +330,18 @@ class Download:
     # legacy row; the session's own quality then stands). Defaulted on the
     # class for the same stand-in reason as _pinned_audio_type above.
     _pinned_tier: QualityTier | None = None
+    # The rank this job targets; a stand-in without one reads -1 (no target).
+    _target_rank: int = -1
+    # Captured policy/provenance defaults for stand-ins built without
+    # __init__ (the same reason _pinned_audio_type is class-level).
+    _duplicate_policy: str = "keep_existing"
+    _quality_strategy: str = "best_available"
+    _metadata_source: str = "origin"
+    _organization_source: str = "origin"
+    _origin_facts: dict | None = None
+    _origin_consistent: bool = False
+    _upgrade_plan: UpgradePlan | None = None
+    _record_replacement: Callable[..., int] | None = None
 
     # Process-wide keep-alive HTTP session (see the comment in __init__): all
     # Download instances share one warm connection pool so an album start does
@@ -385,6 +413,14 @@ class Download:
         pinned_tier: QualityTier | None = None,
         pinned_audio_type: str | None = None,
         settings_data: SettingsData | None = None,
+        duplicate_policy: str = "keep_existing",
+        quality_strategy: str = "best_available",
+        metadata_source: str = "origin",
+        organization_source: str = "origin",
+        origin_facts: dict | None = None,
+        origin_consistent: bool = False,
+        upgrade_plan: UpgradePlan | None = None,
+        record_replacement: Callable[..., int] | None = None,
     ) -> None:
         """Initialize the Download object and its dependencies.
 
@@ -445,6 +481,9 @@ class Download:
 
             provider = TidalProvider(tidal_obj)
         self.provider = provider
+        # Per-thread claim context (see _claim_destination): every pool thread
+        # gets its own, so a parallel track never reads another track's values.
+        self._tls = local()
 
         self.skip_existing = skip_existing
         self.fn_logger = fn_logger
@@ -465,6 +504,20 @@ class Download:
         # seam's QualityTier and a raw word spell it the same way. None is a
         # legacy row whose fetch follows the session's own quality.
         self._pinned_tier = tier_from_word(pinned_tier) if pinned_tier is not None else None
+        # The captured duplicate policy. Keep existing is the default; the
+        # internal refresh_own keeps the legacy Skip-existing-off identity
+        # answer. The engine's skip behaviour follows this policy, never the
+        # live setting.
+        self._duplicate_policy = duplicate_policy or "keep_existing"
+        self._quality_strategy = quality_strategy or "best_available"
+        # Descriptive provenance (ADR 0011): origin facts and whether the
+        # match was consistent enough to fill a missing origin field.
+        self._metadata_source = metadata_source or "origin"
+        self._organization_source = organization_source or "origin"
+        self._origin_facts = dict(origin_facts or {})
+        self._origin_consistent = bool(origin_consistent)
+        self._upgrade_plan = upgrade_plan
+        self._record_replacement = record_replacement
 
         # Destination directories already ensured by this instance (one
         # instance = one queued item, so this resets naturally per album).
@@ -1780,6 +1833,48 @@ class Download:
         except Exception:
             return ""
 
+    def _path_facts(self, media) -> dict[str, str] | None:
+        """Descriptive token values from the origin, or None for delivered.
+
+        ``organization_source="fulfillment"`` (or no captured origin) renders
+        the delivered object exactly as before. An album job uses the origin
+        album's own fields; a track job uses the origin track that matches the
+        delivered entry, or the delivered facts when no unique match exists.
+        Ordering tokens ({list_pos}, {album_track_num}, ...) are never
+        overridden, so source order and collection grouping stay untouched.
+        """
+        if self._organization_source != "origin" or not self._origin_facts:
+            return None
+        try:
+            kind = self.provider.media_kind(media)
+        except Exception:
+            return None
+        if kind == MediaType.ALBUM:
+            if self._origin_facts.get("kind") != "album":
+                return None
+            return album_path_facts(self._origin_facts)
+        if kind != MediaType.TRACK:
+            return None
+        try:
+            delivered = self.provider.track_facts(media)
+        except Exception:
+            return None
+        resolved = resolve_track_facts(
+            delivered,
+            self._origin_facts,
+            "origin",
+            self._origin_consistent,
+            delivered_title=name_builder_title(media),
+        )
+        return path_facts(resolved)
+
+    def _quality_token(self, quality_audio=None) -> str:
+        """The {quality} token: the job's pinned rung, never a live setting."""
+        tier = self._pinned_tier
+        if tier is None and quality_audio is not None:
+            tier = tier_from_word(getattr(quality_audio, "value", quality_audio))
+        return str(getattr(tier, "value", tier) or "")
+
     def _collection_dir(self, relative_template: str) -> pathlib.Path:
         """The folder a collection template points at.
 
@@ -2146,7 +2241,9 @@ class Download:
         path_landed: pathlib.Path | None = self._landed_by_this_run(path_media_dst, media_id, owned_ids)
 
         if path_landed is not None:
-            self.fn_logger.debug(f"Download skipped, since this item already landed at '{log_content(path_landed)}'.")
+            self.fn_logger.debug(
+                f"Destination already holds this item's own copy, so this pass wrote nothing: '{log_content(path_landed)}'"
+            )
 
             return path_landed
 
@@ -2165,7 +2262,9 @@ class Download:
         if not occupant_id or occupant_id not in owned_ids:
             return None
 
-        self.fn_logger.debug(f"Download skipped, since this item already landed at '{log_content(path_media_dst)}'.")
+        self.fn_logger.debug(
+            f"Destination already holds this item's own copy, so this pass wrote nothing: '{log_content(path_media_dst)}'"
+        )
 
         return path_media_dst
 
@@ -2239,12 +2338,122 @@ class Download:
 
         return None
 
+    @staticmethod
+    def _delivered_facts(stream_info: StreamInfo | None) -> DeliveryFacts:
+        delivered = dict(getattr(stream_info, "delivered", None) or {})
+        return DeliveryFacts(
+            tier=tier_from_word(delivered.get("tier")),
+            audio_type=str(delivered.get("audio_type") or ""),
+            codec=str(getattr(stream_info, "codecs", "") or delivered.get("codecs") or ""),
+            bit_depth=delivered.get("bit_depth"),
+            sample_rate=delivered.get("sample_rate"),
+        )
+
+    def _existing_copy_at(
+        self,
+        path_media_dst: pathlib.Path,
+        media,
+        version: str | None,
+        target_rank: int,
+        wants_atmos: bool,
+        ceiling: int | None = None,
+    ) -> ExistingCopy | None:
+        """The destination's occupant as the shared duplicate decision sees it."""
+        media_id = download_identity_id(media)
+        rec = None
+        ownership_of = getattr(self, "_ownership_of", None)
+        if ownership_of is not None and media_id:
+            try:
+                rec = ownership_of(str(media_id), audio_type=version) if version else ownership_of(str(media_id))
+            except TypeError:
+                try:
+                    rec = ownership_of(str(media_id))
+                except Exception:
+                    rec = None
+            except Exception:
+                rec = None
+        occupant_exists = check_file_exists(path_media_dst, extension_ignore=False)
+        if not occupant_exists:
+            # A stale row for a file the user deleted is not a copy to skip,
+            # replace or protect: the destination is simply free.
+            return None
+        rec_path = str((rec or {}).get("path") or "")
+        owned = bool(rec) and bool(rec_path) and pathlib.Path(rec_path) == path_media_dst
+        occupant_id = read_item_id(path_media_dst) if occupant_exists else ""
+        # An untagged occupant is identity-unknown: the legacy refresh_own
+        # answer treats it as this track's own copy, while replace_owned still
+        # refuses it because it has no proven ownership row.
+        same_item = not occupant_id or owned
+        if occupant_id:
+            same_item = occupant_id in owned_item_ids(media)
+        same_version = occupant_is_version(path_media_dst, version) if occupant_exists else True
+        unchanged = (
+            digest_matches((rec or {}).get("audio_digest"), path_media_dst) if owned and occupant_exists else None
+        )
+        # Only the track's own record can make the occupant current: another
+        # track's file at this name is never this track's current copy.
+        current = _copy_is_current(rec, target_rank, wants_atmos, ceiling) if owned else False
+        rank = int((rec or {}).get("quality_rank", -1))
+        return ExistingCopy(
+            path=str(path_media_dst),
+            owned=owned,
+            same_item=same_item,
+            same_version=same_version,
+            unchanged=unchanged,
+            current=current,
+            # A negative rank is a tier-less copy with no quality concept: it
+            # cannot be below a minimum (same rule as retains_below_minimum).
+            minimum_met=rank < 0 or rank >= int(target_rank),
+        )
+
+    def _placement_decision(
+        self,
+        path_media_dst: pathlib.Path,
+        media,
+        version: str | None,
+        target_rank: int,
+        wants_atmos: bool,
+        ceiling: int | None = None,
+    ):
+        existing = self._existing_copy_at(path_media_dst, media, version, target_rank, wants_atmos, ceiling)
+        return decide_placement(
+            self._duplicate_policy,
+            existing,
+            minimum_required=self._quality_strategy == "minimum_required",
+        )
+
+    def _is_upgrade_target(self, media) -> bool:
+        return bool(self._upgrade_plan) and self._upgrade_plan.delivered_media_id == download_identity_id(media)
+
+    def _record_upgraded(self, media, final_path: pathlib.Path, stream_info: StreamInfo | None) -> None:
+        """Write the replacement row through the bridge's store callback."""
+        plan = self._upgrade_plan
+        if plan is None or self._record_replacement is None:
+            raise RuntimeError("An upgrade needs an ownership replacement callback")
+        delivered = self._delivered_facts(stream_info)
+        tier = str(getattr(delivered.tier, "value", delivered.tier) or "") or None
+        self._record_replacement(
+            plan.origin_id,
+            plan.origin_path,
+            download_identity_id(media),
+            str(final_path),
+            tier,
+            audio_type=delivered.audio_type or plan.audio_type or None,
+            bit_depth=delivered.bit_depth,
+            sample_rate=delivered.sample_rate,
+            codecs=delivered.codec,
+            audio_digest=audio_digest(final_path),
+        )
+
     def _claim_destination(
         self,
         path_media_dst: pathlib.Path,
         media_id: str,
         owned_ids: set[str] | None = None,
         fetch_is_atmos: bool | None = None,
+        media=None,
+        delivered_tier: str = "",
+        delivered_audio_type: str = "",
     ) -> tuple[pathlib.Path, str | None]:
         """Pick this download's final name and hold it, in one locked step.
 
@@ -2272,17 +2481,31 @@ class Download:
                 release once the file is in place, or the name unchanged and
                 None when it and all of its numbered variants are taken.
         """
+        if media is None:
+            media = getattr(getattr(self, "_tls", None), "claim_media", None)
+        if not delivered_tier:
+            delivered_tier = str(getattr(getattr(self, "_tls", None), "claim_delivered_tier", "") or "")
+        if not delivered_audio_type:
+            delivered_audio_type = str(getattr(getattr(self, "_tls", None), "claim_delivered_audio_type", "") or "")
         with self._names_reserved_lock:
-            path_media_unique: pathlib.Path | None = path_file_uniquify(
+            taken = self._names_unavailable_to(media_id)
+            placement = self._claim_placement(
                 path_media_dst,
-                names_taken=self._names_unavailable_to(media_id),
-                check_disk=self.skip_existing,
-                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+                media_id,
+                owned_ids,
+                fetch_is_atmos,
+                media,
+                taken,
+                delivered_tier,
+                delivered_audio_type,
             )
-
-            if path_media_unique is None:
+            if placement is None:
                 return path_media_dst, None
-
+            path_media_unique, decision = placement
+            tls = getattr(self, "_tls", None)
+            if tls is None:
+                tls = self._tls = local()
+            tls.placement = decision
             name_reserved: str = str(path_media_unique)
             owner, holds = self._names_reserved.get(name_reserved, (media_id, 0))
             # Counted, not just set: two workers of one item can hold the same
@@ -2291,6 +2514,128 @@ class Download:
             self._names_reserved[name_reserved] = (owner, holds + 1)
 
             return path_media_unique, name_reserved
+
+    def _own_path_for(self, media, version: str | None) -> pathlib.Path | None:
+        """The ownership record's path, when the store names one."""
+        media_id = download_identity_id(media)
+        ownership_of = getattr(self, "_ownership_of", None)
+        if not media_id or ownership_of is None:
+            return None
+        try:
+            rec = ownership_of(media_id, audio_type=version) if version else ownership_of(media_id)
+        except TypeError:
+            try:
+                rec = ownership_of(media_id)
+            except Exception:
+                return None
+        except Exception:
+            return None
+        path = str((rec or {}).get("path") or "")
+        return pathlib.Path(path) if path else None
+
+    def _claim_placement(  # noqa: C901 - one branch per captured policy
+        self,
+        path_media_dst: pathlib.Path,
+        media_id: str,
+        owned_ids: set[str] | None,
+        fetch_is_atmos: bool | None,
+        media,
+        taken: set[str],
+        delivered_tier: str = "",
+        delivered_audio_type: str = "",
+    ) -> tuple[pathlib.Path, PlacementDecision] | None:
+        """The name this duplicate policy claims, or None when none is free."""
+        if media is not None and self._is_upgrade_target(media):
+            target = pathlib.Path(self._upgrade_plan.origin_path)
+            if str(target) in taken:
+                return None
+            return target, PlacementDecision("replace", overwrite=True)
+        version = self._pinned_audio_type
+        if version is None and fetch_is_atmos is not None:
+            version = "atmos" if fetch_is_atmos else "stereo"
+        if media is not None and self._duplicate_policy in ("replace_owned", "keep_both", "refresh_own"):
+            own = self._own_path_for(media, version)
+            if own is not None and own.parent == path_media_dst.parent:
+                path_media_dst = own
+        if getattr(self, "_force_redownload", False) and media is not None:
+            # An explicit Redownload replaces this track's own copy in place
+            # under every policy, exactly as it did before the policy existed.
+            decision = decide_placement(
+                "refresh_own",
+                self._existing_copy_at(
+                    path_media_dst,
+                    media,
+                    version,
+                    self._target_rank,
+                    bool(fetch_is_atmos),
+                ),
+            )
+            if decision.action == "replace":
+                if str(path_media_dst) in taken:
+                    return None
+                return path_media_dst, PlacementDecision("replace", overwrite=True)
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
+        if media is None or self._duplicate_policy == "keep_existing":
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=self.skip_existing,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            if path_media_unique is None:
+                return None
+            return path_media_unique, PlacementDecision("download")
+        version = self._pinned_audio_type
+        if version is None and fetch_is_atmos is not None:
+            version = "atmos" if fetch_is_atmos else "stereo"
+        decision = self._placement_decision(
+            path_media_dst,
+            media,
+            version,
+            self._target_rank,
+            bool(fetch_is_atmos),
+        )
+        if decision.action == "replace":
+            if str(path_media_dst) in taken:
+                return None
+            return path_media_dst, decision
+        if decision.action == "keep_both" and decision.readable_suffix:
+            candidate = keep_both_name(
+                path_media_dst,
+                provider=self._provider_folder(),
+                quality=delivered_tier or self._quality_token(),
+                audio_type=delivered_audio_type or version or "",
+                taken=taken,
+            )
+            return (candidate, decision) if candidate is not None else None
+        if decision.action == "keep_both":
+            # refresh_own's different-track collision keeps the historical
+            # numbered step-aside.
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
+        # A plain download is free only if no sibling holds this name: a claimed
+        # name steps around to its numbered variant, never to a shared one.
+        path_key = name_comparison_key(str(path_media_dst))
+        if any(name_comparison_key(str(held)) == path_key for held in taken):
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
+        return path_media_dst, decision
 
     def _release_name(self, name_reserved: str) -> None:
         """Let go of one hold on a claimed name (see _claim_destination)."""
@@ -2387,6 +2732,9 @@ class Download:
                 illegal_replacement=replacement,
                 illegal_map=mapping,
                 provider_name=self._provider_folder() if provider else "",
+                quality=self._quality_token(quality_audio),
+                audio_type=self._pinned_audio_type or "",
+                facts=self._path_facts(media),
             )
             candidate = (pathlib.Path(self.path_base).expanduser() / (relative + file_extension_dummy)).absolute()
             # Sanitize final path_file to fit into OS boundaries.
@@ -2480,6 +2828,9 @@ class Download:
                     illegal_replacement=self._illegal_replacement(),
                     illegal_map=self._illegal_map(),
                     provider_name=self._provider_folder(),
+                    quality=self._quality_token(quality_audio),
+                    audio_type=self._pinned_audio_type or "",
+                    facts=self._path_facts(media),
                 )
                 path_media_track_dir: pathlib.Path = (
                     pathlib.Path(self.path_base).expanduser() / (file_name_track_dir_relative + file_extension_dummy)
@@ -2877,6 +3228,20 @@ class Download:
         captured for that stream, so a skipped file never records a quality it
         did not actually deliver."""
 
+    def _note_retained(self, media: Track | Video, reason: str) -> None:
+        """The existing copy was kept: below the minimum, a failed carry-over,
+        or an upgrade that did not prove itself. A no-op here; the GUI's
+        tracked download overrides it to report a visible KEPT outcome."""
+
+    def _note_protected(self, media: Track | Video, reason: str) -> None:
+        """The new copy landed beside a file the Replace policy protected.
+        A no-op here; the GUI's tracked download reports KEPT BOTH."""
+
+    def _note_upgraded(self, media: Track | Video, origin_id: str, origin_path: str) -> None:
+        """A verified cross-provider replacement committed over the origin
+        copy. A no-op here; the GUI's tracked download records the ownership
+        replacement from the event."""
+
     def _note_delivered(self, media: Track | Video) -> None:
         """The item's file and sidecars are fully on disk; only post-processing
         and the deliberate inter-download delay remain. A no-op here; the GUI's
@@ -3060,7 +3425,6 @@ class Download:
             # skipped upstream, so an occupied destination is a different track). Resolve the
             # unique name BEFORE writing lyrics/cover so those sidecars align with the final
             # audio file.
-            overwrite: bool = not self.skip_existing
             media_id: str = download_identity_id(media)
             path_media_dst = pathlib.Path(path_file_sanitize(path_media_dst, adapt=True))
             # Which Version this fetch brings, resolved once: the stream's own
@@ -3081,7 +3445,14 @@ class Download:
             # can only make the claim step aside from an Atmos file, never
             # replace one.
             fetch_is_atmos: bool = fetch_version == AudioType.ATMOS
+            delivered_facts = self._delivered_facts(stream_info)
             path_media_asked: pathlib.Path = path_media_dst
+            tls = getattr(self, "_tls", None)
+            if tls is None:
+                tls = self._tls = local()
+            tls.claim_media = media
+            tls.claim_delivered_tier = str(getattr(delivered_facts.tier, "value", delivered_facts.tier) or "")
+            tls.claim_delivered_audio_type = delivered_facts.audio_type or fetch_version or ""
             path_media_dst, name_reserved = self._claim_destination(
                 path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos
             )
@@ -3113,6 +3484,37 @@ class Download:
 
                 return False, path_media_dst
 
+            placement = getattr(self._tls, "placement", None) or PlacementDecision("download")
+            upgrade_target = self._is_upgrade_target(media)
+            if upgrade_target and not digest_matches(self._upgrade_plan.origin_digest, self._upgrade_plan.origin_path):
+                self._note_skipped_after_stream(media)
+                self._note_retained(media, UPGRADE_RETAINED_REASON)
+                if name_reserved is not None:
+                    self._release_name(name_reserved)
+                return True, pathlib.Path(self._upgrade_plan.origin_path)
+            if (
+                self._quality_strategy == "minimum_required"
+                and self._pinned_tier is not None
+                and quality_rank(delivered_facts.tier) < quality_rank(self._pinned_tier)
+            ):
+                if check_file_exists(path_media_dst, extension_ignore=False):
+                    # The delivery cannot meet the minimum: keep the copy
+                    # already there rather than replace it with a lower one.
+                    self._note_skipped_after_stream(media)
+                    self._note_retained(media, RETAINED_REASON)
+                    if name_reserved is not None:
+                        self._release_name(name_reserved)
+                    return True, path_media_dst
+                self.fn_logger.warning(
+                    "The delivery is below the requested minimum; the file is kept and reported as such."
+                )
+            if placement.action == "replace":
+                overwrite = True
+            elif placement.action == "keep_both" or self._duplicate_policy in ("replace_owned", "keep_both"):
+                overwrite = False
+            else:
+                overwrite = not self.skip_existing
+
             try:
                 if path_media_dst != path_media_asked:
                     # Stepped aside, so something took the name between the
@@ -3137,6 +3539,56 @@ class Download:
                 extras = self._handle_metadata_and_extras(
                     media, tmp_path_file, path_media_dst, is_parent_album, stream_info
                 )
+
+                replacing_own = check_file_exists(path_media_dst, extension_ignore=False) and (
+                    placement.action == "replace"
+                    or self._is_own_copy(path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos)
+                )
+                if replacing_own:
+                    # The old copy's own tags survive the replacement, whether
+                    # this is the policy's replace, a stale-copy upgrade or an
+                    # explicit Redownload. A carry-over failure aborts before
+                    # the swap: the existing file and its row stay as they were.
+                    try:
+                        carry_over_tags(path_media_dst, tmp_path_file, strict=True)
+                    except Exception:
+                        logger.debug("Could not carry user tags over; keeping the existing copy", exc_info=True)
+                        self._note_skipped_after_stream(media)
+                        self._note_retained(media, CARRY_OVER_FAILED_REASON)
+                        return True, path_media_dst
+
+                if upgrade_target:
+                    origin_path = pathlib.Path(self._upgrade_plan.origin_path)
+                    delivered_suffix = str(stream_info.file_extension or origin_path.suffix)
+                    same_container = delivered_suffix.lower() == origin_path.suffix.lower()
+                    result = commit_upgrade(
+                        tmp_path_file,
+                        self._upgrade_plan,
+                        delivered_facts,
+                        place=lambda staged, final: self._move_file(
+                            staged,
+                            final,
+                            overwrite=same_container,
+                            occupant_is_own=(
+                                (lambda candidate: digest_matches(self._upgrade_plan.origin_digest, candidate))
+                                if same_container
+                                else None
+                            ),
+                        ),
+                        record=lambda final: self._record_upgraded(media, final, stream_info),
+                        final_suffix=delivered_suffix,
+                    )
+                    if result.ok and result.path is not None:
+                        self._note_stage(media, cum["move"])
+                        self._record_name_written(result.path, media_id)
+                        self._note_dir_filled(result.path)
+                        if extras:
+                            self._move_extras(extras, result.path)
+                        self._note_upgraded(media, self._upgrade_plan.origin_id, self._upgrade_plan.origin_path)
+                        return True, result.path
+                    self._note_skipped_after_stream(media)
+                    self._note_retained(media, UPGRADE_RETAINED_REASON)
+                    return True, pathlib.Path(self._upgrade_plan.origin_path)
 
                 self.fn_logger.info(f"Downloaded item '{log_content(name_builder_item(media))}'.")
 
@@ -3180,6 +3632,8 @@ class Download:
                     # never momentarily free between the two.
                     self._record_name_written(path_media_dst, media_id)
                     self._note_dir_filled(path_media_dst)
+                    if placement.action == "keep_both" and placement.reason:
+                        self._note_protected(media, placement.reason)
                 elif path_media_landed is not None:
                     self._note_skipped_after_stream(media)
 
@@ -3413,6 +3867,9 @@ class Download:
             illegal_replacement=self._illegal_replacement(),
             illegal_map=self._illegal_map(),
             provider_name=self._provider_folder(),
+            quality=self._quality_token(),
+            audio_type=self._pinned_audio_type or "",
+            facts=self._path_facts(media),
         )
         path_media_dst: pathlib.Path = (
             pathlib.Path(self.path_base).expanduser() / (file_name_relative + file_extension)
@@ -3443,7 +3900,9 @@ class Download:
             # alone would hand a colliding stranger's file to this track: the
             # audio just downloaded is unlinked and the playlist entry points
             # at somebody else's track.
-            overwrite: bool = not self.skip_existing
+            # Keep both never overwrites: a file that appeared at the name meanwhile
+            # is stepped around, whatever the legacy skip-existing toggle says.
+            overwrite: bool = not self.skip_existing and self._duplicate_policy != "keep_both"
             name_reserved: str | None = None
             media_id: str = download_identity_id(media)
 
@@ -3476,6 +3935,14 @@ class Download:
                 # The mode of the fetch IS the mode of the file being moved, so
                 # ask the file itself: this claim runs long after the stream
                 # object is gone.
+                tls = getattr(self, "_tls", None)
+                if tls is None:
+                    tls = self._tls = local()
+                tls.claim_media = media
+                # This move has no delivery of its own: a previous item's
+                # delivered facts on this thread must not name it.
+                tls.claim_delivered_tier = ""
+                tls.claim_delivered_audio_type = ""
                 path_media_dst, name_reserved = self._claim_destination(
                     path_media_dst, media_id, owned_item_ids(media), _file_audio_mode_is_atmos(path_media_src)
                 )
@@ -4197,7 +4664,14 @@ class Download:
         path_lyrics: pathlib.Path | None = None
         lyrics_suffix: str = EXTENSION_LYRICS
         path_cover: pathlib.Path | None = None
-        facts = self.provider.track_facts(track)
+        delivered_facts = self.provider.track_facts(track)
+        facts = resolve_track_facts(
+            delivered_facts,
+            self._origin_facts,
+            self._metadata_source,
+            self._origin_consistent,
+            delivered_title=name_builder_title(track),
+        )
         replay_gain = replay_gain or {}
         lyrics_synced: str = ""
         lyrics_unsynced: str = ""
@@ -4251,7 +4725,7 @@ class Download:
         target_upc: dict[str, str] = METADATA_LOOKUP_UPC[metadata_target_upc]
         album_facts: dict = facts.get("album") or {}
         explicit: bool = bool(facts.get("explicit", False))
-        title = name_builder_title(track)
+        title = str(facts.get("title") or name_builder_title(track))
         title += METADATA_EXPLICIT if explicit and self.settings.data.mark_explicit else ""
         borrowed_slot: bool = bool(getattr(track, "waves_identity_id", None))
         # The albumartist tag honours the opt-in 'Clean album-artist' pref,
@@ -4597,6 +5071,9 @@ class Download:
                 illegal_replacement=replacement,
                 illegal_map=mapping,
                 provider_name=self._provider_folder() if provider else "",
+                quality=self._quality_token(),
+                audio_type=self._pinned_audio_type or "",
+                facts=self._path_facts(media),
             )
 
         # The same spelling, finished off by a real item of this collection.
@@ -4624,6 +5101,9 @@ class Download:
                 illegal_replacement=replacement,
                 illegal_map=mapping,
                 provider_name=self._provider_folder() if provider else "",
+                quality=self._quality_token(),
+                audio_type=self._pinned_audio_type or "",
+                facts=self._path_facts(sample),
             )
 
         spellings: list[tuple[bool, str, dict[str, str] | None, bool]] = [

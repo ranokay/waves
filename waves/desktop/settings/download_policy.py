@@ -32,7 +32,16 @@ def policy_fields(policies: DownloadPolicies, provider_id: str = "") -> list[dic
         }
         if name in POLICY_CHOICES:
             options = [
-                {"value": word, "label": word.replace("_", " ").capitalize() if word else "Use existing default"}
+                {
+                    "value": word,
+                    "label": (
+                        "Follow Skip existing"
+                        if name == "duplicates" and not word
+                        else word.replace("_", " ").capitalize()
+                        if word
+                        else "Use existing default"
+                    ),
+                }
                 for word in POLICY_CHOICES[name]
             ]
         elif name == "require_extras":

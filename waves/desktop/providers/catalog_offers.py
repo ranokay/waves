@@ -74,6 +74,9 @@ class OfferSnapshot:
     offers: tuple[CatalogOffer, ...]
     # Guards contain private context stamps, never included in presentation.
     guards: tuple[Callable[[], bool], ...] = field(repr=False, compare=False)
+    # The origin catalog identity: descriptive provenance for the Chooser's
+    # matched offers. None when the origin item could not be read.
+    origin: CatalogIdentity | None = None
 
     def validated(self) -> tuple[CatalogOffer, ...]:
         """Call on the receiving thread, including after a queued GUI hop."""
@@ -211,7 +214,7 @@ def collect_offers(
             )
             offers.append(offer)
             guards.append(guard)
-        snapshots.append(OfferSnapshot(result.selection, tuple(offers), tuple(guards)))
+        snapshots.append(OfferSnapshot(result.selection, tuple(offers), tuple(guards), result.origin))
     return tuple(snapshots)
 
 

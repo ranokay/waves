@@ -1126,7 +1126,7 @@ Drawer {
                       // copy already in the library reads
                       // bright, a failure reads red, the
                       // rest stay quiet.
-                      color: td.status === "failed" ? red : (td.status === "done" || td.status === "skipped" || td.status === "owned") ? textHi : textLo
+                      color: td.status === "failed" ? red : (td.status === "done" || td.status === "skipped" || td.status === "owned" || td.status === "retained" || td.status === "protected") ? textHi : textLo
                       Behavior on color {
                         ColorAnimation {
                           duration: 260
@@ -1217,7 +1217,7 @@ Drawer {
                         // without the alarm of RETRY,
                         // which would promise something a
                         // retry cannot deliver.
-                        target: td.status === "done" ? "COMPLETED" : td.status === "failed" ? "FAILED" : td.status === "unavailable" ? "UNAVAILABLE" : (td.status === "skipped" || td.status === "owned") ? "IN LIBRARY" : td.status === "cancelled" ? "STOPPED" : (td.status === "queued" || td.status === "pending") ? "QUEUED" : td.status === "running" ? "" : "·"
+                        target: td.status === "done" ? "COMPLETED" : td.status === "failed" ? "FAILED" : td.status === "unavailable" ? "UNAVAILABLE" : (td.status === "skipped" || td.status === "owned") ? "IN LIBRARY" : td.status === "retained" ? "KEPT" : td.status === "protected" ? "KEPT BOTH" : td.status === "cancelled" ? "STOPPED" : (td.status === "queued" || td.status === "pending") ? "QUEUED" : td.status === "running" ? "" : "·"
                         // IN LIBRARY speaks in the download
                         // button's two voices: green when
                         // Waves wrote that exact file (the
@@ -1225,7 +1225,7 @@ Drawer {
                         // when the library scan matched it
                         // by tags (a guess). Its tier cell
                         // keeps the copy's own quality.
-                        color: td.status === "done" ? accent : td.status === "failed" ? red : td.status === "unavailable" ? redDim : (td.status === "skipped" || td.status === "owned") ? (td.owned === "claim" ? libAccent : accent) : textDim
+                        color: td.status === "done" ? accent : td.status === "failed" ? red : td.status === "unavailable" ? redDim : (td.status === "skipped" || td.status === "owned") ? (td.owned === "claim" ? libAccent : accent) : td.status === "protected" ? accent : td.status === "retained" ? libAccent : textDim
                         Behavior on color {
                           ColorAnimation {
                             duration: 260
