@@ -137,6 +137,13 @@ keep consent specific to the operation.
   matches; unowned, uncertain and externally modified files are protected and
   reported. Skip existing off keeps its historical identity answer as the
   internal `refresh_own` value. A replacement carries the user's own tags.
+- Accepted risk: the FLAC audio digest is the STREAMINFO MD5 the encoder wrote,
+  not a re-decode of the frames. A tool that edits the audio frames without
+  updating STREAMINFO leaves that digest stale, so the file reads as unchanged
+  and Replace or an upgrade may overwrite it. The maintainer accepted this over
+  decode-verifying every candidate replacement, whose cost lands on each
+  replacement and upgrade. Revisit if a file with a stale STREAMINFO is seen in
+  practice.
 - The cross-provider upgrade is reachable from the Chooser only, for a track
   offer whose matched origin Version is owned, unchanged and demonstrably
   improved by the probed delivery. The delivered file verifies the improvement
