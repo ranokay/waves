@@ -497,3 +497,16 @@ def test_resume_rejection_resolves_once_and_does_not_offer_browser_retry():
     assert bridge._provider_login_attempts == {}
     assert bridge._session_resolved
     assert bridge.statuses[-1] == "Not signed in"
+
+
+def test_explicit_connect_clears_completed_signout_barrier():
+    provider = _Provider()
+    bridge = _Bridge(provider)
+    barrier = Event()
+    barrier.set()
+    bridge._provider_cleanup_events["tidal"] = barrier
+    _begin(bridge)
+    auth.complete_login(bridge, "tidal", "https://tidal.test/callback")
+    bridge.threadpool.run_next()
+    assert bridge.deliver().ok
+    assert "tidal" not in bridge._provider_cleanup_events

@@ -214,6 +214,13 @@ def _publish_account(bridge, event: LoginEvent) -> None:
                 logger.warning("Provider post-login setup could not finish")
 
 
+def _clear_completed_cleanup(bridge, event: LoginEvent) -> None:
+    if event.ok and not event.resume:
+        cleanup = getattr(bridge, "_provider_cleanup_events", {}).get(event.token.provider_id)
+        if cleanup is not None and cleanup.is_set():
+            bridge._provider_cleanup_events.pop(event.token.provider_id, None)
+
+
 def apply_login_event(bridge, event: LoginEvent) -> None:
     """GUI thread: commit only the result still owned by this request."""
     if getattr(bridge, "_factory_reset", False):
@@ -234,6 +241,7 @@ def apply_login_event(bridge, event: LoginEvent) -> None:
     active = getattr(bridge, "_provider_login_attempts", {}).get(event.token.provider_id)
     if not current or active is None or active.token != event.token:
         return
+    _clear_completed_cleanup(bridge, event)
     if event.ok or event.resume or event.phase == "failed_start":
         getattr(bridge, "_provider_login_attempts", {}).pop(event.token.provider_id, None)
     else:

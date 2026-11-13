@@ -428,9 +428,8 @@ def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
 
     Returns ``{"reachable", "state", "logged_in", "account", "error"}``.
     ``state`` keeps the guest's own spelling (the live guest answers
-    ``authenticated``); ``logged_in`` folds it to one boolean, true whenever
-    the guest answered with a state that is not ``logged_out`` (the same
-    rule gamdl uses). Never raises: the caller reads the dict.
+    ``authenticated``); ``logged_in`` is true only for that explicit state.
+    Never raises: the caller reads the dict.
     Optional ``account_id`` and ``storefront`` appear only when explicitly
     supplied without conflicts. The account label is never an identifier.
     """
@@ -463,7 +462,7 @@ def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
     return {
         "reachable": True,
         "state": state,
-        "logged_in": bool(state and state != "logged_out"),
+        "logged_in": state == "authenticated",
         "account": _wrapper_account_label(payload, auth),
         "error": "",
         **_wrapper_context_fields(payload, auth),

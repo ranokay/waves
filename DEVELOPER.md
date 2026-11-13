@@ -89,6 +89,34 @@ For an album-card action:
 Extract a cohesive state owner when a feature needs one; avoid appending pure
 rules to the bridge or adding a forwarding module for a single call.
 
+## Local provider session controls
+
+On macOS, a source checkout can ask the running Waves owner for a provider's
+cached session state or request access:
+
+```bash
+uv run --locked --all-extras python waves.py session status tidal
+uv run --locked --all-extras python waves.py session ensure apple
+```
+
+The provider is `tidal` or `apple`. The command prints one JSON object. Exit
+0 means the request was answered, 2 means invalid arguments, 3 means the owner
+or platform is unavailable, and 4 means human action is required. A `checking`
+result is not authentication. Read the separate `facts` fields rather than
+inferring catalog or delivery readiness from account state.
+
+`status` does not start Waves. `ensure` starts the normal GUI if no owner is
+running, waits for it for a bounded time, and reuses its provider lifecycle.
+When a person must act, Waves raises the relevant setup view. The command does
+not contain or return credentials, verification codes or login redirects.
+The profile follows normal Waves path selection, including `XDG_CONFIG_HOME`
+when set. This control transport is available on macOS; other platforms return
+`unsupported_platform` and keep their normal GUI launch behavior.
+
+The packaged executable has the same argument dispatch, but stdout and launch
+behavior in a signed GUI bundle have not yet been qualified. Use the source
+command above until that package behavior has been verified.
+
 ## Testing and verification
 
 The gate matrix is in
