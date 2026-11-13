@@ -20,7 +20,10 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 import pathlib
+import subprocess
+import sys
 import threading
 from unittest.mock import MagicMock
 
@@ -146,10 +149,7 @@ def test_the_source_is_still_taken_away_when_it_can_be(tmp_path):
 # The migration breadcrumb has to be able to reach the ring.
 # --------------------------------------------------------------------------- #
 def test_wiring_migration_breadcrumb_follows_diagnostics_installation():
-    """Pin boot ordering; test_the_breadcrumb_says_what_happened_and_never_where covers the logger.
-
-    Cold boot alone cannot prove the breadcrumb was queued after handler setup.
-    """
+    """Pin boot ordering; the isolated load-failure scenario exercises this order."""
     source = inspect.getsource(waves_app._run_waves)
     at_bridge = source.index("WavesBridge(tidal=tidal)")
     at_breadcrumb = source.index("_log_config_migration()")
@@ -283,10 +283,7 @@ def test_icon_debug_before_diagnostics_install_holds_its_lines(monkeypatch, caps
 
 
 def test_wiring_boot_threads_start_through_the_one_function():
-    """The cold-process boot test exercises launch; pin its warm-up delegation.
-
-    A successful boot does not reveal which helper started the warm-up thread.
-    """
+    """Pin warm-up delegation alongside the isolated load-failure scenario."""
     source = inspect.getsource(waves_app._run_waves)
 
     assert "_start_boot_threads()" in source
@@ -296,11 +293,7 @@ def test_wiring_boot_threads_start_through_the_one_function():
 
 
 def test_wiring_qml_load_failure_shuts_down_and_flushes():
-    """Pin the failure branch absent from the successful cold-process boot.
-
-    test_a_line_logged_after_shutdown_still_reaches_the_dev_log exercises the
-    normal exit flush; deliberately breaking QML is needed to reach this branch.
-    """
+    """Pin the QML-failure cleanup exercised by the isolated startup scenario."""
     source = inspect.getsource(waves_app._run_waves)
     fail_arm = source[source.index("if not root_objects:") :]
     fail_arm = fail_arm[: fail_arm.index("# The macOS back-swipe filter")]
@@ -310,3 +303,101 @@ def test_wiring_qml_load_failure_shuts_down_and_flushes():
 
     exit_arm = source[source.index("os._exit(rc)") - 400 : source.index("os._exit(rc)")]
     assert "wait_for_disk_log()" in exit_arm, "os._exit skips atexit, so the writer never gets its stop"
+
+
+def _startup_failure_scenario() -> int:
+    """Exercise the real launcher and bridge, with only the QML file missing."""
+    from waves import paths
+
+    events: list[str] = []
+    warmup_finished = threading.Event()
+    main_thread = threading.get_ident()
+    real_bridge = waves_app.WavesBridge
+    real_boot = waves_app._start_boot_threads
+    real_warmup = waves_app._warm_tls
+    real_breadcrumb = waves_app._log_config_migration
+    real_flush = waves_app.diagnostics.wait_for_disk_log
+
+    class ObservedBridge(real_bridge):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            events.append("bridge_created")
+
+        def shutdown(self):
+            events.append("shutdown_begin")
+            super().shutdown()
+            events.append("shutdown_done")
+
+    def observed_boot():
+        events.append("boot_helper")
+        real_boot()
+
+    def observed_warmup():
+        if threading.get_ident() != main_thread:
+            events.append("warmup_worker")
+        try:
+            real_warmup()
+        finally:
+            warmup_finished.set()
+
+    def observed_breadcrumb():
+        events.append("breadcrumb")
+        real_breadcrumb()
+
+    def observed_flush(*args, **kwargs):
+        events.append("flush_begin")
+        result = real_flush(*args, **kwargs)
+        events.append("flush_done")
+        return result
+
+    waves_app.WavesBridge = ObservedBridge
+    waves_app._start_boot_threads = observed_boot
+    waves_app._warm_tls = observed_warmup
+    waves_app._log_config_migration = observed_breadcrumb
+    waves_app.diagnostics.wait_for_disk_log = observed_flush
+    waves_app._QML_MAIN = pathlib.Path(os.environ["XDG_CONFIG_HOME"]) / "missing-main.qml"
+    paths.CONFIG_MIGRATION = "moved"
+    result = waves_app._run_waves(None, None)
+    warmup_done = warmup_finished.wait(5)
+    print("STARTUP_FAILURE_EVIDENCE=" + json.dumps({"result": result, "events": events, "warmup_done": warmup_done}))
+    return 0
+
+
+@pytest.mark.qml
+@pytest.mark.integration
+def test_isolated_qml_load_failure_runs_boot_and_shutdown_lifecycle(tmp_path):
+    """Run the actual Qt launcher and bridge without a user profile or QML root."""
+    env = os.environ.copy()
+    env.update(
+        XDG_CONFIG_HOME=str(tmp_path / "config"),
+        XDG_DATA_HOME=str(tmp_path / "data"),
+        XDG_CACHE_HOME=str(tmp_path / "cache"),
+        QT_QPA_PLATFORM="offscreen",
+        WAVES_TEST_SEAM="1",
+        WAVES_DEBUG="1",
+    )
+    env.pop("WAVES_ACCOUNT_TESTS", None)
+    proc = subprocess.run(  # noqa: S603 - current interpreter and this fixture's fixed scenario
+        [sys.executable, str(pathlib.Path(__file__).resolve()), "--startup-failure-scenario"],
+        cwd=pathlib.Path(__file__).resolve().parents[2],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 0, f"scenario failed: {proc.stderr[-2000:]}"
+    marker = "STARTUP_FAILURE_EVIDENCE="
+    lines = [line.removeprefix(marker) for line in proc.stdout.splitlines() if line.startswith(marker)]
+    assert len(lines) == 1
+    evidence = json.loads(lines[0])
+    assert evidence["result"] == 1 and evidence["warmup_done"] is True
+    events = evidence["events"]
+    assert events.count("boot_helper") == events.count("warmup_worker") == 1
+    assert events.index("boot_helper") < events.index("bridge_created") < events.index("breadcrumb")
+    assert events.index("breadcrumb") < events.index("shutdown_begin") < events.index("shutdown_done")
+    assert events.index("shutdown_done") < events.index("flush_begin") < events.index("flush_done")
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--startup-failure-scenario"]:
+    raise SystemExit(_startup_failure_scenario())
