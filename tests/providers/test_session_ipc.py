@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -43,6 +44,27 @@ def test_real_roundtrip_sanitizes_and_activates(tmp_path):
         assert answer["action"] == "complete_verification"
         assert "account_id" not in answer
         assert request(tmp_path, {"version": 1, "op": "activate"}) == {"version": 1, "result": "activated"}
+
+
+@pytest.mark.parametrize("version", [None, True, 2])
+def test_client_rejects_bad_response_version(tmp_path, monkeypatch, version):
+    from waves.desktop.providers import session_ipc
+
+    original = session_ipc._receive
+    client_thread = threading.get_ident()
+
+    def receive(conn, deadline):
+        result = original(conn, deadline)
+        if threading.get_ident() == client_thread:
+            if version is None:
+                result.pop("version")
+            else:
+                result["version"] = version
+        return result
+
+    monkeypatch.setattr(session_ipc, "_receive", receive)
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, dispatch):
+        assert request(tmp_path, {"version": 1, "op": "activate"}) == {"version": 1, "error": "unavailable"}
 
 
 @pytest.mark.parametrize(
@@ -158,6 +180,36 @@ def test_long_profile_path_and_peer_rejection(tmp_path, monkeypatch):
         assert request(profile, {"version": 1, "op": "activate"})["result"] == "activated"
         monkeypatch.setattr(session_ipc, "_peer_uid", lambda _conn: os.getuid() + 1)
         assert request(profile, {"version": 1, "op": "activate"})["error"] == "unavailable"
+
+
+def test_socket_path_does_not_depend_on_uid_length(tmp_path):
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, dispatch) as server:
+        assert len(os.fsencode(server.path)) < 104
+        assert "waves-provider-" not in str(server.path)
+        assert request(tmp_path, {"version": 1, "op": "activate"})["result"] == "activated"
+
+
+def test_removed_temporary_namespace_is_recreated(tmp_path):
+    with ProfileOwner.acquire(tmp_path) as owner:
+        with SessionServer(owner, dispatch) as server:
+            old_namespace = server.path.parent
+        if old_namespace.exists():
+            old_namespace.rmdir()
+        with SessionServer(owner, dispatch) as server:
+            assert server.path.parent != old_namespace
+            assert request(tmp_path, {"version": 1, "op": "activate"})["result"] == "activated"
+
+
+def test_preempted_namespace_is_replaced_without_removing_file(tmp_path):
+    with ProfileOwner.acquire(tmp_path) as owner:
+        with SessionServer(owner, dispatch) as server:
+            root = server.path.parent.parent
+        with tempfile.NamedTemporaryFile(prefix="w-", dir=root) as other:
+            (owner.control_dir / "namespace").write_text(os.path.basename(other.name))
+            with SessionServer(owner, dispatch) as server:
+                assert str(server.path.parent) != other.name
+                assert os.path.isfile(other.name)
+                assert request(tmp_path, {"version": 1, "op": "activate"})["result"] == "activated"
 
 
 @pytest.mark.integration

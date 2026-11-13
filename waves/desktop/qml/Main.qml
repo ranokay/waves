@@ -6427,7 +6427,7 @@ ApplicationWindow {
   property var signInStepProviders: []
   function openProviderSignIn(providerId) {
     var id = String(providerId || "")
-    if (setupOpen && setupMode === id)
+    if ((setupOpen || welcomeDue) && setupMode === id)
       return
     openSetupPage()
     setupMode = root.signInStepProviders.indexOf(id) >= 0 ? id : "cards"

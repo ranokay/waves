@@ -283,6 +283,21 @@ def _run_scenario() -> int:
     if not q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not pending:
         bad.append("reopening the handoff cancelled the existing sign-in attempt")
 
+    q("root.setupOpen = false; root.providerCards = []; setupSettings.firstRunAnswered = false")
+    if not q("root.welcomeDue"):
+        bad.append("the first-run handoff scenario did not enter the welcome flow")
+    q('root.answerWelcome("tidal"); waves.beginProviderLogin("tidal")')
+    wait_until(
+        lambda: bool(q("root.setupUrlOpened")) and "tidal" in bridge._provider_login_attempts,
+        message="the first-run handoff needs an active sign-in",
+    )
+    pending = bridge._provider_login_attempts.get("tidal")
+    assert pending is not None
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    if not q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not pending:
+        bad.append("the first-run handoff cancelled the existing sign-in attempt")
+
     for line in bad:
         print(f"REGRESSED: {line}", file=sys.stderr)
     return _EXIT_REGRESSED if bad else _EXIT_OK

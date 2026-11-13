@@ -568,10 +568,10 @@ def verify_cookies_file(path: str, *, include_expiry: bool = False) -> dict:
         cookie_domain = fields[0].lstrip(".")
         if cookie_domain != "apple.com" and not cookie_domain.endswith(".apple.com"):
             continue
-        # Netscape field 5 is the expiry epoch; 0 is a session cookie
+        # Netscape field 5 is the expiry epoch; 0 or empty is a session cookie
         # (no static expiry to check).
         try:
-            expires = int(fields[4])
+            expires = int(fields[4] or "0")
         except ValueError:
             continue
         if expires < 0:

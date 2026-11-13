@@ -348,6 +348,9 @@ def test_verify_cookies_accepts_future_and_session_tokens(tmp_path):
     )
     assert verify_cookies_file(str(session))["has_token"] is True
 
+    session.write_text(".apple.com\tTRUE\t/\tTRUE\t\tmedia-user-token\tabc123\n", encoding="utf-8")
+    assert verify_cookies_file(str(session))["has_token"] is True
+
 
 # ---- wrapper guest session ---------------------------------------------------- #
 

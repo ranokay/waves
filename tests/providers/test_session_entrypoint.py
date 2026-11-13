@@ -103,3 +103,25 @@ def test_ensure_without_owner_launches_a_gui(tmp_path):
             break
     else:
         pytest.fail("task-owned GUI did not shut down")
+
+
+def test_ensure_launches_from_another_working_directory(tmp_path):
+    env = _env(tmp_path)
+    env["WAVES_QUIT_AFTER_BOOT_MS"] = "5000"
+    result = subprocess.run(  # noqa: S603 - fixed source entrypoint and test arguments
+        [sys.executable, str(REPO_ROOT / "waves.py"), "session", "ensure", "apple"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=35,
+        check=False,
+    )
+    assert result.returncode == 4
+    assert json.loads(result.stdout)["action"] == "enable_provider"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if _command(env, "session", "status", "apple").returncode == 3:
+            break
+    else:
+        pytest.fail("task-owned GUI did not shut down")

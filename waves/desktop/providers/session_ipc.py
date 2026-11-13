@@ -10,14 +10,18 @@ import ctypes
 import errno
 import hashlib
 import json
+import math
 import os
+import re
 import socket
 import stat
 import struct
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 from waves.desktop.providers.profile_owner import ProfileOwner
@@ -65,7 +69,7 @@ def _error(code: str) -> dict:
     return {"version": 1, "error": code}
 
 
-def _namespace(*, create: bool) -> Path:
+def _namespace(profile: Path, *, create: bool) -> Path:  # noqa: C901 - validates each ownership boundary
     if sys.platform == "darwin":
         root = Path("/private/tmp")
     elif sys.platform.startswith("linux"):
@@ -75,18 +79,61 @@ def _namespace(*, create: bool) -> Path:
     root_info = root.lstat()
     if not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != 0 or not root_info.st_mode & stat.S_ISVTX:
         raise IPCUnavailable()
-    namespace = root / f"waves-provider-{os.getuid()}"
-    created = False
-    if create:
+    control = profile / "provider-control"
+    control_fd = os.open(control, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        control_info = os.fstat(control_fd)
+        if (
+            control_info.st_uid != os.getuid()
+            or stat.S_IMODE(control_info.st_mode) != 0o700
+            or (control_info.st_dev, control_info.st_ino) != (control.lstat().st_dev, control.lstat().st_ino)
+        ):
+            raise IPCUnavailable()
         try:
-            namespace.mkdir(mode=0o700)
-            created = True
-        except FileExistsError:
-            pass
+            record_fd = os.open("namespace", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=control_fd)
+        except FileNotFoundError:
+            namespace = None
+        else:
+            try:
+                info = os.fstat(record_fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_nlink != 1
+                ):
+                    raise IPCUnavailable()
+                name = os.read(record_fd, 64).decode("ascii")
+                if not re.fullmatch(r"w-[a-z0-9_]{8}", name):
+                    raise IPCUnavailable()
+                namespace = root / name
+            finally:
+                os.close(record_fd)
+        if namespace is not None and create:
+            try:
+                info = namespace.lstat()
+            except FileNotFoundError:
+                namespace = None
+            else:
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                    namespace = None
+        if namespace is None:
+            if not create:
+                raise IPCUnavailable()
+            namespace = Path(tempfile.mkdtemp(prefix="w-", dir=root))
+            record_fd, record_path = tempfile.mkstemp(prefix=".namespace-", dir=control)
+            try:
+                os.fchmod(record_fd, 0o600)
+                os.write(record_fd, namespace.name.encode("ascii"))
+                os.replace(record_path, "namespace", dst_dir_fd=control_fd)
+            finally:
+                os.close(record_fd)
+                if os.path.exists(record_path):
+                    os.unlink(record_path)
+    finally:
+        os.close(control_fd)
     fd = os.open(namespace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        if created:
-            os.fchmod(fd, 0o700)
         info = os.fstat(fd)
         path_info = namespace.lstat()
         if (
@@ -103,7 +150,7 @@ def _namespace(*, create: bool) -> Path:
 
 def _endpoint(profile: Path, *, create: bool) -> Path:
     identity = hashlib.sha256(os.fsencode(Path(profile).resolve(strict=True))).hexdigest()
-    path = _namespace(create=create) / (identity + ".sock")
+    path = _namespace(Path(profile).resolve(strict=True), create=create) / (identity + ".sock")
     if len(os.fsencode(path)) >= 104:
         raise IPCUnavailable()
     return path
@@ -168,12 +215,17 @@ def _validate(request: object) -> str | None:
         return "invalid_request"
     if request["version"] != 1:
         return "unsupported_version"
+    if "deadline" in request:
+        value = request["deadline"]
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            return "invalid_request"
+    fields = set(request) - {"deadline"}
     op = request.get("op")
     if not isinstance(op, str) or op not in {"status", "ensure", "activate"}:
         return "unsupported_operation"
     if op == "activate":
-        return None if set(request) == {"version", "op"} else "invalid_request"
-    if set(request) != {"version", "op", "provider"}:
+        return None if fields == {"version", "op"} else "invalid_request"
+    if fields != {"version", "op", "provider"}:
         return "invalid_request"
     if not isinstance(request["provider"], str) or request["provider"] not in {"tidal", "apple"}:
         return "unsupported_provider"
@@ -310,6 +362,7 @@ class SessionServer:
                     if problem:
                         result = _error(problem)
                     elif isinstance(request, dict):
+                        deadline = min(deadline, request.pop("deadline", deadline))
                         result = self._call(request, deadline)
                     else:
                         result = _error("invalid_request")
@@ -360,6 +413,8 @@ class SessionServer:
             if self._socket_info is not None:
                 _remove_owned_socket(self.path, self._socket_info)
                 self._socket_info = None
+                with suppress(OSError):
+                    self.path.parent.rmdir()
         finally:
             if self._registered:
                 with _ACTIVE_LOCK:
@@ -389,8 +444,10 @@ def request(profile: Path, message: dict, *, timeout: float = TIMEOUT) -> dict:
             conn.connect(str(path))
             if _peer_uid(conn) != os.getuid():
                 raise IPCUnavailable()  # noqa: TRY301
-            _send(conn, message, deadline)
+            _send(conn, {**message, "deadline": deadline}, deadline)
             response = _receive(conn, deadline)
+        if not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1:
+            return _error("unavailable")
         if (
             isinstance(response, dict)
             and set(response) == {"version", "error"}

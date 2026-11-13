@@ -38,7 +38,11 @@ def activate_existing(profile: Path, *, timeout: float = _START_TIMEOUT) -> bool
 
 
 def _start_gui() -> None:
-    command = [str(executable_path())] if is_frozen() else [sys.executable, "-m", "waves.desktop"]
+    command = (
+        [str(executable_path())]
+        if is_frozen()
+        else [sys.executable, str(Path(__file__).resolve().parents[3] / "waves.py")]
+    )
     subprocess.Popen(  # noqa: S603 - executable is this app or its Python interpreter
         command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
     )

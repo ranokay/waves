@@ -94,6 +94,24 @@ def test_expired_request_never_applies_queued_gui_effect(app, bridge, tmp_path, 
         assert activations == [] and bridge.signInRequested.emits == []
 
 
+def test_short_client_deadline_cancels_queued_activation(app, bridge, tmp_path):
+    activations = []
+    entered = threading.Event()
+    adapter = SessionDispatcher(bridge, lambda: activations.append(True))
+    adapter._queued.connect(lambda _job: entered.set(), Qt.ConnectionType.DirectConnection)
+    with (
+        ProfileOwner.acquire(tmp_path) as owner,
+        SessionServer(owner, adapter.dispatch, timeout=1, on_close=adapter.close),
+    ):
+        worker = threading.Thread(target=lambda: request(tmp_path, {"version": 1, "op": "activate"}, timeout=0.1))
+        worker.start()
+        assert entered.wait(1)
+        worker.join(2)
+        assert not worker.is_alive()
+        app.processEvents()
+        assert activations == []
+
+
 def test_server_close_invalidates_queued_requests_before_owner_release(app, bridge, tmp_path):
     activations = []
     entered = threading.Event()
