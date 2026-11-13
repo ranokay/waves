@@ -315,10 +315,10 @@ class SessionServer:
             if (held.st_dev, held.st_ino) != (lock.st_dev, lock.st_ino):
                 raise IPCUnavailable()  # noqa: TRY301
             profile = owner.control_dir.parent
-            self.path = _endpoint(profile, create=True)
-            if self.path.stem != owner.endpoint_id:
-                raise IPCUnavailable()  # noqa: TRY301
             with _ACTIVE_LOCK:
+                self.path = _endpoint(profile, create=True)
+                if self.path.stem != owner.endpoint_id:
+                    raise IPCUnavailable()  # noqa: TRY301
                 if str(self.path) in _ACTIVE_ENDPOINTS:
                     raise IPCUnavailable()  # noqa: TRY301
                 _ACTIVE_ENDPOINTS.add(str(self.path))

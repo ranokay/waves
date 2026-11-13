@@ -134,6 +134,41 @@ def test_closed_owner_refused_and_active_server_keeps_lock(tmp_path):
         pass
 
 
+def test_simultaneous_servers_share_one_owner_endpoint(tmp_path, monkeypatch):
+    from waves.desktop.providers import session_ipc
+
+    original = session_ipc.tempfile.mkdtemp
+
+    def slow_create(*args, **kwargs):
+        time.sleep(0.05)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(session_ipc.tempfile, "mkdtemp", slow_create)
+    barrier = threading.Barrier(2)
+    servers = []
+    errors = []
+    with ProfileOwner.acquire(tmp_path) as owner:
+
+        def start():
+            barrier.wait()
+            try:
+                servers.append(SessionServer(owner, dispatch))
+            except IPCUnavailable:
+                errors.append(True)
+
+        workers = [threading.Thread(target=start) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(2)
+        try:
+            assert all(not worker.is_alive() for worker in workers)
+            assert len(servers) == 1 and len(errors) == 1
+        finally:
+            for server in servers:
+                server.close()
+
+
 def test_unsafe_existing_endpoint_not_removed(tmp_path):
     with ProfileOwner.acquire(tmp_path) as owner:
         from waves.desktop.providers.session_ipc import _endpoint
