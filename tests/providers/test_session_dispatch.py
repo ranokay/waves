@@ -262,9 +262,12 @@ def test_stale_apple_refresh_is_scheduled_once_and_stopped_runtime_never_refresh
         assert call_while_pumping(app, tmp_path, msg)["state"] == "checking"
         assert call_while_pumping(app, tmp_path, msg)["state"] == "checking"
         assert calls == [True]
+        adapter._apple_refresh_started -= 11
+        assert call_while_pumping(app, tmp_path, msg)["state"] == "checking"
+        assert calls == [True, True]
         bridge._apple_runtime_sessions.is_stopped = lambda _id: True
         assert call_while_pumping(app, tmp_path, msg)["action"] == "start_runtime"
-        assert calls == [True]
+        assert calls == [True, True]
 
 
 def test_verified_cookies_account_survives_stopped_wrapper(app, bridge, tmp_path):

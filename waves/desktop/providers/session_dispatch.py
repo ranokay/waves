@@ -261,12 +261,8 @@ class SessionDispatcher(QObject):
         if not callable(schedule):
             return result
         key = (id(cache), (cache or {}).get("at"))
-        if key == self._apple_refresh_key:
-            return (
-                _response("checking")
-                if time.monotonic() - self._apple_refresh_started < 10
-                else _response("unavailable_unknown", "open_waves")
-            )
+        if key == self._apple_refresh_key and time.monotonic() - self._apple_refresh_started < 10:
+            return _response("checking")
         if self._current(job) and schedule():
             self._apple_refresh_key = key
             self._apple_refresh_started = time.monotonic()

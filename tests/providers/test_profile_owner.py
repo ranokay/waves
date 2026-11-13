@@ -47,6 +47,7 @@ def test_owner_excludes_another_process_and_release_allows_next(tmp_path, owner_
     with pytest.raises(OwnerBusy):
         ProfileOwner.acquire(tmp_path)
     proc.stdin.close()
+    proc.stdin = None
     assert proc.wait(timeout=5) == 0
     with ProfileOwner.acquire(tmp_path) as owner:
         assert owner.control_dir.stat().st_mode & 0o777 == 0o700

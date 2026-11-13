@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 from providers.qml_auth import CallbackLoginAttempt
 from support.paths import QML_MAIN
-from support.qml import run_scenario
+from support.qml import run_scenario, wait_until
 from support.qml_probe import scene_js
 
 _EXIT_OK = 0
@@ -270,8 +270,12 @@ def _run_scenario() -> int:
     if q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not None:
         bad.append("reopening a cancelled handoff started another sign-in")
     q('waves.beginProviderLogin("tidal")')
-    settle(500)
+    wait_until(
+        lambda: bool(q("root.setupUrlOpened")) and "tidal" in bridge._provider_login_attempts,
+        message="the repeated-handoff scenario needs an active sign-in",
+    )
     pending = bridge._provider_login_attempts.get("tidal")
+    assert pending is not None
     bridge.signInRequested.emit("tidal")
     settle(150)
     bridge.signInRequested.emit("tidal")
