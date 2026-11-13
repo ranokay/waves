@@ -145,12 +145,12 @@ def test_the_source_is_still_taken_away_when_it_can_be(tmp_path):
 # --------------------------------------------------------------------------- #
 # The migration breadcrumb has to be able to reach the ring.
 # --------------------------------------------------------------------------- #
-def test_the_migration_breadcrumb_is_logged_after_diagnostics_are_installed():
-    """Structural: the bridge is what installs the handlers, so the line has to
-    come after it. Logged any earlier it was dropped at the root default (INFO)
-    or reached stderr only (WARNING), which a packaged build cannot show, and it
-    never reached the ring, the disk log or an exported bundle."""
-    source = inspect.getsource(waves_app.waves_activate)
+def test_wiring_migration_breadcrumb_follows_diagnostics_installation():
+    """Pin boot ordering; test_the_breadcrumb_says_what_happened_and_never_where covers the logger.
+
+    Cold boot alone cannot prove the breadcrumb was queued after handler setup.
+    """
+    source = inspect.getsource(waves_app._run_waves)
     at_bridge = source.index("WavesBridge(tidal=tidal)")
     at_breadcrumb = source.index("_log_config_migration()")
 
@@ -282,10 +282,12 @@ def test_icon_debug_before_diagnostics_install_holds_its_lines(monkeypatch, caps
     assert waves_app._icon_debug_pending == ["WAVES aumid: set Waves.Waves"]
 
 
-def test_boot_threads_start_through_the_one_function():
-    """Structural: the TLS warm-up runs through _start_boot_threads so the
-    quiet-window guard sees the same launch the user gets."""
-    source = inspect.getsource(waves_app.waves_activate)
+def test_wiring_boot_threads_start_through_the_one_function():
+    """The cold-process boot test exercises launch; pin its warm-up delegation.
+
+    A successful boot does not reveal which helper started the warm-up thread.
+    """
+    source = inspect.getsource(waves_app._run_waves)
 
     assert "_start_boot_threads()" in source
     assert "threading.Thread(target=_warm_tls" not in source
@@ -293,11 +295,13 @@ def test_boot_threads_start_through_the_one_function():
     assert "_warm_tls" in boot_source
 
 
-def test_a_qml_load_failure_shuts_down_and_flushes(monkeypatch):
-    """Structural: app.exec never runs, so aboutToQuit never fires. The
-    failure path must drain the pools, abort the bridge's login/sweep, and
-    give the disk log its bounded chance to land the tail."""
-    source = inspect.getsource(waves_app.waves_activate)
+def test_wiring_qml_load_failure_shuts_down_and_flushes():
+    """Pin the failure branch absent from the successful cold-process boot.
+
+    test_a_line_logged_after_shutdown_still_reaches_the_dev_log exercises the
+    normal exit flush; deliberately breaking QML is needed to reach this branch.
+    """
+    source = inspect.getsource(waves_app._run_waves)
     fail_arm = source[source.index("if not root_objects:") :]
     fail_arm = fail_arm[: fail_arm.index("# The macOS back-swipe filter")]
 
