@@ -126,6 +126,7 @@ def test_unsafe_existing_endpoint_not_removed(tmp_path):
             path.unlink()
 
 
+@pytest.mark.integration
 def test_crash_recovery_replaces_stale_socket(tmp_path):
     code = (
         "import os,sys\n"
@@ -159,6 +160,7 @@ def test_long_profile_path_and_peer_rejection(tmp_path, monkeypatch):
         assert request(profile, {"version": 1, "op": "activate"})["error"] == "unavailable"
 
 
+@pytest.mark.integration
 def test_separate_process_can_use_client(tmp_path):
     code = (
         "import json,sys\n"

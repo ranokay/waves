@@ -42,6 +42,7 @@ def owner_process(tmp_path):
         proc.communicate(timeout=5)
 
 
+@pytest.mark.integration
 def test_owner_excludes_another_process_and_release_allows_next(tmp_path, owner_process):
     proc = owner_process()
     with pytest.raises(OwnerBusy):
@@ -57,6 +58,7 @@ def test_owner_excludes_another_process_and_release_allows_next(tmp_path, owner_
         assert next_owner.endpoint_id == owner.endpoint_id
 
 
+@pytest.mark.integration
 def test_abrupt_exit_releases_lock_without_unlinking(tmp_path, owner_process):
     proc = owner_process()
     lock = tmp_path / "provider-control" / "owner.lock"

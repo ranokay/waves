@@ -15,7 +15,10 @@ from waves.desktop.providers.profile_owner import ProfileOwner
 from waves.desktop.providers.session_dispatch import SessionDispatcher
 from waves.desktop.providers.session_ipc import SessionServer, request
 
-pytestmark = pytest.mark.skipif(sys.platform != "darwin" and not sys.platform.startswith("linux"), reason="Unix IPC")
+pytestmark = [
+    pytest.mark.qml,
+    pytest.mark.skipif(sys.platform != "darwin" and not sys.platform.startswith("linux"), reason="Unix IPC"),
+]
 
 
 @pytest.fixture
