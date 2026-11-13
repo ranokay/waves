@@ -261,6 +261,24 @@ def _run_scenario() -> int:
     ):
         bad.append("the paste field has no pixels to click")
 
+    q('root.openSettingsCard("providers_apple")')
+    settle(150)
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    if not q("root.setupOpen") or q("root.setupMode") != "tidal":
+        bad.append("a repeated handoff did not restore the sign-in page")
+    if q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not None:
+        bad.append("reopening a cancelled handoff started another sign-in")
+    q('waves.beginProviderLogin("tidal")')
+    settle(500)
+    pending = bridge._provider_login_attempts.get("tidal")
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    if not q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not pending:
+        bad.append("reopening the handoff cancelled the existing sign-in attempt")
+
     for line in bad:
         print(f"REGRESSED: {line}", file=sys.stderr)
     return _EXIT_REGRESSED if bad else _EXIT_OK

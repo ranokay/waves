@@ -50,7 +50,7 @@ def call_while_pumping(app, profile, message):
     return result[0]
 
 
-def test_socket_dispatch_uses_qt_thread_and_no_duplicate_handoff(app, bridge, tmp_path):
+def test_socket_dispatch_uses_qt_thread_and_reopens_handoff(app, bridge, tmp_path):
     activations = []
     adapter = SessionDispatcher(bridge, lambda: activations.append(threading.get_ident()))
     with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, adapter.dispatch, on_close=adapter.close):
@@ -60,7 +60,7 @@ def test_socket_dispatch_uses_qt_thread_and_no_duplicate_handoff(app, bridge, tm
         assert first == second
         assert first["state"] == "unavailable_unknown" and first["action"] == "open_waves"
         assert first["result"] == "action_required"
-        assert bridge.signInRequested.emits == ["tidal"]
+        assert bridge.signInRequested.emits == ["tidal", "tidal"]
         assert activations == [threading.get_ident(), threading.get_ident()]
         assert bridge._provider_login_attempts == {}
         assert call_while_pumping(app, tmp_path, {"version": 1, "op": "activate"})["result"] == "activated"
@@ -196,7 +196,7 @@ def test_concurrent_ensures_share_single_pending_handoff(app, bridge, tmp_path):
                 worker.join(0.005)
         assert all(not worker.is_alive() for worker in threads)
         assert len(replies) == 2 and all(reply["action"] == "open_waves" for reply in replies)
-        assert bridge.signInRequested.emits == ["tidal"]
+        assert bridge.signInRequested.emits == ["tidal", "tidal"]
         assert bridge._provider_login_attempts == {}
 
 
@@ -238,9 +238,12 @@ def test_ensure_resumes_saved_tidal_once_and_respects_signout(app, bridge, tmp_p
         assert call_while_pumping(app, tmp_path, msg)["state"] == "checking"
         assert calls == ["resume"]
         bridge._provider_login_attempts.clear()
+        assert call_while_pumping(app, tmp_path, msg)["state"] == "checking"
+        assert calls == ["resume", "resume"]
+        bridge._provider_login_attempts.clear()
         bridge._provider_cleanup_events["tidal"] = threading.Event()
         assert call_while_pumping(app, tmp_path, msg)["state"] == "signed_out"
-        assert calls == ["resume"]
+        assert calls == ["resume", "resume"]
 
 
 def test_stale_apple_refresh_is_scheduled_once_and_stopped_runtime_never_refreshes(app, bridge, tmp_path):
@@ -262,3 +265,200 @@ def test_stale_apple_refresh_is_scheduled_once_and_stopped_runtime_never_refresh
         bridge._apple_runtime_sessions.is_stopped = lambda _id: True
         assert call_while_pumping(app, tmp_path, msg)["action"] == "start_runtime"
         assert calls == [True]
+
+
+def test_verified_cookies_account_survives_stopped_wrapper(app, bridge, tmp_path):
+    from waves.desktop.providers.lifecycle import provider_contexts
+    from waves.file_integrity import sha256_file
+    from waves.providers.apple.engines import EngineFacts
+    from waves.providers.apple.runtime import verify_cookies_file
+
+    cookies = tmp_path / "fixture-cookies.txt"
+    cookies.write_text(".apple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tfixture-only\n")
+    assert verify_cookies_file(str(cookies))["has_token"]
+    bridge.settings.data.apple_cookies_path = str(cookies)
+    bridge.providers = {"apple": SimpleNamespace(cookies_path=str(cookies))}
+    bridge._apple_engine_facts_gen = 1
+    bridge._apple_runtime_sessions = SimpleNamespace(
+        choices_restored=True, is_stopped=lambda _id: True, revision=lambda _id: (1, 2)
+    )
+    bridge._apple_engine_facts_cache = (
+        provider_contexts(bridge).capture("apple"),
+        time.time(),
+        EngineFacts(cookies_ready=True),
+        [],
+        1,
+        (1, 2),
+        (str(cookies), sha256_file(cookies), 0),
+    )
+    adapter = SessionDispatcher(bridge, lambda: pytest.fail("valid cookies need no handoff"))
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, adapter.dispatch, on_close=adapter.close):
+        for op in ("status", "ensure"):
+            result = call_while_pumping(app, tmp_path, {"version": 1, "op": op, "provider": "apple"})
+            assert result["state"] == "authenticated"
+            assert result["facts"]["runtime"] == "not_ready"
+            assert result["facts"]["delivery"] == "unknown"
+
+
+@pytest.mark.parametrize("valid", [True, False, "expired", "empty", "bad_expiry", "negative_expiry"])
+@pytest.mark.parametrize("stopped", [False, True])
+def test_cookie_evidence_is_refreshed_once_on_worker_without_gui_file_reads(
+    app, bridge, tmp_path, monkeypatch, valid, stopped
+):
+    from waves.desktop.backend import WavesBridge
+    from waves.providers.apple import runtime
+    from waves.providers.apple.provider import AppleProvider
+
+    cookies = tmp_path / "fixture-cookies.txt"
+    name = "other-cookie" if valid is False else "media-user-token"
+    expiry = {"expired": "1", "bad_expiry": "invalid", "negative_expiry": "-1"}.get(valid, "0")
+    value = "" if valid == "empty" else "fixture-only"
+    cookies.write_text(f".apple.com\tTRUE\t/\tTRUE\t{expiry}\t{name}\t{value}\n")
+    provider = AppleProvider()
+    provider.cookies_path = str(cookies)
+    bridge.providers = {"apple": provider}
+    bridge.settings.data.apple_cookies_path = str(cookies)
+    bridge._apple_engine_facts_gen = 1
+    bridge._apple_engine_facts_cache = None
+    if stopped:
+        bridge._apple_runtime_sessions = SimpleNamespace(
+            choices_restored=True,
+            is_stopped=lambda _id: True,
+            revision=lambda _id: (0, 0),
+            readiness=lambda _id: "stopped",
+            observe_current=lambda *_args: ("stopped", (0, 0)),
+        )
+        monkeypatch.setattr(
+            WavesBridge, "_apple_observe_wrapper_identity", lambda _bridge: SimpleNamespace(revision="", verified=None)
+        )
+    bridge._apple_cookies_ready = lambda: True
+    bridge._apple_runtime_ready = lambda: False
+    bridge._apple_needs_attention = lambda: False
+    bridge._apple_fetch_binary_ready = lambda: False
+    bridge._apple_wrapper_signed_in = lambda: False
+    bridge._apple_container_serves = lambda: False
+    bridge._apple_live_flags = WavesBridge._apple_live_flags.__get__(bridge)
+    bridge._apple_engine_facts = WavesBridge._apple_engine_facts.__get__(bridge)
+    bridge._apple_engine_details = WavesBridge._apple_engine_details.__get__(bridge)
+    workers, deliveries, probes = [], [], []
+    bridge.threadpool = SimpleNamespace(start=workers.append)
+    bridge._catalogEvent = SimpleNamespace(emit=deliveries.append)
+    original = runtime.verify_cookies_file
+
+    def verify_on_worker(*args, **kwargs):
+        probes.append(threading.get_ident())
+        assert threading.get_ident() != threading.main_thread().ident
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "verify_cookies_file", verify_on_worker)
+    adapter = SessionDispatcher(bridge, lambda: pytest.fail("no sign-in handoff while checking cookies"))
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, adapter.dispatch, on_close=adapter.close):
+        message = {"version": 1, "op": "ensure", "provider": "apple"}
+        for _ in range(2):
+            assert call_while_pumping(app, tmp_path, message)["state"] == "checking"
+        assert len(workers) == 1 and probes == []
+        worker = threading.Thread(target=workers.pop().run)
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive() and probes and len(deliveries) == 1
+        deliveries.pop().deliver()
+        status = call_while_pumping(app, tmp_path, {**message, "op": "status"})
+        assert (status["state"] == "authenticated") is (valid is True)
+        if valid is True:
+            assert call_while_pumping(app, tmp_path, message)["state"] == "authenticated"
+        assert len(probes) == 2
+
+
+@pytest.mark.parametrize("change", ["provider_epoch", "generation", "cookie_path", "account_revision", "age", "expiry"])
+def test_changed_cookie_evidence_never_authenticates(app, bridge, tmp_path, change):
+    from waves.desktop.providers.lifecycle import provider_contexts
+    from waves.providers.apple.engines import EngineFacts
+
+    path = str(tmp_path / "fixture-cookies.txt")
+    bridge.settings.data.apple_cookies_path = path
+    bridge.providers = {"apple": SimpleNamespace(cookies_path=path)}
+    bridge._apple_engine_facts_gen = 1
+    bridge._apple_runtime_sessions = SimpleNamespace(
+        choices_restored=True, is_stopped=lambda _id: True, revision=lambda _id: (1, 2)
+    )
+    contexts = provider_contexts(bridge)
+    evidence = (path, "fixture-digest", time.time() - 1 if change == "expiry" else 0)
+    bridge._apple_engine_facts_cache = (
+        contexts.capture("apple"),
+        time.time() - 31 if change == "age" else time.time(),
+        EngineFacts(cookies_ready=True),
+        [],
+        1,
+        (1, 2),
+        evidence,
+    )
+    if change == "provider_epoch":
+        contexts.revoke("apple")
+    elif change == "generation":
+        bridge._apple_engine_facts_gen += 1
+    elif change == "cookie_path":
+        bridge.settings.data.apple_cookies_path = path + ".new"
+        bridge.providers["apple"].cookies_path = path + ".new"
+    elif change == "account_revision":
+        bridge._apple_runtime_sessions.revision = lambda _id: (2, 2)
+    adapter = SessionDispatcher(bridge, lambda: None)
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, adapter.dispatch, on_close=adapter.close):
+        answer = call_while_pumping(app, tmp_path, {"version": 1, "op": "status", "provider": "apple"})
+        assert answer["state"] != "authenticated"
+        assert answer["facts"]["runtime"] == "not_ready"
+
+
+def test_wrapper_expiry_does_not_reject_current_cookie_evidence(app, bridge, tmp_path):
+    from waves.desktop.providers.lifecycle import provider_contexts
+    from waves.providers.apple.engines import EngineFacts
+
+    path = str(tmp_path / "fixture-cookies.txt")
+    bridge.settings.data.apple_cookies_path = path
+    bridge.providers = {"apple": SimpleNamespace(cookies_path=path)}
+    bridge._apple_engine_facts_gen = 1
+    bridge._apple_session_expired = True
+    bridge._apple_session_credential = "wrapper"
+    bridge._apple_engine_facts_cache = (
+        provider_contexts(bridge).capture("apple"),
+        time.time(),
+        EngineFacts(cookies_ready=True),
+        [],
+        1,
+        (0, 0),
+        (path, "fixture-digest", 0),
+    )
+    adapter = SessionDispatcher(bridge, lambda: pytest.fail("cookies need no wrapper handoff"))
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, adapter.dispatch, on_close=adapter.close):
+        result = call_while_pumping(app, tmp_path, {"version": 1, "op": "ensure", "provider": "apple"})
+        assert result["state"] == "authenticated" and result["facts"]["delivery"] == "unknown"
+        assert bridge._apple_session_expired and bridge._apple_session_credential == "wrapper"
+
+
+def test_good_wrapper_does_not_clear_cookie_expiry(app, bridge, tmp_path):
+    from waves.desktop.providers.lifecycle import provider_contexts
+    from waves.providers.apple.engines import EngineFacts
+
+    path = str(tmp_path / "fixture-cookies.txt")
+    bridge.settings.data.apple_cookies_path = path
+    bridge.providers = {"apple": SimpleNamespace(cookies_path=path)}
+    bridge._apple_engine_facts_gen = 1
+    bridge._apple_session_expired = True
+    bridge._apple_session_credential = "cookies"
+    bridge._apple_engine_facts_cache = (
+        provider_contexts(bridge).capture("apple"),
+        time.time(),
+        EngineFacts(cookies_ready=True),
+        [],
+        1,
+        (0, 0),
+        (path, "fixture-digest", 0),
+    )
+    bridge._apple_wrapper_auth_cache = {
+        "at": time.time(),
+        "result": {"reachable": True, "state": "authenticated", "logged_in": True},
+    }
+    adapter = SessionDispatcher(bridge, lambda: pytest.fail("wrapper needs no handoff"))
+    with ProfileOwner.acquire(tmp_path) as owner, SessionServer(owner, adapter.dispatch, on_close=adapter.close):
+        result = call_while_pumping(app, tmp_path, {"version": 1, "op": "ensure", "provider": "apple"})
+        assert result["state"] == "authenticated" and result["facts"]["delivery"] == "unknown"
+        assert bridge._apple_session_expired and bridge._apple_session_credential == "cookies"

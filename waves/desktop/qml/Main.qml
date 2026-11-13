@@ -6426,8 +6426,10 @@ ApplicationWindow {
   // names and auth entry points. Setup flows remain provider actions.
   property var signInStepProviders: []
   function openProviderSignIn(providerId) {
-    openSetupPage()
     var id = String(providerId || "")
+    if (setupOpen && setupMode === id)
+      return
+    openSetupPage()
     setupMode = root.signInStepProviders.indexOf(id) >= 0 ? id : "cards"
   }
   // Identity resolution stays in Python, including bare legacy TIDAL IDs.

@@ -52,18 +52,62 @@ def _tidal_snapshot(bridge) -> dict:
     return _response("unavailable_unknown", "open_waves")
 
 
+def _apple_cookies_state(bridge) -> bool | None:
+    """Read worker-verified cookies evidence without touching its file."""
+    data = getattr(getattr(bridge, "settings", None), "data", None)
+    path = str(getattr(data, "apple_cookies_path", "") or "")
+    if not path:
+        return False
+    if (
+        getattr(bridge, "_apple_session_expired", False)
+        and getattr(bridge, "_apple_session_credential", "") != AppleCredential.WRAPPER
+    ):
+        return False
+    provider = (getattr(bridge, "providers", None) or {}).get("apple")
+    if str(getattr(provider, "cookies_path", "") or "") != path:
+        return None
+    cache = getattr(bridge, "_apple_engine_facts_cache", None)
+    contexts = getattr(bridge, "_provider_contexts", None)
+    if not isinstance(cache, tuple) or len(cache) < 7 or contexts is None:
+        return None
+    token, when, facts, _, generation, revision, evidence = cache[:7]
+    age = time.time() - when
+    if not contexts.current(token) or generation != getattr(bridge, "_apple_engine_facts_gen", 0) or not 0 <= age < 30:
+        return None
+    sessions = getattr(bridge, "_apple_runtime_sessions", None)
+    if sessions is not None and sessions.revision("apple:wrapper-v2")[0] != revision[0]:
+        return None
+    if not isinstance(evidence, tuple) or len(evidence) != 3 or evidence[0] != path:
+        return None
+    _, fingerprint, expires = evidence
+    if not fingerprint or getattr(facts, "cookies_ready", None) is not True:
+        return False
+    return not expires or time.time() < expires
+
+
 def _apple_snapshot(bridge) -> dict:
     data = getattr(getattr(bridge, "settings", None), "data", None)
     if not bool(getattr(data, "apple_enabled", False)):
         return _response("unavailable_unknown", "enable_provider", catalog="not_ready")
+    if getattr(bridge, "_apple_signout_inflight", False):
+        return _response("checking")
     sessions = getattr(bridge, "_apple_runtime_sessions", None)
+    cookies = _apple_cookies_state(bridge)
+    stopped = sessions is not None and sessions.choices_restored and sessions.is_stopped("apple:wrapper-v2")
+    if cookies is True:
+        return _response("authenticated", runtime="not_ready" if stopped else "unknown")
+    wrapper = _apple_wrapper_snapshot(bridge, sessions, stopped)
+    if cookies is None and wrapper["state"] != "authenticated":
+        return _response("checking", runtime=wrapper["facts"]["runtime"])
+    return wrapper
+
+
+def _apple_wrapper_snapshot(bridge, sessions, stopped: bool) -> dict:
     if sessions is not None:
         if not sessions.choices_restored:
             return _response("checking")
-        if sessions.is_stopped("apple:wrapper-v2"):
+        if stopped:
             return _response("unavailable_unknown", "start_runtime", runtime="not_ready")
-    if getattr(bridge, "_apple_signout_inflight", False):
-        return _response("checking")
     if (
         getattr(bridge, "_apple_session_expired", False)
         and getattr(bridge, "_apple_session_credential", "") != AppleCredential.COOKIES
@@ -111,8 +155,6 @@ class SessionDispatcher(QObject):
         self._closed = False
         self._generation = 0
         self._pending: set[_Request] = set()
-        self._shown: dict[str, tuple[str, str]] = {}
-        self._tidal_resume_requested = False
         self._apple_refresh_key = None
         self._apple_refresh_started = 0.0
         self._queued.connect(self._apply, Qt.ConnectionType.QueuedConnection)
@@ -140,7 +182,7 @@ class SessionDispatcher(QObject):
         )
 
     @Slot(object)
-    def _apply(self, job: _Request) -> None:  # noqa: C901 - one serialized deadline boundary
+    def _apply(self, job: _Request) -> None:
         with self._lock:
             try:
                 if not self._current(job):
@@ -153,21 +195,15 @@ class SessionDispatcher(QObject):
                     return
                 provider = job.message["provider"]
                 result = _tidal_snapshot(self._bridge) if provider == "tidal" else _apple_snapshot(self._bridge)
-                if provider == "tidal" and result["state"] == "authenticated":
-                    self._tidal_resume_requested = False
                 if op == "ensure" and self._current(job):
                     result = self._ensure(job, provider, result)
-                marker = (result["state"], result["action"])
-                if result["action"] == "none":
-                    self._shown.pop(provider, None)
-                elif op == "ensure" and self._current(job):
+                if result["action"] != "none" and op == "ensure" and self._current(job):
                     self._activate()
-                    if self._shown.get(provider) != marker and self._current(job):
+                    if self._current(job):
                         if provider == "tidal":
                             self._bridge.signInRequested.emit(provider)
                         else:
                             self._bridge.appleSetupRequested.emit("setup")
-                        self._shown[provider] = marker
                 if self._current(job):
                     job.result = result
             except Exception:
@@ -178,7 +214,7 @@ class SessionDispatcher(QObject):
     def _ensure(self, job: _Request, provider: str, result: dict) -> dict:  # noqa: C901 - explicit lifecycle guards
         bridge = self._bridge
         if provider == "tidal":
-            if result["state"] != "unavailable_unknown" or self._tidal_resume_requested:
+            if result["state"] != "unavailable_unknown":
                 return result
             if "tidal" in getattr(bridge, "_provider_cleanup_events", {}):
                 return result
@@ -186,10 +222,23 @@ class SessionDispatcher(QObject):
             eligible = getattr(provider_obj, "has_resumable_session", None)
             resume = getattr(bridge, "_try_token_login", None)
             if callable(eligible) and eligible() and callable(resume) and self._current(job):
-                self._tidal_resume_requested = True
                 resume()
                 return _response("checking")
             return result
+
+        data = getattr(getattr(bridge, "settings", None), "data", None)
+        if (
+            bool(getattr(data, "apple_enabled", False))
+            and str(getattr(data, "apple_cookies_path", "") or "")
+            and _apple_cookies_state(bridge) is None
+            and result["state"] != "authenticated"
+            and not getattr(bridge, "_apple_signout_inflight", False)
+        ):
+            refresh = getattr(bridge, "_apple_engine_details", None)
+            pool = getattr(getattr(bridge, "threadpool", None), "start", None)
+            if callable(refresh) and callable(pool) and self._current(job):
+                refresh()
+                return _response("checking", runtime=result["facts"]["runtime"])
 
         if result["state"] not in {"checking", "unavailable_unknown"} or result["action"] in {
             "enable_provider",
