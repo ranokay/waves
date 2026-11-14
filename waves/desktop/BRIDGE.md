@@ -100,6 +100,18 @@ log, diagnostics-export and update actions remain available.
 
 ## Session and status
 
+On macOS, `SessionDispatcher` queues local agent requests to the bridge thread.
+Status reads cached facts. Ensure may schedule the existing saved-session or
+Apple wrapper probe on its worker pool, and may emit `signInRequested` or
+`appleSetupRequested` when the user needs to act. It does not start browser
+login or send a verification code. The adapter checks the deadline and its
+lifetime before each queued action. Application shutdown closes the adapter and
+socket before the profile owner lock is released.
+
+The local response separates account state from catalog, runtime, identity,
+storefront and delivery facts. An unknown fact stays unknown. The transport
+excludes credentials, account identifiers, login URLs and redirect payloads.
+
 | Signal                                                                                             | Fires when                                                                                                                                                      |
 | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `loggedInChanged`                                                                                  | Login/logout completes (property `loggedIn`)                                                                                                                    |

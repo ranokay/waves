@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 from providers.qml_auth import CallbackLoginAttempt
 from support.paths import QML_MAIN
-from support.qml import run_scenario
+from support.qml import run_scenario, wait_until
 from support.qml_probe import scene_js
 
 _EXIT_OK = 0
@@ -260,6 +260,43 @@ def _run_scenario() -> int:
         > 0
     ):
         bad.append("the paste field has no pixels to click")
+
+    q('root.openSettingsCard("providers_apple")')
+    settle(150)
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    if not q("root.setupOpen") or q("root.setupMode") != "tidal":
+        bad.append("a repeated handoff did not restore the sign-in page")
+    if q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not None:
+        bad.append("reopening a cancelled handoff started another sign-in")
+    q('waves.beginProviderLogin("tidal")')
+    wait_until(
+        lambda: bool(q("root.setupUrlOpened")) and "tidal" in bridge._provider_login_attempts,
+        message="the repeated-handoff scenario needs an active sign-in",
+    )
+    pending = bridge._provider_login_attempts.get("tidal")
+    assert pending is not None
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    if not q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not pending:
+        bad.append("reopening the handoff cancelled the existing sign-in attempt")
+
+    q("root.setupOpen = false; root.providerCards = []; setupSettings.firstRunAnswered = false")
+    if not q("root.welcomeDue"):
+        bad.append("the first-run handoff scenario did not enter the welcome flow")
+    q('root.answerWelcome("tidal"); waves.beginProviderLogin("tidal")')
+    wait_until(
+        lambda: bool(q("root.setupUrlOpened")) and "tidal" in bridge._provider_login_attempts,
+        message="the first-run handoff needs an active sign-in",
+    )
+    pending = bridge._provider_login_attempts.get("tidal")
+    assert pending is not None
+    bridge.signInRequested.emit("tidal")
+    settle(150)
+    if not q("root.setupUrlOpened") or bridge._provider_login_attempts.get("tidal") is not pending:
+        bad.append("the first-run handoff cancelled the existing sign-in attempt")
 
     for line in bad:
         print(f"REGRESSED: {line}", file=sys.stderr)

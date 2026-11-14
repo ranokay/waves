@@ -26,6 +26,8 @@ issue. A test enforces it.
 
 ### ✨ Added
 
+- 🤝 On macOS, local agent commands can inspect or request provider access through the running Waves session, with human setup when needed ([issue #759](https://github.com/ranokay/waves/issues/759)).
+
 - 🧭 Browse combines every ready provider's editorial shelves into one landing: each section names its source, a source filter and per-section move/collapse/hide controls persist across launches, and every page, playlist grid and paging fetch drills back through the provider that served it ([issue #600](https://github.com/ranokay/waves/issues/600)).
 - 🅴 Explicit tracks now wear an E beside their title in every track list — search, browse, saved lists, album and playlist expands included — so an explicit version and its clean twin are easy to tell apart ([issue #51](https://github.com/iamprivacy/Waves/issues/51)).
 

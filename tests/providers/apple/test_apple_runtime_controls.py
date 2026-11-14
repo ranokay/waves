@@ -829,3 +829,20 @@ def test_latest_stop_wins_when_it_arrives_at_an_older_resume_commit(tmp_path, ru
     workers.pop().run()
     assert sessions.is_stopped(runtime_id)
     assert AppleRuntimeSessions(tmp_path).is_stopped(runtime_id)
+
+
+def test_cookie_evidence_rejects_file_changed_during_verification(tmp_path, monkeypatch):
+    from waves.desktop.backend import _apple_cookie_evidence
+    from waves.providers.apple import runtime
+
+    cookie = tmp_path / "fixture-cookies.txt"
+    cookie.write_text(".apple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tfixture-only\n")
+    verify = runtime.verify_cookies_file
+
+    def replace_during_verify(*args, **kwargs):
+        result = verify(*args, **kwargs)
+        cookie.write_text("fixture changed\n")
+        return result
+
+    monkeypatch.setattr(runtime, "verify_cookies_file", replace_during_verify)
+    assert _apple_cookie_evidence(str(cookie)) == (str(cookie), "", 0)

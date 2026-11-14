@@ -7,6 +7,11 @@ if "--library-worker" in sys.argv[1:]:
 
     raise SystemExit(worker_main(sys.argv[1:]))
 
+if sys.argv[1:2] == ["session"]:
+    from waves.desktop.providers.session_control import main as session_main
+
+    raise SystemExit(session_main(sys.argv[2:]))
+
 from .app import waves_activate
 
 raise SystemExit(waves_activate())
