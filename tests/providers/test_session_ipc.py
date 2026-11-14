@@ -247,6 +247,33 @@ def test_preempted_namespace_is_replaced_without_removing_file(tmp_path):
                 assert request(tmp_path, {"version": 1, "op": "activate"})["result"] == "activated"
 
 
+def test_replaced_control_directory_cannot_receive_namespace_record(tmp_path, monkeypatch):
+    from waves.desktop.providers import session_ipc
+
+    original = session_ipc.tempfile.mkdtemp
+    with ProfileOwner.acquire(tmp_path) as owner:
+        control = owner.control_dir
+        moved = tmp_path / "original-control"
+        created = []
+
+        def replace_control(*args, **kwargs):
+            namespace = original(*args, **kwargs)
+            created.append(namespace)
+            control.rename(moved)
+            control.mkdir(mode=0o700)
+            return namespace
+
+        monkeypatch.setattr(session_ipc.tempfile, "mkdtemp", replace_control)
+        try:
+            with pytest.raises(IPCUnavailable):
+                SessionServer(owner, dispatch)
+            assert not (control / "namespace").exists()
+            assert (moved / "namespace").is_file()
+        finally:
+            for namespace in created:
+                os.rmdir(namespace)
+
+
 @pytest.mark.integration
 def test_separate_process_can_use_client(tmp_path):
     code = (

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import secrets
 import socket
 import stat
 import struct
@@ -121,15 +122,20 @@ def _namespace(profile: Path, *, create: bool) -> Path:  # noqa: C901 - validate
             if not create:
                 raise IPCUnavailable()
             namespace = Path(tempfile.mkdtemp(prefix="w-", dir=root))
-            record_fd, record_path = tempfile.mkstemp(prefix=".namespace-", dir=control)
+            record_name = f".namespace-{secrets.token_hex(8)}"
+            record_fd = os.open(
+                record_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=control_fd
+            )
             try:
                 os.fchmod(record_fd, 0o600)
                 os.write(record_fd, namespace.name.encode("ascii"))
-                os.replace(record_path, "namespace", dst_dir_fd=control_fd)
+                os.replace(record_name, "namespace", src_dir_fd=control_fd, dst_dir_fd=control_fd)
             finally:
                 os.close(record_fd)
-                if os.path.exists(record_path):
-                    os.unlink(record_path)
+                with suppress(FileNotFoundError):
+                    os.unlink(record_name, dir_fd=control_fd)
+        if (control_info.st_dev, control_info.st_ino) != (control.lstat().st_dev, control.lstat().st_ino):
+            raise IPCUnavailable()
     finally:
         os.close(control_fd)
     fd = os.open(namespace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
