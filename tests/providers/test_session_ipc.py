@@ -235,6 +235,25 @@ def test_removed_temporary_namespace_is_recreated(tmp_path):
             assert request(tmp_path, {"version": 1, "op": "activate"})["result"] == "activated"
 
 
+@pytest.mark.integration
+def test_namespace_survives_restrictive_umask(tmp_path):
+    code = (
+        "import os,sys\n"
+        "from pathlib import Path\n"
+        "from waves.desktop.providers.profile_owner import ProfileOwner\n"
+        "from waves.desktop.providers.session_ipc import SessionServer,request\n"
+        "p=Path(sys.argv[1])\n"
+        "with ProfileOwner.acquire(p) as owner:\n"
+        " os.umask(0o700)\n"
+        " with SessionServer(owner,lambda r,d: {'result':'activated'}):\n"
+        "  assert request(p,{'version':1,'op':'activate'})['result']=='activated'\n"
+    )
+    result = subprocess.run(  # noqa: S603 - fixed interpreter and fixture script
+        [sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, timeout=5, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_preempted_namespace_is_replaced_without_removing_file(tmp_path):
     with ProfileOwner.acquire(tmp_path) as owner:
         with SessionServer(owner, dispatch) as server:

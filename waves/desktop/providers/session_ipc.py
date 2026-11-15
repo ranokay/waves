@@ -122,6 +122,7 @@ def _namespace(profile: Path, *, create: bool) -> Path:  # noqa: C901 - validate
             if not create:
                 raise IPCUnavailable()
             namespace = Path(tempfile.mkdtemp(prefix="w-", dir=root))
+            os.chmod(namespace, 0o700, follow_symlinks=False)
             record_name = f".namespace-{secrets.token_hex(8)}"
             record_fd = os.open(
                 record_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=control_fd
