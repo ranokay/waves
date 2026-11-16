@@ -428,9 +428,8 @@ def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
 
     Returns ``{"reachable", "state", "logged_in", "account", "error"}``.
     ``state`` keeps the guest's own spelling (the live guest answers
-    ``authenticated``); ``logged_in`` folds it to one boolean, true whenever
-    the guest answered with a state that is not ``logged_out`` (the same
-    rule gamdl uses). Never raises: the caller reads the dict.
+    ``authenticated``); ``logged_in`` is true only for that explicit state.
+    Never raises: the caller reads the dict.
     Optional ``account_id`` and ``storefront`` appear only when explicitly
     supplied without conflicts. The account label is never an identifier.
     """
@@ -463,7 +462,7 @@ def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
     return {
         "reachable": True,
         "state": state,
-        "logged_in": bool(state and state != "logged_out"),
+        "logged_in": state == "authenticated",
         "account": _wrapper_account_label(payload, auth),
         "error": "",
         **_wrapper_context_fields(payload, auth),
@@ -539,14 +538,15 @@ def describe_image_pull_error(exc: Exception | str, image: str = WRAPPER_V2_IMAG
 # Cookies fallback: Netscape export carrying a signed-in session.
 
 
-def verify_cookies_file(path: str) -> dict:
+def verify_cookies_file(path: str, *, include_expiry: bool = False) -> dict:
     """Check a Netscape cookies export unlocks the cookies tier.
 
     Returns ``{"ok", "path", "has_token"}``. ``has_token`` is True when a
     ``media-user-token`` cookie for an Apple domain is present and not
     expired: the marker gamdl's ``create_from_netscape_cookies`` needs to
     build a session. Missing file, no token, or a concrete past expiry
-    raises with wizard-ready words.
+    raises with wizard-ready words. When requested, ``expires_at`` is the
+    token expiry epoch, or zero for a session cookie.
     """
     p = Path(str(path or "").strip()).expanduser()
     if not str(path or "").strip() or not p.is_file():
@@ -561,19 +561,21 @@ def verify_cookies_file(path: str) -> dict:
         if not stripped or stripped.startswith("#"):
             continue
         fields = [field.strip() for field in stripped.split("\t")]
-        if len(fields) < 7 or fields[5] != "media-user-token":
+        if len(fields) < 7 or fields[5] != "media-user-token" or not fields[6]:
             continue
         # The domain decides, not a substring: a token filed under a
         # lookalike domain is not an Apple session.
         cookie_domain = fields[0].lstrip(".")
         if cookie_domain != "apple.com" and not cookie_domain.endswith(".apple.com"):
             continue
-        # Netscape field 5 is the expiry epoch; 0 is a session cookie
+        # Netscape field 5 is the expiry epoch; 0 or empty is a session cookie
         # (no static expiry to check).
         try:
-            expires = int(fields[4] or 0)
+            expires = int(fields[4] or "0")
         except ValueError:
-            expires = 0
+            continue
+        if expires < 0:
+            continue
         if expires > 0 and expires < time.time():
             raise ValueError(
                 "That cookies export's Apple session has expired. "
@@ -586,7 +588,10 @@ def verify_cookies_file(path: str) -> dict:
             "That cookies export has no signed-in Apple session (no media-user-token cookie). "
             "Export again from a logged-in music.apple.com tab."
         )
-    return {"ok": True, "path": str(p), "has_token": True}
+    result = {"ok": True, "path": str(p), "has_token": True}
+    if include_expiry:
+        result["expires_at"] = expires
+    return result
 
 
 # Setup state: one describer for the slot and the schema.

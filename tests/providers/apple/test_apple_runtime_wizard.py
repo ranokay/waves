@@ -348,6 +348,9 @@ def test_verify_cookies_accepts_future_and_session_tokens(tmp_path):
     )
     assert verify_cookies_file(str(session))["has_token"] is True
 
+    session.write_text(".apple.com\tTRUE\t/\tTRUE\t\tmedia-user-token\tabc123\n", encoding="utf-8")
+    assert verify_cookies_file(str(session))["has_token"] is True
+
 
 # ---- wrapper guest session ---------------------------------------------------- #
 
@@ -2565,3 +2568,12 @@ def test_login_exception_after_runtime_switch_cannot_restore_the_form(tmp_path, 
     finally:
         host._events.close()
         loop.processEvents()
+
+
+@pytest.mark.parametrize("state", ["awaiting_2fa", "unknown", "not_logged_out", "", "rejected"])
+def test_wrapper_only_authenticated_state_is_signed_in(state):
+    base = "http://127.0.0.1:51234"
+    session = _WrapperSession(get={f"{base}/me": _WrapperResp(payload={"auth": {"state": state}})})
+    result = wrapper_auth_state(base, session=session)
+    assert result["state"] == state
+    assert result["logged_in"] is False

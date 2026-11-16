@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import SIGNAL, QDateTime, QObject, Qt, QTimer, QUrl, Slot
+from PySide6.QtCore import SIGNAL, QDateTime, QObject, QSettings, Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QWindow
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkDiskCache, QNetworkRequest, QSslConfiguration
 from PySide6.QtQml import QQmlApplicationEngine, QQmlIncubationController, QQmlNetworkAccessManagerFactory
@@ -717,6 +717,27 @@ def _start_boot_threads() -> None:
 
 
 def waves_activate(tidal: Tidal | None = None) -> int:
+    if sys.platform != "darwin":
+        return _run_waves(tidal, None)
+    from waves.desktop.providers.profile_owner import OwnerBusy, OwnerUnavailable, ProfileOwner
+    from waves.desktop.providers.session_control import activate_existing, profile_path
+
+    try:
+        profile = profile_path()
+        profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+        owner = ProfileOwner.acquire(profile)
+    except OwnerBusy:
+        return 0 if activate_existing(profile) else 1
+    except (OwnerUnavailable, OSError):
+        print("Waves could not safely own its profile.", file=sys.stderr)
+        return 1
+    try:
+        return _run_waves(tidal, owner)
+    finally:
+        owner.close()
+
+
+def _run_waves(tidal: Tidal | None, owner) -> int:  # noqa: C901 - application boot and shutdown
     _tune_interpreter_for_gui()
     _install_crash_diagnostics()
     # The freeze watchdog's stuck-event-loop tracebacks belong in the same
@@ -753,6 +774,11 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     app.styleHints().setTabFocusBehavior(Qt.TabFocusBehavior.TabFocusAllControls)
     app.setApplicationName("Waves")
     app.setOrganizationName("Waves")
+    # Native QSettings ignores XDG on macOS. Test-seam launches keep QML
+    # preferences in the same disposable profile as the bridge.
+    if os.environ.get("WAVES_TEST_SEAM") == "1" and os.environ.get("XDG_CONFIG_HOME"):
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, os.environ["XDG_CONFIG_HOME"])
     icon = _app_icon()
     if icon is not None:
         app.setWindowIcon(icon)
@@ -797,8 +823,6 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     QTimer.singleShot(20_000, incubation.release_throttle)
     # Abort downloads and drain the worker pools before the Qt object graph is
     # torn down, otherwise quitting mid-download hangs in QThreadPool teardown.
-    app.aboutToQuit.connect(bridge.shutdown)
-
     engine.load(QUrl.fromLocalFile(str(_QML_MAIN)))
     root_objects = engine.rootObjects()
     if not root_objects:
@@ -846,7 +870,34 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     _install_test_quit(app)  # WAVES_QUIT_AFTER_BOOT_MS, the integration tests' seam
     _block_gui_for_test()  # WAVES_BLOCK_GUI_MS, the watchdog integration test's freeze
 
-    rc = app.exec()
+    server = None
+    if owner is not None:
+        from waves.desktop.providers.session_dispatch import SessionDispatcher
+        from waves.desktop.providers.session_ipc import SessionServer
+
+        def activate_window() -> None:
+            window = root_objects[0]
+            if isinstance(window, QWindow):
+                if window.visibility() == QWindow.Visibility.Minimized:
+                    window.showNormal()
+                window.raise_()
+                window.requestActivate()
+
+        adapter = SessionDispatcher(bridge, activate_window)
+        try:
+            server = SessionServer(owner, adapter.dispatch, on_close=adapter.close)
+        except Exception:
+            adapter.close()
+            bridge.shutdown()
+            diagnostics.wait_for_disk_log()
+            return 1
+        app.aboutToQuit.connect(server.close)
+    app.aboutToQuit.connect(bridge.shutdown)
+    try:
+        rc = app.exec()
+    finally:
+        if server is not None:
+            server.close()
     _log_after_shutdown_probe()
     if owns_app:
         # Standalone launch: background workers (e.g. the search popularity

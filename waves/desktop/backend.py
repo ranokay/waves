@@ -1033,6 +1033,25 @@ def _advertised_ceiling(media) -> int | None:
     return None
 
 
+def _apple_cookie_evidence(path: str) -> tuple[str, str, int]:
+    """Verify one stable cookies export on the engine-facts worker."""
+    if not path:
+        return ("", "", 0)
+    from waves.file_integrity import sha256_file
+    from waves.providers.apple.runtime import verify_cookies_file
+
+    try:
+        file_path = pathlib.Path(path).expanduser()
+        before = sha256_file(file_path)
+        result = verify_cookies_file(path, include_expiry=True)
+        after = sha256_file(file_path)
+        if before == after:
+            return (path, after, int(result["expires_at"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return (path, "", 0)
+
+
 def _apple_cookies_resave_changed(values, before: str) -> bool:
     """Whether a settings save names a different cookies export than before.
 
@@ -23725,7 +23744,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # binary cannot start a download (the gate below says the same).
         signed_in = False
         account_signed_in = False
-        if cookies_ready and not bool(getattr(self, "_apple_session_expired", False)):
+        cookies_expired = (
+            bool(getattr(self, "_apple_session_expired", False))
+            and getattr(self, "_apple_session_credential", "") != AppleCredential.WRAPPER
+        )
+        if cookies_ready and not cookies_expired:
             try:
                 from waves.providers.apple.runtime import verify_cookies_file
 
@@ -23779,6 +23802,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         sessions = getattr(self, "_apple_runtime_sessions", None)
         admission_before = sessions.revision("apple:wrapper-v2") if sessions is not None else (0, 0)
         flags = self._apple_live_flags()
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        data = getattr(getattr(self, "settings", None), "data", None)
+        cookies_path = str(getattr(provider, "cookies_path", "") or "") or str(
+            getattr(data, "apple_cookies_path", "") or ""
+        )
+        cookie_evidence = _apple_cookie_evidence(cookies_path)
         auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
         if getattr(self, "_apple_wrapper_login_inflight", False) or getattr(self, "_apple_signout_inflight", False):
             auth = {}
@@ -23788,15 +23817,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if manager is not None and hasattr(manager, "verify"):
             manager.verify()
         if sessions is not None:
-            from waves.file_integrity import sha256_file
             from waves.providers.apple.runtime_sessions import AccountContext, wrapper_session_evidence
 
             provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
-            cookies = str(getattr(provider, "cookies_path", "") or "")
-            try:
-                revision = sha256_file(cookies) if cookies else ""
-            except OSError:
-                revision = ""
+            revision = cookie_evidence[1]
             # The catalog client signs no account in, so its storefront is the
             # public default, never account evidence. Unknown keeps a session
             # from another storefront confirmable instead of mismatched.
@@ -23828,7 +23852,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         protocol = True if auth.get("reachable") and auth.get("state") in ("authenticated", "logged_out") else None
         facts = EngineFacts(
             enabled=bool(flags["enabled"]),
-            cookies_ready=bool(flags["cookies_account_ready"]),
+            cookies_ready=bool(flags["cookies_account_ready"] and cookie_evidence[1]),
             wrapper_ready=True
             if auth.get("state") == "authenticated"
             else False
@@ -23853,6 +23877,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return (
                 provider_contexts(self).current(token)
                 and generation == getattr(self, "_apple_engine_facts_gen", 0)
+                and cookies_path
+                == str(getattr((getattr(self, "providers", {}) or {}).get(CTX_APPLE), "cookies_path", "") or "")
+                and cookies_path
+                == str(getattr(getattr(getattr(self, "settings", None), "data", None), "apple_cookies_path", "") or "")
                 and (sessions is None or sessions.revision("apple:wrapper-v2") == admission_revision)
             )
 
@@ -23869,6 +23897,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         details,
                         generation,
                         admission_revision,
+                        cookie_evidence,
                     )
 
             if provider_contexts(self).commit(token, store) and current():
@@ -23908,6 +23937,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             cache is not None
             and provider_contexts(self).current(cache[0])
             and cache[4] == generation
+            and len(cache) > 6
+            and cache[6][0] == str(getattr(provider, "cookies_path", "") or "")
             and (sessions is None or (len(cache) > 5 and cache[5] == sessions.revision("apple:wrapper-v2")))
         )
         details = cache[3] if current else provider.engine_details(EngineFacts())

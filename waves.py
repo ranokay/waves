@@ -165,6 +165,10 @@ def main() -> int:
         from waves.library.worker import main as worker_main
 
         return worker_main(sys.argv[1:])
+    if sys.argv[1:2] == ["session"]:
+        from waves.desktop.providers.session_control import main as session_main
+
+        return session_main(sys.argv[2:])
     try:
         from waves.desktop.app import waves_activate
     except ImportError as e:

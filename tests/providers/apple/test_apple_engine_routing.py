@@ -247,14 +247,26 @@ def test_safe_engine_details_keep_assets_independent_of_audio_setup():
     assert all(item["state"] != "ready" for item in requirements if item["operation"] == "audio")
 
 
-def test_bridge_engine_details_use_verified_account_facts_without_audio_binary_coupling():
+def _cookie_backed_provider(tmp_path):
+    """A matching provider and settings context backed by a synthetic export."""
+    from types import SimpleNamespace
+
+    path = tmp_path / "fixture-cookies.txt"
+    path.write_text(".apple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tfixture-only\n")
+    provider = AppleProvider()
+    provider.cookies_path = str(path)
+    return provider, SimpleNamespace(data=SimpleNamespace(apple_cookies_path=str(path)))
+
+
+def test_bridge_engine_details_use_verified_account_facts_without_audio_binary_coupling(tmp_path):
     from types import SimpleNamespace
 
     from waves.desktop.backend import WavesBridge
 
-    provider = AppleProvider()
+    provider, settings = _cookie_backed_provider(tmp_path)
     bridge = BridgeStub(
         providers={"apple": provider},
+        settings=settings,
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": False},
         _apple_fetch_binary_ready=lambda: False,
         _apple_container_serves=lambda: False,
@@ -367,14 +379,16 @@ def test_engine_policy_normalizes_pins_and_orders_at_every_intake():
     assert EnginePolicy((" Gamdl ",), " Auto ") == EnginePolicy()
 
 
-def test_engine_detail_slot_queues_setup_reads_and_serves_cached_facts():
+def test_engine_detail_slot_queues_setup_reads_and_serves_cached_facts(tmp_path):
     from types import SimpleNamespace
 
     from waves.desktop.backend import WavesBridge
 
     queued, publications, reads, signals = [], [], [], []
+    provider, settings = _cookie_backed_provider(tmp_path)
     bridge = BridgeStub(
-        providers={"apple": AppleProvider()},
+        providers={"apple": provider},
+        settings=settings,
         threadpool=SimpleNamespace(start=queued.append),
         _get_apple_enabled=lambda: True,
         _apple_live_flags=lambda: (
@@ -422,16 +436,17 @@ def test_revoked_engine_detail_refresh_cannot_restore_account_readiness():
 
 
 @pytest.mark.parametrize("revoke", [False, True])
-def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_changes(revoke):
+def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_changes(revoke, tmp_path):
     from types import SimpleNamespace
 
     from waves.desktop.backend import WavesBridge
     from waves.desktop.providers.lifecycle import provider_contexts
 
     publications, signals = [], []
+    provider, settings = _cookie_backed_provider(tmp_path)
     bridge = BridgeStub(
-        providers={"apple": AppleProvider()},
-        settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="new-export")),
+        providers={"apple": provider},
+        settings=settings,
         _settings_save_lock=Lock(),
         _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": False},
         _apple_wrapper_auth_cache={"result": {"reachable": False}},
@@ -445,6 +460,7 @@ def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_c
     if revoke:
         provider_contexts(bridge).revoke("apple")
     else:
+        bridge.settings.data.apple_cookies_path = str(tmp_path / "new-export")
         WavesBridge._configure_apple_provider(bridge)
     WavesBridge._on_catalog_event(bridge, publications[0])
     assert getattr(bridge, "_apple_engine_facts_cache", None) is None

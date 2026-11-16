@@ -237,6 +237,16 @@ class TidalProvider(Provider):
 
     # ----- session / auth
 
+    def has_resumable_session(self) -> bool:
+        """Read saved-session eligibility without contacting TIDAL."""
+        owner = self._tidal
+        return bool(
+            owner.token_from_storage
+            and getattr(owner, "_sign_in_at_stake", True)
+            and not getattr(owner, "persistence_frozen", False)
+            and not getattr(owner, "_keep_file_untouched", False)
+        )
+
     def create_login_attempt(self, *, resume=False, register_secrets=None) -> LoginAttempt:
         from waves.providers.tidal_auth import TidalLoginAttempt
 
