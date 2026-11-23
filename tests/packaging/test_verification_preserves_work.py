@@ -112,10 +112,9 @@ def test_commit_checks_staged_content_and_preserves_unstaged_work(checkout, name
     assert succeeds(checkout, "git", "stash", "list").stdout == b""
 
 
-@pytest.mark.parametrize("branch", ["main"])
-def test_protected_branch_guard_runs_only_for_commits(checkout, branch):
+def test_protected_branch_guard_runs_only_for_commits(checkout):
     succeeds(checkout, "mise", "run", "install")
-    succeeds(checkout, "git", "switch", "-c", branch)
+    succeeds(checkout, "git", "switch", "-c", "main")
     # Whole-tree validation is allowed on the integration branch.
     succeeds(checkout, "mise", "run", "check")
     (checkout / "sample.md").write_text("# Sample\n")

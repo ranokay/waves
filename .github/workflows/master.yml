@@ -1,5 +1,8 @@
 name: master
 
+# The file and workflow keep the `master` name: the branch retarget does not
+# rename workflows or their checks.
+#
 # Pull requests to `main` run the cheap automatic checks: `quality`
 # (`mise run check`) and `test-fast` on Ubuntu. The strict matrix and the
 # macOS/Windows fast tests are heavier and stay manual-only (`workflow_dispatch`);

@@ -1,7 +1,8 @@
-"""The update hygiene stays wired: Dependabot follows the default branch and scans the
-composite actions, the release build carries Nuitka's build tree between
-runs, the contributor gate record matches the PR and manual test workflow,
-and the Python classifiers name only the versions that workflow tests.
+"""The update hygiene stays wired: Dependabot follows the default branch and
+scans the composite actions, the release build carries Nuitka's build tree
+between runs, the contributor gate record matches the PR and manual test
+workflow, and the Python classifiers name only the versions that workflow
+tests.
 
 Dependabot reads the PEP 621 metadata and uv.lock through the "pip" ecosystem;
 the ignored names are the pins that move by hand (docs/dependency-updates.md).
