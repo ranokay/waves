@@ -61,9 +61,9 @@ def checkout(tmp_path):
     succeeds(tmp_path, "git", "config", "commit.gpgsign", "false")
     succeeds(tmp_path, "git", "add", ".")
     succeeds(tmp_path, "git", "commit", "-qm", "Fixture")
-    # The changelog guard compares committed HEAD with origin/develop, and this
+    # The changelog guard compares committed HEAD with origin/main, and this
     # disposable repo has no remote of its own.
-    succeeds(tmp_path, "git", "update-ref", "refs/remotes/origin/develop", "HEAD")
+    succeeds(tmp_path, "git", "update-ref", "refs/remotes/origin/main", "HEAD")
     succeeds(tmp_path, "uv", "sync", "--locked", "--all-extras")
     return tmp_path
 
@@ -112,11 +112,11 @@ def test_commit_checks_staged_content_and_preserves_unstaged_work(checkout, name
     assert succeeds(checkout, "git", "stash", "list").stdout == b""
 
 
-@pytest.mark.parametrize("branch", ["main", "develop"])
+@pytest.mark.parametrize("branch", ["main"])
 def test_protected_branch_guard_runs_only_for_commits(checkout, branch):
     succeeds(checkout, "mise", "run", "install")
     succeeds(checkout, "git", "switch", "-c", branch)
-    # Whole-tree validation is allowed on the integration and mirror branches.
+    # Whole-tree validation is allowed on the integration branch.
     succeeds(checkout, "mise", "run", "check")
     (checkout / "sample.md").write_text("# Sample\n")
     succeeds(checkout, "git", "add", "sample.md")
@@ -426,7 +426,7 @@ def test_pyupgrade_fix_treats_a_dash_named_script_as_a_file(checkout):
     assert succeeds(checkout, "git", "write-tree").stdout == index
 
 
-@pytest.mark.parametrize("branch", ["fixture", "main", "develop"])
+@pytest.mark.parametrize("branch", ["fixture", "main"])
 def test_empty_commits_run_only_the_commit_branch_guard(checkout, branch):
     succeeds(checkout, "mise", "run", "install")
     if branch != "fixture":

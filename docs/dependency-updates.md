@@ -33,7 +33,7 @@ never leaks into the default run or CI.
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wrapper-upstream-check` (Mondays 09:00) | Opens one deduped issue when `glomatico/wrapper-v2` moves past `.github/wrapper-upstream.sha`. Never builds or publishes.                                                                                                                                                                                      |
 | Pin-drift tests                          | Fail when the image tag, digest, APK pin, guest-lib pin and runbook drift (`test_wrapper_image_pins.py`), when gamdl drops a member the engine calls (`test_pinned_client_contract.py`), or when the Dependabot ignores, its composite-action scan or the release cache step disappear (`test_ci_hygiene.py`). |
-| Dependabot (`.github/dependabot.yml`)    | Weekly grouped PRs for `uv.lock` and for the actions in the workflows and the composite actions under `.github/actions/`, targeting `develop`. Ignores the deliberate pins below.                                                                                                                              |
+| Dependabot (`.github/dependabot.yml`)    | Weekly grouped PRs for `uv.lock` and for the actions in the workflows and the composite actions under `.github/actions/`, targeting the default branch (`main`). Ignores the deliberate pins below.                                                                                                            |
 | The in-app updater                       | Ships app and engine bumps to users through normal releases; no side channel (spec §10.4).                                                                                                                                                                                                                     |
 | The release build cache                  | Carries Nuitka's build tree between runs so a routine release relinks instead of recompiling every module.                                                                                                                                                                                                     |
 
@@ -41,7 +41,7 @@ never leaks into the default run or CI.
 
 | Artifact           | Pinned in                                                            | Cadence                                                                | Procedure                                                                                                                                                                                                                                                                            |
 | ------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| gamdl              | `pyproject.toml` (`>=3.8.5,<3.9`, patch-only on purpose)             | When Apple breaks, or a monthly glance                                 | Branch off `develop`, open the constraint to the needed minor and relock, then gate on tests + live suite (below).                                                                                                                                                                   |
+| gamdl              | `pyproject.toml` (`>=3.8.5,<3.9`, patch-only on purpose)             | When Apple breaks, or a monthly glance                                 | Branch off `main`, open the constraint to the needed minor and relock, then gate on tests + live suite (below).                                                                                                                                                                      |
 | yt-dlp             | Floored to gamdl's own floor; the lockfile holds the version         | Normally only with a gamdl bump, or standalone for a security advisory | `uv lock` after a gamdl change; standalone advisory via `uv lock --upgrade-package yt-dlp` without moving the floor past gamdl's Requires-Dist (lockstep test below), same gates, note the advisory ID in the PR.                                                                    |
 | Wrapper image      | `WRAPPER_V2_IMAGE` + `WRAPPER_V2_IMAGE_DIGEST`                       | On the watcher's issue, or when ALAC breaks                            | Dispatch `wrapper-image` with the new upstream SHA, then move tag + digest + runbook in one commit (below).                                                                                                                                                                          |
 | APK / guest libs   | `APK_PINNED_VERSION`, runbook, private asset                         | Only with an image rebuild                                             | The image build re-pins libs from the blessed APK; the app never manages them.                                                                                                                                                                                                       |
@@ -59,7 +59,7 @@ never leaks into the default run or CI.
 ### gamdl
 
 ```bash
-git checkout develop && git checkout -b chore/bump-gamdl
+git checkout main && git checkout -b chore/bump-gamdl
 uv add 'gamdl>=3.9,<3.10'        # edits pyproject.toml and uv.lock
 uv run --locked --all-extras pytest                    # the pinned-client contract fails first on surface changes
 WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests
@@ -135,7 +135,7 @@ record the results in the owning issue or PR.
 
 ## Reviewing a Dependabot PR
 
-- A PR to `develop` runs `quality` and the Ubuntu `test-fast` group
+- A PR to `main` runs `quality` and the Ubuntu `test-fast` group
   automatically, because this fork is public and standard GitHub-hosted runners
   are not metered; the test workflow's strict matrix is still manual-only. A
   dependency change is full-gate: run `mise run check` and

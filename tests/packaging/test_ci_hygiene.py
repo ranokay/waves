@@ -1,4 +1,4 @@
-"""The update hygiene stays wired: Dependabot targets develop and scans the
+"""The update hygiene stays wired: Dependabot follows the default branch and scans the
 composite actions, the release build carries Nuitka's build tree between
 runs, the contributor gate record matches the PR and manual test workflow,
 and the Python classifiers name only the versions that workflow tests.
@@ -65,12 +65,12 @@ def _entry(cfg: dict, ecosystem: str) -> dict:
     return matches[0]
 
 
-def test_dependabot_updates_develop_and_leaves_the_deliberate_pins_alone():
+def test_dependabot_follows_the_default_branch_and_leaves_the_deliberate_pins_alone():
     cfg = yaml.safe_load(DEPENDABOT.read_text())
     assert cfg["version"] == 2
 
     python_deps = _entry(cfg, "pip")
-    assert python_deps["target-branch"] == "develop"
+    assert "target-branch" not in python_deps
     assert python_deps["groups"], "a week of bumps should arrive as one grouped PR"
     # Exact set: adding a pin to the ignore list means updating the playbook's
     # story too, and this fails until it does.
@@ -78,7 +78,7 @@ def test_dependabot_updates_develop_and_leaves_the_deliberate_pins_alone():
     assert ignored == {"gamdl", "yt-dlp", "nuitka", "pyside6"}
 
     actions = _entry(cfg, "github-actions")
-    assert actions["target-branch"] == "develop"
+    assert "target-branch" not in actions
     # A composite action's SHA pins get bumped only when the entry names its
     # directory, literally or by a `*` glob. As in Dependabot's glob, `*` never
     # crosses a "/".
@@ -368,16 +368,16 @@ def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
 
 
 def test_the_merge_gate_record_matches_the_pr_workflow():
-    """A PR to develop runs quality and test-fast; the strict matrix and the
+    """A PR to main runs quality and test-fast; the strict matrix and the
     macOS/Windows legs stay dispatch-only. The contributor record must name the
     automatic pair."""
     wf = _master_workflow()
     # YAML 1.1 reads the `on:` key as boolean True (the wrapper-image pins
-    # test notes the same quirk); the trigger set is dispatch plus develop PRs.
+    # test notes the same quirk); the trigger set is dispatch plus main PRs.
     triggers = wf[True]
     assert set(triggers) == {"workflow_dispatch", "pull_request"}, triggers
     assert triggers["pull_request"] == {
-        "branches": ["develop"],
+        "branches": ["main"],
         "types": ["opened", "synchronize", "reopened", "edited"],
     }, triggers["pull_request"]
 

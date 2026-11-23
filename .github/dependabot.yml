@@ -11,7 +11,6 @@ version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
-    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -30,7 +29,6 @@ updates:
     # "/" scans .github/workflows and a root action.yml only. The glob adds
     # each composite action's directory, so its SHA pins get bumped too.
     directories: ["/", "/.github/actions/*"]
-    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"

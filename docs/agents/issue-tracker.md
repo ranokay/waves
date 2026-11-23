@@ -11,7 +11,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --repo ranokay/waves --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --repo ranokay/waves --comment "..."`
 
-**This repo is a fork — pin every `gh` call to it**: `--repo ranokay/waves` (or `GH_REPO=ranokay/waves`). Left to infer the repo from the remotes, `gh` resolves to the upstream parent (`iamprivacy/Waves`, the `upstream` remote) and the call silently targets the wrong repository — PR creation then fails with "No commits between develop and …" against a branch that does not exist there (seen on issue #23's PR). The parent is the right target only for `/sync-upstream`'s reads.
+**This repo is a fork — pin every `gh` call to it**: `--repo ranokay/waves` (or `GH_REPO=ranokay/waves`). Left to infer the repo from the remotes, `gh` resolves to the upstream parent (`iamprivacy/Waves`, the `upstream` remote) and the call silently targets the wrong repository — PR creation then fails with "No commits between main and …" against a branch that does not exist there (seen on issue #23's PR). The parent is the right target only for `/sync-upstream`'s reads.
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42 --repo ranokay/waves` and fall back to `gh issue view 42 --repo ranokay/waves`.
 

@@ -80,12 +80,13 @@ with their owner before changing them. It never changes global hook settings.
 4. Create a branch for local development:
 
 ```bash
-git switch develop
+git switch main
 git switch -c name-of-your-bugfix-or-feature
 ```
 
-This fork integrates into `develop`; `main` mirrors upstream and takes no
-PRs. Follow [the implementation workflow](docs/agents/implementation-workflow.md)
+This fork integrates into `main`; upstream changes arrive through a Sync PR
+that lands with a merge commit. Follow
+[the implementation workflow](docs/agents/implementation-workflow.md)
 for issue branches and synchronization. Locate the feature's code and tests
 in [the domain map](docs/architecture.md).
 
@@ -101,7 +102,7 @@ mise run check
    [the gate matrix](docs/agents/implementation-workflow.md#gate-matrix). It
    defines the prose, isolated-logic and full-gate checks.
 
-The merge stands on the local gate. Every PR to `develop` also runs `quality`
+The merge stands on the local gate. Every PR to `main` also runs `quality`
 (`mise run check`) and the Ubuntu `test-fast` group automatically, because this
 fork is public and standard GitHub-hosted runners are not metered; the strict
 matrix across Python 3.12, 3.13 and 3.14 and the macOS/Windows fast legs stay

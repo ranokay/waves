@@ -141,7 +141,7 @@ can build the Linux leg matching its arch, not the macOS/Windows legs.
 The release workflow smoke-launches all macOS bundles and the Linux/Windows
 x64 bundles offscreen; Linux/Windows arm64 artifacts are built without a
 launch. `master.yml` runs `quality` (`mise run check`) and the Ubuntu `test-fast`
-group on every PR to `develop`, and runs the strict suite (`mise run test-strict`)
+group on every PR to `main`, and runs the strict suite (`mise run test-strict`)
 on Linux for Python 3.12–3.14 plus fast-domain tests on macOS and Windows when
 dispatched by hand. The PR jobs are automatic because this fork is public, so
 standard GitHub-hosted runners are not metered; the class-specific local gate
@@ -221,8 +221,8 @@ files. Python tools come from `uv.lock`; hk and Prettier are pinned in
   keep their whitespace/Prettier exclusions, and the end-of-file check excludes
   LICENSE.
 - Commit hooks check the staged version with unstaged edits temporarily saved
-  by hk. They apply no fixes and stage nothing. The `main`/`develop` branch
-  guard runs only at commit time. The pre-push hook runs static checks too.
+  by hk. They apply no fixes and stage nothing. The `main` branch guard runs
+  only at commit time. The pre-push hook runs static checks too.
 - `mise run lint-qml` runs qmllint over `waves/desktop/qml`; hk calls the same
   script for selected QML and JavaScript. Errors fail; existing warnings are
   counted instead of burying errors.
