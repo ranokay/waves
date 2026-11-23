@@ -49,6 +49,7 @@ issue. A test enforces it.
 ### 🔧 Changed
 
 - 🔊 With "Download Dolby Atmos" on, one click now saves both the stereo and Dolby Atmos versions as separate queue rows (the Atmos row is badged ATMOS and lands in the new "Dolby Atmos files" subfolder by default, blank places it alongside), each with its own ownership, progress, cancel and retry, and the button settles only when every enabled version is owned; Atmos-only tracks still fetch Atmos alone, and every file now carries a WAVES_AUDIO_TYPE tag so recognition never sniffs codecs ([issue #29](https://github.com/ranokay/waves/issues/29)).
+- 👾 A new app icon: a pixel terminal window with waves.
 
 ### 🐛 Fixed
 
