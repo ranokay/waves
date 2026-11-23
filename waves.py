@@ -3,18 +3,18 @@
 
 This is the compile target for a standalone Waves build (the binary that ships
 in the public repo's Releases). It is a thin launcher, deliberately separate
-from ``waves/waves_ui/app.py``: Nuitka compiles the entry file as ``__main__``,
-so it must use *absolute* imports, ``waves_ui`` keeps its relative imports and
+from ``waves/desktop/app.py``: Nuitka compiles the entry file as ``__main__``,
+so it must use *absolute* imports, ``desktop`` keeps its relative imports and
 stays a normal package, untouched.
 
 This file lives at the repo root, NOT inside the package: as ``waves/waves.py``
 it would shadow the ``waves`` package for its own absolute imports, and Nuitka
 names the build artifacts (``dist/waves.app`` / ``dist/waves.dist``) after this
-file's basename, which the Makefile and CI key on, so neither its name nor its
+file's basename, which the build and CI key on, so neither its name nor its
 location may change casually.
 
-From a source checkout, ``python -m waves.waves_ui`` remains the way to run;
-this file exists so ``make gui-waves`` can produce the frozen app.
+From a source checkout, ``mise run app`` remains the way to run;
+this file exists so ``tools/build_waves.sh`` (task ``build``) can produce the frozen app.
 
 The ``nuitka-project`` directives below are the canonical build recipe. They
 target the QML front-end: the PySide6 plugin pulls
@@ -25,13 +25,13 @@ along as data files so ``app.py`` finds them next to itself at runtime.
 # Compilation mode, support OS-specific options
 # nuitka-project-if: {OS} in ("Darwin"):
 #    nuitka-project: --macos-create-app-bundle
-#    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/waves/ui/icon.icns
+#    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/waves/desktop/icons/icon.icns
 #    nuitka-project: --macos-signed-app-name=com.waves.app
 #    nuitka-project: --macos-app-mode=gui
 # nuitka-project-if: {OS} in ("Linux", "FreeBSD"):
-#    nuitka-project: --linux-icon={MAIN_DIRECTORY}/waves/ui/icon512.png
+#    nuitka-project: --linux-icon={MAIN_DIRECTORY}/waves/desktop/icons/icon512.png
 # nuitka-project-if: {OS} in ("Windows"):
-#    nuitka-project: --windows-icon-from-ico={MAIN_DIRECTORY}/waves/ui/icon.ico
+#    nuitka-project: --windows-icon-from-ico={MAIN_DIRECTORY}/waves/desktop/icons/icon.ico
 #    nuitka-project: --file-description="Waves: saves music from your TIDAL account for offline listening."
 
 # Debugging options, controlled via environment variable at compile time.
@@ -60,17 +60,14 @@ along as data files so ``app.py`` finds them next to itself at runtime.
 # for the in-app track/artist preview.
 # nuitka-project: --include-qt-plugins=qml,multimedia
 # The library scanner process re-executes this binary with --library-worker.
-# nuitka-project: --include-module=waves.library_worker
-# waves_ui.notify builds the notifier inside a function, so Nuitka never sees
-# the import; without these two lines the bundle ships without banners. The
-# data line carries resources/python.png, which common.py names at import.
-# nuitka-project: --include-package=desktop_notifier
-# nuitka-project: --include-package-data=desktop_notifier
+# nuitka-project: --include-module=waves.library.worker
+# The Apple download tool's guard re-executes it with --apple-child-guard.
+# nuitka-project: --include-module=waves.providers.apple.child_guard
 # Qt 6.11 added a Qt.labs.assetdownloader QML module that ships ONLY as a
 # static library, which Nuitka cannot process. It arrives through the qml
 # plugin scan rather than the DLL list, so --noinclude-dlls does not reach
-# it; the Makefile prunes it from the build virtualenv beforehand instead
-# (tools/prune_static_qml_plugins.py, run from the Makefile).
+# it; tools/build_waves.sh prunes it from the build virtualenv beforehand
+# instead (tools/prune_static_qml_plugins.py).
 # Drop the heavy Qt modules Waves never loads, it is a QtQuick app that only
 # imports QtQuick(.Controls.Basic/.Layouts/.Effects/.Shapes/.Dialogs) + QtCore.
 # NOTE: on a macOS standalone build Nuitka names the Qt libraries without the
@@ -117,7 +114,7 @@ along as data files so ``app.py`` finds them next to itself at runtime.
 # nuitka-project: --noinclude-dlls=*fluentwinui3*
 # nuitka-project: --noinclude-dlls=*controls2ios*
 # nuitka-project: --noinclude-dlls=*controls2macos*
-# nuitka-project: --include-package=waves.waves_ui
+# nuitka-project: --include-package=waves.desktop
 # nuitka-project: --include-package=tidalapi
 # requests imports charset_normalizer lazily, so import-following grabs only its
 # compiled extensions and drops the pure-Python submodules, include the whole
@@ -129,20 +126,19 @@ along as data files so ``app.py`` finds them next to itself at runtime.
 # on the case-insensitive filesystems macOS and Windows ship with (the build
 # died on exactly that). app.py's _data_dir() knows both this packaged layout
 # and the in-package source layout.
-# nuitka-project: --include-data-dir={MAIN_DIRECTORY}/waves/waves_ui/qml=waves_ui/qml
-# nuitka-project: --include-data-dir={MAIN_DIRECTORY}/waves/waves_ui/fonts=waves_ui/fonts
+# nuitka-project: --include-data-dir={MAIN_DIRECTORY}/waves/desktop/qml=desktop/qml
+# nuitka-project: --include-data-dir={MAIN_DIRECTORY}/waves/desktop/fonts=desktop/fonts
 # Only the PNG size ladder is read at runtime (app.py builds the window icon
-# from it on Windows and Linux; on macOS it sets none, so the Dock keeps the
-# bundle's grid-fit icns); the executable's own icon comes from --macos-app-icon /
+# from it); the executable's own icon comes from --macos-app-icon /
 # --windows-icon-from-ico at build time, so a bare icon* glob shipped a second
 # unreachable icon.icns (and an icon.ico) inside every bundle. Windows alone
 # also carries icon.ico: app.py falls back to it if the PNG ladder is ever
 # missing, a net kept from the truncated-ico taskbar incident.
-# nuitka-project: --include-data-files={MAIN_DIRECTORY}/waves/ui/icon*.png=ui/
+# nuitka-project: --include-data-files={MAIN_DIRECTORY}/waves/desktop/icons/icon*.png=desktop/icons/
 # nuitka-project-if: {OS} in ("Windows"):
-#    nuitka-project: --include-data-files={MAIN_DIRECTORY}/waves/ui/icon.ico=ui/icon.ico
+#    nuitka-project: --include-data-files={MAIN_DIRECTORY}/waves/desktop/icons/icon.ico=desktop/icons/icon.ico
 # nuitka-project: --include-data-files=./pyproject.toml=pyproject.toml
-# AGPL-3.0 requires the license text to travel with the binary; ship it inside
+# AGPL-3.0 requires the licence text to travel with the binary; ship it inside
 # the bundle next to the Phosphor (qml/) and JetBrains Mono (fonts/) notices.
 # nuitka-project: --include-data-files=./LICENSE=LICENSE
 # nuitka-project: --company-name=Waves
@@ -156,14 +152,25 @@ def main() -> int:
     """Launch the Waves QML UI and return its exit code.
 
     ``--library-worker`` runs the library scanner instead (the app starts
-    its own binary this way, see waves.library_worker): decided before any
-    Qt import, since the scanner must never load Qt."""
+    its own binary this way, see waves.library.worker): decided before any
+    Qt import, since the scanner must never load Qt. A leading
+    ``--apple-child-guard`` runs the Apple download tool's guard the same way
+    (waves.providers.apple.child_guard); it is read first because the
+    tool's own argv follows it."""
+    if sys.argv[1:2] == ["--apple-child-guard"]:
+        from waves.providers.apple.child_guard import main as guard_main
+
+        return guard_main(sys.argv[2:])
     if "--library-worker" in sys.argv[1:]:
-        from waves.library_worker import main as worker_main
+        from waves.library.worker import main as worker_main
 
         return worker_main(sys.argv[1:])
+    if sys.argv[1:2] == ["session"]:
+        from waves.desktop.providers.session_control import main as session_main
+
+        return session_main(sys.argv[2:])
     try:
-        from waves.waves_ui.app import waves_activate
+        from waves.desktop.app import waves_activate
     except ImportError as e:
         print(e)
         print("Qt dependencies missing. Cannot start Waves. Please read the 'README.md' carefully.")

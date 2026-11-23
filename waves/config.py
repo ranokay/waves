@@ -2,18 +2,18 @@ import contextlib
 import enum
 import json
 import logging
-import math
 import os
 import shutil
 import tempfile
 import threading
 import time
+import types
 import typing
 from collections.abc import Callable
 from json import JSONDecodeError
 from pathlib import Path
-from threading import Event, Lock
-from typing import Any
+from threading import Lock
+from typing import Any, ClassVar
 
 import tidalapi
 from requests.adapters import Retry
@@ -22,17 +22,68 @@ from urllib3.exceptions import InvalidHeader
 from waves.constants import (
     ATMOS_CLIENT_ID,
     ATMOS_CLIENT_SECRET,
-    ATMOS_REQUEST_QUALITY,
     REQUESTS_TIMEOUT_SEC,
+    QualityTier,
+    tier_from_word,
 )
-from waves.helper.decorator import SingletonMeta
-from waves.helper.path import path_config_base, path_file_settings, path_file_token
-from waves.http_pool import IdleDropAdapter
-from waves.model.cfg import INT_BOUNDS
+from waves.http import IdleDropAdapter
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Token as ModelToken
+from waves.model.download_policy import DOWNLOAD_POLICY_BOOLEAN_FIELDS, FULFILLMENT_BOOLEAN_FIELDS
+from waves.paths import path_config_base, path_file_settings, path_file_token
 
 logger = logging.getLogger("waves.config")
+
+
+class SingletonMeta(type):
+    """Process-wide singleton metaclass for the settings owners.
+
+    ``Settings`` and ``Tidal`` must resolve to one object for
+    the whole process, however many modules import them. The instance registry
+    is deliberately public: tests pop entries to simulate a fresh install.
+    """
+
+    _instances: ClassVar[dict] = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]
+
+
+# The Atmos session pins the shared session to this one tier: TIDAL serves
+# Atmos only through a fixed request tier, whatever the audio quality settings
+# say (the stereo ladder never governs an Atmos fetch).
+ATMOS_REQUEST_QUALITY = tidalapi.Quality.low_320k
+
+# The engine's codec map (spec §4.3: each provider maps its engine's codecs
+# onto the Waves ladder): each rung onto the tidalapi Quality the session
+# asks for. The engine owns the mapping -- ``providers.tidal`` imports it
+# from here, because that module imports this one (never the reverse).
+_TIDAL_QUALITY_BY_TIER: dict[QualityTier, tidalapi.Quality] = {
+    QualityTier.LOW: tidalapi.Quality.low_96k,
+    QualityTier.HIGH: tidalapi.Quality.low_320k,
+    QualityTier.LOSSLESS: tidalapi.Quality.high_lossless,
+    QualityTier.HI_RES_LOSSLESS: tidalapi.Quality.hi_res_lossless,
+}
+
+
+def tidal_quality_for_tier(tier: QualityTier) -> tidalapi.Quality:
+    """The tidalapi Quality the engine asks its session for at a Waves rung."""
+    return _TIDAL_QUALITY_BY_TIER[QualityTier(tier)]
+
+
+def session_quality_from_word(word: str | None) -> tidalapi.Quality | None:
+    """A settings word onto the session's quality, or None when unreadable.
+
+    THE gather point for "read the user's tier and write it onto the session":
+    the fold onto the ladder (any spelling a config or a caller can carry) and
+    the engine's codec map in one call, with one policy -- an unreadable value
+    answers None and the caller writes nothing, so the session keeps the tier
+    it already carries rather than a corrupt setting crashing it."""
+    tier = tier_from_word(word)
+    return tidal_quality_for_tier(tier) if tier is not None else None
+
 
 # Windows answers os.replace with a sharing violation (WinError 32) while ANY
 # other process holds the target open: an antivirus scanning the file, a backup
@@ -84,10 +135,29 @@ def _set_aside(path: str, error: Exception) -> bool:
     return True
 
 
-class BaseConfig:
-    data: ModelSettings | ModelToken
+def _same_config(left: str, right: str) -> bool:
+    """True when two config JSON texts carry the same structure.
+
+    Unparseable input is never equal: a corrupt file must flow through the
+    set-aside path, not be mistaken for an unchanged one.
+    """
+    try:
+        return json.loads(left) == json.loads(right)
+    except ValueError:
+        return False
+
+
+class BaseConfig[TModel: (ModelSettings, ModelToken)]:
+    """The shared read/save skin over one config file.
+
+    Generic over the model it owns: ``Settings`` carries ``ModelSettings`` and
+    ``Tidal`` carries ``ModelToken``, so ``.data`` is the concrete model and
+    attribute access on it type-checks.
+    """
+
+    data: TModel
     file_path: str
-    cls_model: ModelSettings | ModelToken
+    cls_model: type[TModel]
     path_base: str = path_config_base()
     # Set by read() when the file on disk could not be read, or was unusable
     # and could not be set aside. That file may still hold the user's real
@@ -96,11 +166,14 @@ class BaseConfig:
     # later save from the app. The next launch reads the file again.
     _keep_file_untouched: bool = False
 
-    def save(self, config_to_compare: str = None) -> None:
+    def save(self, config_to_compare: str | None = None) -> None:
         data_json = self.data.to_json()
 
-        # If old and current config is equal, skip the write operation.
-        if config_to_compare == data_json:
+        # If old and current config is equal, skip the write operation. The
+        # comparison is over parsed structures, not text: the writer
+        # pretty-prints (indent=4) while to_json() is single-line, so raw
+        # text never matches a file this app wrote.
+        if config_to_compare is not None and _same_config(config_to_compare, data_json):
             return
 
         self.write_serialized(data_json)
@@ -115,6 +188,16 @@ class BaseConfig:
                 os.path.basename(self.file_path),
             )
             return
+        tmp_path = self.stage_serialized(data_json)
+        _replace_with_retry(tmp_path, self.file_path)
+
+    def stage_serialized(self, data_json: str) -> str:
+        """Flush a private JSON sibling without publishing or changing the model.
+
+        The caller owns the returned path and must replace or remove it. This
+        keeps the fsync-bearing work outside a staged auth commit's short lock.
+        ``mkstemp`` creates the sibling with mode 0600 on Unix.
+        """
         # Try to create the base folder.
         os.makedirs(self.path_base, exist_ok=True)
 
@@ -124,15 +207,16 @@ class BaseConfig:
         # Windows), so a reader (or the next launch) only ever sees a complete
         # file. This mirrors the page_cache write in the Waves bridge.
         obj_json_config = json.loads(data_json)  # pretty format
-        # A temp sibling of this write's OWN, not one fixed name. Nothing stops
-        # a second copy of Waves running against the same config folder (the
-        # launch path contemplates one), and both staged through
-        # "settings.json.tmp": open() truncates and each writer flushes its own
-        # length, so the two interleaved into one file and whichever os.replace
-        # landed last published the mixture. The next launch called that
-        # corrupt, moved it to .bak and started on factory defaults, taking the
-        # download folder, the templates and the quality with it; the identical
-        # shape on token.json signs the user out.
+        # A temp sibling of this write's OWN, not one fixed name: a second copy
+        # of Waves running against the same config folder (the launch path
+        # contemplates one) must not stage through a shared
+        # "settings.json.tmp". open() truncates and each writer flushes its own
+        # length, so two writers sharing the name would interleave into one
+        # file and whichever os.replace ran last would publish the mixture: the
+        # next launch treats a mixture as corrupt, moves it to .bak and starts
+        # on factory defaults, taking the download folder, the templates and
+        # the quality with it. The identical shape on token.json signs the user
+        # out.
         fd, tmp_path = tempfile.mkstemp(
             dir=os.path.dirname(self.file_path) or ".",
             prefix=f"{os.path.basename(self.file_path)}.",
@@ -149,7 +233,7 @@ class BaseConfig:
             with contextlib.suppress(OSError):
                 os.remove(tmp_path)
             raise
-        _replace_with_retry(tmp_path, self.file_path)
+        return tmp_path
 
     def set_option(self, key: str, value: Any) -> None:
         value_old: Any = getattr(self.data, key)
@@ -175,17 +259,13 @@ class BaseConfig:
             result = True
         except FileNotFoundError:
             self.data = self.cls_model()
-        except (JSONDecodeError, TypeError, ValueError, AttributeError, OverflowError) as e:
+        except (JSONDecodeError, TypeError, ValueError, AttributeError) as e:
             # AttributeError is what a file of valid JSON whose top level is not
             # an object raises: dataclasses_json asks the parsed value for
-            # .items(), and "[]", "null", a bare string or a number has none. It
-            # crashed every launch with a traceback, past the very self-heal this
-            # arm exists to do, and only deleting the file by hand recovered the
-            # app. TypeError is a field of the wrong shape (a list where a number
-            # belongs): it used to skip the set-aside, so the defaults written
-            # back below replaced the only copy. OverflowError is a number no
-            # field can hold. A file that is there and unusable is a broken
-            # config whatever shape it is broken in.
+            # .items(), and "[]", "null", a bare string or a number has none.
+            # TypeError is a field of the wrong shape (a list where a number
+            # belongs). Preserve the unusable file before writing defaults;
+            # invalid structure needs the same recovery as invalid JSON.
             self.data = self.cls_model()
             if not _set_aside(path, e):
                 # Not moved (a lock, a read-only folder), so it is still the
@@ -225,110 +305,265 @@ class BaseConfig:
 # paced nothing, and it costs a long list half an hour of standing still.
 _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC: float = 30.0
 
+# Run-once settings migrations, by name. Completion is recorded in the
+# settings model where a step has an in-file marker, and in a sidecar beside
+# the settings file either way. The sidecar is what survives a downgrade: an
+# older release rewrites settings.json from its own model and drops every
+# field it does not know, so the in-file markers vanish with it and a step
+# would run again over a choice the user has made since. The quality split is
+# not listed: its carrier is never serialized by this model, so a carrier that
+# appears can only come from a pre-split release, whose file has no
+# tidal_quality_audio at all; folding it is the recovery of that setting, not
+# a replay over a newer choice.
+_MIGRATIONS_SIDECAR_NAME = "settings-migrations.json"
+_MIGRATION_STEPS: tuple[str, ...] = (
+    "replay_gain_default",
+    "playlist_folder_default",
+    "provider_segment",
+    "rate_limit_wired",
+    "lyrics_art_providers",
+    "atmos_default",
+)
 
-def _migrate_settings(data: ModelSettings) -> bool:
+
+def _migrations_state_path() -> Path:
+    """The migration-completion sidecar beside settings.json."""
+    return Path(path_config_base()) / _MIGRATIONS_SIDECAR_NAME
+
+
+def _completed_migrations() -> set[str]:
+    """Steps recorded as applied, or an empty set when nothing is recorded."""
+    try:
+        raw = json.loads(_migrations_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(raw, dict):
+        return set()
+    steps = raw.get("completed")
+    if not isinstance(steps, list):
+        return set()
+    return {str(step) for step in steps}
+
+
+def _remember_migrations(completed: set[str]) -> None:
+    """Record the completed run-once steps. Best-effort, never raises.
+
+    Names this build does not know (a newer build's steps, seen when the code
+    is downgraded) are carried through: dropping them would let the newer
+    build replay them on the next upgrade.
+    """
+    path = _migrations_state_path()
+    steps = sorted(completed | set(_MIGRATION_STEPS))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(str(path)) or ".",
+            prefix=f"{os.path.basename(str(path))}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, mode="w", encoding="utf-8") as f:
+                f.write(json.dumps({"completed": steps}, indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            _replace_with_retry(tmp_path, str(path))
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
+            raise
+    except OSError:
+        logger.warning("Could not record the completed settings migrations beside the settings file")
+
+
+def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # noqa: C901 (sequential one-time steps)
     """Apply one-time upgrade steps to an already-loaded settings model.
 
-    Returns True when something changed, so the caller persists it. Each step is
-    guarded by a marker stored in the config, so it runs at most once and never
-    overrides a choice the user makes afterwards.
+    Returns True when something changed, so the caller persists it. A step
+    runs only when neither its in-file marker nor the sidecar beside the
+    settings file says it already ran, so a downgrade that drops the markers
+    cannot replay a step over choices the user has since made. ``record=False``
+    leaves the sidecar alone: the production caller records only after the
+    migrated settings are on disk, or a save that never landed would mark the
+    steps done forever.
     """
     changed = False
+    done = _completed_migrations()
 
-    # ReplayGain became on-by-default. Configs created before that carry an
-    # explicit False that is really just the old default, so switch them on once.
-    # A user who turns it back off later keeps it off: the marker stops this from
-    # firing again.
-    if not data.replay_gain_default_migrated:
+    # quality_audio split into the per-provider settings (spec §9.2), stored
+    # as Waves tier strings. The legacy field is a migration-only carrier
+    # (never serialized): when a pre-split config handed it a value, fold
+    # that value onto the ladder into tidal_quality_audio -- identical
+    # meaning, since tidalapi's serialized tier values already are the
+    # ladder's words (low_320k serialized as "HIGH", the word the UI shows) --
+    # then null it, so the key leaves settings.json on the next save. The
+    # carrier can only be present in a file an older release wrote, and that
+    # file has no tidal_quality_audio to preserve, so folding is the recovery
+    # of the setting, never an overwrite of a newer choice.
+    if data.quality_audio is not None:
+        tier = tier_from_word(data.quality_audio)
+        if tier is not None:
+            data.tidal_quality_audio = tier.value
+        else:
+            logger.warning(
+                "Settings carried an unreadable audio quality %r; the TIDAL default stands",
+                data.quality_audio,
+            )
+        data.quality_audio = None
+        changed = True
+
+    # ReplayGain is on by default. A config written under the old default
+    # carries an explicit False that is not a user choice, so the step switches
+    # it on once. A user who turns it back off keeps it off: the marker and the
+    # sidecar stop this from firing again.
+    if "replay_gain_default" not in done and not data.replay_gain_default_migrated:
         data.metadata_replay_gain = True
         data.replay_gain_default_migrated = True
         changed = True
 
-    # The playlist template default grew {folder_path}. Defaults are persisted
-    # verbatim, so an untouched install stores the old default string: only
-    # that exact value is upgraded. Anything else is a customized template the
-    # user owns, and it is never rewritten (they can add {folder_path} where
-    # they want it).
-    if not data.format_playlist_folder_migrated:
+    # The playlist template default carries {folder_path}. Defaults are
+    # persisted verbatim, so an untouched install stores the older default
+    # string: only that exact value is upgraded. Anything else is a customized
+    # template the user owns, and it is never rewritten (they can add
+    # {folder_path} where they want it).
+    if "playlist_folder_default" not in done and not data.format_playlist_folder_migrated:
         old_default = "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}"
         if data.format_playlist == old_default:
             data.format_playlist = ModelSettings().format_playlist
         data.format_playlist_folder_migrated = True
         changed = True
 
-    # The two rate-limit fields sat in Advanced while nothing read them, and
-    # they asked a different question then ("albums to process"), so a value on
-    # disk is a guess about something else that never took effect. Now that
-    # they pace real downloads, a leftover of a minute between batches would
-    # quietly add half an hour to a long playlist, so a pause no answer to the
-    # new question would give goes back to the default.
-    #
-    # It resets THAT and nothing else, because the marker cannot be relied on
-    # to keep this to one run: the marker is a field the previous release does
-    # not have, and that release rewrites settings.json from its own model on
-    # every launch, so a downgrade and back strips it and this runs again. A
-    # pace the user has since tuned is theirs, and stands.
-    if not data.api_rate_limit_wired_migrated:
+    # Download paths split by provider: the album and track template defaults
+    # carry a leading {provider_name} segment. Like the {folder_path}
+    # migration above, only stored values equal to the OLD defaults are
+    # rewritten; a customized template is the user's own layout and is never
+    # touched (existing files stay where they are either way: ownership
+    # records absolute paths and the library scan is recursive, so nothing is
+    # stranded by the new folder).
+    if "provider_segment" not in done:
+        changed = _migrate_provider_segment(data) or changed
+
+    # The two rate-limit fields are a one-time reset: values on disk were set
+    # when the fields asked a different question ("albums to process") and
+    # nothing read them, so they are guesses about something else. A leftover
+    # of a minute between batches would quietly add half an hour to a long
+    # playlist, so anything beyond a plausible pause goes back to the default.
+    # The guard is the in-file marker for installs that carry it and the
+    # sidecar for configs a downgrade stripped: a pace the user has since
+    # tuned is theirs, and stands.
+    if "rate_limit_wired" not in done and not data.api_rate_limit_wired_migrated:
         if data.api_rate_limit_delay_sec > _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC:
             data.api_rate_limit_delay_sec = ModelSettings().api_rate_limit_delay_sec
         data.api_rate_limit_wired_migrated = True
         changed = True
 
+    # Lyrics & artwork split per provider: the shared toggles
+    # move into each provider's card. Copy the shared values into both
+    # mirrors once, so an existing install downloads exactly as configured
+    # while each provider's choices become its own from here on.
+    if "lyrics_art_providers" not in done:
+        changed = _migrate_lyrics_art_providers(data) or changed
+
+    # The Atmos toggle became the Chooser default-audio dropdown.
+    # A downgrade can re-serialize the retired carrier; it is dropped either
+    # way, and only a first run lets it move the dropdown.
+    if "atmos_default" not in done:
+        changed = _migrate_atmos_default(data) or changed
+    elif data.download_dolby_atmos is not None:
+        data.download_dolby_atmos = None
+        changed = True
+
+    if record and not set(_MIGRATION_STEPS) <= done:
+        _remember_migrations(done)
+
     return changed
 
 
-def _clamp_bounded_numbers(data: ModelSettings) -> bool:
-    """Pull every INT_BOUNDS setting back inside its range, on every load.
+def _migrate_atmos_default(data: ModelSettings) -> bool:
+    """Fold the retired Atmos toggle into the default-audio dropdown."""
+    if data.download_dolby_atmos is None:
+        return False
+    # On means both Versions side by side; off was the default already, so
+    # only True writes. The carrier nulls either way, so the old key leaves
+    # settings.json on the next save.
+    if data.download_dolby_atmos:
+        data.default_audio_type = "both"
+    data.download_dolby_atmos = None
+    return True
 
-    The Settings save clamps, but a config file edited by hand never passes
-    through it, and the engine reads these raw: a finishing count of 100 sized
-    the queue's thread pool and every album's fan-out past a hundred threads.
-    Not a one-time migration, so no marker. Returns True when something
-    changed, so the caller persists it.
-    """
-    changed = False
-    for key, (low, high) in INT_BOUNDS.items():
-        value = getattr(data, key)
+
+def _migrate_provider_segment(data: ModelSettings) -> bool:
+    """Prefix stored album/track templates with the {provider_name} segment."""
+    if data.format_provider_segment_migrated:
+        return False
+    old_default = (
+        "{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
+        "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
+    )
+    fresh = ModelSettings()
+    if data.format_album == old_default:
+        data.format_album = fresh.format_album
+    if data.format_track == old_default:
+        data.format_track = fresh.format_track
+    data.format_provider_segment_migrated = True
+    return True
+
+
+def _migrate_lyrics_art_providers(data: ModelSettings) -> bool:
+    """Copy the shared lyrics/artwork toggles into both provider mirrors."""
+    if data.lyrics_art_per_provider_migrated:
+        return False
+    from waves.model.cfg import LYRICS_ART_KEYS, PROVIDER_IDS
+
+    for base in LYRICS_ART_KEYS:
         try:
-            number = int(value)
-        except (TypeError, ValueError, OverflowError):
-            number = getattr(ModelSettings(), key)
-        number = max(low, min(high, number))
-        # A bool compares equal to 0 or 1, so the type is checked as well.
-        if number != value or isinstance(value, bool) or not isinstance(value, int):
-            setattr(data, key, number)
-            changed = True
-    return changed
+            value = getattr(data, base)
+        except AttributeError:
+            continue
+        for pid in PROVIDER_IDS:
+            try:
+                setattr(data, f"{pid}_{base}", value)
+            except Exception:
+                logger.debug("Could not migrate %s_%s", pid, base, exc_info=True)
+    data.lyrics_art_per_provider_migrated = True
+    return True
 
 
-class Settings(BaseConfig, metaclass=SingletonMeta):
+class Settings(BaseConfig[ModelSettings], metaclass=SingletonMeta):
     def __init__(self):
         self.cls_model = ModelSettings
         self.file_path = path_file_settings()
         self.read(self.file_path)
-        # Both run: a bitwise or, not a short-circuit.
-        if _migrate_settings(self.data) | _clamp_bounded_numbers(self.data):
+        # Change in memory first, record nothing: a step whose settings never
+        # reach disk is not done, and the next launch must run it again.
+        changed = _migrate_settings(self.data, record=False)
+        persisted = True
+        if changed:
             # Same degrade as read()'s write-back: a still-locked file must not
             # abort startup; the migrations live in memory and persist on the
             # next successful save (their markers keep them one-time).
             try:
                 self.save()
             except OSError as e:
+                persisted = False
                 logger.warning(
                     "Settings migration persist blocked by another process; continuing in memory (%s)",
                     type(e).__name__,
                 )
+        if persisted and not set(_MIGRATION_STEPS) <= _completed_migrations():
+            # Seed the sidecar from the in-file markers on the first launch
+            # after this build, so the steps already applied are recorded even
+            # when this run had nothing of its own to write.
+            _remember_migrations(_completed_migrations())
 
 
-# Retry policy for api.tidal.com. Every catalog call the download engine makes
-# (the track re-fetch, its album, the playback request) went out exactly once:
-# tidalapi mounts no adapter, so the first 429 or 5xx failed that track, and a
-# failed track fails the collection around it. A 12-track album never noticed;
-# a 500-track playlist makes some 1500 calls in a row and noticed every time
-# (issue #35). Nothing that REACHED TIDAL is ever sent twice: a status or read
-# retry is GET/HEAD only, so a sign-in or a playlist edit is never resubmitted,
-# and a connect retry can only repeat a request whose connection never opened.
-# TIDAL's own Retry-After wins over the backoff.
+# Retry policy for api.tidal.com. tidalapi mounts no adapter, so a first 429
+# or 5xx fails that track, and a failed track fails the collection around it;
+# this policy retries each catalog call the download engine makes (the track
+# re-fetch, its album, the playback request). Nothing that REACHED TIDAL is
+# ever sent twice: a status or read retry is GET/HEAD only, so a sign-in or a
+# playlist edit is never resubmitted, and a connect retry can only repeat a
+# request whose connection never opened. TIDAL's own Retry-After wins over the
+# backoff.
 _API_RETRY_TOTAL: int = 3
 # urllib3's ladder from this factor is 0, 3, 6 seconds: its first retry is
 # always immediate (get_backoff_time returns 0 for it), which is the right
@@ -395,49 +630,44 @@ def api_waits_wake_for(event) -> None:
     _api_waits.event = event
 
 
-def _quality_or_default(value) -> tidalapi.Quality:
-    """``value`` as a tidalapi Quality, or the model's default when it is not
-    one (a None or a stray string that got past the reader)."""
-    try:
-        return tidalapi.Quality(value)
-    except (ValueError, TypeError):
-        logger.warning("Config: audio quality unusable, using the default")
-        return tidalapi.Quality(ModelSettings().quality_audio)
+# The words a hand-edited settings file may spell a toggle with. Case and
+# surrounding whitespace fold away; nothing else is a boolean here. Only this
+# load path is in scope: set_option keeps its own list and policy.
+_BOOLEAN_WORDS: dict[str, bool] = {
+    "true": True,
+    "1": True,
+    "yes": True,
+    "false": False,
+    "0": False,
+    "no": False,
+}
 
 
-_BOOL_WORDS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
+def _boolean_word(value: str) -> bool | None:
+    """The boolean a canonical word names, or None when it names none."""
+    return _BOOLEAN_WORDS.get(value.strip().lower())
+
+
+def _boolean_field(hint) -> bool:
+    """Whether the field holds a bool directly or as ``bool | None``."""
+    if hint is bool:
+        return True
+    args = typing.get_args(hint)
+    if typing.get_origin(hint) not in (typing.Union, types.UnionType):
+        return False
+    return bool in args and all(arg is bool or arg is type(None) for arg in args)
 
 
 def _field_unusable(hint, value) -> bool:
-    """A null, a string in a bool field that names no bool, a number field
-    holding what no number can be made of, a text field holding a list, an
-    object or a bool, a number that is not finite, or a value that is not a
-    member of the enum the field holds."""
+    """A null the field does not allow, a value outside the field's enum, or
+    a boolean field holding a word the canonical six do not name."""
     if value is None:
-        return True
-    if hint is bool and isinstance(value, str):
-        return True
-    if hint in (int, float):
-        # dataclasses_json reads a number field with int(value) or
-        # float(value). A word ("three"), an empty string, a list or an
-        # object raised out of from_json and threw the whole file away; a
-        # bool is a wrong shape that int() quietly takes as 0 or 1.
-        if isinstance(value, bool):
-            return True
-        try:
-            number = hint(value)
-        except (TypeError, ValueError, OverflowError):
-            return True
-        # json reads Infinity, -Infinity, NaN (and a literal too big for a
-        # float) as non-finite floats. A whole-number field raised
-        # OverflowError or ValueError on them out of from_json, and a seconds
-        # field would sleep forever.
-        if not math.isfinite(number):
-            return True
-    if hint is str and isinstance(value, list | dict | bool):
-        # str() of these is a literal like "['/Music']", which would then be
-        # used as a path or a template.
-        return True
+        # Unlike upstream, this fork's models have legitimate nulls (Token's
+        # logged-out credentials, the quality split's migration carriers):
+        # only a null the field's own type forbids is unusable.
+        return type(None) not in typing.get_args(hint)
+    if isinstance(value, str) and _boolean_field(hint):
+        return _boolean_word(value) is None
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         try:
             hint(value)
@@ -446,17 +676,73 @@ def _field_unusable(hint, value) -> bool:
     return False
 
 
+def _unusable_fields_and_boolean_rewrites(raw: dict, hints: dict) -> tuple[list[str], dict[str, bool]]:
+    """The fields to delete and the boolean words to rewrite, for one stored object."""
+    dropped: list[str] = []
+    rewritten: dict[str, bool] = {}
+    for key, value in raw.items():
+        if key not in hints:
+            continue
+        if _field_unusable(hints[key], value):
+            dropped.append(key)
+        elif isinstance(value, str) and _boolean_field(hints[key]):
+            word = _boolean_word(value)
+            if word is not None:
+                rewritten[key] = word
+    return dropped, rewritten
+
+
+def _rewrite_boolean_words(raw: dict, keys: tuple[str, ...]) -> bool:
+    """Rewrite canonical boolean words on ``keys`` in place, dropping unknown ones."""
+    changed = False
+    for key in keys:
+        value = raw.get(key)
+        if not isinstance(value, str):
+            continue
+        word = _boolean_word(value)
+        if word is None:
+            del raw[key]
+        else:
+            raw[key] = word
+        changed = True
+    return changed
+
+
+# The booleans inside download_policies. That field decodes through its own
+# function, which keeps the default for anything that is not a real boolean,
+# so the top-level walk cannot reach these toggles.
+def _normalize_policy_boolean_words(raw: dict) -> bool:
+    """Coerce hand-edited boolean words inside the nested ``download_policies``."""
+    policies = raw.get("download_policies")
+    if not isinstance(policies, dict):
+        return False
+    changed = _rewrite_boolean_words(policies, DOWNLOAD_POLICY_BOOLEAN_FIELDS)
+    shared = policies.get("shared")
+    if isinstance(shared, dict):
+        changed = _rewrite_boolean_words(shared, FULFILLMENT_BOOLEAN_FIELDS) or changed
+    providers = policies.get("providers")
+    if isinstance(providers, dict):
+        for values in providers.values():
+            if isinstance(values, dict):
+                changed = _rewrite_boolean_words(values, FULFILLMENT_BOOLEAN_FIELDS) or changed
+    return changed
+
+
 def _drop_unusable_fields(settings_json: str, cls_model) -> str:
     """The stored JSON with every field the model could not use removed, so
-    the dataclass default fills it in and the rest of the file survives.
+    the dataclass default fills it in, and every canonical boolean word
+    rewritten to the real boolean it names.
 
-    Two shapes reached the whole-file bail-out below (settings.json moved to
-    .bak, every setting back to stock): a null value (a hand edit, a sync
+    Two shapes reached the whole-file bail-out in ``read`` (settings.json moved
+    to .bak, every setting back to stock): a null value (a hand edit, a sync
     tool, a half-merged file), which dataclasses_json keeps as None and then
-    crashes the launch in settings_apply or the migration compare, and an
-    enum member this build does not know (a rollback past a newer tier),
-    which raises out of from_json for that one field and threw away the
-    download folder, every template and every toggle with it."""
+    crashes the launch in settings_apply or the migration compare; and an enum
+    member this build does not know (a rollback past a newer tier), which
+    raises out of from_json for that one field. A boolean toggle spelled as a
+    word did not raise: the decode read any non-empty string as true, so
+    "false", "0" and "no" all switched the toggle back on. Canonical words are
+    rewritten here; any other word is dropped like any other unusable value,
+    so one bad toggle does not cost the file."""
     try:
         raw = json.loads(settings_json)
     except (JSONDecodeError, TypeError):
@@ -467,20 +753,15 @@ def _drop_unusable_fields(settings_json: str, cls_model) -> str:
         hints = typing.get_type_hints(cls_model)
     except Exception:
         return settings_json
-    # dataclasses_json reads a bool field with bool(value), so a hand-edited
-    # "false" loaded as True and was written back as true. Canonical spellings
-    # become the bool they name; any other string is unusable below.
-    coerced = False
-    for key, value in raw.items():
-        if hints.get(key) is bool and isinstance(value, str) and value.strip().lower() in _BOOL_WORDS:
-            raw[key] = _BOOL_WORDS[value.strip().lower()]
-            coerced = True
-    dropped = [key for key, value in raw.items() if key in hints and _field_unusable(hints[key], value)]
-    if not dropped:
-        return json.dumps(raw) if coerced else settings_json
+    dropped, rewritten = _unusable_fields_and_boolean_rewrites(raw, hints)
+    policy_rewritten = _normalize_policy_boolean_words(raw)
+    if not dropped and not rewritten and not policy_rewritten:
+        return settings_json
     for key in dropped:
         del raw[key]
-    logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
+    raw.update(rewritten)
+    if dropped:
+        logger.warning("Config: %d unusable field(s) reset to default", len(dropped))
     return json.dumps(raw)
 
 
@@ -549,16 +830,14 @@ class _ApiAdapter(IdleDropAdapter):
     tidalapi passes no timeout, so a black-holed connection parks a download
     worker forever and, with the queue running one job at a time, the whole
     queue with it. requests only applies a default when the caller gave none,
-    which is exactly the gap this fills. Connections that sat through a long
-    gap or a sleep are dropped before reuse, like the download session's
-    (issue #47, see waves.http_pool): the catalog is asked from several
-    threads at once too (an artist page's five sections, search enrichment).
+    which is exactly the gap this fills. Waiting connections are also dropped
+    after idle or sleep, using the shared HTTP adapter's rule.
     """
 
-    def send(self, request, **kwargs):
+    def send(self, request, *args, **kwargs):
         if kwargs.get("timeout") is None:
             kwargs["timeout"] = REQUESTS_TIMEOUT_SEC
-        return super().send(request, **kwargs)
+        return super().send(request, *args, **kwargs)
 
 
 def harden_api_session(session: tidalapi.Session) -> None:
@@ -586,13 +865,13 @@ def harden_api_session(session: tidalapi.Session) -> None:
     session.request_session.mount("http://", adapter)
 
 
-class Tidal(BaseConfig, metaclass=SingletonMeta):
+class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
     session: tidalapi.Session
     token_from_storage: bool = False
     settings: Settings
     is_pkce: bool
 
-    def __init__(self, settings: Settings = None):
+    def __init__(self, settings: Settings | None = None):
         self.cls_model = ModelToken
         tidal_config: tidalapi.Config = tidalapi.Config(item_limit=10000)
         self.session = tidalapi.Session(tidal_config)
@@ -629,23 +908,28 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
             self.settings = settings
             self.settings_apply()
 
-    def settings_apply(self, settings: Settings = None) -> bool:
+    def settings_apply(self, settings: Settings | None = None) -> bool:
         if settings:
             self.settings = settings
 
         if not self.is_atmos_session:
+            # The settings carry Waves tier strings; the engine maps the rung
+            # onto its own codec vocabulary (spec §4.3). An unreadable value
+            # writes nothing: the session keeps the tier it already carries.
             # A job on the pool pins its row's tier onto this same session
             # under stream_lock for the length of one manifest request; a
             # write from the GUI thread in that window fetched that track at
             # today's setting. The wait is bounded (the manifest request is
             # sub-second) so a stuck lock cannot freeze the GUI.
-            lock = getattr(self, "stream_lock", None)
-            held = bool(lock is not None and lock.acquire(timeout=2.0))
-            try:
-                self.session.audio_quality = _quality_or_default(self.settings.data.quality_audio)
-            finally:
-                if held:
-                    lock.release()
+            quality = session_quality_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
+            if quality is not None:
+                lock = getattr(self, "stream_lock", None)
+                held = bool(lock is not None and lock.acquire(timeout=2.0))
+                try:
+                    self.session.audio_quality = quality
+                finally:
+                    if held:
+                        lock.release()
         self.session.video_quality = tidalapi.VideoQuality.high
 
         return True
@@ -655,12 +939,18 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         self.is_pkce = do_pkce
 
         if self.token_from_storage:
+            token_type = self.data.token_type
+            access_token = self.data.access_token
+            if not token_type or not access_token:
+                # The model declares null credentials for a logged-out file;
+                # there is no stored sign-in to load.
+                return False
             try:
                 result = self.session.load_oauth_session(
-                    self.data.token_type,
-                    self.data.access_token,
+                    token_type,
+                    access_token,
                     self.data.refresh_token,
-                    self.data.expiry_time,
+                    self.data.expiry_time,  # ty: ignore[invalid-argument-type]  # stored as an epoch float; tidalapi only round-trips it
                     is_pkce=do_pkce,
                 )
             except Exception:
@@ -669,9 +959,9 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
                 if os.path.exists(self.file_path):
                     os.remove(self.file_path)
 
-                print(
-                    "Either there is something wrong with your credentials / account or some server problems on TIDALs "
-                    "side. Anyway... Try to login again by re-starting this app."
+                logger.warning(
+                    "Either there is something wrong with your credentials / account or some server problems on "
+                    "TIDALs side. Anyway... Try to login again by re-starting this app."
                 )
 
         return result
@@ -688,7 +978,10 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         """Tell the listener (if any) that this session's credentials are new.
 
         Best-effort in every direction: a listener that raises must never take
-        a login or a quality switch down with it.
+        a login or a quality switch down with it. The listener collects the
+        facts itself through its provider (it owns the redactor mapping); the
+        event carries no session object, so the UI never needs to reach past
+        its seam to read one.
         """
         sink = getattr(self, "on_session_credentials", None)
 
@@ -696,7 +989,7 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
             return
 
         with contextlib.suppress(Exception):
-            sink(self.session)
+            sink()
 
     def token_persist(self) -> None:
         self.set_option("token_type", self.session.token_type)
@@ -712,15 +1005,15 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         self._note_session_credentials()
 
     def _reauthenticate_current_client(self) -> bool:
-        """Make the currently set client credentials actually take effect.
+        """Make the set client credentials actually take effect.
 
         A client swap alone does nothing: ``login_token`` loads the saved
         grant through ``load_oauth_session``, which only contacts TIDAL when
         the stored access pass is already rejected. While that pass is still
         valid (the normal case) the swap is a silent no-op, so the request
         keeps going out under the old client. Forcing a refresh here exchanges
-        the saved refresh credential for a fresh access pass under the client
-        that is set right now, which is what proves (or disproves) that client.
+        the saved refresh credential for a fresh access pass under the new
+        client, which is what proves (or disproves) that client.
 
         The refresh result is deliberately not persisted: the saved sign-in on
         disk stays the user's own, so an Atmos swap can never overwrite it.
@@ -728,7 +1021,10 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         try:
             if not self.login_token(do_pkce=self.is_pkce):
                 return False
-            refreshed = bool(self.session.token_refresh(self.session.refresh_token))
+            refresh_token = self.session.refresh_token
+            if not refresh_token:
+                return False
+            refreshed = bool(self.session.token_refresh(refresh_token))
         except Exception as exc:
             # A category, never the credential: the exception type says what
             # kind of failure it was without naming any client id or endpoint.
@@ -768,8 +1064,8 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         # stops a Settings save from writing the user's stereo tier over the
         # Atmos request on the shared session, and the re-authentication is two
         # network round trips (tens of seconds while TIDAL throttles): a save
-        # landing in that window used to sail through the gate, and the Atmos
-        # get_stream that followed asked at a tier the Atmos client never
+        # landing in that window would sail through the gate, and the Atmos
+        # get_stream that followed would ask at a tier the Atmos client never
         # requests. Lowered again by the restore below if the switch fails.
         self.is_atmos_session = True
 
@@ -813,7 +1109,9 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         # at all and the session kept the tier from before it.
         self.is_atmos_session = False
         # Explicitly restore audio quality to user's configured setting
-        self.session.audio_quality = tidalapi.Quality(self.settings.data.quality_audio)
+        quality = session_quality_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
+        if quality is not None:
+            self.session.audio_quality = quality
 
         # Re-authenticate under the original client.
         if not self._reauthenticate_current_client():
@@ -857,23 +1155,3 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         del self.session
 
         return True
-
-    def is_authentication_error(self, error: Exception) -> bool:
-        """Check if an error is related to authentication/OAuth issues.
-
-        Args:
-            error (Exception): The exception to check.
-
-        Returns:
-            bool: True if the error is authentication-related, False otherwise.
-        """
-        error_msg = str(error)
-        return "401" in error_msg or "OAuth" in error_msg or "token" in error_msg.lower()
-
-
-class HandlingApp(metaclass=SingletonMeta):
-    event_abort: Event = Event()
-    event_run: Event = Event()
-
-    def __init__(self):
-        self.event_run.set()

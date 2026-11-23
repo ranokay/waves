@@ -1,0 +1,1067 @@
+import logging
+import pathlib
+
+import mutagen.flac
+import mutagen.mp3
+import mutagen.mp4
+from mutagen import flac, id3, mp4
+from mutagen.id3 import (
+    APIC,
+    COMM,
+    TALB,
+    TBPM,
+    TCOM,
+    TCON,
+    TCOP,
+    TDRC,
+    TIT1,
+    TIT2,
+    TKEY,
+    TPE1,
+    TPE2,
+    TRCK,
+    TSRC,
+    TXXX,
+    USLT,
+    WOAS,
+)
+
+from waves.ids import DEFAULT_PROVIDER, namespaced_id
+
+logger = logging.getLogger("waves.tags")
+
+
+def sniff_image_format(data: bytes) -> str:
+    """The image's real format by magic bytes: "png", "jpg", or "" unknown."""
+    head = bytes(data[:8]) if data else b""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    return ""
+
+
+def _rg_missing(value) -> bool:
+    """True when a ReplayGain value was never actually measured.
+
+    tidalapi substitutes a literal 1.0 whenever TIDAL omits a loudness field,
+    so a 1.0 (or None) means "unknown", not a real reading. Writing it would
+    stamp a phantom +1 dB gain (and a full-scale peak that claims zero headroom)
+    onto every unmeasured track, which is worse than writing nothing. A genuine
+    track sitting at exactly 1.0 is astronomically rare and benign to skip.
+    """
+    return value is None or value == 1.0
+
+
+def _replay_gain_tags(album_gain, album_peak, track_gain, track_peak):
+    """Yield (REPLAYGAIN_* name, text) for each value TIDAL actually measured.
+
+    Gain is emitted in the ReplayGain 2.0 writer form ("-7.36 dB": two decimals
+    plus the unit, what loudgain and strict readers expect); peak stays a bare
+    linear amplitude (1.0 = full scale, no unit). Sentinel or missing values are
+    dropped (see _rg_missing) so the tags never carry data TIDAL did not supply.
+    """
+    for kind, value in (
+        ("ALBUM_GAIN", album_gain),
+        ("ALBUM_PEAK", album_peak),
+        ("TRACK_GAIN", track_gain),
+        ("TRACK_PEAK", track_peak),
+    ):
+        if _rg_missing(value):
+            continue
+        text = f"{value:.2f} dB" if kind.endswith("GAIN") else str(value)
+        yield f"REPLAYGAIN_{kind}", text
+
+
+class MetadataUnreadable(Exception):
+    """Raised when the audio file cannot be parsed for tagging.
+
+    ``mutagen.File`` returns ``None`` for unidentifiable or truncated files. Turning
+    that into an explicit, catchable error lets the caller fail only the offending
+    item instead of aborting the whole collection with a bare ``AttributeError``.
+    """
+
+    def __init__(self, path_file):
+        super().__init__(f"Cannot read audio file for tagging: {path_file}")
+        self.path_file = path_file
+
+
+# One tag name across containers so a file can always answer "which TIDAL
+# item is this?": distinct tracks whose sanitized filenames collide (several
+# mixes sharing a title) are told apart by this id, not by their name.
+ITEM_ID_TAG = "WAVES_TIDAL_ID"
+
+# The same question asked about people rather than items: "whose music is this?"
+# Two artists can share a name (and so share a folder), and a name cannot tell
+# them apart afterwards. These carry the TIDAL artist ids beside the names, so a
+# file, and through it the folder holding it, can always answer for itself.
+# Written from the release onward only: an untagged file means "unknown", never
+# "somebody else".
+ARTIST_ID_TAG = "WAVES_TIDAL_ARTIST_ID"
+ALBUM_ARTIST_ID_TAG = "WAVES_TIDAL_ALBUM_ARTIST_ID"
+
+# §8.1 of the provider spec: the generic tag family both providers write going
+# forward, beside the legacy WAVES_TIDAL_* tags. Same three questions as the
+# legacy trio, answered in the one format every provider shares -- the
+# namespaced id (waves.ids) -- so an Apple file can carry its identity in the
+# same atoms.
+GENERIC_ITEM_ID_TAG = "WAVES_ITEM_ID"
+GENERIC_ARTIST_IDS_TAG = "WAVES_ARTIST_IDS"
+GENERIC_ALBUM_ARTIST_ID_TAG = "WAVES_ALBUM_ARTIST_ID"
+
+# §5.3 / §8.1: which Version a file is -- "stereo" / "atmos" in
+# the seam's AudioType spelling. Recognition reads this tag first and only
+# falls back to the codec sniff for files from before it existed, so a file
+# is never misread because its container shares an extension.
+GENERIC_AUDIO_TYPE_TAG = "WAVES_AUDIO_TYPE"
+
+# Tags that describe the OLD audio or the OLD delivery, never the song: a
+# replacement copy must not inherit them (matched as a lowercase substring).
+# The WAVES_* family is checked by prefix below, so the fork's provenance tags
+# and catalog ids always come from the delivered file.
+_TAGS_NOT_CARRIED = (
+    "replaygain",
+    "encoder",
+    "encodedby",
+    "encoded by",
+    "\xa9too",
+    "encoding params",
+    "itunnorm",
+    "itunsmpb",
+    "itunpgap",
+    "isrc",
+    "upc",
+    "barcode",
+)
+_TAGS_OLD_WINS = frozenset({"genre", "\xa9gen", "tcon"})
+_TAG_PREFIXES_NEVER_CARRIED = ("waves_",)
+# ID3 frames that describe the delivery by frame id (the encoder and the ISRC),
+# matched exactly so a user's frame that merely contains these letters is kept.
+_ID3_FRAMES_NEVER_CARRIED = frozenset({"tenc", "tsrc"})
+
+# The common user fields mapped across containers (M4A <-> FLAC <-> MP3).
+# Anything container-specific that has no counterpart is reported as not
+# carried; it is never copied by a guessed name.
+_CROSS_CONTAINER_TAGS = {
+    "genre": (("genre", "GENRE", "\xa9gen", "TCON"), {"flac": "GENRE", "mp4": "\xa9gen", "mp3": "TCON"}),
+    "comment": (("comment", "COMMENT", "\xa9cmt", "COMM"), {"flac": "COMMENT", "mp4": "\xa9cmt", "mp3": "COMM"}),
+    "composer": (("composer", "COMPOSER", "\xa9wrt", "TCOM"), {"flac": "COMPOSER", "mp4": "\xa9wrt", "mp3": "TCOM"}),
+    "grouping": (("grouping", "GROUPING", "\xa9grp", "TIT1"), {"flac": "GROUPING", "mp4": "\xa9grp", "mp3": "TIT1"}),
+}
+AUDIO_TYPE_STEREO = "stereo"
+AUDIO_TYPE_ATMOS = "atmos"
+
+
+def _legacy_id(value) -> str:
+    """A namespaced id in the legacy tag's bare spelling.
+
+    The Provider seam hands every id over namespaced ("tidal:123", §4.2 of the
+    provider spec); these WAVES_TIDAL_* tags predate the namespace and stay
+    bare, so the writer strips the prefix it is given. A value with no
+    namespace -- everything older builds wrote, and anything a caller passes
+    straight through -- is kept exactly as it is.
+    """
+    text = str(value or "")
+    provider_id, _sep, raw = text.partition(":")
+    if not raw or not provider_id:
+        return text
+    return raw
+
+
+def _bare_legacy_id(value: str) -> str:
+    """A generic tag's id in the spelling the engine's comparisons speak.
+
+    The legacy tags carry tidal ids bare, and every gate that asks a file
+    "are you mine?" compares against that bare spelling -- so a tidal
+    namespace is read back off, and a new file answers exactly as an old one
+    does. A FOREIGN namespace stays prefixed: it can never equal a bare tidal
+    id, which is what keeps another provider's file from being claimed,
+    skipped or replaced as this provider's own copy (§4.2: owning on TIDAL
+    never satisfies another provider's gate).
+    """
+    provider_id, sep, raw = value.partition(":")
+    if not sep or not provider_id or not raw:
+        return value
+    return raw if provider_id == DEFAULT_PROVIDER else value
+
+
+def _ids_in_tags(tags, tag: str) -> list[str]:
+    """Every value one of Waves' own id tags carries inside an OPEN file's tag
+    block, in written order.
+
+    Split out of :func:`read_custom_ids` so :func:`read_item_id` can ask two
+    tag names of ONE mutagen object: the library scan reads an item id for
+    every file of a cold library, and reopening the container for the legacy
+    fallback doubled that phase's file opens for no better answer.
+    """
+    for key in (tag, f"TXXX:{tag}", f"----:com.apple.iTunes:{tag}"):
+        try:
+            value = tags.get(key)
+        except Exception:  # noqa: S112 - a container that can't .get() a key simply has no id
+            continue
+        if not value:
+            continue
+        raw = value if isinstance(value, list) else [value]
+        found: list[str] = []
+        for item in raw:
+            # MP4 freeform values are a bytes subclass, so decode before the
+            # frame check: bytes have no .text and must not be str()'d into
+            # a b"..." literal.
+            if isinstance(item, bytes):
+                item = item.decode("utf-8", "ignore")
+            elif hasattr(item, "text"):  # an ID3 TXXX frame carries its own list
+                found.extend(str(part).strip() for part in item.text or [])
+                continue
+            found.append(str(item).strip())
+        texts = [text for text in found if text]
+        if texts:
+            return texts
+    return []
+
+
+def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
+    """Every value one of Waves' own id tags carries, in written order.
+
+    One probe for all three containers: a Vorbis comment is stored under the
+    bare name, ID3 under a "TXXX:" description, MP4 under an iTunes freeform
+    atom. An unreadable file, a container with no tags at all, or a tag that
+    was never written all answer the same way, with an empty list.
+    """
+    try:
+        m = mutagen.File(path_file)
+    except Exception:
+        return []
+    if m is None or not m.tags:
+        return []
+    return _ids_in_tags(m.tags, tag)
+
+
+def read_item_id_or_none(path_file: str | pathlib.Path) -> str | None:
+    """The item id a file was downloaded as; None when the read FAILED, ""
+    when the file opened with no Waves id (including a container with no tag
+    block at all).
+
+    :func:`read_item_id`'s tri-state sibling, for the library scan (ADR 0007):
+    the scan persists "" as the finished "not Waves' file" and
+    None as "could not read this file, try again", so a transient open
+    failure on a NAS must not harden into an untagged row that Saved misses
+    forever. A caller that only wants the id keeps ``read_item_id``, which
+    answers "" for both cases; both ask the two tag names of ONE open.
+    """
+    try:
+        m = mutagen.File(path_file)
+    except Exception:
+        return None
+    if m is None:
+        # Not a container mutagen can parse at all: there is no tag block to
+        # read, so "" is the settled answer (what the gate's reader gives too,
+        # and what an empty fixture file answers). Only a read that FAILED
+        # -- an I/O error, a file gone between two opens -- still retries.
+        return ""
+    tags = getattr(m, "tags", None)
+    if not tags:
+        return ""
+    ids = _ids_in_tags(tags, GENERIC_ITEM_ID_TAG) or _ids_in_tags(tags, ITEM_ID_TAG)
+    return _bare_legacy_id(ids[0]) if ids else ""
+
+
+def read_item_id(path_file: str | pathlib.Path) -> str:
+    """The item id a file was downloaded as, or "" when untagged.
+
+    Generic-first, legacy-fallback (§8.1): the WAVES_ITEM_ID tag is the one
+    both providers write now, and it wins when present; a file from before
+    this family existed answers through its legacy WAVES_TIDAL_ID tag, so
+    every library already on disk stays recognized. Either way a tidal file
+    answers with its bare id -- the spelling the engine's own-copy and
+    skip gates compare against -- while a file saved by another provider
+    answers under its namespaced id, which can never equal a bare tidal id.
+
+    Both tag names are asked of ONE open: the library scan calls this for
+    every file of a cold scan (ADR 0007), and the legacy fallback
+    is the common case there, so reopening the container for it would double
+    the phase's file opens.
+
+    Files from releases before any id tag existed (or raw .ts videos, which
+    have no tag atoms) return "": callers must treat that as "identity
+    unknown", never as "different item". A caller that must tell an unreadable
+    file from an untagged one asks :func:`read_item_id_or_none`.
+    """
+    return read_item_id_or_none(path_file) or ""
+
+
+def normalize_audio_type_tag(value: str | None) -> str | None:
+    """One spelling for a WAVES_AUDIO_TYPE tag value, or None when untagged."""
+    text = str(value or "").strip().lower()
+    if text in (AUDIO_TYPE_STEREO, AUDIO_TYPE_ATMOS):
+        return text
+    return None
+
+
+def read_audio_type(path_file: str | pathlib.Path) -> str | None:
+    """The Version a file was downloaded as ("stereo" / "atmos"), or None.
+
+    Generic tag first (§5.3): what both providers write now, so recognition
+    never sniffs codecs for a file Waves wrote. Untagged files (every library
+    already on disk, a user's own files) answer None and callers fall back
+    to the codec sniff, which stays the legacy answer, never the source.
+    """
+    ids = read_custom_ids(path_file, GENERIC_AUDIO_TYPE_TAG)
+    if not ids:
+        return None
+    return normalize_audio_type_tag(ids[0])
+
+
+# Every extension Dolby Atmos can arrive in: E-AC-3 JOC and AC-4 are MP4
+# payloads, so any other container is stereo by construction and needs no open.
+_ATMOS_CONTAINER_SUFFIXES = (".m4a", ".mp4")
+_ATMOS_CODECS = ("ec-3", "ac-4")
+
+
+def _mp4_codec(path_file) -> str:
+    """The codec one MP4 container reports, "" when it says nothing.
+
+    Module-level because the container open is a seam a test can stand in
+    front of (the codec sniff's own rules), and because every reader goes
+    through this one place rather than opening the container itself.
+    """
+    return str(getattr(mp4.MP4(str(path_file)).info, "codec", "") or "")
+
+
+def read_file_audio_type(path_file: str | pathlib.Path) -> str | None:
+    """The audio type the audio file at this path IS: "stereo" / "atmos" / None.
+
+    read_audio_type's fallback sibling: that one answers only what the tag says
+    (the download gates' question -- a file Waves wrote must never be guessed
+    from its container), while this one answers what the FILE is, codec sniff
+    included, for the gates that judge a copy already on disk.
+
+    Tag first, codec second (§5.3): a file Waves wrote carries
+    WAVES_AUDIO_TYPE, which answers without opening the container and can
+    never misread a shared extension (TIDAL's stereo AAC and its Atmos both
+    live in .m4a). Untagged files -- every library already on disk, a user's
+    own files -- fall back to the codec sniff, which stays the legacy answer,
+    never the source. Only an MP4 container can hold Atmos, so every other
+    extension is stereo by construction, answered without opening the file.
+
+    None means the file could not be read at all: callers keep their
+    historical answer (an unreadable copy is never evidence of a DIFFERENT
+    Version) instead of guessing.
+    """
+    tagged = read_audio_type(path_file)
+    if tagged in (AUDIO_TYPE_STEREO, AUDIO_TYPE_ATMOS):
+        return tagged
+    if pathlib.Path(str(path_file)).suffix.lower() not in _ATMOS_CONTAINER_SUFFIXES:
+        return AUDIO_TYPE_STEREO
+    try:
+        codec = _mp4_codec(path_file)
+    except Exception:
+        return None
+    return AUDIO_TYPE_ATMOS if codec.startswith(_ATMOS_CODECS) else AUDIO_TYPE_STEREO
+
+
+def occupant_is_version(path_file: str | pathlib.Path, version: str | None) -> bool:
+    """Whether the audio file at this path may stand in for ``version``'s copy.
+
+    The Version half of :func:`occupant_is_own`, the full question every
+    Version-aware skip asks: an occupant whose on-disk Version differs is the
+    OTHER Version's file, so it is not this one's copy however its id reads --
+    a dual download keeps one file per Version, and a blank Atmos template
+    aims both at one name.
+
+    A Version the caller did not pin (None: a legacy single row, or a stream
+    that has not answered yet) and an occupant whose Version cannot be read
+    both keep the historical answer, "yes": neither is evidence of a
+    DIFFERENT Version.
+    """
+    if version is None:
+        return True
+    on_disk = read_file_audio_type(path_file)
+    return on_disk is None or on_disk == version
+
+
+def occupant_is_own(path_file: str | pathlib.Path, owned_ids: set[str], version: str | None) -> bool:
+    """Whether the audio file at this path is one of these items' own copy.
+
+    The full skip question, Version and identity: the occupant must be the
+    Version's copy (:func:`occupant_is_version`) and carry one of the owned
+    ids. An absent id is identity unknown, never another item's -- the rule
+    the shared engine's ``_existing_same_item_at`` and the Apple runner's
+    delivery skip both ask, so a tagged file for a DIFFERENT item falls
+    through to destination numbering and is fetched instead of skipped.
+
+    ``owned_ids`` mirrors ``waves.ids.owned_item_ids``: every id a file
+    of the item may legitimately carry (its own, plus the legacy spellings).
+    """
+    if not occupant_is_version(path_file, version):
+        return False
+    occupant_id = read_item_id(path_file)
+    return not occupant_id or occupant_id in owned_ids
+
+
+class Metadata:
+    path_file: str | pathlib.Path
+    title: str
+    album: str
+    albumartist: list[str] | None
+    artists: list[str] | None
+    copy_right: str
+    tracknumber: int
+    discnumber: int
+    totaldisc: int
+    totaltrack: int
+    date: str
+    composer: str
+    isrc: str
+    lyrics: str
+    lyrics_unsynced: str
+    path_cover: str
+    cover_data: bytes | None
+    album_replay_gain: float
+    album_peak_amplitude: float
+    track_replay_gain: float
+    track_peak_amplitude: float
+    url_share: str
+    replay_gain_write: bool
+    upc: str
+    target_upc: dict[str, str]
+    explicit: bool
+    bpm: int
+    initial_key: str
+    m: mutagen.FileType
+    release_type: str
+
+    def __init__(
+        self,
+        path_file: str | pathlib.Path,
+        target_upc: dict[str, str],
+        album: str = "",
+        title: str = "",
+        artists: list[str] | None = None,
+        copy_right: str = "",
+        tracknumber: int = 0,
+        discnumber: int = 0,
+        totaltrack: int = 0,
+        totaldisc: int = 0,
+        composer: str = "",
+        isrc: str = "",
+        albumartist: list[str] | None = None,
+        date: str = "",
+        lyrics: str = "",
+        lyrics_unsynced: str = "",
+        cover_data: bytes | None = None,
+        album_replay_gain: float = 1.0,
+        album_peak_amplitude: float = 1.0,
+        track_replay_gain: float = 1.0,
+        track_peak_amplitude: float = 1.0,
+        url_share: str = "",
+        replay_gain_write: bool = True,
+        upc: str = "",
+        explicit: bool = False,
+        bpm: int = 0,
+        initial_key: str = "",
+        release_type: str = "",
+        is_video: bool = False,
+        item_id: str = "",
+        artist_ids: list[str] | None = None,
+        album_artist_ids: list[str] | None = None,
+        legacy_ids: bool = True,
+        audio_type: str | None = None,
+        # Custom-template omit flags: one per omittable tag
+        # group, all defaulting to written (Provider-default behavior). The
+        # callers derive them from the template; lyrics and cover are NOT
+        # here (their embed toggles decide those).
+        write_composer: bool = True,
+        write_copyright: bool = True,
+        write_isrc: bool = True,
+        write_bpm: bool = True,
+        write_initial_key: bool = True,
+        write_upc: bool = True,
+    ):
+        self.path_file = path_file
+        self.title = title
+        self.album = album
+        self.albumartist = albumartist
+        self.artists = artists
+        self.copy_right = copy_right
+        self.tracknumber = tracknumber
+        self.discnumber = discnumber
+        self.totaldisc = totaldisc
+        self.totaltrack = totaltrack
+        self.date = date
+        self.composer = composer
+        self.isrc = isrc
+        self.write_composer = write_composer
+        self.write_copyright = write_copyright
+        self.write_isrc = write_isrc
+        self.write_bpm = write_bpm
+        self.write_initial_key = write_initial_key
+        self.write_upc = write_upc
+        self.lyrics = lyrics
+        self.lyrics_unsynced = lyrics_unsynced
+        self.cover_data = cover_data
+        self.album_replay_gain = album_replay_gain
+        self.album_peak_amplitude = album_peak_amplitude
+        self.track_replay_gain = track_replay_gain
+        self.track_peak_amplitude = track_peak_amplitude
+        self.url_share = url_share
+        self.replay_gain_write = replay_gain_write
+        self.upc = upc
+        self.target_upc = target_upc
+        self.explicit = explicit
+        self.bpm = bpm
+        self.initial_key = initial_key
+        self.m: mutagen.FileType = mutagen.File(self.path_file)
+        self.release_type = release_type
+        self.is_video = is_video
+        # The seam's ids arrive namespaced; the legacy tags carry bare ids.
+        # Apple files set legacy_ids=False: the legacy trio predates the
+        # namespace and stripping an "apple:456" id into WAVES_TIDAL_ID would
+        # mislabel the file, so those files carry the generic family only.
+        self.legacy_ids = legacy_ids
+        self.item_id = _legacy_id(item_id)
+        self.artist_ids = [_legacy_id(a) for a in artist_ids or []]
+        self.album_artist_ids = [_legacy_id(a) for a in album_artist_ids or []]
+        if not legacy_ids:
+            self.item_id = ""
+            self.artist_ids = []
+            self.album_artist_ids = []
+        # The generic family (§8.1) rides the SAME ids in the namespaced
+        # spelling, written beside the legacy tags: one identity, two formats,
+        # so an existing library keeps its legacy readers while every new file
+        # also answers in the format both providers share.
+        self.namespaced_item_id = namespaced_id(item_id)
+        self.namespaced_artist_ids = [namespaced_id(a) for a in artist_ids or []]
+        self.namespaced_album_artist_ids = [namespaced_id(a) for a in album_artist_ids or []]
+        # Which Version this file is (§5.3): written on every audio file so
+        # recognition never sniffs codecs. Videos carry no audio type.
+        self.audio_type = normalize_audio_type_tag(audio_type)
+
+    def _cover(self) -> bool:
+        result: bool = False
+
+        if self.cover_data:
+            # The tag's declared format must match the bytes, or strict
+            # readers show a broken picture (a PNG labelled jpeg, or the
+            # default-format MP4Cover over PNG bytes).
+            image_format = sniff_image_format(self.cover_data)
+            mime = "image/png" if image_format == "png" else "image/jpeg"
+            if self.m.tags is None:
+                raise MetadataUnreadable(self.path_file)
+            if isinstance(self.m, mutagen.flac.FLAC):
+                flac_cover = flac.Picture()
+                flac_cover.type = id3.PictureType.COVER_FRONT
+                flac_cover.data = self.cover_data
+                flac_cover.mime = mime
+
+                self.m.clear_pictures()
+                self.m.add_picture(flac_cover)
+            elif isinstance(self.m, mutagen.mp3.MP3):
+                # Without a mime type (mutagen's default is "") strict readers
+                # skip the picture; the FLAC arm above names the same one.
+                self.m.tags.add(
+                    APIC(
+                        encoding=3,
+                        mime=mime,
+                        type=id3.PictureType.COVER_FRONT,
+                        desc="Cover",
+                        data=self.cover_data,
+                    )
+                )
+            elif isinstance(self.m, mutagen.mp4.MP4):
+                cover_mp4 = mp4.MP4Cover(
+                    self.cover_data,
+                    imageformat=(mp4.MP4Cover.FORMAT_PNG if image_format == "png" else mp4.MP4Cover.FORMAT_JPEG),
+                )
+                self.m.tags["covr"] = [cover_mp4]
+
+            result = True
+
+        return result
+
+    def save(self):
+        if self.m is None:
+            # mutagen.File() returns None for an unidentifiable/truncated file. Fail this
+            # item explicitly so a single bad file doesn't abort the whole collection.
+            raise MetadataUnreadable(self.path_file)
+
+        # Only a file with NO tag block gets one. An existing but empty block
+        # (a VORBIS_COMMENT with the vendor string alone, an empty ilst) is
+        # falsy too, and add_tags() raises on it, which failed the track.
+        if self.m.tags is None:
+            self.m.add_tags()
+
+        if isinstance(self.m, mutagen.flac.FLAC):
+            self.set_flac()
+        elif isinstance(self.m, mutagen.mp3.MP3):
+            self.set_mp3()
+        elif isinstance(self.m, mutagen.mp4.MP4):
+            if self.is_video:
+                self.set_mp4_video()
+            else:
+                self.set_mp4()
+
+        self._cover()
+        self.cleanup_tags()
+        self.m.save()
+
+        return True
+
+    def _primary_lyrics(self) -> str:
+        """Lyrics for the container's primary lyrics field: timed when available.
+
+        Most players read only the primary field (FLAC ``LYRICS``, MP4 ``©lyr``)
+        and ignore the unsynced sibling, so a track that only has untimed lyrics
+        falls back to them there rather than showing nothing. Never a downgrade:
+        every save rewrites the full tag set, so a later re-download that finds
+        timed lyrics replaces the untimed text with the better form.
+        """
+        return self.lyrics or self.lyrics_unsynced
+
+    def _rg_pairs(self):
+        # One place to guard and format the four ReplayGain values before each
+        # container maps them into its own tag scheme.
+        return _replay_gain_tags(
+            self.album_replay_gain,
+            self.album_peak_amplitude,
+            self.track_replay_gain,
+            self.track_peak_amplitude,
+        )
+
+    def _set_flac_custom_tags(self):
+        # Custom-template omit flags, split from set_flac so the
+        # writer stays under the branch budget.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        if self.write_copyright:
+            self.m.tags["COPYRIGHT"] = self.copy_right
+        # An empty composer is no value from the delivery: it must not blank a
+        # composer the user's own tags carried over.
+        if self.write_composer and self.composer:
+            self.m.tags["COMPOSER"] = self.composer
+        if self.write_isrc:
+            self.m.tags["ISRC"] = self.isrc
+        if self.write_upc:
+            self.m.tags[self.target_upc["FLAC"]] = self.upc
+        if self.write_bpm:
+            self.m.tags["BPM"] = str(self.bpm if self.bpm > 0 else "")
+        if self.write_initial_key:
+            self.m.tags["INITIALKEY"] = self.initial_key
+
+    def set_flac(self):
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        self.m.tags["TITLE"] = self.title
+        self.m.tags["ALBUM"] = self.album
+        self.m.tags["ALBUMARTIST"] = self.albumartist
+        self.m.tags["ARTIST"] = self.artists
+        self._set_flac_custom_tags()
+        # 0 means the track number is unknown: write nothing, as TRACKTOTAL does.
+        self.m.tags["TRACKNUMBER"] = str(self.tracknumber) if self.tracknumber > 0 else ""
+        # 0 means the count is unknown (the album summary carried none):
+        # write nothing rather than "of 1" beside a real track number.
+        # cleanup_tags drops the empty value before the file is saved.
+        self.m.tags["TRACKTOTAL"] = str(self.totaltrack) if self.totaltrack > 0 else ""
+        self.m.tags["DISCNUMBER"] = str(self.discnumber) if self.discnumber > 0 else ""
+        # 0 means the volume count is unknown: write nothing rather than
+        # "of 0", mirroring TRACKTOTAL above. cleanup_tags drops the empty
+        # value before the file is saved.
+        self.m.tags["DISCTOTAL"] = str(self.totaldisc) if self.totaldisc > 0 else ""
+        self.m.tags["DATE"] = self.date
+        self.m.tags["ORIGINALDATE"] = self.date
+        self.m.tags["LYRICS"] = self._primary_lyrics()
+        self.m.tags["UNSYNCEDLYRICS"] = self.lyrics_unsynced
+        self.m.tags["URL"] = self.url_share
+        self.m.tags["RELEASETYPE"] = self.release_type
+        # The Vorbis spelling of the explicit flag (Picard, MusicBee and
+        # foobar read it), so a FLAC says what the same track's M4A says
+        # through rtng.
+        self.m.tags["ITUNESADVISORY"] = "1" if self.explicit else "0"
+        self.m.tags[ITEM_ID_TAG] = self.item_id
+        self.m.tags[GENERIC_ITEM_ID_TAG] = self.namespaced_item_id
+        if self.audio_type:
+            self.m.tags[GENERIC_AUDIO_TYPE_TAG] = self.audio_type
+        if self.artist_ids:
+            self.m.tags[ARTIST_ID_TAG] = self.artist_ids
+        if self.album_artist_ids:
+            self.m.tags[ALBUM_ARTIST_ID_TAG] = self.album_artist_ids
+        if self.namespaced_artist_ids:
+            self.m.tags[GENERIC_ARTIST_IDS_TAG] = self.namespaced_artist_ids
+        if self.namespaced_album_artist_ids:
+            self.m.tags[GENERIC_ALBUM_ARTIST_ID_TAG] = self.namespaced_album_artist_ids
+
+        if self.replay_gain_write:
+            for key, text in self._rg_pairs():
+                self.m.tags[key] = text
+
+    def _set_mp3_custom_tags(self):
+        # Custom-template omit flags, split from set_mp3 so the
+        # writer stays under the branch budget.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        if self.write_copyright:
+            self.m.tags.add(TCOP(encoding=3, text=self.copy_right))
+        if self.write_composer and self.composer:
+            self.m.tags.add(TCOM(encoding=3, text=self.composer))
+        if self.write_isrc:
+            self.m.tags.add(TSRC(encoding=3, text=self.isrc))
+        if self.write_upc:
+            self.m.tags.add(TXXX(encoding=3, desc=self.target_upc["MP3"], text=self.upc))
+        if self.write_bpm:
+            self.m.tags.add(TBPM(encoding=3, text=str(self.bpm if self.bpm > 0 else "")))
+        if self.write_initial_key:
+            self.m.tags.add(TKEY(encoding=3, text=self.initial_key))
+
+    def set_mp3(self):
+        # ID3 Frame (tags) overview: https://exiftool.org/TagNames/ID3.html / https://id3.org/id3v2.3.0
+        # Mapping overview: https://docs.mp3tag.de/mapping/
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        self.m.tags.add(TIT2(encoding=3, text=self.title))
+        self.m.tags.add(TALB(encoding=3, text=self.album))
+        self.m.tags.add(TPE2(encoding=3, text=self.albumartist))  # TPE2 is the album artist
+        self.m.tags.add(TPE1(encoding=3, text=self.artists))
+        self._set_mp3_custom_tags()
+        self.m.tags.add(TRCK(encoding=3, text=str(self.tracknumber)))
+        self.m.tags.add(TDRC(encoding=3, text=self.date))
+        # No SYLT: every synced source here is LRC text, and one
+        # (whole-blob, 0) entry reads as a single 0:00 line of raw markup.
+        # The LRC rides the unsynchronized frame instead (the text-field
+        # shape the other containers already use), falling back to it only
+        # when no unsynced text exists.
+        self.m.tags.add(USLT(encoding=3, desc="text", text=self.lyrics_unsynced or self.lyrics))
+        # A URL frame has one field, "url", and mutagen silently discards every
+        # other keyword: WOAS(text=...) wrote an empty URL and dropped its value.
+        self.m.tags.add(WOAS(url=self.url_share))
+        self.m.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=self.release_type))
+        self.m.tags.add(TXXX(encoding=3, desc="ITUNESADVISORY", text="1" if self.explicit else "0"))
+        self._set_mp3_ids()
+
+        if self.replay_gain_write:
+            for key, text in self._rg_pairs():
+                self.m.tags.add(TXXX(encoding=3, desc=key, text=text))
+
+    def _set_mp3_ids(self):
+        # Shared id-tag block (legacy + generic families plus the audio-type
+        # Version): split from set_mp3 so the writer stays under the branch
+        # budget, mirroring _set_mp4_artist_ids below.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        if self.item_id:
+            self.m.tags.add(TXXX(encoding=3, desc=ITEM_ID_TAG, text=self.item_id))
+        if self.namespaced_item_id:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ITEM_ID_TAG, text=self.namespaced_item_id))
+        if self.audio_type:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_AUDIO_TYPE_TAG, text=self.audio_type))
+        if self.artist_ids:
+            self.m.tags.add(TXXX(encoding=3, desc=ARTIST_ID_TAG, text=self.artist_ids))
+        if self.album_artist_ids:
+            self.m.tags.add(TXXX(encoding=3, desc=ALBUM_ARTIST_ID_TAG, text=self.album_artist_ids))
+        if self.namespaced_artist_ids:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ARTIST_IDS_TAG, text=self.namespaced_artist_ids))
+        if self.namespaced_album_artist_ids:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ALBUM_ARTIST_ID_TAG, text=self.namespaced_album_artist_ids))
+
+    def _set_mp4_custom_tags(self):
+        # Custom-template omit flags, split from set_mp4 so the
+        # writer stays under the branch budget.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        if self.write_copyright:
+            self.m.tags["cprt"] = self.copy_right
+        if self.write_composer and self.composer:
+            self.m.tags["\xa9wrt"] = self.composer
+        if self.write_isrc:
+            self.m.tags["isrc"] = self.isrc
+            # The freeform atom is the one mainstream readers (Picard, beets,
+            # Mp3tag) map to ISRC; the bare atom stays for files and tools that
+            # already read the old spelling.
+            self.m.tags["----:com.apple.iTunes:ISRC"] = self.isrc.encode("utf-8")
+        if self.write_upc:
+            self.m.tags[f"----:com.apple.iTunes:{self.target_upc['MP4']}"] = self.upc.encode("utf-8")
+        if self.bpm > 0 and self.write_bpm:
+            self.m.tags["tmpo"] = [self.bpm]
+        if self.write_initial_key:
+            self.m.tags["----:com.apple.iTunes:initialkey"] = self.initial_key.encode("utf-8")
+
+    def set_mp4(self):
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        self.m.tags["\xa9nam"] = self.title
+        self.m.tags["\xa9alb"] = self.album
+        self.m.tags["aART"] = self.albumartist
+        self.m.tags["\xa9ART"] = self.artists
+        self._set_mp4_custom_tags()
+        self.m.tags["trkn"] = [[self.tracknumber, self.totaltrack]]
+        # An unknown volume count writes no disk atom rather than "1 of 0":
+        # 0 is how trkn spells an unknown total (pinned), but a zero disc
+        # total is a claim no source made. Pop any staged value so a retag
+        # never leaves the old total behind.
+        if self.totaldisc > 0:
+            self.m.tags["disk"] = [[self.discnumber, self.totaldisc]]
+        else:
+            self.m.tags.pop("disk", None)
+        # self.m.tags['\xa9gen'] = self.genre
+        self.m.tags["\xa9day"] = self.date
+        self.m.tags["\xa9lyr"] = self._primary_lyrics()
+        self.m.tags["----:com.apple.iTunes:UNSYNCEDLYRICS"] = self.lyrics_unsynced.encode("utf-8")
+        self.m.tags["\xa9url"] = self.url_share
+        self.m.tags["rtng"] = [1 if self.explicit else 0]
+
+        self.m.tags["----:com.apple.iTunes:MusicBrainz Album Type"] = self.release_type.encode("utf-8")
+        if self.item_id:
+            self.m.tags[f"----:com.apple.iTunes:{ITEM_ID_TAG}"] = self.item_id.encode("utf-8")
+        if self.namespaced_item_id:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] = self.namespaced_item_id.encode("utf-8")
+        if self.audio_type:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_AUDIO_TYPE_TAG}"] = self.audio_type.encode("utf-8")
+        self._set_mp4_artist_ids()
+
+        if self.replay_gain_write:
+            for key, text in self._rg_pairs():
+                self.m.tags[f"----:com.apple.iTunes:{key}"] = text.encode("utf-8")
+
+    def set_mp4_video(self):
+        # The music-video subset of set_mp4. A standalone video has no album
+        # structure, lyrics, ISRC, UPC or loudness data, and writing those
+        # atoms zeroed is noise readers take literally ("track 0 of 0"), so
+        # only the fields a video really has are written. "stik" is the
+        # iTunes media-kind atom; 6 means music video, so players and
+        # library managers file it under videos rather than songs.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        self.m.tags["\xa9nam"] = self.title
+        self.m.tags["\xa9alb"] = self.album
+        self.m.tags["aART"] = self.albumartist
+        self.m.tags["\xa9ART"] = self.artists
+        self.m.tags["\xa9day"] = self.date
+        self.m.tags["\xa9url"] = self.url_share
+        self.m.tags["rtng"] = [1 if self.explicit else 0]
+        self.m.tags["stik"] = [6]
+        if self.item_id:
+            self.m.tags[f"----:com.apple.iTunes:{ITEM_ID_TAG}"] = self.item_id.encode("utf-8")
+        if self.namespaced_item_id:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] = self.namespaced_item_id.encode("utf-8")
+        self._set_mp4_artist_ids()
+
+    def _set_mp4_artist_ids(self):
+        # Shared by the album and the music-video branch: a freeform atom holds
+        # BYTES, and a multi-artist credit is a list of them.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        if self.artist_ids:
+            self.m.tags[f"----:com.apple.iTunes:{ARTIST_ID_TAG}"] = [i.encode("utf-8") for i in self.artist_ids]
+        if self.album_artist_ids:
+            self.m.tags[f"----:com.apple.iTunes:{ALBUM_ARTIST_ID_TAG}"] = [
+                i.encode("utf-8") for i in self.album_artist_ids
+            ]
+        if self.namespaced_artist_ids:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ARTIST_IDS_TAG}"] = [
+                i.encode("utf-8") for i in self.namespaced_artist_ids
+            ]
+        if self.namespaced_album_artist_ids:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ALBUM_ARTIST_ID_TAG}"] = [
+                i.encode("utf-8") for i in self.namespaced_album_artist_ids
+            ]
+
+    @staticmethod
+    def _is_empty_tag(value) -> bool:
+        """True for a tag that carries no text.
+
+        MP4 freeform atoms (``----:com.apple.iTunes:*``) hold BYTES, so an
+        unset lyric, UPC, key or release type is written as b"" and was invisible
+        to a string-only sweep: those atoms reached the file and showed up as
+        blank custom fields in tag editors, where the same track saved as FLAC
+        carried none at all.
+        """
+        if isinstance(value, str | bytes):
+            return not value
+        if isinstance(value, list):
+            return all(isinstance(item, str | bytes) and not item for item in value)
+        return False
+
+    def cleanup_tags(self):
+        # Collect keys to delete first to avoid RuntimeError during iteration
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
+        keys_to_delete = [key for key, value in self.m.tags.items() if self._is_empty_tag(value)]
+        for key in keys_to_delete:
+            del self.m.tags[key]
+
+
+def _tag_never_carried(key) -> bool:
+    lowered = str(key).lower()
+    # The container prefixes put WAVES_* behind "TXXX:" (MP3) or
+    # "----:com.apple.iTunes:" (MP4); compare the bare tag name so every
+    # container's provenance tag is refused, not only FLAC's.
+    bare = lowered.rsplit(":", 1)[-1]
+    if any(bare.startswith(prefix) for prefix in _TAG_PREFIXES_NEVER_CARRIED):
+        return True
+    if bare in _ID3_FRAMES_NEVER_CARRIED:
+        return True
+    return any(mark in lowered for mark in _TAGS_NOT_CARRIED)
+
+
+def _read_tag(tags, key):
+    """A container's value for ``key``, or None. Expected lookup misses are
+    quiet; any other failure is logged so a tag problem stays observable.
+
+    An ID3 tag block keys a COMM frame by language and description, so a plain
+    get() misses it; getall() returns every frame of that id.
+    """
+    try:
+        if hasattr(tags, "getall"):
+            frames = tags.getall(key)
+            return frames[0] if frames else None
+        return tags.get(key)
+    except (KeyError, TypeError, ValueError):
+        return None
+    except Exception:
+        logger.warning("could not read tag %s; skipping it", key, exc_info=True)
+        return None
+
+
+def _tag_text(tags, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = _read_tag(tags, key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if hasattr(value, "text"):
+            value = value.text
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "ignore")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _set_cross_container_tag(handle, container: str, field: str, text: str) -> None:
+    if handle.tags is None:
+        handle.add_tags()
+    if container == "mp3":
+        frame = (
+            COMM(encoding=3, lang="eng", desc="", text=text)
+            if field == "COMM"
+            else {"TCON": TCON, "TCOM": TCOM, "TIT1": TIT1}[field](encoding=3, text=text)
+        )
+        handle.tags.add(frame)
+    else:
+        handle.tags[field] = text
+
+
+def _carry_across_containers(old, new) -> int:
+    """Copy the common user fields between different container tag schemes."""
+    if isinstance(new, mutagen.flac.FLAC):
+        container = "flac"
+    elif isinstance(new, mutagen.mp4.MP4):
+        container = "mp4"
+    elif isinstance(new, mutagen.mp3.MP3):
+        container = "mp3"
+    else:
+        # A container with no mapping (Ogg, WAV, ...) carries nothing rather than
+        # receiving another container's frames.
+        return 0
+    carried = 0
+    for name, (source_keys, destinations) in _CROSS_CONTAINER_TAGS.items():
+        text = _tag_text(old.tags, source_keys)
+        if not text:
+            continue
+        destination = destinations.get(container)
+        if destination is None:
+            continue
+        existing = _tag_text(new.tags, (destination,))
+        # The user's Genre wins over the new file's, as it does in the same-
+        # container carry (_TAGS_OLD_WINS); other fields keep the new value.
+        if existing and name != "genre":
+            continue
+        _set_cross_container_tag(new, container, destination, text)
+        carried += 1
+    if carried:
+        new.save()
+    return carried
+
+
+def _is_io_failure(exc: BaseException) -> bool:
+    """Whether mutagen failed to READ the file, not to parse it.
+
+    An I/O failure is an OSError, or a MutagenError wrapping one (args[0] or
+    __cause__), as with a missing file or a permission denial. Everything else
+    is a parse failure: the bytes are not a container mutagen can read.
+    """
+    if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+        return True
+    return bool(exc.args) and isinstance(exc.args[0], OSError)
+
+
+def _open_for_carry(path):
+    """``mutagen.File`` for the carry-over: None when the bytes cannot be parsed
+    (no recoverable tags), but the I/O failure itself when the file cannot be
+    read, so a strict caller aborts before replacing anything."""
+    try:
+        return mutagen.File(path)
+    except Exception as exc:
+        if _is_io_failure(exc):
+            raise
+        return None
+
+
+def carry_over_tags(path_old, path_new, *, strict: bool = False) -> int:  # noqa: C901 - one tag family at a time
+    """Keep the user's own tags on the file replacing ``path_old``.
+
+    Waves writes the tags it knows and leaves the rest alone, so a Genre, a
+    Comment, a rating or a mood the user typed into the old file has no
+    counterpart in the new one and a replacement threw it away (upstream
+    iamprivacy/Waves#55). Only tags the new file LACKS are carried, with the
+    old copy's Genre winning; the fresh writer's fields stay. Every WAVES_*
+    tag, catalog id, ISRC, UPC, codec/quality and encoder/ReplayGain tag is
+    never carried: those describe the delivered file.
+
+    Different containers (M4A -> FLAC) carry the common user fields (Genre,
+    Comment, Composer, Grouping) by name. Container-specific fields with no
+    safe counterpart, such as a rating or a mood atom, are not guessed: they
+    stay on the old container rather than being written as a false value.
+    ``strict=True`` raises when either file cannot be READ (an I/O failure:
+    a missing file, a permission denial) or saved, so the caller aborts before
+    replacing the old file. A file mutagen cannot PARSE (a damaged or truncated
+    container) has no recoverable tags: it carries nothing and returns 0, even
+    under ``strict=True``, so a damaged own copy can still be replaced.
+    """
+    try:
+        old = _open_for_carry(path_old)
+        new = _open_for_carry(path_new)
+        if old is None or new is None:
+            # A container mutagen cannot parse has no tag block to carry; that
+            # is not a user-tag failure. An I/O failure never gets here: it
+            # raised in _open_for_carry, so strict callers abort first.
+            return 0
+        if old.tags is None:
+            # An untagged own copy (a failed tag write, a user's bare file)
+            # has nothing to carry; that is not a failure.
+            return 0
+        if new.tags is None:
+            new.add_tags()
+        if not isinstance(new.tags, type(old.tags)):
+            return _carry_across_containers(old, new)
+        carried = 0
+        for key in list(old.tags.keys()):
+            lowered = str(key).lower()
+            if _tag_never_carried(key):
+                continue
+            if key in new.tags and lowered not in _TAGS_OLD_WINS:
+                continue
+            value = old.tags[key]
+            if Metadata._is_empty_tag(value) or (key in new.tags and new.tags[key] == value):
+                continue
+            new.tags[key] = value
+            carried += 1
+        if carried:
+            new.save()
+    except Exception as exc:
+        if strict:
+            raise MetadataUnreadable(path_old) from exc
+        return 0
+    return carried

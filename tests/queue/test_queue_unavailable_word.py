@@ -1,0 +1,201 @@
+"""A delisted track reads UNAVAILABLE in the queue, and its album still finishes.
+
+WHAT THIS FENCES OFF
+--------------------
+TIDAL delists tracks. The engine skips them (``allow_streaming`` false) and says
+so in the log, but it returns the same empty-handed ``(False, "")`` a broken
+download returns. Tallying that as a failure turns an album whose every track
+TIDAL has withdrawn into ``RuntimeError: 15 of 15 tracks failed``: the album
+red, a RETRY button that can never succeed, and nothing on screen saying who
+refused.
+
+The word is the whole point, so it is asserted on the REAL delegate:
+the bridge's own _track_lifecycle feeds the per-track registry, the expansion
+renders it, and the outcome column has to read UNAVAILABLE, distinct from both
+FAILED and the green COMPLETED beside it. Reading it as FAILED would put a retry
+in front of the user for a file that no longer exists anywhere.
+
+Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
+installs process-global handlers that must not leak into the suite.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+    scoped_q,
+)
+
+# An album of the shape fenced here: some tracks landed, one was
+# already owned, one genuinely broke, and three are gone from TIDAL.
+LEDGER = [
+    ("1", "Truth Without Love", "done"),
+    ("2", "Time Machine", "unavailable"),
+    ("3", "Authors Of Forever", "done"),
+    ("4", "Wasted Energy", "unavailable"),
+    ("5", "Underdog", "skipped"),
+    ("6", "3 Hour Drive", "unavailable"),
+    ("7", "Show Me Love", "failed"),
+    ("8", "Kept Copy", "retained"),
+    ("9", "Protected Copy", "protected"),
+]
+WANT = "COMPLETED | UNAVAILABLE | COMPLETED | UNAVAILABLE | IN LIBRARY | UNAVAILABLE | FAILED | KEPT | KEPT BOTH"
+
+
+@pytest.mark.qml
+def test_a_delisted_track_reads_unavailable_not_failed():
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        timeout=120,
+        sandbox_prefix="waves-queue-unavailable-test-",
+        failure_message="the queue's UNAVAILABLE word regressed.",
+    )
+
+
+def _run_scenario() -> int:
+    try:
+        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+    except Exception as exc:
+        print(f"Qt unavailable: {exc}", file=sys.stderr)
+        return EXIT_NO_QT
+
+    from support.offline import PARK_LOGIN_QML, patch_offline
+
+    patch_offline()
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
+    try:
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
+    except Exception as exc:
+        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
+        return EXIT_NO_QT
+
+    engine = QQmlApplicationEngine()
+    bridge = WavesBridge(tidal=None)
+    engine.rootContext().setContextProperty("waves", bridge)
+    engine.rootContext().setContextProperty("monoFont", _load_mono())
+    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
+    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
+    roots = engine.rootObjects()
+    if not roots:
+        print("Main.qml failed to load", file=sys.stderr)
+        return EXIT_PRECONDITION
+    root = roots[0]
+
+    def q(expr: str):
+        e = QQmlExpression(QQmlEngine.contextForObject(root), root, expr)
+        r = e.evaluate()
+        if e.hasError():
+            raise RuntimeError(e.error().toString())
+        return r[0] if isinstance(r, tuple) else r
+
+    # The queue ListView lives inside QueueDrawer.qml:
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
+    def settle(ms: int) -> None:
+        loop = QEventLoop()
+        QTimer.singleShot(ms, loop.quit)
+        loop.exec()
+
+    settle(120)
+    q(PARK_LOGIN_QML)
+    q("queueDrawer.open()")
+    settle(120)
+    if not bool(q("queueDrawer.visible")):
+        print("the queue drawer would not open", file=sys.stderr)
+        return EXIT_PRECONDITION
+
+    qid = bridge._enqueue(
+        "ALICIA (With Commentary)", "album", media_id="156010613", collection=True, tracks=len(LEDGER)
+    )
+    # Report every track the way a real download does, through the bridge's own
+    # lifecycle handler. No `path` on the events, so the ownership write no-ops
+    # rather than touching this machine.
+    for tid, title, status in LEDGER:
+        bridge._track_lifecycle(qid, {"id": tid, "num": int(tid), "title": title, "status": status})
+    bridge.queueChanged.emit(list(bridge._queue))
+    settle(120)
+
+    bad = []
+
+    # 1. The registry-only merge is the real path when the album fetch comes
+    #    back empty, which is every offline case and any expand after a job.
+    bridge._merge_queue_tracks(qid, [])
+    q(f"root.queueExpanded = ({{ {qid}: true }})")
+    settle(400)
+
+    words = str(
+        qd("""(function () {
+                var out = [];
+                function walk(o) {
+                    if (!o) return;
+                    if (o.objectName === 'qTrackWord' && ('' + o.target) !== '')
+                        out.push('' + o.target);
+                    var kids = o.children;
+                    for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
+                }
+                walk(queueList.itemAtIndex(0));
+                return out.join(' | ');
+            })()""")
+    )
+    if words != WANT:
+        bad.append(f"the expanded ledger's outcome column read {words!r}, want {WANT!r}")
+
+    # 2. UNAVAILABLE must not wear the failure red: the two states call for
+    #    different things from the reader, and only one of them can be retried.
+    colors = str(
+        qd("""(function () {
+                var out = [];
+                function walk(o) {
+                    if (!o) return;
+                    if (o.objectName === 'qTrackWord' && ('' + o.target) !== '')
+                        out.push(('' + o.target) + '=' + ('' + o.color));
+                    var kids = o.children;
+                    for (var i = 0; i < (kids ? kids.length : 0); ++i) walk(kids[i]);
+                }
+                walk(queueList.itemAtIndex(0));
+                return out.join(' | ');
+            })()""")
+    )
+    seen = dict(part.split("=", 1) for part in colors.split(" | ") if "=" in part)
+    if seen.get("UNAVAILABLE") == seen.get("FAILED"):
+        bad.append(f"UNAVAILABLE is painted the same as FAILED ({colors!r})")
+    if seen.get("UNAVAILABLE") == seen.get("COMPLETED"):
+        bad.append(f"UNAVAILABLE is painted the same as COMPLETED ({colors!r})")
+    bad.extend(
+        f"{kept} is missing or painted like FAILED ({colors!r})"
+        for kept in ("KEPT", "KEPT BOTH")
+        if seen.get(kept) is None or seen.get(kept) == seen.get("FAILED")
+    )
+
+    # 3. A refused track is settled, not still pending: a row left at zero reads
+    #    as work in flight for the rest of the job and stalls the album's bar.
+    pcts = [bridge._jobs.tracks[qid][tid].get("pct") for tid, _t, status in LEDGER if status == "unavailable"]
+    if pcts != [100.0, 100.0, 100.0]:
+        bad.append(f"refused tracks did not settle their rows (pct={pcts})")
+
+    if bad:
+        print("\n".join(bad), file=sys.stderr)
+        return EXIT_REGRESSED
+    print("ok: a delisted track says UNAVAILABLE, and says it in its own colour")
+    return EXIT_OK
+
+
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

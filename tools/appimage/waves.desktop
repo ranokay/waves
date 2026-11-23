@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Waves
-Comment=Save music from your own TIDAL account for offline listening
+Comment=Download music from your own TIDAL account
 Exec=Waves
 Icon=waves
 Terminal=false

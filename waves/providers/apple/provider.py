@@ -1,0 +1,2122 @@
+"""Apple Music catalog access through gamdl's embedded client."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from threading import Event, Lock, RLock, local
+from typing import TYPE_CHECKING
+from urllib.parse import urlparse
+
+from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.events import EventCode, Failure, FailureScope
+from waves.providers.apple.engines import (
+    AppleEngine,
+    EngineFacts,
+    EngineOperation,
+    EnginePolicy,
+    EngineRequest,
+    EngineResult,
+    EngineRouter,
+    EngineRouteUnavailable,
+)
+from waves.providers.apple.gamdl_logs import quiet_gamdl_logs
+from waves.providers.base import (
+    AudioType,
+    Capability,
+    Provider,
+    ProviderDescriptor,
+    QualityOption,
+    Refusal,
+    RefusalKind,
+    StatusKind,
+    StreamInfo,
+    validate_row,
+)
+
+if TYPE_CHECKING:
+    # The engine is imported lazily at runtime (its gamdl imports are heavy);
+    # the names are still the real types of the objects kept on this provider.
+    from waves.providers.apple.engine import AppleDelivery, AppleFetchSession
+
+
+class _CatalogThreadState(local):
+    epoch: int | None = None
+
+
+class _EngineThreadState(local):
+    policy: EnginePolicy | None = None
+    abort: Event | None = None
+    required_codec: str = ""
+    operation_priority: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+
+class AppleCatalogUnavailable(RuntimeError):
+    """gamdl could not reach Apple's public catalog."""
+
+    def __init__(self) -> None:
+        super().__init__("Apple changed its web app. A Waves update is needed.")
+
+
+class AppleCollectionIncomplete(RuntimeError):
+    """A collection's continuation pages did not all arrive.
+
+    Raised before a partial set is cached or handed to a page or download,
+    so a truncated collection is never presented as complete.
+    """
+
+    def __init__(self, collection: str = "") -> None:
+        label = str(collection or "collection").strip() or "collection"
+        super().__init__(f"Apple sent only part of this {label}. Try again.")
+
+
+logger = logging.getLogger("waves.providers.apple")
+
+
+def _relative_amp_uri(raw: str) -> str:
+    """An AMP request path from a continuation value.
+
+    Apple's ``next`` is usually already relative; an absolute form is
+    stripped to its path and query, the shape ``_amp_request`` accepts.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme or parsed.netloc:
+        text = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return text
+
+
+def _song_query_id(query: str) -> str | None:
+    """The ``?i=<songId>`` song id off an album URL, if present."""
+    for chunk in query.split("&"):
+        if chunk.startswith("i=") and len(chunk) > 2:
+            return chunk[2:].split("/")[0]
+    return None
+
+
+def _catalog_path_id(type_seg: str, raw_id: str) -> tuple[str, str, None] | None:
+    """A catalog path's (kind, id) for the four linkable Apple kinds."""
+    kinds = {"album": "album", "artist": "artist", "playlist": "playlist", "song": "track", "songs": "track"}
+    kind = kinds.get(type_seg)
+    if kind is None or not raw_id:
+        return None
+    return (kind, raw_id, None)
+
+
+class AppleProvider(Provider):
+    id = CTX_APPLE
+    name = "Apple Music"
+    identity_kinds = frozenset({"track", "album"})
+
+    def catalog_identity_context(self):
+        return (str(self._catalog_epoch), str(getattr(self._catalog, "storefront", "us")))
+
+    def catalog_identity(self, kind, raw_id):
+        from waves.providers.apple.catalog_identity import read_identity
+
+        with self.catalog_context():
+            return read_identity(self, kind, raw_id)
+
+    def catalog_candidates(self, origin):
+        from waves.providers.apple.catalog_identity import find_candidates
+
+        with self.catalog_context():
+            return find_candidates(self, origin)
+
+    def availability_context(self):
+        from hashlib import sha256
+
+        from waves.providers.apple.gamdl_engine import gamdl_version
+
+        runtime = (
+            self.wrapper_url,
+            self.wrapper_decrypt_host,
+            self.wrapper_decrypt_port,
+            self.cookies_path,
+            self.nm3u8dlre_path,
+            self.wrapper_logged_in,
+            self.engine_policy(),
+            self.engine_details(),
+            self.offer_context_probe() if self.offer_context_probe else (),
+        )
+        return (*self.catalog_identity_context(), gamdl_version(), sha256(repr(runtime).encode()).hexdigest())
+
+    def offer_readiness(self, identity, ask, live):
+        from waves.providers.base import OperationReadiness, ReadinessState
+
+        if live.enabled is not True:
+            return OperationReadiness(
+                Capability.DOWNLOAD, ReadinessState.DISABLED if live.enabled is False else ReadinessState.UNKNOWN
+            )
+        if identity.kind not in self.identity_kinds or ask.audio_type not in self.audio_types:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        lossless = ask.tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+        if lossless and ask.audio_type == AudioType.ATMOS:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        request = EngineRequest(
+            EngineOperation.AUDIO,
+            {},
+            ask.tier,
+            AudioType(ask.audio_type),
+            required_codec=ask.required_codec or ("alac" if lossless else ""),
+        )
+        policy = self.engine_policy(ask.engine_pin or None)
+        facts = self.engine_facts_probe() if self.engine_facts_probe else EngineFacts(enabled=live.enabled)
+        engines = self._engines.engines
+        order = (policy.pin,) if policy.pin else tuple(dict.fromkeys((*policy.preferences, *engines)))
+        states = [
+            engines[pid].readiness(request, facts) for pid in order if pid in engines and engines[pid].supports(request)
+        ]
+        state = next((item for item in states if item.state == ReadinessState.READY), states[0] if states else None)
+        return OperationReadiness(
+            Capability.DOWNLOAD, state.state if state else ReadinessState.UNSUPPORTED, state.action if state else ""
+        )
+
+    def probe_availability(self, identity, ask):
+        from waves.providers.apple.catalog_offers import probe
+
+        with self.catalog_context():
+            return probe(self, identity, ask)
+
+    # No Capability.ARTIST_DOWNLOAD: an artist discography sweep is the one
+    # verb this catalog cannot answer (`downloadArtist` refuses it with the
+    # present-tense words), so the artist page renders no control for it.
+    # Album/playlist/track downloads are all here.
+    capabilities = frozenset(
+        {
+            Capability.SEARCH,
+            Capability.CATALOG,
+            Capability.OPEN_URL,
+            Capability.DOWNLOAD,
+            Capability.LYRICS,
+            Capability.ART,
+            Capability.PREVIEW,
+        }
+    )
+    public_operations = frozenset(
+        {Capability.SEARCH, Capability.CATALOG, Capability.OPEN_URL, Capability.ART, Capability.PREVIEW}
+    )
+    # Apple's catalog answers artists, albums, tracks and playlists; it has no
+    # videos or mixes, so its search group carries no such buckets and the
+    # page's videos/mixes filters never show its head.
+    search_sections = ("artists", "albums", "tracks", "playlists")
+
+    # ----- chooser metadata
+
+    # Apple's ladder has no LOW rung; AAC 256 is its floor. The detail words
+    # are the Chooser's label text, never ranks (ADR 0001).
+    quality_options = (
+        QualityOption(QualityTier.HI_RES_LOSSLESS, "ALAC 24/192"),
+        QualityOption(QualityTier.LOSSLESS, "ALAC 16/44.1"),
+        QualityOption(QualityTier.HIGH, "AAC 256"),
+    )
+    quality_setting = "apple_quality_audio"
+    # A track always carries stereo alongside its Atmos variant, and a
+    # per-click Atmos fetch is a real delivery, so Apple serves both types.
+    audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
+    settings_card = "apple"
+    # Apple's syllable-timed lyrics arrive as TTML, so its Chooser offers the
+    # verbatim sidecar toggle (the writer honors it for Apple only).
+    ttml_lyrics = True
+
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """Apple Music's card identity and the fields its Providers card owns.
+
+        The card's status rows and wizard steps are bridge-built live data
+        (the runtime and cookies probes are the bridge's to run), so this
+        descriptor names them through ``settings_fields`` and leaves their
+        shape to the ``setup`` status kind.
+        """
+        return ProviderDescriptor(
+            id=cls.id,
+            name=cls.name,
+            logo="assets/providers/apple-music.png",
+            capability_summary="Search and preview now; downloads need a one-time setup.",
+            card_desc=(
+                "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
+                "downloads at once with no runtime; the managed runtime plus wrapper sign-in unlock the full tier."
+            ),
+            # The first tier needs no Apple account, so the card offers a
+            # setup, never a sign-in.
+            welcome_action="Set up Apple Music",
+            settings_fields=(
+                "provider_apple_status",
+                "apple_setup_wizard",
+                "apple_quality_audio",
+                "apple_engine",
+                "apple_lyrics_embed",
+                "apple_lyrics_file",
+                "apple_lyrics_prefer_lrclib",
+                "apple_lyrics_word_timed",
+                "apple_lyrics_ttml_file",
+                "apple_metadata_cover_dimension",
+                "apple_metadata_cover_embed",
+                "apple_cover_album_file",
+                "apple_cover_file_format",
+                "apple_cookies_path",
+                "path_binary_nm3u8dlre",
+                "apple_wrapper_port",
+                "apple_runtime_mode",
+                "apple_wrapper_url",
+                "apple_wrapper_container",
+                "apple_wrapper_image_digest",
+                "apple_wrapper_decrypt_port",
+                "apple_lite_container",
+                "apple_lite_image_digest",
+                "apple_lite_endpoint",
+                "apple_runtime_auto_install",
+                "apple_quarantine_dir",
+                "apple_quarantine_keep",
+            ),
+            status_kind=StatusKind.SETUP,
+            link_hosts=("music.apple.com",),
+            login_flow="setup",
+        )
+
+    def __init__(self, catalog=None, catalog_factory=None, *, engines: tuple[AppleEngine, ...] | None = None) -> None:
+        from waves.providers.apple.gamdl_engine import GamdlEngine
+
+        self._engines = EngineRouter(engines if engines is not None else (GamdlEngine(self),))
+        self._engine_thread = _EngineThreadState()
+        self.engine_selection = "auto"
+        self.engine_preferences = ("gamdl",)
+        # Composition supplies current setup facts when execution runs on a
+        # worker. Direct library callers keep the engine's own validation.
+        self.engine_facts_probe: Callable[[], EngineFacts] | None = None
+        # Composition supplies a memory-only stamp for queued GUI validation.
+        self.offer_context_probe: Callable[[], tuple[str, ...]] | None = None
+        self._catalog = catalog
+        self._catalog_factory = catalog_factory or self._create_catalog
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_lock = Lock()
+        self._catalog_cache_lock = RLock()
+        self._catalog_epoch = 0
+        self._catalog_thread = _CatalogThreadState()
+        self._objects: dict[str, dict[str, dict]] = {
+            "artist": {},
+            "album": {},
+            "track": {},
+            "playlist": {},
+        }
+        # Ids fetched through get_object (the canonical endpoints, carrying
+        # track lists and artist views). Search summaries share _objects but
+        # are never complete: a search album has no tracks, a search artist
+        # no views, so page builders must not reuse them (see _is_complete).
+        self._complete: set[tuple[str, str]] = set()
+        # Cookies-tier download configuration, written by the bridge (which
+        # owns Settings) whenever settings save, read here at resolve time.
+        self.cookies_path: str = ""
+        self.nm3u8dlre_path: str = ""
+        self.ffmpeg_path: str = ""
+        self.runtime_usage: Callable[[], AbstractContextManager] = nullcontext
+        self.runtime_context_revision: Callable[[str], tuple[int, int]] = lambda _runtime: (0, 0)
+        self.runtime_stopped: Callable[[str], bool] = lambda _runtime: False
+        # How to start the download tool's guard (child_guard.launcher),
+        # written by the bridge, which knows whether Waves runs packaged.
+        # Empty starts the tool unguarded: it still stops with its job.
+        self.guard_launcher: tuple[str, ...] = ()
+        # Managed wrapper configuration for the ALAC path: the
+        # wrapper HTTP API URL (a persisted free high port, never port 80).
+        # Written by the bridge from the runtime manager; empty means the
+        # wrapper tier is not set up and the cookies tier serves alone. The
+        # session itself lives in the guest (tokens persist across container
+        # restarts), so Waves stores no Apple ID secret here, only the URL.
+        self.wrapper_url: str = ""
+        self.wrapper_decrypt_host: str = "127.0.0.1"
+        self.wrapper_decrypt_port: int = 10020
+        # The guest's account state, mirrored here by the bridge from its
+        # /me probe or a completed sign-in. The guest owns the session;
+        # Waves stores no Apple ID secret.
+        self.wrapper_logged_in: bool = False
+        # Staged deliveries by their file path: resolve_stream decrypts into
+        # a workdir the caller moves out of, then releases here so the temp
+        # tree is removed. Never global: one entry per in-flight track.
+        self._staged: dict[str, AppleDelivery] = {}
+        # One download job's reused gamdl stack (event loop, API, wrapper
+        # client). The runner opens a scope around a job's tracks; outside
+        # one every fetch builds and closes its own stack.
+        self._fetch_scoped = False
+        self._fetch_stack: AppleFetchSession | None = None
+
+    def engine_policy(self, selection: str | None = None) -> EnginePolicy:
+        selected = str(self.engine_selection if selection is None else selection).strip().lower()
+        return EnginePolicy(tuple(self.engine_preferences), "" if selected in ("", "auto") else selected)
+
+    @contextmanager
+    def engine_job_context(
+        self,
+        policy: EnginePolicy,
+        abort: Event,
+        *,
+        required_codec: str = "",
+        operation_priority: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    ) -> Iterator[None]:
+        """Keep the captured engine choice and whole-job Cancel on this worker."""
+        outer = (
+            self._engine_thread.policy,
+            self._engine_thread.abort,
+            self._engine_thread.required_codec,
+            self._engine_thread.operation_priority,
+        )
+        self._engine_thread.policy, self._engine_thread.abort = policy, abort
+        self._engine_thread.required_codec = required_codec
+        self._engine_thread.operation_priority = operation_priority
+        try:
+            yield
+        finally:
+            (
+                self._engine_thread.policy,
+                self._engine_thread.abort,
+                self._engine_thread.required_codec,
+                self._engine_thread.operation_priority,
+            ) = outer
+
+    def engine_details(self, facts: EngineFacts | None = None) -> list[dict]:
+        """Safe capability/setup data. No paths, endpoints or account identifiers."""
+        details = []
+        for engine in self._engines.engines.values():
+            descriptor = engine.descriptor
+            requirements = []
+            for requirement in descriptor.requirements:
+                request = EngineRequest(
+                    requirement.operation,
+                    {},
+                    requirement.tiers[-1] if requirement.tiers else QualityTier.HIGH,
+                    requirement.audio_types[0] if requirement.audio_types else AudioType.STEREO,
+                    required_codec=requirement.codecs[0] if requirement.codecs else "",
+                )
+                readiness = engine.readiness(request, facts or EngineFacts())
+                requirements.append(
+                    {
+                        "operation": str(requirement.operation),
+                        "codecs": list(requirement.codecs),
+                        "audio_types": [str(value) for value in requirement.audio_types],
+                        "tiers": [str(value) for value in requirement.tiers],
+                        "runtime": requirement.runtime,
+                        "runtime_kind": facts.wrapper_runtime_kind
+                        if facts is not None and requirement.protocol
+                        else requirement.runtime_kind,
+                        "account_boundary": requirement.account_boundary,
+                        "protocol": requirement.protocol,
+                        "formats": list(requirement.formats),
+                        "state": str(readiness.state),
+                        "action": readiness.action,
+                    }
+                )
+            details.append(
+                {
+                    "id": descriptor.id,
+                    "name": descriptor.name,
+                    "client": descriptor.client,
+                    "compatible_versions": descriptor.compatible_versions,
+                    "requirements": requirements,
+                    "recommended_operations": [
+                        str(operation) for operation, evidence in descriptor.recommendations if evidence
+                    ],
+                }
+            )
+        return details
+
+    def catalog_context(self) -> AbstractContextManager[None]:
+        """Capture this dispatch's cache epoch before its worker can be delayed.
+
+        Nested service/translation calls retain their outer dispatch's epoch.
+        The scope carries no resource ownership and holds no lock while work
+        runs; only individual cache reads/writes share the invalidation lock.
+        """
+        with self._catalog_cache_lock:
+            outer = self._catalog_thread.epoch
+            epoch = self._catalog_epoch if outer is None else outer
+        return self._catalog_scope(epoch)
+
+    @contextmanager
+    def _catalog_scope(self, epoch: int) -> Iterator[None]:
+        outer = self._catalog_thread.epoch
+        if outer is None:
+            self._catalog_thread.epoch = epoch
+        try:
+            yield
+        finally:
+            self._catalog_thread.epoch = outer
+
+    def invalidate_catalog_context(self) -> None:
+        """Forget catalog results without closing a shared client or fetch loop."""
+        with self._catalog_cache_lock:
+            self._catalog_epoch += 1
+            for objects in self._objects.values():
+                objects.clear()
+            self._complete.clear()
+
+    @property
+    def wrapper_available(self) -> bool:
+        """Whether the managed wrapper tier can serve ALAC."""
+        return bool(str(self.wrapper_url or "").strip())
+
+    @contextmanager
+    def fetch_job_session(self):
+        """One download job's shared fetch stack, closed when the job ends.
+
+        The job's tracks fetch sequentially through this scope; the engine
+        builds each tier's gamdl stack (API, base interface, wrapper client)
+        and its event loop once and the scope releases them at the end. A
+        nested scope shares the outermost stack.
+        """
+        if self._fetch_scoped:
+            yield self
+            return
+        self._fetch_scoped = True
+        try:
+            with self.runtime_usage():
+                yield self
+        finally:
+            self._fetch_scoped = False
+            self._drop_fetch_stack()
+
+    def _fetch_session(self):
+        """The scoped engine session for this job, or None outside a scope."""
+        if not self._fetch_scoped:
+            return None
+        if self._fetch_stack is None:
+            from waves.providers.apple import engine as apple_engine
+
+            self._fetch_stack = apple_engine.AppleFetchSession(
+                cookies_path=self.cookies_path,
+                wrapper_url=self.wrapper_url,
+                nm3u8dlre_path=self.nm3u8dlre_path,
+                ffmpeg_path=self.ffmpeg_path,
+                decrypt_host=self.wrapper_decrypt_host,
+                decrypt_port=self.wrapper_decrypt_port,
+                guard_launcher=self.guard_launcher,
+            )
+        return self._fetch_stack
+
+    def _drop_fetch_stack(self) -> None:
+        """Close and forget the scoped stack: a job end, or a stale session."""
+        session = self._fetch_stack
+        self._fetch_stack = None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                logger.debug("Could not close the Apple fetch stack", exc_info=True)
+
+    def _fetch_with_stack(self, one_shot, scoped):
+        """Run a fetch through the job's stack when one is open, else one-shot.
+
+        A credential failure drops the stale stack so the runner's retry
+        rebuilds it from the fresh export or signed-in guest; wrapper
+        death drops it too, so the retry re-opens the guest instead of
+        reusing the client that just failed.
+        """
+        from waves.providers.apple.engine import AppleCredentialsError, AppleWrapperDown
+
+        session = self._fetch_session()
+        if session is None:
+            return one_shot()
+        try:
+            return scoped(session)
+        except (AppleCredentialsError, AppleWrapperDown):
+            self._drop_fetch_stack()
+            raise
+
+    def _fetch_cookies(self, *, song_id: str, atmos: bool):
+        """One cookies-tier delivery through the job's stack when scoped.
+
+        The job's abort, when this worker runs one, ends the fetch early.
+        """
+        from waves.providers.apple.engine import download_song_file
+
+        abort = self._engine_thread.abort
+        return self._fetch_with_stack(
+            one_shot=lambda: download_song_file(
+                song_id=song_id,
+                atmos=atmos,
+                cookies_path=self.cookies_path,
+                nm3u8dlre_path=self.nm3u8dlre_path,
+                ffmpeg_path=self.ffmpeg_path,
+                guard_launcher=self.guard_launcher,
+                abort=abort,
+            ),
+            scoped=lambda session: session.download_song(song_id=song_id, atmos=atmos, abort=abort),
+        )
+
+    def _fetch_alac(self, *, song_id: str, max_tier: str):
+        """One wrapper-tier delivery through the job's stack when scoped.
+
+        The job's abort, when this worker runs one, ends the fetch early.
+        """
+        from waves.providers.apple.engine import download_song_alac_file
+
+        abort = self._engine_thread.abort
+        return self._fetch_with_stack(
+            one_shot=lambda: download_song_alac_file(
+                song_id=song_id,
+                wrapper_url=self.wrapper_url,
+                nm3u8dlre_path=self.nm3u8dlre_path,
+                ffmpeg_path=self.ffmpeg_path,
+                decrypt_host=self.wrapper_decrypt_host,
+                decrypt_port=self.wrapper_decrypt_port,
+                max_tier=max_tier,
+                guard_launcher=self.guard_launcher,
+                abort=abort,
+            ),
+            scoped=lambda session: session.download_alac(song_id=song_id, max_tier=max_tier, abort=abort),
+        )
+
+    @staticmethod
+    def _verified_probe(delivery) -> dict | None:
+        """The engine-verified probe carried by a delivery, or None.
+
+        Only the engine's fail-fast verification (codec family + full
+        decode on the exact staged bytes) marks a delivery verified; a
+        probe-less delivery keeps the provider's own read.
+        """
+        probe = getattr(delivery, "probe", None)
+        if not getattr(delivery, "verified", False) or not isinstance(probe, dict) or not probe:
+            return None
+        return dict(probe)
+
+    @staticmethod
+    def _probe_rate(probe: dict) -> int | None:
+        """An ffprobe sample-rate string as an int, or None."""
+        try:
+            rate = int(str(probe.get("sample_rate") or "").strip())
+        except (TypeError, ValueError):
+            return None
+        return rate if rate > 0 else None
+
+    @staticmethod
+    def _probe_depth(probe: dict) -> int | None:
+        """An ffprobe bit depth as an int, or None when it carries none.
+
+        Mirrors the engine's own read: a non-integer depth is no depth, never
+        a guessed one."""
+        depth = probe.get("bit_depth")
+        return depth if isinstance(depth, int) and depth > 0 else None
+
+    def _run(self, awaitable):
+        with self._loop_lock:
+            if self._loop is None:
+                self._loop = asyncio.new_event_loop()
+            return self._loop.run_until_complete(awaitable)
+
+    async def _search(self, needle: str) -> dict:
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        return await self._catalog.get_search_results(needle, types="songs,albums,playlists,artists")
+
+    @staticmethod
+    async def _create_catalog():
+        quiet_gamdl_logs()
+        from gamdl.api import apple_music
+
+        return await apple_music.AppleMusicApi.create()
+
+    def search(self, needle: str) -> dict:
+        """Return Apple's public catalog matches as complete Waves row dictionaries."""
+        with self.catalog_context():
+            try:
+                response = self._run(self._search(needle))
+                results = response.get("results") or {}
+                artist_resources = self._resources(results, "artists")
+                artist_ids = {
+                    str(self._attributes(item).get("name") or "").casefold(): self._id(item.get("id"))
+                    for item in artist_resources
+                    if self._attributes(item).get("name") and item.get("id")
+                }
+                return {
+                    "artists": [self._artist_row(item) for item in artist_resources],
+                    "albums": [self._album_row(item, artist_ids) for item in self._resources(results, "albums")],
+                    "tracks": [self._track_row(item, artist_ids) for item in self._resources(results, "songs")],
+                    "videos": [],
+                    "playlists": [self._playlist_row(item) for item in self._resources(results, "playlists")],
+                    "mixes": [],
+                    "top": None,
+                }
+            except Exception as exc:
+                raise AppleCatalogUnavailable from exc
+
+    @staticmethod
+    def _resources(results: dict, kind: str) -> list[dict]:
+        bucket = results.get(kind) or {}
+        return [item for item in bucket.get("data") or [] if isinstance(item, dict)]
+
+    @staticmethod
+    def _attributes(item: dict) -> dict:
+        attrs = item.get("attributes") or {}
+        return attrs if isinstance(attrs, dict) else {}
+
+    @staticmethod
+    def _unwrap(obj):
+        """A catalog resource out of its {"kind", "item"} open_url wrapper."""
+        return obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+
+    @staticmethod
+    def _id(raw) -> str:
+        raw = str(raw or "")
+        return f"{CTX_APPLE}:{raw}" if raw else ""
+
+    @classmethod
+    def _related_id(cls, item: dict, kind: str) -> str:
+        relationships = item.get("relationships") or {}
+        related = relationships.get(kind) or {}
+        data = related.get("data") or []
+        if data and isinstance(data[0], dict):
+            return cls._id(data[0].get("id"))
+        return ""
+
+    @classmethod
+    def _artist_id(cls, item: dict, attrs: dict, artist_ids: dict[str, str]) -> str:
+        related = cls._related_id(item, "artists")
+        if related:
+            return related
+        path = urlparse(str(attrs.get("artistUrl") or "")).path.rstrip("/")
+        if path:
+            return cls._id(path.rsplit("/", 1)[-1])
+        return artist_ids.get(str(attrs.get("artistName") or "").casefold(), "")
+
+    @classmethod
+    def _album_id(cls, item: dict, attrs: dict) -> str:
+        related = cls._related_id(item, "albums")
+        if related:
+            return related
+        path = urlparse(str(attrs.get("url") or "")).path.rstrip("/")
+        return cls._id(path.rsplit("/", 1)[-1]) if path else ""
+
+    @staticmethod
+    def _art(attrs: dict, width: int, height: int | None = None) -> str:
+        artwork = attrs.get("artwork") or {}
+        template = str(artwork.get("url") or "") if isinstance(artwork, dict) else ""
+        if not template:
+            return ""
+        # The {w}x{h} template serves up to the master's native size
+        # (5000x5000 on recent Apple masters); clamp only to keep the
+        # request sane, never down to the TIDAL-legacy 1280 cap.
+        try:
+            w = max(16, min(5000, int(width)))
+        except (TypeError, ValueError):
+            w = 320
+        try:
+            h = max(16, min(5000, int(height))) if height is not None else w
+        except (TypeError, ValueError):
+            h = w
+        return template.replace("{w}", str(w)).replace("{h}", str(h)).replace("{f}", "jpg")
+
+    def cover_raw_url(self, obj) -> str:
+        """Original-master artwork from the pinned or preferred engine."""
+        return self._engine_artwork(obj, 5000, original=True)
+
+    @staticmethod
+    def _gamdl_cover_raw_url(obj) -> str:
+        """The true original-master image URL for an Apple resource.
+
+        The gamdl raw-mode rewrite: strip the ``image/thumb/`` path segment,
+        swap the ``is1-ssl`` host for ``a1``, and drop the ``{w}x{h}bb.jpg``
+        suffix. Empty when the resource carries no artwork template.
+        """
+        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        attrs = item.get("attributes") or {} if isinstance(item, dict) else {}
+        artwork = attrs.get("artwork") or {}
+        template = str(artwork.get("url") or "") if isinstance(artwork, dict) else ""
+        if not template:
+            return ""
+        import re
+
+        url = re.sub(r"is1-ssl", "a1", template)
+        url = re.sub(r"image/thumb/", "", url)
+        url = re.sub(r"/\{w\}x\{h\}bb\.jpg", "", url)
+        url = re.sub(r"/\{w\}x\{h\}([a-z]{2})\.jpg", "", url)
+        return url
+
+    @staticmethod
+    def _seconds(attrs: dict) -> int:
+        try:
+            return max(0, int(attrs.get("durationInMillis") or 0) // 1000)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _duration(seconds: int) -> str:
+        return f"{seconds // 60}:{seconds % 60:02d}"
+
+    @staticmethod
+    def _date(attrs: dict) -> str:
+        return str(attrs.get("releaseDate") or "")[:10]
+
+    @classmethod
+    def _artist_credit(cls, item: dict, attrs: dict, artist_ids: dict[str, str]) -> tuple[str, list[dict]]:
+        name = str(attrs.get("artistName") or "")
+        artist_id = cls._artist_id(item, attrs, artist_ids)
+        return artist_id, ([{"id": artist_id, "name": name, "roles": []}] if name else [])
+
+    @staticmethod
+    def _quality(attrs: dict) -> str:
+        traits = {str(trait).lower() for trait in attrs.get("audioTraits") or []}
+        if "hi-res-lossless" in traits:
+            return "HI-RES"
+        if "lossless" in traits:
+            return "LOSSLESS"
+        return "HIGH"
+
+    def _remember(self, kind: str, item: dict) -> str:
+        raw_id = str(item.get("id") or "")
+        # Only a DIFFERENT object invalidates completeness: rendering the
+        # fetched object itself (row_for on a get_object result) passes the
+        # identical dict back and must preserve its marker, or a legitimately
+        # empty collection refetches on every read.
+        with self.catalog_context(), self._catalog_cache_lock:
+            if (
+                self._catalog_thread.epoch == self._catalog_epoch
+                and raw_id
+                and self._objects[kind].get(raw_id) is not item
+            ):
+                self._objects[kind][raw_id] = item
+                self._complete.discard((kind, raw_id))
+        return self._id(raw_id)
+
+    def _artist_row(self, item: dict) -> dict:
+        attrs = self._attributes(item)
+        return validate_row(
+            "artist",
+            {
+                "id": self._remember("artist", item),
+                "name": str(attrs.get("name") or ""),
+                "art": self._art(attrs, 320),
+                "roles": "Artist",
+                "popularity": -1,
+            },
+        )
+
+    def _album_row(self, item: dict, artist_ids: dict[str, str]) -> dict:
+        attrs = self._attributes(item)
+        artist_id, artists = self._artist_credit(item, attrs, artist_ids)
+        date = self._date(attrs)
+        return validate_row(
+            "album",
+            {
+                "id": self._remember("album", item),
+                "title": str(attrs.get("name") or ""),
+                "artist": str(attrs.get("artistName") or ""),
+                "artist_id": artist_id,
+                "artists": artists,
+                "art": self._art(attrs, 320),
+                "year": date[:4],
+                "date": date,
+                "tracks": int(attrs.get("trackCount") or 0),
+                "duration_sec": self._seconds(attrs),
+                "quality": self._quality(attrs),
+                "popularity": -1,
+                "explicit": attrs.get("contentRating") == "explicit",
+                "added": "",
+                # Release identifier, when Apple names one: cross-provider
+                # search folding evidence, never a display fact.
+                "upc": str(attrs.get("upc") or ""),
+            },
+        )
+
+    def _track_row(self, item: dict, artist_ids: dict[str, str]) -> dict:
+        attrs = self._attributes(item)
+        artist_id, artists = self._artist_credit(item, attrs, artist_ids)
+        date = self._date(attrs)
+        seconds = self._seconds(attrs)
+        return validate_row(
+            "track",
+            {
+                "id": self._remember("track", item),
+                "title": str(attrs.get("name") or ""),
+                "artist": str(attrs.get("artistName") or ""),
+                "artist_id": artist_id,
+                "artists": artists,
+                "album": str(attrs.get("albumName") or ""),
+                "album_id": self._album_id(item, attrs),
+                "num": int(attrs.get("trackNumber") or 0),
+                "vol": int(attrs.get("discNumber") or 1),
+                "art": self._art(attrs, 160),
+                "year": date[:4],
+                "date": date,
+                "duration": self._duration(seconds),
+                "duration_sec": seconds,
+                "quality": self._quality(attrs),
+                "popularity": -1,
+                "explicit": attrs.get("contentRating") == "explicit",
+                "added": "",
+                # Recording identifier, when Apple names one: cross-provider
+                # search folding evidence, never a display fact.
+                "isrc": str(attrs.get("isrc") or ""),
+            },
+        )
+
+    def _playlist_row(self, item: dict) -> dict:
+        attrs = self._attributes(item)
+        relationships = item.get("relationships") or {}
+        tracks = relationships.get("tracks") or {}
+        meta = tracks.get("meta") or {}
+        return validate_row(
+            "playlist",
+            {
+                "id": self._remember("playlist", item),
+                "title": str(attrs.get("name") or ""),
+                "art": self._art(attrs, 320),
+                "tracks": int(attrs.get("trackCount") or meta.get("total") or 0),
+                "creator": str(attrs.get("curatorName") or ""),
+                "added": "",
+                "kind": "playlist",
+                "sub": "",
+                "path": "",
+                "plCount": 0,
+            },
+        )
+
+    def login_begin(self) -> str:
+        return ""
+
+    def login_complete(self, payload: str) -> bool:
+        return False
+
+    def logout(self) -> None:
+        return None
+
+    def login_resume(self) -> bool:
+        return False
+
+    def reset_session(self) -> None:
+        return None
+
+    def account_id(self) -> str:
+        return ""
+
+    def credential_facts(self) -> dict[str, str]:
+        return {}
+
+    @property
+    def is_logged_in(self) -> bool:
+        """Whether the wrapper guest reports an authenticated session.
+
+        The cookies tier is a separate fallback and never sets this; the
+        bridge mirrors its /me probe or a completed sign-in here.
+        """
+        return bool(self.wrapper_logged_in)
+
+    def apply_quality(self, tier: QualityTier, audio_type: AudioType) -> None:
+        return None
+
+    def open_url(self, url: str) -> object | None:
+        """Resolve a pasted Apple Music share URL to its catalog resource.
+
+        Returns ``{"kind": ..., "item": ...}`` where kind is one of
+        "album" / "artist" / "playlist" / "track", or None when the URL is
+        not Apple's grammar or the item is gone. The bridge builds the page
+        payload from the resolved resource.
+        """
+        with self.catalog_context():
+            parsed = self.parse_apple_url(url)
+            if parsed is None:
+                return None
+            kind, raw_id, _song_id = parsed
+            try:
+                item = self.get_object(kind, raw_id)
+            except Exception:
+                return None
+            return {"kind": kind, "item": item}
+
+    @staticmethod
+    def parse_apple_url(url: str) -> tuple[str, str, str | None] | None:
+        """An Apple Music share URL into (kind, raw_id, song_id).
+
+        Kinds: "album" / "artist" / "playlist" / "track". A song link is an
+        album URL with a ``?i=<songId>`` query, so it answers ("track",
+        songId, None). Playlist ids travel as ``pl.<hash>``.
+        """
+        try:
+            parsed = urlparse(str(url or ""))
+        except Exception:
+            return None
+        host = (parsed.hostname or "").lower()
+        if host != "music.apple.com" and not host.endswith(".music.apple.com"):
+            return None
+        parts = [seg for seg in parsed.path.split("/") if seg]
+        if len(parts) < 3:
+            return None
+        song_id = _song_query_id(parsed.query or "")
+        if song_id:
+            return ("track", song_id, None)
+        return _catalog_path_id(parts[1].lower(), parts[-1])
+
+    def cached(self, kind: str, raw_id: str) -> dict | None:
+        """A remembered resource without spending a catalog call, if present.
+
+        The download slots read this on the GUI thread: a hit queues at once,
+        a miss refetches on a worker exactly like the TIDAL _objs dance.
+        """
+        raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
+        with self._catalog_cache_lock:
+            item = self._objects.get(kind, {}).get(raw_id)
+        return item if isinstance(item, dict) else None
+
+    def get_object(self, kind: str, raw_id: str) -> object:
+        with self.catalog_context():
+            raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
+            with self._catalog_cache_lock:
+                cached = self._objects.get(kind, {}).get(raw_id)
+                if cached is not None and ((kind, raw_id) in self._complete or self._is_complete(kind, cached)):
+                    return cached
+            if kind == "album":
+                item = self._first_data(self._run(self._fetch_album(raw_id)))
+            elif kind == "artist":
+                item = self._first_data(self._run(self._fetch_artist(raw_id)))
+            elif kind == "playlist":
+                item = self._first_data(self._run(self._fetch_playlist(raw_id)))
+            elif kind == "track":
+                item = self._first_data(self._run(self._fetch_song(raw_id)))
+            else:
+                raise KeyError(kind)
+            if not isinstance(item, dict) or not item.get("id"):
+                raise KeyError(raw_id)
+            with self._catalog_cache_lock:
+                if self._catalog_thread.epoch == self._catalog_epoch:
+                    self._objects[kind][raw_id] = item
+                    self._complete.add((kind, raw_id))
+            return item
+
+    @staticmethod
+    def _has_view_data(views: object) -> bool:
+        """Whether a JSON:API views map holds a renderable row.
+
+        Rows are renderable when named: a view of reference stubs (id/type,
+        no attributes) is no more usable than an empty one, and treating it
+        as data would skip the canonical refetch an artist page needs.
+        """
+        if not isinstance(views, dict):
+            return False
+        for view in views.values():
+            view_data = (view or {}).get("data") if isinstance(view, dict) else None
+            if not isinstance(view_data, list):
+                continue
+            for res in view_data:
+                if isinstance(res, dict) and res.get("attributes"):
+                    return True
+        return False
+
+    @classmethod
+    def _is_complete(cls, kind: str, item: dict) -> bool:
+        """Whether a cached resource carries what the page builders need.
+
+        Search summaries name the item but omit the collections: albums and
+        playlists without their track lists, artists without albums or top
+        songs. Tracks are complete when named (previews ride the attributes).
+        Fetched objects bypass this via _complete, so a genuinely empty
+        collection does not refetch on every read.
+        """
+        if not isinstance(item, dict):
+            return False
+        if kind == "track":
+            return bool(cls._attributes(item).get("name"))
+        if kind in ("album", "playlist"):
+            return bool(cls._relationship_items(item, "tracks"))
+        if kind == "artist":
+            return cls._artist_has_renderable_data(item)
+        return False
+
+    @classmethod
+    def _artist_has_renderable_data(cls, item: dict) -> bool:
+        """Whether a page builder could actually read this artist resource.
+
+        Complete means attributed relationship entries, or a named view row.
+        An Apple search summary lists an artist's albums as reference stubs
+        (id/type/href, no attributes) with no views; accepting those leaves
+        every artist page with blank album rows and no top tracks.
+        """
+        relationships = item.get("relationships") or {}
+        for rel in relationships.values():
+            if not isinstance(rel, dict):
+                continue
+            if cls._has_view_data(rel.get("views")):
+                return True
+            data = rel.get("data")
+            if not isinstance(data, list):
+                continue
+            for res in data:
+                if isinstance(res, dict) and cls._attributes(res).get("name"):
+                    return True
+        return cls._has_view_data(item.get("views"))
+
+    async def _ensure_catalog(self):
+        """The shared catalog client, created lazily on first use."""
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        return self._catalog
+
+    async def _fetch_album(self, raw_id: str) -> dict:
+        catalog = await self._ensure_catalog()
+        response = await catalog.get_album(raw_id)
+        await self._exhaust_response(response, "album")
+        return response
+
+    async def _fetch_artist(self, raw_id: str) -> dict:
+        catalog = await self._ensure_catalog()
+        response = await catalog.get_artist(raw_id)
+        await self._exhaust_response(response, "artist")
+        return response
+
+    async def _fetch_playlist(self, raw_id: str) -> dict:
+        catalog = await self._ensure_catalog()
+        response = await catalog.get_playlist(raw_id)
+        await self._exhaust_response(response, "playlist")
+        return response
+
+    async def _fetch_song(self, raw_id: str) -> dict:
+        catalog = await self._ensure_catalog()
+        return await catalog.get_song(raw_id)
+
+    async def _exhaust_response(self, response: dict, label: str) -> None:
+        """Append every continuation page of a fetched resource in place."""
+        if not isinstance(response, dict):
+            return
+        data = response.get("data")
+        resources = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+            for bucket in self._resource_buckets(resource):
+                await self._exhaust_pages(bucket, label)
+
+    @staticmethod
+    def _resource_buckets(resource: dict) -> list[dict]:
+        """Every relationship/view bucket one resource carries.
+
+        A relationship may nest its own ``views`` (an artist's albums
+        relationship carries named views); those buckets paginate too.
+        """
+        buckets: list[dict] = []
+        for key in ("relationships", "views"):
+            group = resource.get(key)
+            if not isinstance(group, dict):
+                continue
+            for bucket in group.values():
+                if not isinstance(bucket, dict):
+                    continue
+                buckets.append(bucket)
+                views = bucket.get("views")
+                if isinstance(views, dict):
+                    buckets.extend(view for view in views.values() if isinstance(view, dict))
+        return buckets
+
+    @staticmethod
+    def _page_next(bucket: dict) -> str:
+        """A bucket's continuation URI, under ``next`` or ``links.next``."""
+        if not isinstance(bucket, dict):
+            return ""
+        raw_links = bucket.get("links")
+        links = raw_links if isinstance(raw_links, dict) else {}
+        return _relative_amp_uri(bucket.get("next") or links.get("next") or "")
+
+    async def _exhaust_pages(self, bucket: dict, label: str) -> None:
+        """Append every continuation page of one relationship/view in place.
+
+        Order is preserved and repeated entries are kept (Apple playlists may
+        list one song twice). A continuation that fails raises
+        :class:`AppleCollectionIncomplete`, never a short list.
+        """
+        entries = bucket.get("data")
+        if not isinstance(entries, list):
+            return
+        next_uri = self._page_next(bucket)
+        while next_uri:
+            catalog = await self._ensure_catalog()
+            try:
+                page = await catalog._amp_request(next_uri)
+            except Exception as exc:
+                raise AppleCollectionIncomplete(label) from exc
+            if not isinstance(page, dict):
+                raise AppleCollectionIncomplete(label)
+            data = page.get("data")
+            if isinstance(data, list):
+                entries.extend(entry for entry in data if isinstance(entry, dict))
+            next_uri = self._page_next(page)
+
+    @staticmethod
+    def _first_data(response: dict) -> dict:
+        data = (response or {}).get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return data[0]
+        if isinstance(data, dict):
+            return data
+        return {}
+
+    def collection_has_tracks(self, obj) -> bool:
+        """Whether a collection resource already carries its track list.
+
+        Search summaries name the collection but omit it; the download slots
+        refetch those on a worker instead of queueing an empty job.
+        """
+        item = self._unwrap(obj)
+        return bool(isinstance(item, dict) and self._relationship_items(item, "tracks"))
+
+    def collection_items(self, obj, include_videos: bool = True) -> list:
+        """An album's or playlist's songs as Waves track row dicts.
+
+        The catalog resource already carries its tracks in
+        ``relationships.tracks.data``; entries without attributes are
+        re-fetched individually. Artists read through :meth:`artist_page`.
+        """
+        with self.catalog_context():
+            if isinstance(obj, dict) and obj.get("_apple_kind") == "artist":
+                page = self.artist_page(obj["item"])
+                return list(page.get("tracks") or [])
+            item = self._unwrap(obj)
+            if not isinstance(item, dict):
+                return []
+            tracks = self._relationship_items(item, "tracks")
+            label = str(item.get("type") or "collection").removesuffix("s") or "collection"
+            return self._track_rows(tracks, label)
+
+    def collection_rows(self, obj, include_videos: bool = True) -> list:
+        """Apple collection items already are the complete Waves row vocabulary."""
+        return self.collection_items(obj, include_videos=include_videos)
+
+    def _track_rows(self, resources: list[dict], label: str = "collection") -> list[dict]:
+        """Listed track entries as Waves rows; an unresolvable one fails loudly.
+
+        Most entries already carry attributes. An id-only entry is re-fetched,
+        and a failure raises AppleCollectionIncomplete: a collection missing
+        an item it listed is never handed on as complete.
+        """
+        with self.catalog_context():
+            rows: list[dict] = []
+            for res in resources:
+                if not isinstance(res, dict) or not res.get("id"):
+                    continue
+                if not self._attributes(res).get("name"):
+                    try:
+                        res = self.get_object("track", str(res.get("id")))
+                    except Exception as exc:
+                        logger.warning("Apple could not resolve a listed track: %s", res.get("id"))
+                        raise AppleCollectionIncomplete(label) from exc
+                    if not isinstance(res, dict):
+                        raise AppleCollectionIncomplete(label)
+                rows.append(self._track_row(res, {}))
+            return rows
+
+    @classmethod
+    def _relationship_items(cls, item: dict, kind: str) -> list[dict]:
+        """One relationship's data entries as (possibly empty) dicts.
+
+        Fetched resources have every continuation page appended already (see
+        _exhaust_response), so this reader never sees a first-window slice.
+        """
+        relationships = item.get("relationships") or {}
+        related = relationships.get(kind) or {}
+        data = related.get("data") or []
+        return [entry for entry in data if isinstance(entry, dict)]
+
+    def artist_page(self, artist_item: dict) -> dict:
+        """An artist's albums, singles and top tracks as Waves row dicts.
+
+        A canonical artist carries the same releases twice — once in the
+        ``albums`` relationship (the complete list) and once in the named
+        views (the classified shelves, top-songs among them) — so the views
+        are read first and every later entry with the same id is skipped:
+        each release renders on exactly one shelf, and the three rows the
+        views omit still land as albums. Entries without a name never
+        become rows.
+        """
+        with self.catalog_context():
+            attrs = self._attributes(artist_item)
+            albums: list[dict] = []
+            singles: list[dict] = []
+            tracks: list[dict] = []
+            seen: set[str] = set()
+            artist_ids = {
+                str(attrs.get("name") or "").casefold(): self._id(artist_item.get("id"))
+                if artist_item.get("id")
+                else ""
+            }
+            views = artist_item.get("views") or {}
+            if isinstance(views, dict):
+                for view_name, view in views.items():
+                    view_data = (view or {}).get("data") if isinstance(view, dict) else None
+                    if isinstance(view_data, list):
+                        self._sort_artist_resources(
+                            view_data, str(view_name), albums, singles, tracks, artist_ids, seen
+                        )
+            relationships = artist_item.get("relationships") or {}
+            for key, rel in relationships.items():
+                if not isinstance(rel, dict):
+                    continue
+                data = rel.get("data")
+                items = data if isinstance(data, list) else []
+                rel_views = rel.get("views") if isinstance(rel.get("views"), dict) else None
+                if rel_views:
+                    for view_name, view in rel_views.items():
+                        view_data = (view or {}).get("data") if isinstance(view, dict) else None
+                        if isinstance(view_data, list):
+                            self._sort_artist_resources(
+                                view_data, str(view_name), albums, singles, tracks, artist_ids, seen
+                            )
+                self._sort_artist_resources(items, str(key), albums, singles, tracks, artist_ids, seen)
+            return {
+                "id": self._id(artist_item.get("id")),
+                "name": str(attrs.get("name") or ""),
+                "art": self._art(attrs, 320),
+                "bio": "",
+                "albums": albums,
+                "eps": singles,
+                "tracks": tracks,
+            }
+
+    def _sort_artist_resources(
+        self,
+        resources: list,
+        view_name: str,
+        albums: list[dict],
+        singles: list[dict],
+        tracks: list[dict],
+        artist_ids: dict[str, str],
+        seen: set[str],
+    ) -> None:
+        lowered = view_name.lower()
+        for res in resources:
+            if not isinstance(res, dict) or not res.get("id"):
+                continue
+            rid = str(res.get("id"))
+            if rid in seen:
+                continue
+            rtype = str(res.get("type") or "").lower()
+            if rtype == "songs" or (("top" in lowered or "song" in lowered) and rtype in ("", "songs")):
+                # A nameless entry is a reference stub, not a renderable row;
+                # skipping without marking it seen lets a later named copy of
+                # the same song still render.
+                if not self._attributes(res).get("name"):
+                    continue
+                seen.add(rid)
+                tracks.append(self._track_row(res, artist_ids))
+            elif rtype in ("albums", ""):
+                # A nameless entry is a reference stub, not a renderable row;
+                # the completeness check should have refetched it away.
+                if not self._attributes(res).get("name"):
+                    continue
+                seen.add(rid)
+                row = self._album_row(res, artist_ids)
+                if "single" in lowered or "ep" in lowered:
+                    singles.append(row)
+                else:
+                    albums.append(row)
+
+    def row_for(self, kind: str, item: dict) -> dict:
+        """One catalog resource as the Waves row dict the pages render."""
+        with self.catalog_context():
+            if kind == "artist":
+                return self._artist_row(item)
+            if kind == "album":
+                return self._album_row(item, {})
+            if kind == "track":
+                return self._track_row(item, {})
+            if kind == "playlist":
+                return self._playlist_row(item)
+            raise KeyError(kind)
+
+    def user_collections(self) -> dict | None:
+        return None
+
+    def folder_tree(self, root_folders: list | None = None) -> object | None:
+        return None
+
+    def search_tracks(self, needle: str, limit: int = 10) -> list:
+        return []
+
+    def browse_page(self, title: str, api_path: str) -> object | None:
+        return None
+
+    def browse_home(self) -> object | None:
+        return None
+
+    def browse_window(self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50):
+        raise NotImplementedError
+
+    def favorites_page(
+        self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None
+    ) -> tuple[list, bool]:
+        return [], False
+
+    def favorite_ids(self, kind: str) -> set[str]:
+        return set()
+
+    @staticmethod
+    def _audio_signals(item: dict) -> set[str]:
+        """The song's quality flags from both catalog list forms.
+
+        Apple carries the lossless / hi-res / Atmos flags as audioTraits on
+        most reads and as audioVariants on others; both are valid inputs.
+        """
+        attrs = AppleProvider._attributes(item)
+        traits = [str(signal).lower() for signal in attrs.get("audioTraits") or []]
+        variants = [str(signal).lower() for signal in attrs.get("audioVariants") or []]
+        return set(traits) | set(variants)
+
+    @staticmethod
+    def _lossless_rung(signals: set[str]) -> QualityTier | None:
+        """The highest lossless rung a master's flags carry, or None."""
+        if "hi-res-lossless" in signals:
+            return QualityTier.HI_RES_LOSSLESS
+        if "lossless" in signals:
+            return QualityTier.LOSSLESS
+        return None
+
+    def advertised_tier(self, obj) -> QualityTier | None:
+        # Servable ceiling, not catalog prose: without the wrapper only AAC
+        # 256 serves (HIGH whatever the flags say); with the wrapper the
+        # catalog's own flags decide (ALAC 16/44.1 LOSSLESS, 24-bit hi-res
+        # HI_RES_LOSSLESS). The row words already name the master; this tier
+        # is what a download at this object would actually serve.
+        if not self.wrapper_available:
+            return QualityTier.HIGH
+        item = self._unwrap(obj)
+        if not isinstance(item, dict):
+            return QualityTier.HIGH
+        return self._lossless_rung(self._audio_signals(item)) or QualityTier.HIGH
+
+    def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
+        deliveries = [(QualityTier.HIGH, AudioType.STEREO)]
+        item = self._unwrap(obj)
+        if isinstance(item, dict) and self._has_atmos(item):
+            deliveries.append((QualityTier.HIGH, AudioType.ATMOS))
+        if self.wrapper_available and isinstance(item, dict):
+            # The wrapper unlocks the lossless rungs the master actually
+            # holds; detail ("ALAC 24/192") rides Chooser label text, never
+            # rank, so both hi-res sample rates share the one rung.
+            rung = self._lossless_rung(self._audio_signals(item))
+            if rung is QualityTier.HI_RES_LOSSLESS:
+                deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
+                deliveries.append((QualityTier.HI_RES_LOSSLESS, AudioType.STEREO))
+            elif rung is QualityTier.LOSSLESS:
+                deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
+        return deliveries
+
+    def advertised_ceiling(self, obj) -> int | None:
+        # Servable ceiling, per-track when the object is known.
+        # Cookies tier alone: HIGH always. Wrapper tier: the master's own
+        # flags (HI_RES for hi-res, LOSSLESS for lossless, HIGH otherwise),
+        # so an AAC-only master never over-promises HI_RES. None when the
+        # object is unknown and the wrapper is up (never a guess; the gate
+        # settles off the stored ranks then, per _copy_is_current).
+        if not self.wrapper_available:
+            return quality_rank(QualityTier.HIGH)
+        if obj is None:
+            return None
+        item = self._unwrap(obj)
+        if not isinstance(item, dict):
+            return None
+        return quality_rank(self._lossless_rung(self._audio_signals(item)) or QualityTier.HIGH)
+
+    @staticmethod
+    def _has_atmos(item: dict) -> bool:
+        """Whether a song resource carries a Dolby Atmos variant."""
+        signals = AppleProvider._audio_signals(item)
+        return "dolby-atmos" in signals or "atmos" in signals
+
+    def has_atmos(self, item) -> bool:
+        """Whether a song resource carries a Dolby Atmos variant."""
+        unwrapped = self._unwrap(item)
+        return isinstance(unwrapped, dict) and self._has_atmos(unwrapped)
+
+    def _delivery_atmos(self, track, audio_type: AudioType | None) -> bool:
+        """Instead-of semantics: an Atmos ask replaces stereo for tracks that
+        carry it, and tracks without it fall back to stereo so no album is
+        left with a hole."""
+        item = self._unwrap(track)
+        if not isinstance(item, dict):
+            return False
+        return audio_type == AudioType.ATMOS and self._has_atmos(item)
+
+    @staticmethod
+    def _required_request(tier, audio_type) -> tuple[QualityTier, AudioType]:
+        """The caller's request, with the seam's None refused.
+
+        Apple's runner resolves both before asking (the row's pin, else the
+        stored default), so an unresolved request is a caller error, never a
+        tier to guess at.
+        """
+        if tier is None or audio_type is None:
+            raise ValueError("Apple's resolve_stream needs the row's explicit tier and audio type")  # noqa: TRY003
+        return tier, audio_type
+
+    def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
+        """Route one audio ask beneath Apple, preserving the job's engine pin."""
+        tier, audio_type = self._required_request(tier, audio_type)
+        request = EngineRequest(
+            EngineOperation.AUDIO,
+            self._unwrap(track),
+            tier,
+            audio_type,
+            self._engine_thread.abort or Event(),
+            required_codec=self._engine_thread.required_codec,
+        )
+        engine, result = self._execute_engine(request)
+        if result.error is not None:
+            raise result.error
+        if result.failure is not None or not isinstance(result.value, StreamInfo):
+            raise EngineRouteUnavailable(  # noqa: TRY003
+                "The selected Apple engine could not execute this request.", failure=result.failure
+            )
+        info = result.value
+        codec = str((info.delivered or {}).get("codecs") or "").lower()
+        codec = {"mp4a.40.2": "aac", "ec-3": "eac3"}.get(codec, codec)
+        requirement = next(
+            (entry for entry in engine.descriptor.requirements if codec in entry.codecs),
+            None,
+        )
+        info.delivered = {
+            **(info.delivered or {}),
+            "engine_id": engine.descriptor.id,
+            "runtime_id": requirement.runtime if requirement else "",
+        }
+        return info
+
+    def _execute_engine(self, request: EngineRequest) -> tuple[AppleEngine, EngineResult]:
+        policy = self._engine_thread.policy or self.engine_policy()
+        order = dict(self._engine_thread.operation_priority).get(request.operation)
+        if order:
+            policy = EnginePolicy(order, policy.pin, policy.allow_fallback)
+        # Admission must precede setup reads: they can race with account changes
+        # or Stop even when the engine returns a ready snapshot.
+        revisions = {
+            requirement.runtime: self.runtime_context_revision(requirement.runtime)
+            for candidate in self._engines.engines.values()
+            for requirement in candidate.descriptor.requirements
+        }
+        facts = self.engine_facts_probe() if self.engine_facts_probe is not None else None
+        engine = self._engines.select(request, policy, facts)
+        readiness = engine.readiness(request, facts or EngineFacts())
+        runtime_id = readiness.runtime
+        revision = revisions.get(runtime_id)
+
+        def ensure_current(result: EngineResult | None = None) -> None:
+            stopped = self.runtime_stopped(runtime_id)
+            current_revision = self.runtime_context_revision(runtime_id)
+            same_runtime = revision is not None and revision[1] == current_revision[1]
+            same_account = not readiness.account_boundary or revision == current_revision
+            if not request.abort.is_set() and not stopped and same_runtime and same_account:
+                return
+            if result is not None and isinstance(result.value, StreamInfo) and result.value.local_file:
+                self.discard_delivery(result.value.local_file)
+            from waves.providers.apple.engine import _AppleAborted
+
+            if not request.abort.is_set() and stopped:
+                from waves.providers.apple.engine import AppleWrapperDown
+
+                raise AppleWrapperDown()
+            raise _AppleAborted()
+
+        with self.runtime_usage() if request.operation == EngineOperation.AUDIO else nullcontext():
+            ensure_current()
+            result = engine.execute(request)
+        ensure_current(result)
+        return engine, result
+
+    def _resolve_gamdl_stream(
+        self, track, tier: QualityTier | None, audio_type: AudioType | None, *, required_codec: str = ""
+    ) -> StreamInfo:
+        """Fetch and locally decrypt one song through the gamdl engine.
+
+        The request parameters may be None per the seam contract (a caller that
+        pinned nothing); Apple's runner always resolves both first (the row's
+        pin, else the stored default), so None arriving here is refused rather
+        than silently downgraded to a guessed tier.
+
+        Unlike TIDAL's stream manifests this is a whole-file delivery: the
+        engine downloads and decrypts into a staged .m4a and ``local_file``
+        carries it; ``urls`` stays empty because no segment pipeline can
+        replay an encrypted Apple delivery. The caller stages the file and
+        reads ``delivered`` for the ownership record.
+
+        Stereo LOSSLESS/HI_RES takes the ALAC path through the managed
+        wrapper when it is set up; everything else takes the cookies path
+        (AAC 256 stereo, E-AC-3 Atmos). The delivered tier is
+        honest (probed off the staged bytes, e.g. 24/96 where the master
+        tops out); the "ALAC 24/192" detail rides codecs/bit_depth/
+        sample_rate label text, never rank. A probe verified inside the
+        engine rides ``delivered["probe"]`` so the runner reuses it instead
+        of probing and decoding the same bytes again.
+        """
+        item = self._unwrap(track)
+        if not isinstance(item, dict) or not item.get("id"):
+            raise KeyError(str(getattr(track, "id", track)))
+        tier, audio_type = self._required_request(tier, audio_type)
+        atmos = self._delivery_atmos(item, audio_type)
+        try:
+            want = QualityTier(tier) if isinstance(tier, QualityTier) else QualityTier(str(tier))
+        except ValueError:
+            want = QualityTier.HIGH
+        self._check_gamdl_constraint(required_codec, atmos)
+        if self._gamdl_wrapper_requested(item, want, audio_type, required_codec):
+            try:
+                return self._resolve_via_wrapper(item, want)
+            except Exception as exc:
+                from waves.providers.apple.engine import AppleCredentialsError, AppleIntegrityError
+
+                if isinstance(exc, (AppleCredentialsError, AppleIntegrityError)):
+                    # Credentials need the wizard; integrity needs retry +
+                    # quarantine (spec §6). Neither falls back to AAC: a bad
+                    # ALAC file must never arrive as a good AAC one.
+                    raise
+                # Only a genuinely unavailable ALAC variant (no ALAC master,
+                # FairPlay missing) falls back to cookies AAC when cookies
+                # exist, so one AAC-only master cannot hole its album. The
+                # verdict comes from the shared refusal vocabulary (§4.4).
+                try:
+                    kind = self.classify_refusal(exc).kind
+                except Exception:
+                    kind = None
+                if (
+                    required_codec
+                    or str(kind) != str(RefusalKind.UNAVAILABLE)
+                    or not str(self.cookies_path or "").strip()
+                ):
+                    raise
+                logger.debug("Apple ALAC unavailable, falling back to AAC", exc_info=True)
+        delivery = self._fetch_cookies(song_id=str(item.get("id")), atmos=atmos)
+        self._staged[str(delivery.staged_path)] = delivery
+        # The staged file is the provider's to clean once the caller has
+        # moved it out; keep the handle beside the answer, never global.
+        codecs = "ec-3" if atmos else "mp4a.40.2"
+        probe = self._verified_probe(delivery)
+        if probe is None:
+            # No engine verification traveled with these bytes: read the
+            # sample rate here, exactly as the pre-session shape did.
+            sample_rate = self._probe_sample_rate(str(delivery.staged_path))
+            bit_depth = None
+        else:
+            sample_rate = self._probe_rate(probe)
+            bit_depth = probe.get("bit_depth")
+        delivered = {
+            "tier": QualityTier.HIGH.value,
+            "audio_type": str(AudioType.ATMOS if atmos else AudioType.STEREO),
+            "bit_depth": bit_depth,
+            "sample_rate": sample_rate,
+            "codecs": codecs,
+        }
+        if probe is not None:
+            delivered["probe"] = probe
+        return StreamInfo(
+            urls=[],
+            file_extension=".m4a",
+            codecs=codecs,
+            requires_flac_extraction=False,
+            delivered=delivered,
+            replay_gain=None,
+            encrypted=False,
+            single_file=True,
+            local_file=str(delivery.staged_path),
+        )
+
+    def _gamdl_wrapper_requested(self, media, tier: QualityTier, audio_type: AudioType, codec: str = "") -> bool:
+        """One route predicate for setup evidence and the concrete fetch."""
+        return codec == "alac" or (
+            codec != "aac"
+            and not self._delivery_atmos(media, audio_type)
+            and tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+            and self.wrapper_available
+        )
+
+    def _check_gamdl_constraint(self, codec: str, atmos: bool) -> None:
+        from waves.providers.apple.engine import AppleVariantUnavailable
+
+        if codec == "eac3" and not atmos:
+            raise AppleVariantUnavailable("This song has no Atmos rendition.")  # noqa: TRY003
+        if codec == "alac" and not self.wrapper_available:
+            raise AppleVariantUnavailable("ALAC requires the wrapper-v2 runtime.")  # noqa: TRY003
+
+    def _resolve_via_wrapper(self, item: dict, want: QualityTier) -> StreamInfo:
+        """One stereo song through the managed wrapper's ALAC path.
+
+        ``want`` caps the rendition: LOSSLESS takes the best ALAC on that
+        rung (16-bit at any rate, or 24-bit at 44.1/48 kHz), HI_RES the
+        best the master holds (the delivered tier is probed off the bytes
+        either way).
+        """
+        from waves.providers.apple.engine import (
+            apple_delivery_detail,
+            apple_tier_for_delivery,
+        )
+
+        delivery = self._fetch_alac(song_id=str(item.get("id")), max_tier=want.value)
+        self._staged[str(delivery.staged_path)] = delivery
+        # Honest tier off the staged bytes: the master may top out at 24/96
+        # where HI_RES was asked, and the readout must say so. Detail rides
+        # codecs/bit_depth/sample_rate; the tier alone ranks. A probe that
+        # fails too cannot record the ask as verified: ALAC proves at least
+        # LOSSLESS, so that is the substitute, never the requested rung.
+        carried = self._verified_probe(delivery)
+        probe = carried
+        if probe is None:
+            try:
+                from waves.providers.apple.engine import probe_audio_file
+
+                probe = probe_audio_file(str(delivery.staged_path), self._probe_path())
+            except Exception:
+                logger.debug("Apple ALAC probe failed; recording LOSSLESS, not the ask", exc_info=True)
+                probe = {"codec": "alac", "sample_rate": "", "bit_depth": None}
+        codec = str(probe.get("codec") or getattr(delivery, "codec", "") or "alac")
+        bit_depth = self._probe_depth(probe)
+        sample_rate: int | None = self._probe_rate(probe)
+        tier_value = apple_tier_for_delivery(codec, bit_depth, sample_rate or "", fallback=QualityTier.LOSSLESS.value)
+        logger.debug(
+            "Apple ALAC delivery %s",
+            apple_delivery_detail(codec, bit_depth, sample_rate or ""),
+            extra={"tier": tier_value},
+        )
+        delivered = {
+            "tier": tier_value,
+            "audio_type": str(AudioType.STEREO),
+            "bit_depth": bit_depth,
+            "sample_rate": sample_rate,
+            "codecs": codec or "alac",
+        }
+        if carried is not None:
+            delivered["probe"] = carried
+        return StreamInfo(
+            urls=[],
+            # Lossless stereo lands as FLAC: the staged bytes are ALAC-in-m4a
+            # and the caller converts them to FLAC (a lossless decode + FLAC
+            # encode, bit for bit identical since the FLAC container cannot
+            # hold ALAC packets) when its FLAC toggle is on; the flag names
+            # the delivery's container truth either way.
+            file_extension=".flac",
+            codecs=codec or "alac",
+            requires_flac_extraction=True,
+            delivered=delivered,
+            replay_gain=None,
+            encrypted=False,
+            single_file=True,
+            local_file=str(delivery.staged_path),
+        )
+
+    def _probe_path(self) -> str:
+        """An ffprobe binary for the ALAC honesty probe, or "" to trust."""
+        try:
+            from waves.providers.apple.engine import ffprobe_for
+
+            return ffprobe_for(self.ffmpeg_path)
+        except Exception:
+            return ""
+
+    def _probe_sample_rate(self, staged_path: str) -> int | None:
+        """A staged AAC file's sample rate for the ownership record, if known."""
+        try:
+            from waves.providers.apple.engine import probe_audio_file
+
+            probe = probe_audio_file(staged_path, self._probe_path())
+        except Exception:
+            return None
+        else:
+            try:
+                rate = int(str(probe.get("sample_rate") or "").strip())
+            except (TypeError, ValueError):
+                return None
+            return rate if rate > 0 else None
+
+    def discard_delivery(self, local_file: str) -> None:
+        """Remove a staged delivery's workdir after its file moved out."""
+        from waves.providers.apple.engine import cleanup_delivery
+
+        delivery = self._staged.pop(str(local_file), None)
+        if delivery is not None:
+            try:
+                cleanup_delivery(delivery)
+            except Exception:
+                logger.debug("Could not clean the Apple staging area", exc_info=True)
+
+    def preview_url(self, track) -> str | None:
+        """The documented 30-second preview URL off a song resource.
+
+        No session, no wrapper, no setup: ``attributes.previews[0].url`` is a
+        plain AAC clip. None when Apple serves no preview for the song.
+        """
+        item = self._unwrap(track)
+        attrs = self._attributes(item if isinstance(item, dict) else {})
+        previews = attrs.get("previews")
+        if isinstance(previews, list):
+            for entry in previews:
+                if isinstance(entry, dict) and entry.get("url"):
+                    return str(entry["url"])
+        return None
+
+    def fetch_lyrics(self, track) -> tuple[str, str]:
+        """Route optional lyrics under the same captured engine policy."""
+        request = EngineRequest(EngineOperation.LYRICS, self._unwrap(track), abort=self._engine_thread.abort or Event())
+        try:
+            _engine, result = self._execute_engine(request)
+        except EngineRouteUnavailable:
+            return "", ""
+        value = result.value
+        return value if isinstance(value, tuple) and len(value) == 2 else ("", "")
+
+    def _fetch_gamdl_lyrics(self, track) -> tuple[str, str]:
+        """Apple-native lyrics as (synced, plain), converted in Waves' layer.
+
+        Fetches the line-timed ``lyrics`` relationship and converts TTML to
+        LRC here (never waiting on upstream gamdl). Empty when Apple serves
+        no lyrics for the song or the fetch fails; the caller falls through
+        to unsynced text last per the source precedence.
+        """
+        try:
+            ttml = self.fetch_line_ttml(track)
+        except Exception:
+            logger.debug("Apple native lyrics fetch failed", exc_info=True)
+            return "", ""
+        if not ttml:
+            return "", ""
+        try:
+            from waves.metadata.ttml_lyrics import ttml_timing_mode, ttml_to_lrc, ttml_to_text
+        except Exception:
+            return "", ""
+        mode = ttml_timing_mode(ttml)
+        if mode == "none":
+            return "", ttml_to_text(ttml)
+        return ttml_to_lrc(ttml), ttml_to_text(ttml)
+
+    async def _fetch_ttml_resource(self, song_id: str, relation: str) -> str:
+        """One TTML document off the ``lyrics`` / ``syllable-lyrics`` sub-resource.
+
+        Direct sourcing through the embedded catalog client (spec section
+        9.1): ``GET /v1/catalog/{storefront}/songs/{id}/{relation}``. Returns
+        the TTML string, or "" when Apple serves none for this song.
+        """
+        raw_id = str(song_id or "").removeprefix(f"{CTX_APPLE}:")
+        if not raw_id or (self._catalog is None and self._catalog_factory is None):
+            return ""
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        storefront = str(getattr(self._catalog, "storefront", "us") or "us")
+        uri = f"/v1/catalog/{storefront}/songs/{raw_id}/{relation}"
+        try:
+            response = await self._catalog._amp_request(uri, {"extend": "ttmlLocalizations"})
+        except Exception:
+            logger.debug("Apple %s fetch failed for %s", relation, raw_id, exc_info=True)
+            return ""
+        return self._ttml_from_response(response)
+
+    @staticmethod
+    def _ttml_from_attrs(attrs: object) -> str:
+        """TTML out of one resource's attributes, or ""."""
+        if not isinstance(attrs, dict):
+            return ""
+        for key in ("ttml", "ttmlLocalizations", "ttml_localizations"):
+            value = attrs.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+            if isinstance(value, dict):
+                for nested in value.values():
+                    if isinstance(nested, str) and nested.strip() and "<tt" in nested:
+                        return nested
+        return ""
+
+    @classmethod
+    def _ttml_from_relationships(cls, entry: dict) -> str:
+        """TTML out of a relationship-style include, or ""."""
+        rels = entry.get("relationships") or {}
+        if not isinstance(rels, dict):
+            return ""
+        for rel in rels.values():
+            rel_data = (rel or {}).get("data") if isinstance(rel, dict) else None
+            rel_items = rel_data if isinstance(rel_data, list) else [rel_data] if isinstance(rel_data, dict) else []
+            for rel_entry in rel_items:
+                if not isinstance(rel_entry, dict):
+                    continue
+                found = cls._ttml_from_attrs(rel_entry.get("attributes"))
+                if found:
+                    return found
+        return ""
+
+    @classmethod
+    def _ttml_from_response(cls, response: object) -> str:
+        """The TTML string out of a lyrics sub-resource reply, or ""."""
+        if not isinstance(response, dict):
+            return ""
+        data = response.get("data")
+        items = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            found = cls._ttml_from_attrs(entry.get("attributes")) or cls._ttml_from_relationships(entry)
+            if found:
+                return found
+        # Included-section shape (song fetch with include=lyrics).
+        included = response.get("included")
+        for entry in included if isinstance(included, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            found = cls._ttml_from_attrs(entry.get("attributes"))
+            if found:
+                return found
+        return ""
+
+    def _song_id_of(self, track) -> str:
+        item = self._unwrap(track)
+        if isinstance(item, dict):
+            return str(item.get("id") or "")
+        track_id = str(getattr(track, "id", track) or "")
+        return track_id
+
+    def _engine_ttml(self, track, format_name: str) -> str:
+        request = EngineRequest(
+            EngineOperation.LYRICS,
+            self._unwrap(track),
+            abort=self._engine_thread.abort or Event(),
+            lyrics_format=format_name,
+        )
+        try:
+            _engine, result = self._execute_engine(request)
+        except EngineRouteUnavailable:
+            return ""
+        return result.value if isinstance(result.value, str) else ""
+
+    def fetch_syllable_ttml(self, track) -> str:
+        """Word-timed TTML from the pinned or preferred lyrics engine."""
+        return self._engine_ttml(track, "syllable_ttml")
+
+    def fetch_line_ttml(self, track) -> str:
+        """Line-timed TTML from the pinned or preferred lyrics engine."""
+        return self._engine_ttml(track, "line_ttml")
+
+    def _fetch_gamdl_syllable_ttml(self, track) -> str:
+        """Word-timed syllable TTML for one song, or "" when absent."""
+        try:
+            return self._run(self._fetch_ttml_resource(self._song_id_of(track), "syllable-lyrics"))
+        except Exception:
+            logger.debug("Apple syllable-TTML fetch failed", exc_info=True)
+            return ""
+
+    def _fetch_gamdl_line_ttml(self, track) -> str:
+        """Line-timed TTML for one song, or "" when absent."""
+        try:
+            return self._run(self._fetch_ttml_resource(self._song_id_of(track), "lyrics"))
+        except Exception:
+            logger.debug("Apple line-TTML fetch failed", exc_info=True)
+            return ""
+
+    def fetch_word_timed_lrc(self, track) -> str:
+        """Enhanced (word-timed) LRC for one song, converted in Waves' layer."""
+        ttml = self.fetch_syllable_ttml(track)
+        if not ttml:
+            return ""
+        try:
+            from waves.metadata.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
+        except Exception:
+            return ""
+        if ttml_timing_mode(ttml) != "word":
+            return ""
+        return ttml_to_enhanced_lrc(ttml)
+
+    def cover_url(self, obj, dimension: int) -> str:
+        """Route optional artwork under the same captured engine policy."""
+        return self._engine_artwork(obj, dimension)
+
+    def _engine_artwork(self, obj, dimension: int, *, original: bool = False) -> str:
+        request = EngineRequest(
+            EngineOperation.ARTWORK,
+            self._unwrap(obj),
+            abort=self._engine_thread.abort or Event(),
+            artwork_dimension=dimension,
+            artwork_original=original,
+        )
+        try:
+            _engine, result = self._execute_engine(request)
+        except EngineRouteUnavailable:
+            return ""
+        return result.value if isinstance(result.value, str) else ""
+
+    def _gamdl_cover_url(self, obj, dimension: int) -> str:
+        """Best-effort cover URL at the requested square dimension."""
+        item = self._unwrap(obj)
+        attrs = self._attributes(item if isinstance(item, dict) else {})
+        try:
+            dim = max(16, min(5000, int(dimension)))
+        except (TypeError, ValueError):
+            dim = 320
+        return self._art(attrs, dim)
+
+    def track_facts(self, track) -> dict:
+        """The fact schema the tag writer reads, in the seam's namespaced
+        spelling (mirrors TidalProvider.track_facts field for field, so the
+        Metadata writer consumes it unchanged).
+
+        The album block is best-effort from this session's album cache (the
+        album job fetched it first); a bare track read never spends a catalog
+        call on it, so UPC and track totals may be "" where TIDAL fills them.
+        """
+        item = self._unwrap(track)
+        attrs = self._attributes(item if isinstance(item, dict) else {})
+        raw_id = str((item or {}).get("id") or "") if isinstance(item, dict) else ""
+        artist_ids = self._track_artist_ids(item if isinstance(item, dict) else {}, attrs)
+        album_attrs: dict = {}
+        album_artist_id = ""
+        album_id = self._album_id(item if isinstance(item, dict) else {}, attrs)
+        if album_id:
+            album_raw = self.cached("album", album_id)
+            if isinstance(album_raw, dict):
+                maybe = self._attributes(album_raw)
+                if isinstance(maybe, dict):
+                    album_attrs = maybe
+                album_artist_id = self._related_id(album_raw, "artists")
+        artist_name = str(attrs.get("artistName") or "")
+        album_artist_name = str(album_attrs.get("artistName") or "")
+        if album_artist_name:
+            album_artists = [album_artist_name]
+            album_artist_ids = [album_artist_id] if album_artist_id else []
+        else:
+            # No cached album: the track credit is the only answer available.
+            album_artists = [artist_name] if artist_name else []
+            album_artist_ids = [artist_ids[0]] if artist_ids else []
+        return {
+            "item_id": self._id(raw_id),
+            "artist_ids": artist_ids,
+            "album_artist_ids": album_artist_ids,
+            # One combined display credit: per-artist names are unavailable,
+            # so only the first id carries it and the rest stay id-only
+            # instead of repeating the same string per credit.
+            "artists": [(artist_ids[0], artist_name)] + [(aid, "") for aid in artist_ids[1:]] if artist_ids else [],
+            "album_artists": album_artists,
+            "copyright": str(attrs.get("copyright") or ""),
+            "isrc": str(attrs.get("isrc") or ""),
+            "explicit": attrs.get("contentRating") == "explicit",
+            "bpm": 0,
+            "key": None,
+            "key_scale": None,
+            "share_url": str(attrs.get("url") or ""),
+            "volume_num": int(attrs.get("discNumber") or 1),
+            "track_num": int(attrs.get("trackNumber") or 0),
+            "release_date": str(attrs.get("releaseDate") or "")[:10],
+            "release_type": "",
+            "album": {
+                "name": str(attrs.get("albumName") or ""),
+                "num_tracks": album_attrs.get("trackCount"),
+                "num_volumes": None,
+                "upc": str(album_attrs.get("upc") or ""),
+                "type": "",
+            },
+        }
+
+    def _track_artist_ids(self, item: dict, attrs: dict) -> list[str]:
+        """This track's credited artist ids, relationship first."""
+        relationships = item.get("relationships") or {}
+        artists = relationships.get("artists") or {}
+        ids = [self._id(entry.get("id")) for entry in artists.get("data") or [] if isinstance(entry, dict)]
+        if ids:
+            return ids
+        single = self._artist_id(item, attrs, {})
+        return [single] if single else []
+
+    def classify_failure(self, exc: BaseException) -> Failure:
+        """Apple-owned concrete boundaries; arbitrary text stays unknown."""
+        from waves.providers.apple.engine import (
+            AppleCredentialsError,
+            AppleIntegrityError,
+            AppleTrackUnavailable,
+            AppleVariantUnavailable,
+            AppleWrapperDown,
+        )
+
+        if isinstance(exc, AppleCredentialsError):
+            wrapper = str(exc.credential) == "wrapper"
+            return Failure(
+                FailureScope.ACCOUNT,
+                EventCode.ACCOUNT_REQUIRED,
+                "Sign in to Apple's wrapper session again."
+                if wrapper
+                else "Export fresh Apple Music cookies in Settings.",
+                runtime_id="apple:wrapper-v2" if wrapper else "apple:cookies-client",
+            )
+        if isinstance(exc, AppleWrapperDown):
+            return Failure(
+                FailureScope.RUNTIME,
+                EventCode.FAILED,
+                "The Apple runtime is not responding. Check its setup in Settings.",
+                retryable=True,
+                runtime_id="apple:wrapper-v2",
+            )
+        if isinstance(exc, AppleIntegrityError):
+            return Failure(
+                FailureScope.ENGINE,
+                EventCode.INTEGRITY_FAILED,
+                "The Apple download failed verification. Any rejected file stays outside your library.",
+                retryable=True,
+            )
+        if isinstance(exc, AppleVariantUnavailable):
+            return Failure(
+                FailureScope.ENGINE,
+                EventCode.UNAVAILABLE,
+                "The requested delivery is not available through this Apple engine.",
+            )
+        if isinstance(exc, AppleTrackUnavailable):
+            return Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on Apple Music.")
+        if isinstance(exc, AppleCatalogUnavailable):
+            return Failure(
+                FailureScope.PROVIDER,
+                EventCode.PROTOCOL_INCOMPATIBLE,
+                "Apple's catalog format has changed. Check for a Waves update.",
+            )
+        if isinstance(exc, AppleCollectionIncomplete):
+            return Failure(
+                FailureScope.PROVIDER,
+                EventCode.FAILED,
+                "Apple sent only part of this collection. Try again.",
+                retryable=True,
+            )
+        if isinstance(exc, EngineRouteUnavailable):
+            if exc.failure is None:
+                return Failure(
+                    FailureScope.CONFIGURATION,
+                    EventCode.INVALID_CONFIGURATION,
+                    "No selected Apple engine can serve this request. Check your engine and delivery settings.",
+                )
+            failure = exc.failure
+            code, summary = {
+                "incompatible_client": (
+                    EventCode.PROTOCOL_INCOMPATIBLE,
+                    "The Apple engine needs a compatible client update.",
+                ),
+                "unsupported_request": (
+                    EventCode.UNAVAILABLE,
+                    "This Apple engine does not support the requested delivery.",
+                ),
+                "rate_limited": (EventCode.RATE_LIMITED, "Apple is limiting requests. Wait before trying again."),
+            }.get(failure.code, (EventCode.FAILED, "The selected Apple engine could not finish the request."))
+            return Failure(failure.scope, code, summary, failure.retryable, failure.engine, failure.runtime)
+        return super().classify_failure(exc)
+
+    def classify_refusal(self, exc) -> Refusal:
+        """Apple engine errors into the shared refusal vocabulary."""
+        from waves.providers.apple.engine import AppleCredentialsError, AppleVariantUnavailable, AppleWrapperDown
+
+        if isinstance(exc, AppleCredentialsError):
+            return Refusal(RefusalKind.FAILURE, str(exc))
+        if isinstance(exc, AppleVariantUnavailable):
+            # No rendition at the asked ceiling (or none at all): the
+            # provider's fallback rules decide what actually serves.
+            return Refusal(RefusalKind.UNAVAILABLE, "this item is not available on Apple Music")
+        if isinstance(exc, AppleWrapperDown):
+            # The sidecar being down is HELD at the runner (presentation, not
+            # a state); inside the refusal vocabulary it stays retryable
+            # FAILURE, never an unavailable refusal.
+            return Refusal(RefusalKind.FAILURE, str(exc))
+        name = type(exc).__name__
+        text = f"{name}: {exc}"
+        lowered = str(exc).lower()
+        if "429" in text or "TooManyRequests" in name or ("rate" in lowered and "limit" in lowered):
+            return Refusal(RefusalKind.THROTTLED, "Apple is rate-limiting; back off and retry")
+        if (
+            "NotStreamable" in name
+            or "FormatNotAvailable" in name
+            or "DecryptionNotAvailable" in name
+            or "formatnotavailable" in lowered
+            or "decryptionnotavailable" in lowered
+            or "404" in text
+        ):
+            return Refusal(RefusalKind.UNAVAILABLE, "this item is not available on Apple Music")
+        return Refusal(RefusalKind.FAILURE, str(exc) or name)

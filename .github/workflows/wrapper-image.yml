@@ -1,0 +1,369 @@
+# Publishing the Waves wrapper image.
+#
+# Upstream wrapper-v2 ships source only, so Waves publishes its own pinned
+# image for end-user pulls. The build needs Apple's native libraries, which
+# must never enter this repo: they arrive at build time through the private
+# APK_URL secret (an .apk/.apkm you host privately). The lib pins are
+# regenerated deterministically from that blessed APK instead
+# of trusting upstream's pin file to track it, then strictly verified; the
+# blessed APK identity (version/build inputs) is recorded, not trusted
+# blindly.
+# The secrets are unreadable from forks, so fork PRs can read this file
+# but never run the publish path. Private hosting needs auth: set the
+# optional APK_AUTH_HEADER secret to the full header line (e.g.
+# "Authorization: Bearer <token>"); it is sent only to fetch the artifact
+# and never printed (secret values are masked in logs).
+#
+# What gets published: linux/arm64 only (the Apple-silicon native path; the
+# compile stage stays linux/amd64 because Google ships the NDK as x86_64
+# only). The pushed tag must equal the pin in waves/providers/apple/runtime.py
+# (WRAPPER_V2_IMAGE); the pin-drift test fails the suite otherwise.
+#
+# A dispatch names a full upstream commit SHA and a tag that does not exist
+# yet: the run refuses to build a moving ref, and refuses to overwrite a
+# published tag without the explicit repair override. Both are guards, not
+# documentation — see docs/wrapper-image.md.
+name: wrapper-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      wrapper_ref:
+        description: "Upstream wrapper-v2 commit to build (full 40-hex SHA; the run refuses branches and tags)"
+        required: true
+        type: string
+      image_tag:
+        description: "Tag to push (must equal the WRAPPER_V2_IMAGE pin and must not already exist)"
+        required: false
+        default: "0.2.4"
+        type: string
+      allow_tag_overwrite:
+        description: "Overwrite an existing tag (repair only; a release never sets this)"
+        required: false
+        default: false
+        type: boolean
+      apk_version:
+        description: "Blessed APK version (must equal APK_PINNED_VERSION)"
+        required: false
+        default: "3.6.0-beta"
+        type: string
+      apk_build:
+        description: "Blessed APK build number (lib pins are generated from it)"
+        required: false
+        default: "1109"
+        type: string
+
+permissions:
+  contents: read
+
+# Publishes must never overlap: two pushes of one tag is a race.
+concurrency:
+  group: wrapper-image-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and publish (linux/arm64)
+    # Pushes the image to GHCR.
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    env:
+      APK_URL: ${{ secrets.APK_URL }}
+      APK_AUTH_HEADER: ${{ secrets.APK_AUTH_HEADER }}
+      # Your own namespace by default, so forks publish under their own name
+      # with zero edits (the app pin stays the maintainer's; see docs).
+      IMAGE: ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2
+      TAG: ${{ inputs.image_tag }}
+      APK_VERSION: ${{ inputs.apk_version }}
+      APK_BUILD: ${{ inputs.apk_build }}
+      TARGET_ARCH: arm64-v8a
+      RUNTIME_PLATFORM: linux/arm64
+
+    steps:
+      - name: Require a full upstream commit SHA
+        env:
+          WRAPPER_REF: ${{ inputs.wrapper_ref }}
+        run: |
+          # The OCI revision label and .github/wrapper-upstream.sha are only
+          # provenance if the built ref cannot move. Branches and tags can.
+          if [[ ! "${WRAPPER_REF}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::wrapper_ref must be a full 40-hex commit SHA; got '${WRAPPER_REF}'."
+            exit 1
+          fi
+
+      - name: Check out this repo (the notices templates live here)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check out upstream wrapper-v2 at the pinned ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: glomatico/wrapper-v2
+          ref: ${{ inputs.wrapper_ref }}
+          path: wrapper-v2
+
+      - name: Record the exact source SHA
+        working-directory: wrapper-v2
+        run: |
+          echo "WRAPPER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git rev-parse HEAD
+
+      # The arm64 image runs under QEMU on amd64 runners (smoke test only;
+      # the compile stage stays amd64 for the x86_64-only NDK).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing tag
+        env:
+          ALLOW_TAG_OVERWRITE: ${{ inputs.allow_tag_overwrite }}
+        run: |
+          # A published tag is an address clients already pulled, and the app
+          # pins its digest: republishing it serves different bytes under a
+          # pin that still names the old ones. New releases take a new tag.
+          if out="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" 2>&1)"; then
+            if [[ "${ALLOW_TAG_OVERWRITE}" == "true" ]]; then
+              echo "::warning::overwriting existing tag ${IMAGE}:${TAG} (allow_tag_overwrite=true)"
+            else
+              echo "::error::tag ${IMAGE}:${TAG} already exists; publish a new tag, or set allow_tag_overwrite=true to repair this one."
+              exit 1
+            fi
+          else
+            # A missing tag and a package that does not exist yet both read
+            # as not found; every other failure (auth, registry) is unknown
+            # and must not authorize a push.
+            case "$out" in
+              *"not found"*|*"manifest unknown"*)
+                echo "tag ${IMAGE}:${TAG} does not exist yet; proceeding" ;;
+              *)
+                echo "::error::cannot tell whether ${IMAGE}:${TAG} exists (registry error): ${out}"
+                exit 1 ;;
+            esac
+          fi
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            jq unzip curl ca-certificates
+
+      - name: Validate Compose config
+        working-directory: wrapper-v2
+        run: docker compose config --quiet
+
+      - name: Rust unit tests
+        working-directory: wrapper-v2
+        run: cargo test
+
+      - name: Make scripts executable
+        working-directory: wrapper-v2
+        run: chmod +x tools/extract-libs.sh tools/stage-system.sh
+
+      - name: Sanity check APK_URL secret
+        run: |
+          if [[ -z "${APK_URL}" ]]; then
+            echo "::error::APK_URL secret is not set."
+            echo "Maintainers: add a repository secret APK_URL pointing at a privately hosted"
+            echo "Apple Music .apk/.apkm (see docs/wrapper-image.md). It is never committed."
+            exit 1
+          fi
+
+      - name: Download Apple Music artifact
+        run: |
+          mkdir -p .tmp
+          artifact=".tmp/apple-music.apk"
+          if [[ "${APK_URL,,}" == *.apkm* ]]; then
+            artifact=".tmp/apple-music.apkm"
+          fi
+          # Private hosting (a private-repo release asset, a token-gated
+          # bucket) authenticates through APK_AUTH_HEADER; the header value
+          # is a masked secret and never appears in logs.
+          auth_args=()
+          if [[ -n "${APK_AUTH_HEADER}" ]]; then
+            auth_args=(-H "${APK_AUTH_HEADER}")
+          fi
+          # A private repo's /releases/download/ URL serves a browser
+          # session only: a token header gets a 404 there. Resolve that URL
+          # through the release API and fetch the asset endpoint instead,
+          # which is the documented token path.
+          download_url="${APK_URL}"
+          if [[ "${APK_URL}" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)$ ]]; then
+            owner="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"
+            tag="${BASH_REMATCH[3]}"; asset_name="${BASH_REMATCH[4]}"
+            if ! release_json="$(curl -fsSL --proto '=https' --proto-redir '=https' \
+              --retry 3 --retry-delay 2 "${auth_args[@]}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}")"; then
+              echo "::error::could not resolve release '${tag}' in ${owner}/${repo} through the API."
+              exit 1
+            fi
+            asset_id="$(printf '%s' "${release_json}" \
+              | jq -r --arg name "${asset_name}" '.assets[] | select(.name == $name) | .id')"
+            if [[ -z "${asset_id}" || "${asset_id}" == "null" ]]; then
+              echo "::error::no asset named '${asset_name}' in ${owner}/${repo} release '${tag}'."
+              exit 1
+            fi
+            download_url="https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset_id}"
+            auth_args+=(-H "Accept: application/octet-stream")
+          fi
+          # HTTPS only, redirects included: the request carries a masked
+          # credential and must never follow a downgrade.
+          curl -fL --proto '=https' --proto-redir '=https' \
+            --retry 3 --retry-delay 2 "${auth_args[@]}" -o "${artifact}" "${download_url}"
+          echo "APPLE_MUSIC_ARTIFACT=${artifact}" >> "$GITHUB_ENV"
+          ls -lh "${artifact}"
+
+      - name: Regenerate lib pins from the blessed APK
+        working-directory: wrapper-v2
+        run: |
+          # Upstream's LIBS_VERSION.json is not guaranteed to track the
+          # blessed APK, so the blessed file is the source of
+          # truth: extract once ignoring hashes, rewrite this arch's pins
+          # plus the APK identity, and let the strict extraction below prove
+          # the tree matches. The APK file itself never reaches the app:
+          # publishing owns its provenance end to end.
+          blessed_out="${RUNNER_TEMP}/blessed-libs"
+          ./tools/extract-libs.sh \
+            --bundle "${GITHUB_WORKSPACE}/${APPLE_MUSIC_ARTIFACT}" \
+            --arch "${TARGET_ARCH}" \
+            --out "${blessed_out}" \
+            --ignore-hash
+          python3 - "${blessed_out}" "${APK_VERSION}" "${APK_BUILD}" <<'EOF'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          out_dir, apk_version, apk_build = sys.argv[1], sys.argv[2], sys.argv[3]
+          libs = {}
+          for f in sorted(Path(out_dir).glob("*.so")):
+              libs[f.name] = hashlib.sha256(f.read_bytes()).hexdigest()
+          pins = Path("LIBS_VERSION.json")
+          data = json.loads(pins.read_text())
+          data["libs"]["arm64-v8a"] = libs
+          data["apple_music"]["version"] = apk_version
+          data["apple_music"]["build"] = apk_build
+          pins.write_text(json.dumps(data, indent=2) + "\n")
+          print(f"pinned {len(libs)} arm64-v8a libs from APK {apk_version} build {apk_build}")
+          EOF
+
+      - name: Extract Apple native libs, strict against regenerated pins
+        working-directory: wrapper-v2
+        run: |
+          ./tools/extract-libs.sh \
+            --bundle "${GITHUB_WORKSPACE}/${APPLE_MUSIC_ARTIFACT}" \
+            --arch "${TARGET_ARCH}"
+
+      - name: Stage Android system binaries
+        working-directory: wrapper-v2
+        run: ./tools/stage-system.sh --arch "${TARGET_ARCH}"
+
+      - name: Prepare notices
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p wrapper-v2/notices
+          cp tools/wrapper-image/NOTICE wrapper-v2/notices/NOTICE
+          cp tools/wrapper-image/Apache-2.0.txt wrapper-v2/notices/Apache-2.0.txt
+          cp tools/wrapper-image/BSD-3-Clause.txt wrapper-v2/notices/BSD-3-Clause.txt
+          cp tools/wrapper-image/BSD-2-Clause.txt wrapper-v2/notices/BSD-2-Clause.txt
+          cat >> wrapper-v2/Dockerfile <<'EOF'
+
+          # Waves: third-party notices shipped with the image.
+          COPY notices/NOTICE /licenses/NOTICE
+          COPY notices/Apache-2.0.txt /licenses/Apache-2.0
+          COPY notices/BSD-3-Clause.txt /licenses/BSD-3-Clause
+          COPY notices/BSD-2-Clause.txt /licenses/BSD-2-Clause
+          EOF
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: wrapper-v2
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          labels: |
+            org.opencontainers.image.title=Waves wrapper v2
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.WRAPPER_SHA }}
+            org.opencontainers.image.licenses=Unlicense AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause
+            org.opencontainers.image.description=Pinned wrapper-v2 image with the blessed APK guest libs; contains proprietary Apple libraries (see /licenses/NOTICE).
+          build-args: |
+            BUILD_PLATFORM=linux/amd64
+            RUNTIME_PLATFORM=${{ env.RUNTIME_PLATFORM }}
+            TARGET_ARCH=${{ env.TARGET_ARCH }}
+
+      - name: Smoke test (HTTP and TCP)
+        run: |
+          docker rm -f wrapper-smoke 2>/dev/null || true
+          # Same caps as production (see waves/providers/apple/supervision.container_run_args):
+          # AppArmor's default profile can deny mount(2) even with CAP_SYS_ADMIN.
+          docker run -d \
+            --platform "${RUNTIME_PLATFORM}" \
+            --name wrapper-smoke \
+            --cap-add SYS_ADMIN --cap-add SYS_CHROOT --cap-add SYS_PTRACE \
+            --security-opt apparmor=unconfined \
+            -p 8080:80 \
+            -p 11020:10020 \
+            "${IMAGE}:${TAG}"
+          http_ok=0
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+              echo "health OK after ${i} attempt(s)"
+              http_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$http_ok" != "1" ]]; then
+            echo "::error::health did not become ready in time"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          curl -sf http://127.0.0.1:8080/health | jq .
+          tcp_ok=0
+          for i in $(seq 1 20); do
+            if timeout 2 bash -c '</dev/tcp/127.0.0.1/11020' 2>/dev/null; then
+              echo "TCP decrypt listener OK after ${i} attempt(s)"
+              tcp_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$tcp_ok" != "1" ]]; then
+            echo "::error::TCP decrypt listener did not accept connections in time"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          docker rm -f wrapper-smoke
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## Wrapper image published"
+            echo ""
+            echo "| Fact | Value |"
+            echo "| ---- | ----- |"
+            echo "| Image | \`${IMAGE}:${TAG}\` |"
+            echo "| Digest | \`$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{.Manifest.Digest}}' 2>/dev/null || echo unknown)\` |"
+            echo "| Upstream ref | \`${{ inputs.wrapper_ref }}\` (\`${WRAPPER_SHA}\`) |"
+            echo "| Blessed APK | \`${APK_VERSION}\` build \`${APK_BUILD}\` (pins regenerated from it) |"
+            echo "| Arch | \`${TARGET_ARCH}\` / \`${RUNTIME_PLATFORM}\` |"
+            echo ""
+            echo "Guest libs pinned by the source tree:"
+            echo '```json'
+            cat wrapper-v2/LIBS_VERSION.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

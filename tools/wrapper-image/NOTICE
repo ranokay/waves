@@ -1,0 +1,28 @@
+Waves wrapper image notices
+===========================
+
+This image is published by Waves (https://github.com/ranokay/waves) and
+bundles or derives from the following components. Full license texts ship
+under /licenses; the Debian base's own license texts are under
+/usr/share/common-licenses.
+
+- wrapper-v2 (https://github.com/glomatico/wrapper-v2), the wrapper service
+  and decrypt listener, under the Unlicense. The commit it was built from is
+  recorded in this image's org.opencontainers.image.revision label and in
+  docs/wrapper-image.md of the Waves repository.
+- Android system libraries from the Android Open Source Project (AOSP),
+  Apache-2.0 / BSD-licensed, staged from wrapper-v2's
+  vendor/android-system tree (linker64, bionic, and the AOSP libraries
+  Apple's binaries link against).
+- The Debian base image and its packages, each under its own license.
+
+Proprietary Apple libraries
+---------------------------
+
+This image also contains 18 native libraries extracted from Apple's
+com.apple.android.music package (version 3.6.0-beta, build 1109) at image
+build time: libCoreFP.so, libandroidappmusic.so, libCoreFoundation.so and
+their peers. They are not covered by any license granted to Waves and remain
+Apple's property. They are included only so the wrapper can decrypt the
+user's own Apple Music downloads on the user's machine. See
+docs/wrapper-image.md for the distribution caveat this implies.

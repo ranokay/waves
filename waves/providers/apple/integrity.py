@@ -1,0 +1,409 @@
+"""Apple integrity gate: verification, outbreak pre-filter, quarantine paths.
+
+Spec §6: every Apple audio delivery is verified pre-swap with an
+ffmpeg decode-to-null check (always-on, never a setting; TIDAL untouched).
+Persistent failures land in a scan-excluded "Waves Quarantine" folder inside
+the library root plus a provider-scoped skip-list that bulk runs auto-skip.
+REDOWNLOAD is the explicit re-ask and clears when a verified copy lands.
+
+Pure standard library plus mutagen/ffprobe reads, no Qt, so it unit tests
+without the GUI stack. The download runner (backend) owns retry pacing,
+queue wording and ownership; this module owns the pure decisions: what the
+failure words are, what counts as outbreak-era, and where quarantine files go.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+
+from waves.paths import path_file_numbered_candidate
+
+logger = logging.getLogger("waves.providers.apple.integrity")
+
+# The queue row's plain-words verdict after the retry cap. Counted as failed,
+# covered by RETRY ALL. The em dash is the spec's own wording.
+INTEGRITY_FAIL_MESSAGE: str = "failed integrity check \u2014 quarantined"
+
+# The quarantine folder's fixed name. The library scan excludes exactly this
+# name (see library_index), so a quarantined file can never badge IN LIBRARY.
+# A custom quarantine location keeps this folder's role; only its parent moves.
+QUARANTINE_DIR_NAME: str = "Waves Quarantine"
+
+# Outbreak pre-filter: Apple's own ALAC encoder has emitted malformed packets
+# since ~May 2025 (provider spec §6). An outbreak-era file
+# quarantines after 1 retry instead of the normal 2: re-fetching known-bad
+# Apple sources is pure waste.
+OUTBREAK_YEAR: int = 2025
+OUTBREAK_MONTH: int = 5
+
+# How an Encoded date can arrive: ffmpeg creation_time ("2025-06-23T04:06:21Z"),
+# mutagen freeform text, or a bare "2025-06-23" / "20250623". The year-month is
+# all the pre-filter needs; a day that cannot be parsed still yields its month.
+_DATE_RE = re.compile(r"(19|20)\d{2}[-_/.]?(0[1-9]|1[0-2])(?:[-_/.]?\d{1,2})?")
+
+
+def _norm_dir(path: str | Path) -> str:
+    # realpath so a symlinked download root and a real quarantine ancestor
+    # compare canonically; harmless for not-yet-created folders (existing
+    # parents resolve, the rest appends lexically).
+    return os.path.normpath(os.path.realpath(os.path.expanduser(str(path or ""))))
+
+
+# Whether two different spellings can name the same path. Windows folds case
+# in the filesystem, and macOS volumes are case-insensitive by default while
+# normcase is a no-op there, so comparisons casefold on both. A case-sensitive
+# volume on those platforms is not distinguished.
+_CASE_INSENSITIVE_PATHS = os.name == "nt" or sys.platform == "darwin"
+
+
+def _fold_path(path: str) -> str:
+    """A path spelling for comparisons: folded on case-insensitive platforms."""
+    folded = os.path.normcase(str(path))
+    return folded.casefold() if _CASE_INSENSITIVE_PATHS else folded
+
+
+def _same_dir(first: str | Path, second: str | Path) -> bool:
+    """Whether two directory paths name the same folder.
+
+    Platform-correct first (casefolded on Windows and macOS, exact on Linux),
+    then an identity check for aliases the spelling cannot show (a symlink, a
+    case-insensitive volume): samefile needs both paths to exist, so a missing
+    path simply cannot prove aliasing.
+    """
+    first_norm, second_norm = _norm_dir(first), _norm_dir(second)
+    if _fold_path(first_norm) == _fold_path(second_norm):
+        return True
+    try:
+        return os.path.samefile(first_norm, second_norm)
+    except OSError:
+        return False
+
+
+def _is_within(child: str | Path, parent: str | Path) -> bool:
+    """Whether ``child`` is ``parent`` itself or sits under it.
+
+    Spelling first (folded on case-insensitive platforms, exact on Linux, so
+    a case-only difference on Linux stays two different folders); samefile
+    then settles aliasing the spelling cannot show (symlinks, insensitive
+    volumes) wherever both paths exist.
+    """
+    child_norm, parent_norm = _norm_dir(child), _norm_dir(parent)
+    if _same_dir(child_norm, parent_norm):
+        return True
+    prefix = parent_norm.rstrip(os.sep) + os.sep
+    return _fold_path(child_norm).startswith(_fold_path(prefix))
+
+
+def resolve_quarantine_dir(
+    download_base: str | Path,
+    custom: str | Path | None = None,
+    library_root: str | Path | None = None,
+) -> Path:
+    """Where quarantined Apple files land.
+
+    Empty custom means the default: <download_base>/Waves Quarantine. A set
+    custom value is the full folder path (absolute, or ~/expanded). The folder
+    is created on use, never here.
+
+    A custom path naming the download root itself, or an ancestor of it,
+    falls back to the default: quarantining into the library at the intended
+    relative path would place a corrupt file exactly where a verified copy
+    belongs, and registering an ancestor would exclude the whole library
+    from the scan. The same holds for the active separate library root: a
+    custom path naming it, or an ancestor of it, would exclude the whole
+    scanned library once registered, so it falls back the same way.
+    """
+    base = Path(os.path.expanduser(str(download_base or "")))
+    text = str(custom or "").strip()
+    if text:
+        candidate = Path(os.path.expanduser(text))
+        if _is_within(base, candidate):
+            logger.warning("Apple quarantine folder overlaps the download folder; using the default instead")
+            return base / QUARANTINE_DIR_NAME
+        library_text = str(library_root or "").strip()
+        if library_text:
+            library_path = Path(os.path.expanduser(library_text))
+            if _is_within(library_path, candidate):
+                logger.warning("Apple quarantine folder overlaps the library folder; using the default instead")
+                return base / QUARANTINE_DIR_NAME
+        return candidate
+    return base / QUARANTINE_DIR_NAME
+
+
+# Previously-used custom quarantine folders, remembered so a changed setting
+# cannot resurrect an old corrupt stash in the scan: the library scan excludes
+# every remembered root, not just the current one. A tiny JSON sidecar beside
+# the settings (not a setting itself: no UI, no migration, just an exclusion
+# list the bridge rewrites). Uncapped on purpose: evicting the oldest root
+# would re-expose a folder that may still hold quarantined files, and entries
+# are short strings written only when settings save.
+_QUARANTINE_SIDECAR_NAME = "apple_quarantine_roots.json"
+
+
+def _quarantine_sidecar(config_dir: str | Path) -> Path:
+    return Path(os.path.expanduser(str(config_dir or ""))) / _QUARANTINE_SIDECAR_NAME
+
+
+def known_quarantine_dirs(config_dir: str | Path) -> list[str]:
+    """Previously-used quarantine folders, newest first, or []. Never raises."""
+    try:
+        raw = json.loads(_quarantine_sidecar(config_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    known: list[str] = []
+    for entry in raw:
+        text = str(entry or "").strip()
+        if text and text not in known:
+            known.append(text)
+    return known
+
+
+def remember_quarantine_dir(config_dir: str | Path, path: str | Path) -> list[str]:
+    """Remember a quarantine folder, returning the known list (newest first).
+
+    Best-effort throughout: a sidecar that cannot be written simply means an
+    old custom folder relies on its next use for registration. Never raises.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return known_quarantine_dirs(config_dir)
+    known = [text, *(entry for entry in known_quarantine_dirs(config_dir) if entry != text)]
+    try:
+        sidecar = _quarantine_sidecar(config_dir)
+        if str(sidecar.parent):
+            os.makedirs(sidecar.parent, exist_ok=True)
+        tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+        tmp.write_text(json.dumps(known, indent=2), encoding="utf-8")
+        os.replace(tmp, sidecar)
+    except OSError:
+        # A previous custom folder then relies on its next use for
+        # registration; worth surfacing, since an unregistered old stash can
+        # be scanned back into the library.
+        logger.warning("Could not remember the Apple quarantine folder")
+    return known
+
+
+def quarantine_dest(quarantine_root: str | Path, relative: str, extension: str = ".m4a") -> Path:
+    """The quarantine path for one track: the intended relative path, kept.
+
+    Files keep their intended names (same relative path and stem as the
+    library copy) so a later verified copy replaces them by name and a human
+    can tell what failed. Numbered on collision, mirroring pick_destination,
+    so two same-named failures never share a name.
+    """
+    relative = str(relative or "").strip().lstrip("/\\")
+    if not relative:
+        raise ValueError("quarantine destination needs a relative path")  # noqa: TRY003
+    parent = Path(str(quarantine_root)).expanduser() / Path(relative).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    stem = Path(relative).name
+    return path_file_numbered_candidate(parent / f"{stem}{extension}")
+
+
+def prune_empty_quarantine_dirs(paths, root: str | Path) -> None:
+    """Remove quarantine folders left empty after their bytes were deleted.
+
+    Each path's parent walks up toward (but never past) ``root``, removing
+    only folders that are empty; a folder that still holds anything stops the
+    walk. Never raises: bytes are already gone, and a folder that cannot be
+    removed is harmless.
+    """
+    root_norm = _norm_dir(root)
+    visited: set[str] = set()
+    for path in paths:
+        text = str(path or "")
+        if not text:
+            continue
+        parent = Path(text).expanduser().parent
+        while True:
+            parent_norm = _norm_dir(parent)
+            if _same_dir(parent_norm, root_norm) or not _is_within(parent_norm, root_norm):
+                break
+            if parent_norm in visited:
+                break
+            visited.add(parent_norm)
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+
+
+def parse_encoded_date(text: str | None) -> datetime.date | None:
+    """An Encoded/creation date string onto a date, or None when unreadable.
+
+    Accepts ffmpeg creation_time, ISO dates, and compact YYYYMMDD. Only the
+    year-month-day matters; time and timezone are dropped.
+    """
+    if not text:
+        return None
+    match = _DATE_RE.search(str(text))
+    if not match:
+        return None
+    digits = re.sub(r"\D", "", match.group(0))
+    try:
+        if len(digits) >= 8:
+            return datetime.date(int(digits[0:4]), int(digits[4:6]), int(digits[6:8]))
+        if len(digits) >= 6:
+            return datetime.date(int(digits[0:4]), int(digits[4:6]), 1)
+    except ValueError:
+        return None
+    return None
+
+
+def is_outbreak_era(encoded_date: datetime.date | str | None) -> bool:
+    """Whether an Encoded date falls in the outbreak window (>= 2025-05)."""
+    if isinstance(encoded_date, str):
+        encoded_date = parse_encoded_date(encoded_date)
+    if not isinstance(encoded_date, datetime.date):
+        return False
+    return (encoded_date.year, encoded_date.month) >= (OUTBREAK_YEAR, OUTBREAK_MONTH)
+
+
+def encoded_date_of(path: str | Path, ffprobe_path: str = "") -> datetime.date | None:
+    """A staged Apple file's Encoded/creation date, or None when unknown.
+
+    ffprobe first (format + stream creation_time, the research's signal),
+    mutagen freeform second. Unknown stays unknown: the normal retry budget
+    applies, never the sharpened one. Never raises; a date read must not fail
+    a download that verification already passed.
+    """
+    target = Path(str(path))
+    if not target.is_file():
+        return None
+    probed = _ffprobe_creation_date(target, ffprobe_path)
+    if probed is not None:
+        return probed
+    return _mutagen_encoded_date(target)
+
+
+def _ffprobe_creation_date(path: Path, ffprobe_path: str) -> datetime.date | None:
+    import json
+    import shutil
+    import subprocess
+
+    from waves.providers.apple import child_guard
+
+    ffprobe = str(ffprobe_path or "").strip() or (shutil.which("ffprobe") or "")
+    if not ffprobe:
+        # Nothing to probe with means unknown, not an error.
+        return None
+    try:
+        proc = subprocess.run(  # noqa: S603 (resolved binary, fixed argv)
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format_tags=creation_time,creationdate,encoded_date:"
+                "stream_tags=creation_time,creationdate,encoded_date",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **child_guard.NO_WINDOW,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except ValueError:
+        return None
+    for text in _creation_candidates(payload):
+        parsed = parse_encoded_date(text)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+# The ffprobe tag spellings a creation date can hide under.
+_DATE_TAG_KEYS = ("creation_time", "creationdate", "encoded_date")
+
+
+def _creation_candidates(payload: dict) -> list[str]:
+    """Every creation/encoded date string an ffprobe JSON payload carries."""
+    import contextlib
+
+    candidates: list[str] = []
+    with contextlib.suppress(Exception):
+        tags = (payload.get("format") or {}).get("tags") or {}
+        if isinstance(tags, dict):
+            candidates.extend(str(tags[key]) for key in _DATE_TAG_KEYS if tags.get(key))
+        for stream in payload.get("streams") or []:
+            tags = (stream or {}).get("tags") or {}
+            if isinstance(tags, dict) and any(tags.get(key) for key in _DATE_TAG_KEYS):
+                candidates.extend(str(tags[key]) for key in _DATE_TAG_KEYS if tags.get(key))
+    return candidates
+
+
+def _mutagen_encoded_date(path: Path) -> datetime.date | None:
+    try:
+        from mutagen.mp4 import MP4
+    except Exception:
+        return None
+    try:
+        tags = MP4(str(path)).tags or {}
+    except Exception:
+        return None
+    for key in (
+        "----:com.apple.iTunes:Encoded Date",
+        "----:com.apple.iTunes:encoded_date",
+        "----:com.apple.iTunes:creation_time",
+    ):
+        # Deliberately NOT ©day (and never track-number atoms): Waves writes
+        # ©day itself from the album's release date, so a post-outbreak
+        # release with an unknown encode date would misread as outbreak-era
+        # and lose most of its retry budget. Unknown stays unknown.
+        values = tags.get(key)
+        if not values:
+            continue
+        items = list(values) if isinstance(values, list | tuple) else [values]
+        for item in items:
+            if isinstance(item, bytes):
+                try:
+                    item = item.decode("utf-8", "replace")
+                except Exception:
+                    logger.debug("Could not decode an Encoded date tag value", exc_info=True)
+                    continue
+            parsed = parse_encoded_date(str(item))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def integrity_retries(settings_data, *, outbreak: bool = False) -> int:
+    """Automatic re-downloads after an integrity failure (not total attempts).
+
+    Normal files get the tunable count (default 2); outbreak-era files get at
+    most 1: re-fetching known-bad Apple sources is pure waste. Never negative.
+    """
+    try:
+        configured = int(getattr(settings_data, "apple_integrity_retries", 2))
+    except (TypeError, ValueError):
+        configured = 2
+    configured = max(0, configured)
+    if outbreak:
+        return min(configured, 1)
+    return configured
+
+
+def integrity_retry_delay(settings_data) -> float:
+    """Seconds between integrity retries: brief pacing, tunable in Advanced."""
+    try:
+        delay = float(getattr(settings_data, "apple_integrity_retry_delay_sec", 5.0))
+    except (TypeError, ValueError):
+        return 5.0
+    return max(0.0, delay)

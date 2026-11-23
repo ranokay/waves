@@ -1,0 +1,806 @@
+--- a/lite/lite_main.cpp
++++ b/lite/lite_main.cpp
+@@ -1,0 +2,3 @@
++#include "session_observer.h"
++#include "session_transport.h"
++#include "session_developer.h"
+@@ -57,0 +61,17 @@
++static uint64_t g_session_credential_generation = 1;
++
++// Construct and destroy while holding g_tokens_mutex. Even a completed
++// in-memory credential change invalidates a concurrent observation.
++class SessionCredentialMutation {
++public:
++    SessionCredentialMutation() : dev_(g_tokens.dev_token.substr(0, waves_lite_session::kTokenLimit)),
++        music_(g_tokens.music_token.substr(0, waves_lite_session::kTokenLimit)),
++        storefront_(g_tokens.storefront_id.substr(0, 64)) {}
++    ~SessionCredentialMutation() {
++        if (dev_ != g_tokens.dev_token || music_ != g_tokens.music_token || storefront_ != g_tokens.storefront_id) {
++            if (g_session_credential_generation < waves_lite_session::kCounterLimit) ++g_session_credential_generation;
++        }
++    }
++private:
++    std::string dev_, music_, storefront_;
++};
+@@ -164,0 +185 @@
++    SessionCredentialMutation session_mutation;
+@@ -191,0 +213 @@
++    SessionCredentialMutation session_mutation;
+@@ -216,0 +239,26 @@
++}
++
++static void handle_session_observation(const httplib::Request& request, httplib::Response& response) {
++    using namespace waves_lite_session;
++    if (g_host != "127.0.0.1" || request.remote_addr != "127.0.0.1") {
++        response.status = 403;
++        response.set_content(Observation().json(), "application/json");
++        return;
++    }
++    static Observer observer(os_random, normalize_storefront_id);
++    const Observation observation = observer.observe(g_base_dir, [](CachedCredentials& cached) {
++        std::unique_lock<std::mutex> lock(g_tokens_mutex, std::try_to_lock);
++        if (!lock.owns_lock() || g_refresh_stop.load() || g_session_credential_generation >= kCounterLimit) return false;
++        if (!header_valid(g_tokens.dev_token) || !header_valid(g_tokens.music_token) || !region_valid(g_tokens.storefront_id)) return false;
++        cached.dev_token = g_tokens.dev_token;
++        cached.music_token = g_tokens.music_token;
++        cached.storefront = g_tokens.storefront_id;
++        cached.generation = g_session_credential_generation;
++        return true;
++    }, [](const std::string& developer, const std::string& music) {
++        return request_storefront(developer, music, [] {
++            return read_developer_process(g_base_dir, "/proc/self/exe");
++        });
++    });
++    response.set_header("Cache-Control", "no-store");
++    response.set_content(observation.json(), "application/json");
+@@ -440,0 +489 @@
++    SessionCredentialMutation session_mutation;
+@@ -486,0 +536,28 @@
++    // This exact private entry bypasses argument files, sign-in and serving.
++    if (argc > 1 && strcmp(argv[1], "--waves-session-developer") == 0) {
++        if (argc != 4 || strcmp(argv[2], "--base-dir") != 0 ||
++            !waves_lite_session::developer_output_ready()) _exit(2);
++        struct stat directory;
++        if (lstat(argv[3], &directory) != 0 || !S_ISDIR(directory.st_mode) ||
++            directory.st_uid != getuid() || (directory.st_mode & 0777) != 0700) _exit(2);
++        if (!hide_native_output()) _exit(1);
++        umask(0077);
++        setenv("ANDROID_DATA", "/data", 1);
++        setenv("ANDROID_ROOT", "/system", 1);
++        setenv("TZ", "UTC", 1);
++        for (const char* name : {"http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"}) unsetenv(name);
++        Logger::get().configure(LogLevel::Error, "", 5 * 1024 * 1024);
++        set_base_dir(argv[3]);
++        g_base_dir = argv[3];
++        install_hooks();
++        g_resolved_device_info = resolve_device_info("");
++        set_device_info(g_resolved_device_info.c_str());
++        g_reqCtx = init_ctx();
++        try {
++            std::string token = fetch_dev_token();
++            const bool written = waves_lite_session::write_developer_token(token);
++            private_input::wipe(token);
++            // The OS owns cleanup; native SDK destructors are not qualified.
++            _exit(written ? 0 : 1);
++        } catch (...) { _exit(1); }
++    }
+@@ -614,0 +692 @@
++    SessionCredentialMutation session_mutation;
+@@ -663,0 +742,2 @@
++    svr.Get("/waves/session/v1", handle_session_observation);
++
+@@ -667,0 +748 @@
++    SessionCredentialMutation session_mutation;
+@@ -711,0 +793 @@
++    SessionCredentialMutation session_mutation;
+--- /dev/null
++++ b/lite/session_observer.h
+@@ -0,0 +1,514 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Waves contributors
++#pragma once
++
++#include <atomic>
++#include <cerrno>
++#include <cstdint>
++#include <cstdlib>
++#include <fcntl.h>
++#include <functional>
++#include <limits>
++#include <map>
++#include <mutex>
++#include <set>
++#include <sstream>
++#include <string>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <vector>
++#ifdef __linux__
++#include <sys/inotify.h>
++#endif
++
++namespace waves_lite_session {
++
++const size_t kBodyLimit = 65536;
++const size_t kTokenLimit = 8192;
++const uint64_t kCounterLimit = 9007199254740991ULL;
++
++enum class Error {
++    None, CredentialsUnavailable, CredentialContextChanged, ObserverBusy,
++    UpstreamUnavailable, UpstreamRejected, InvalidUpstreamResponse, ObserverUnavailable
++};
++
++inline const char* error_name(Error error) {
++    switch (error) {
++        case Error::None: return "";
++        case Error::CredentialsUnavailable: return "credentials_unavailable";
++        case Error::CredentialContextChanged: return "credential_context_changed";
++        case Error::ObserverBusy: return "observer_busy";
++        case Error::UpstreamUnavailable: return "upstream_unavailable";
++        case Error::UpstreamRejected: return "upstream_rejected";
++        case Error::InvalidUpstreamResponse: return "invalid_upstream_response";
++        case Error::ObserverUnavailable: return "observer_unavailable";
++    }
++    return "observer_unavailable";
++}
++
++struct Observation {
++    bool authenticated = false;
++    std::string storefront;
++    std::string session_revision;
++    Error error = Error::ObserverUnavailable;
++    std::string json() const {
++        return std::string("{\"protocol\":\"waves-lite-session-v1\",\"authenticated\":") +
++            (authenticated ? "true" : "null") + ",\"storefront\":\"" + storefront +
++            "\",\"account_id\":\"\",\"session_revision\":\"" + session_revision +
++            "\",\"error\":\"" + error_name(error) + "\"}";
++    }
++};
++
++struct CachedCredentials {
++    std::string dev_token, music_token, storefront;
++    uint64_t generation = 0;
++    bool operator==(const CachedCredentials& other) const {
++        return dev_token == other.dev_token && music_token == other.music_token &&
++            storefront == other.storefront && generation == other.generation;
++    }
++};
++
++struct UpstreamResponse {
++    bool transport_ok = true;
++    long status = 0;
++    std::string body;
++};
++
++inline bool region_valid(const std::string& value) {
++    return value.size() == 2 && value[0] >= 'a' && value[0] <= 'z' && value[1] >= 'a' && value[1] <= 'z';
++}
++
++inline bool header_valid(const std::string& value) {
++    if (value.empty() || value.size() > kTokenLimit) return false;
++    for (unsigned char character : value) if (character < 33 || character > 126) return false;
++    return true;
++}
++
++inline bool os_random(unsigned char* output, size_t count) {
++    const int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++    if (fd < 0) return false;
++    size_t offset = 0;
++    while (offset < count) {
++        const ssize_t amount = read(fd, output + offset, count - offset);
++        if (amount < 0 && errno == EINTR) continue;
++        if (amount <= 0) break;
++        offset += static_cast<size_t>(amount);
++    }
++    const bool closed = close(fd) == 0;
++    return offset == count && closed;
++}
++
++namespace detail {
++
++struct JsonValue {
++    enum Kind { Other, String, Object, Array } kind = Other;
++    std::string text;
++    std::map<std::string, JsonValue> fields;
++    std::vector<JsonValue> items;
++};
++
++// Parse the whole bounded document. Duplicate fields and excessive depth are
++// rejected before the response can be classified as authentication evidence.
++class JsonParser {
++public:
++    explicit JsonParser(const std::string& source) : source_(source) {}
++    bool parse(JsonValue& value) {
++        return source_.size() <= kBodyLimit && read_value(value, 0) && whitespace() == source_.size();
++    }
++private:
++    size_t whitespace() {
++        while (offset_ < source_.size() && (source_[offset_] == ' ' || source_[offset_] == '\t' ||
++               source_[offset_] == '\r' || source_[offset_] == '\n')) ++offset_;
++        return offset_;
++    }
++    bool consume(char character) {
++        whitespace();
++        if (offset_ == source_.size() || source_[offset_] != character) return false;
++        ++offset_;
++        return true;
++    }
++    bool read_hex(unsigned int& code) {
++        code = 0;
++        for (int i = 0; i < 4; ++i) {
++            if (offset_ == source_.size()) return false;
++            const char digit = source_[offset_++];
++            code *= 16;
++            if (digit >= '0' && digit <= '9') code += digit - '0';
++            else if (digit >= 'a' && digit <= 'f') code += digit - 'a' + 10;
++            else if (digit >= 'A' && digit <= 'F') code += digit - 'A' + 10;
++            else return false;
++        }
++        return true;
++    }
++    static void append_unicode(std::string& text, unsigned int code) {
++        if (code < 128) text += static_cast<char>(code);
++        else if (code < 2048) {
++            text += static_cast<char>(0xc0 | (code >> 6));
++            text += static_cast<char>(0x80 | (code & 63));
++        } else if (code < 65536) {
++            text += static_cast<char>(0xe0 | (code >> 12));
++            text += static_cast<char>(0x80 | ((code >> 6) & 63));
++            text += static_cast<char>(0x80 | (code & 63));
++        } else {
++            text += static_cast<char>(0xf0 | (code >> 18));
++            text += static_cast<char>(0x80 | ((code >> 12) & 63));
++            text += static_cast<char>(0x80 | ((code >> 6) & 63));
++            text += static_cast<char>(0x80 | (code & 63));
++        }
++    }
++    bool read_string(std::string& text) {
++        if (!consume('"')) return false;
++        while (offset_ < source_.size()) {
++            const unsigned char character = source_[offset_++];
++            if (character == '"') return true;
++            if (character < 32) return false;
++            if (character >= 128) {
++                unsigned int code = 0;
++                size_t continuation = 0;
++                unsigned int minimum = 0;
++                if (character >= 0xc2 && character <= 0xdf) { code = character & 31; continuation = 1; minimum = 128; }
++                else if (character >= 0xe0 && character <= 0xef) { code = character & 15; continuation = 2; minimum = 2048; }
++                else if (character >= 0xf0 && character <= 0xf4) { code = character & 7; continuation = 3; minimum = 65536; }
++                else return false;
++                for (size_t i = 0; i < continuation; ++i) {
++                    if (offset_ == source_.size()) return false;
++                    const unsigned char next = source_[offset_++];
++                    if (next < 0x80 || next > 0xbf) return false;
++                    code = (code << 6) | (next & 63);
++                }
++                if (code < minimum || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return false;
++                append_unicode(text, code);
++                continue;
++            }
++            if (character != '\\') { text += static_cast<char>(character); continue; }
++            if (offset_ == source_.size()) return false;
++            const char escaped = source_[offset_++];
++            if (escaped == '"' || escaped == '\\' || escaped == '/') text += escaped;
++            else if (escaped == 'b') text += '\b';
++            else if (escaped == 'f') text += '\f';
++            else if (escaped == 'n') text += '\n';
++            else if (escaped == 'r') text += '\r';
++            else if (escaped == 't') text += '\t';
++            else if (escaped == 'u') {
++                unsigned int code = 0;
++                if (!read_hex(code)) return false;
++                if (code >= 0xd800 && code <= 0xdbff) {
++                    if (offset_ + 2 > source_.size() || source_[offset_] != '\\' || source_[offset_ + 1] != 'u') return false;
++                    offset_ += 2;
++                    unsigned int low = 0;
++                    if (!read_hex(low) || low < 0xdc00 || low > 0xdfff) return false;
++                    code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
++                } else if (code >= 0xdc00 && code <= 0xdfff) {
++                    return false;
++                }
++                append_unicode(text, code);
++            } else return false;
++        }
++        return false;
++    }
++    bool read_value(JsonValue& value, size_t depth) {
++        if (depth > 16 || ++values_ > 4096 || whitespace() == source_.size()) return false;
++        const char first = source_[offset_];
++        if (first == '"') { value.kind = JsonValue::String; return read_string(value.text); }
++        if (first == '{') {
++            value.kind = JsonValue::Object;
++            ++offset_;
++            if (consume('}')) return true;
++            do {
++                std::string name;
++                JsonValue child;
++                if (!read_string(name) || value.fields.count(name) || !consume(':') || !read_value(child, depth + 1)) return false;
++                value.fields.emplace(name, std::move(child));
++                if (consume('}')) return true;
++            } while (consume(','));
++            return false;
++        }
++        if (first == '[') {
++            value.kind = JsonValue::Array;
++            ++offset_;
++            if (consume(']')) return true;
++            do {
++                JsonValue child;
++                if (!read_value(child, depth + 1)) return false;
++                value.items.push_back(std::move(child));
++                if (consume(']')) return true;
++            } while (consume(','));
++            return false;
++        }
++        const size_t start = offset_;
++        while (offset_ < source_.size() && source_[offset_] != ',' && source_[offset_] != ']' && source_[offset_] != '}' &&
++               source_[offset_] != ' ' && source_[offset_] != '\t' && source_[offset_] != '\r' && source_[offset_] != '\n') ++offset_;
++        const std::string literal = source_.substr(start, offset_ - start);
++        if (literal == "null" || literal == "true" || literal == "false") return true;
++        size_t index = literal[0] == '-' ? 1 : 0;
++        if (index == literal.size()) return false;
++        if (literal[index] == '0') ++index;
++        else {
++            if (literal[index] < '1' || literal[index] > '9') return false;
++            while (index < literal.size() && literal[index] >= '0' && literal[index] <= '9') ++index;
++        }
++        if (index < literal.size() && literal[index] == '.') {
++            const size_t digits = ++index;
++            while (index < literal.size() && literal[index] >= '0' && literal[index] <= '9') ++index;
++            if (index == digits) return false;
++        }
++        if (index < literal.size() && (literal[index] == 'e' || literal[index] == 'E')) {
++            ++index;
++            if (index < literal.size() && (literal[index] == '+' || literal[index] == '-')) ++index;
++            const size_t digits = index;
++            while (index < literal.size() && literal[index] >= '0' && literal[index] <= '9') ++index;
++            if (index == digits) return false;
++        }
++        return index == literal.size();
++    }
++    const std::string& source_;
++    size_t offset_ = 0, values_ = 0;
++};
++
++inline bool storefront_response(const std::string& body, std::string& storefront) {
++    JsonValue root;
++    if (!JsonParser(body).parse(root) || root.kind != JsonValue::Object || root.fields.count("errors")) return false;
++    const std::map<std::string, JsonValue>::const_iterator data = root.fields.find("data");
++    if (data == root.fields.end() || data->second.kind != JsonValue::Array || data->second.items.size() != 1) return false;
++    const JsonValue& item = data->second.items[0];
++    if (item.kind != JsonValue::Object) return false;
++    const std::map<std::string, JsonValue>::const_iterator id = item.fields.find("id"), type = item.fields.find("type");
++    if (id == item.fields.end() || type == item.fields.end() || id->second.kind != JsonValue::String ||
++        type->second.kind != JsonValue::String || type->second.text != "storefronts" || !region_valid(id->second.text)) return false;
++    storefront = id->second.text;
++    return true;
++}
++
++inline std::string version(const struct stat& info) {
++    std::ostringstream value;
++    value << info.st_dev << ':' << info.st_ino << ':' << info.st_mode << ':' << info.st_uid << ':' << info.st_size;
++#ifdef __APPLE__
++    value << ':' << info.st_mtimespec.tv_sec << ':' << info.st_mtimespec.tv_nsec << ':' << info.st_ctimespec.tv_sec << ':' << info.st_ctimespec.tv_nsec;
++#else
++    value << ':' << info.st_mtim.tv_sec << ':' << info.st_mtim.tv_nsec << ':' << info.st_ctim.tv_sec << ':' << info.st_ctim.tv_nsec;
++#endif
++    return value.str();
++}
++
++inline std::string directory_version(const struct stat& info) {
++#ifdef __linux__
++    // inotify records directory metadata and credential-file ABA changes.
++    // Unrelated SDK storage must not change this credential witness.
++    std::ostringstream value;
++    value << info.st_dev << ':' << info.st_ino << ':' << info.st_mode << ':' << info.st_uid;
++    return value.str();
++#else
++    return version(info);
++#endif
++}
++
++const char* const kCredentialFileNames[] = {"DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"};
++
++struct Files {
++    bool valid = false;
++    std::string dev_token, music_token, storefront, versions;
++};
++
++inline Files read_files(const std::string& directory) {
++    Files files;
++    const int dir = open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
++    if (dir < 0) return files;
++    struct stat owner;
++    bool valid = fstat(dir, &owner) == 0 && S_ISDIR(owner.st_mode) && owner.st_uid == geteuid() && (owner.st_mode & 0777) == 0700;
++    if (valid) files.versions = directory_version(owner);
++    std::string* values[] = {&files.dev_token, &files.music_token, &files.storefront};
++    for (size_t i = 0; valid && i < 3; ++i) {
++        const int fd = openat(dir, kCredentialFileNames[i], O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
++        struct stat before, after;
++        valid = fd >= 0 && fstat(fd, &before) == 0 && S_ISREG(before.st_mode) && before.st_uid == geteuid() &&
++            (before.st_mode & 0777) == 0600 && before.st_nlink == 1 && before.st_size > 0 && before.st_size <= static_cast<off_t>(kTokenLimit);
++        char data[1024];
++        while (valid) {
++            const ssize_t amount = read(fd, data, sizeof(data));
++            if (amount < 0 && errno == EINTR) continue;
++            if (amount < 0) { valid = false; break; }
++            if (amount == 0) break;
++            values[i]->append(data, static_cast<size_t>(amount));
++            if (values[i]->size() > kTokenLimit) valid = false;
++        }
++        if (valid) valid = fstat(fd, &after) == 0 && version(before) == version(after);
++        if (valid) files.versions += "/" + version(after);
++        if (fd >= 0 && close(fd) != 0) valid = false;
++        while (!values[i]->empty() && (values[i]->back() == '\r' || values[i]->back() == '\n' || values[i]->back() == ' ')) values[i]->pop_back();
++    }
++    struct stat after;
++    if (valid) valid = fstat(dir, &after) == 0 && directory_version(owner) == directory_version(after);
++    if (close(dir) != 0) valid = false;
++    files.valid = valid;
++    return files;
++}
++
++// Linux filesystem events catch replacement followed by restoration of the
++// same inode/bytes during an upstream request. Overflow is a failed observation.
++class DirectoryEvents {
++public:
++    ~DirectoryEvents() {
++#ifdef __linux__
++        if (fd_ >= 0) close(fd_);
++#endif
++    }
++    bool start(const std::string& directory) {
++#ifdef __linux__
++        if (directory == directory_ && fd_ >= 0) return true;
++        if (fd_ >= 0) close(fd_);
++        fd_ = inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
++        if (fd_ < 0) return false;
++        const uint32_t events = IN_CLOSE_WRITE | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF;
++        if (inotify_add_watch(fd_, directory.c_str(), events | IN_ONLYDIR | IN_DONT_FOLLOW) < 0) {
++            close(fd_);
++            fd_ = -1;
++            directory_.clear();
++            return false;
++        }
++        directory_ = directory;
++#else
++        (void)directory;
++#endif
++        return true;
++    }
++    bool changed(bool& unavailable) {
++#ifdef __linux__
++        alignas(struct inotify_event) char buffer[8192];
++        bool changed = false;
++        for (size_t attempts = 0; attempts < 32; ++attempts) {
++            const ssize_t amount = read(fd_, buffer, sizeof(buffer));
++            if (amount < 0 && errno == EINTR) continue;
++            if (amount < 0 && errno == EAGAIN) {
++                if (unavailable) {
++                    close(fd_);
++                    fd_ = -1;
++                    directory_.clear();
++                }
++                return changed;
++            }
++            if (amount <= 0) {
++                unavailable = true;
++                close(fd_);
++                fd_ = -1;
++                directory_.clear();
++                return true;
++            }
++            for (size_t offset = 0; offset < static_cast<size_t>(amount);) {
++                if (static_cast<size_t>(amount) - offset < sizeof(struct inotify_event)) { unavailable = true; return true; }
++                const struct inotify_event* event = reinterpret_cast<const struct inotify_event*>(buffer + offset);
++                if (event->len > static_cast<size_t>(amount) - offset - sizeof(struct inotify_event)) { unavailable = true; return true; }
++                const bool lost = event->mask & (IN_Q_OVERFLOW | IN_IGNORED | IN_UNMOUNT | IN_DELETE_SELF | IN_MOVE_SELF);
++                if (lost) unavailable = true;
++                if (!event->len || lost) changed = true;
++                else {
++                    size_t length = 0;
++                    while (length < event->len && event->name[length]) ++length;
++                    if (length == event->len) { unavailable = true; return true; }
++                    const std::string name(event->name, length);
++                    for (const char* credential : kCredentialFileNames) if (name == credential) changed = true;
++                }
++                offset += sizeof(struct inotify_event) + event->len;
++            }
++        }
++        unavailable = true;
++        close(fd_);
++        fd_ = -1;
++        directory_.clear();
++        return true;
++#else
++        (void)unavailable;
++        return false;
++#endif
++    }
++private:
++#ifdef __linux__
++    int fd_ = -1;
++    std::string directory_;
++#endif
++};
++
++} // namespace detail
++
++class Observer {
++public:
++    typedef std::function<bool(unsigned char*, size_t)> RandomSource;
++    typedef std::function<std::string(const std::string&)> NormalizeStorefront;
++    typedef std::function<bool(CachedCredentials&)> CredentialsSource;
++    typedef std::function<UpstreamResponse(const std::string&, const std::string&)> Transport;
++    explicit Observer(RandomSource random = os_random, NormalizeStorefront normalize = NormalizeStorefront()) : normalize_(normalize) {
++        unsigned char bytes[16];
++        if (!random(bytes, sizeof(bytes))) return;
++        const char* hex = "0123456789abcdef";
++        for (unsigned char byte : bytes) { nonce_ += hex[byte >> 4]; nonce_ += hex[byte & 15]; }
++    }
++    Observation observe(const std::string& directory, const CredentialsSource& cached_source, const Transport& transport) {
++        std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
++        if (nonce_.empty()) return result(Error::ObserverUnavailable);
++        if (!lock.owns_lock()) return result(Error::ObserverBusy);
++        try {
++            if (!events_.start(directory)) return changed(Error::ObserverUnavailable);
++            bool unavailable = false;
++            if (events_.changed(unavailable)) return changed(unavailable ? Error::ObserverUnavailable : Error::CredentialContextChanged);
++            const detail::Files before = detail::read_files(directory);
++            if (!before.valid) { previous_versions_.clear(); return changed(Error::CredentialsUnavailable); }
++            if (!previous_versions_.empty() && previous_versions_ != before.versions) {
++                previous_versions_ = before.versions;
++                return changed(Error::CredentialContextChanged);
++            }
++            previous_versions_ = before.versions;
++            CachedCredentials cached;
++            if (!cached_source(cached)) return result(Error::ObserverBusy);
++            const std::string region = normalize_ ? normalize_(before.storefront) : before.storefront;
++            if (cached.generation == 0 || !header_valid(before.dev_token) || !header_valid(before.music_token) || !region_valid(region) ||
++                before.dev_token != cached.dev_token || before.music_token != cached.music_token || region != cached.storefront) {
++                return changed(Error::CredentialsUnavailable);
++            }
++            if (cached_generation_ != 0 && cached_generation_ != cached.generation) {
++                cached_generation_ = cached.generation;
++                return changed(Error::CredentialContextChanged);
++            }
++            cached_generation_ = cached.generation;
++            if (events_.changed(unavailable)) return changed(unavailable ? Error::ObserverUnavailable : Error::CredentialContextChanged);
++            if (counter_.load() >= kCounterLimit) return result(Error::ObserverUnavailable);
++            const UpstreamResponse response = transport(cached.dev_token, cached.music_token);
++            CachedCredentials after_cached;
++            const detail::Files after = detail::read_files(directory);
++            if (events_.changed(unavailable) || !after.valid || before.versions != after.versions ||
++                before.dev_token != after.dev_token || before.music_token != after.music_token || before.storefront != after.storefront ||
++                !cached_source(after_cached) || !(cached == after_cached)) {
++                previous_versions_ = after.valid ? after.versions : "";
++                return changed(unavailable ? Error::ObserverUnavailable : Error::CredentialContextChanged);
++            }
++            if (!response.transport_ok) return result(Error::UpstreamUnavailable);
++            if (response.status != 200) return result(Error::UpstreamRejected);
++            std::string storefront;
++            if (!detail::storefront_response(response.body, storefront)) return result(Error::InvalidUpstreamResponse);
++            if (storefront != region) return changed(Error::CredentialContextChanged);
++            Observation observed = result(Error::None);
++            observed.authenticated = true;
++            observed.storefront = storefront;
++            return observed;
++        } catch (...) {
++            return changed(Error::ObserverUnavailable);
++        }
++    }
++private:
++    Observation result(Error error) const {
++        Observation observation;
++        observation.error = error;
++        if (!nonce_.empty()) observation.session_revision = nonce_ + ":" + std::to_string(counter_.load());
++        return observation;
++    }
++    Observation changed(Error error) {
++        if (counter_.load() < kCounterLimit) ++counter_;
++        return result(error);
++    }
++    std::mutex mutex_;
++    std::atomic<uint64_t> counter_{1};
++    uint64_t cached_generation_ = 0;
++    std::string nonce_, previous_versions_;
++    NormalizeStorefront normalize_;
++    detail::DirectoryEvents events_;
++};
++
++} // namespace waves_lite_session
+--- /dev/null
++++ b/lite/session_transport.h
+@@ -0,0 +1,69 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Waves contributors
++#pragma once
++
++#include "lite.h"
++#include "session_observer.h"
++#include <limits>
++
++namespace waves_lite_session {
++
++struct BoundedBody {
++    std::string bytes;
++    bool failed = false;
++};
++
++inline size_t receive_body(char* data, size_t size, size_t count, void* context) {
++    BoundedBody& body = *static_cast<BoundedBody*>(context);
++    if (!size || !count) return 0;
++    if ((size && count > std::numeric_limits<size_t>::max() / size) ||
++        size * count > kBodyLimit - body.bytes.size()) {
++        body.failed = true;
++        return 0;
++    }
++    try {
++        body.bytes.append(data, size * count);
++        return size * count;
++    } catch (...) {
++        body.failed = true;
++        return 0;
++    }
++}
++
++inline UpstreamResponse request_storefront(const std::string& persisted_developer, const std::string& music,
++        const std::function<std::string()>& developer_source) {
++    UpstreamResponse response;
++    response.transport_ok = false;
++    if (!header_valid(persisted_developer) || !header_valid(music)) return response;
++    // Native developer tokens expire independently of the cached account token.
++    // Only the live request below establishes authentication. The persisted
++    // context stays intact while the isolated source supplies a fresh token.
++    const std::string developer = developer_source();
++    if (!header_valid(developer)) return response;
++    CurlEasy curl;
++    if (!curl.ok) return response;
++    CurlSlist headers;
++    if (!headers.append(("Authorization: Bearer " + developer).c_str()) ||
++        !headers.append(("Music-User-Token: " + music).c_str()) ||
++        !headers.append("Accept: application/json")) return response;
++    BoundedBody body;
++    // These two options are absent from the checked minimal libcurl declarations.
++    const int proxy = 10004, no_proxy = 10177;
++    if (!curl.setOptStr(CURLOPT_URL, "https://api.music.apple.com/v1/me/storefront") ||
++        !curl.setOptStr(proxy, "") || !curl.setOptStr(no_proxy, "*") ||
++        !curl.setOptInt(CURLOPT_SSL_VERIFYPEER, 1L) || !curl.setOptInt(CURLOPT_SSL_VERIFYHOST, 2L) ||
++        !curl.setOptInt(CURLOPT_FOLLOWLOCATION, 0L) || !curl.setOptInt(CURLOPT_MAXREDIRS, 0L) ||
++        !curl.setOptInt(CURLOPT_PROTOCOLS, CURLPROTO_HTTPS) ||
++        !curl.setOptInt(CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS) ||
++        !curl.setOptInt(CURLOPT_TIMEOUT_MS, 5000L) || !curl.setOptInt(CURLOPT_CONNECTTIMEOUT_MS, 2000L) ||
++        !curl.setOptStr(CURLOPT_ACCEPT_ENCODING, "identity") ||
++        !curl.setOptPtr(CURLOPT_HTTPHEADER, headers.list) ||
++        !curl.setOptPtr(CURLOPT_WRITEFUNCTION, reinterpret_cast<void*>(&receive_body)) ||
++        !curl.setOptPtr(CURLOPT_WRITEDATA, &body) || !curl.perform() || body.failed) return response;
++    response.status = curl.getResponseCode();
++    response.transport_ok = curl.ok && response.status > 0;
++    response.body = std::move(body.bytes);
++    return response;
++}
++
++} // namespace waves_lite_session
+--- /dev/null
++++ b/lite/session_developer.h
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Waves contributors
++#pragma once
++
++#include "session_observer.h"
++#include <chrono>
++#include <poll.h>
++#include <signal.h>
++#include <sys/resource.h>
++#include <sys/wait.h>
++
++extern char** environ;
++
++namespace waves_lite_session {
++
++// The SDK's opaque request allocations have no checked release operation.
++// Acquire in a fresh executable so process exit reclaims every SDK object.
++class DeveloperChild {
++public:
++    DeveloperChild(pid_t process, int channel) : process_(process), channel_(channel) {}
++    ~DeveloperChild() {
++        close(channel_);
++        if (!reaped_) {
++            kill(process_, SIGKILL);
++            while (waitpid(process_, &status_, 0) < 0 && errno == EINTR) {}
++        }
++    }
++    std::string receive() {
++        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
++        std::string token;
++        bool eof = false;
++        while (std::chrono::steady_clock::now() < deadline) {
++            if (!reaped_) {
++                const pid_t result = waitpid(process_, &status_, WNOHANG);
++                if (result == process_) reaped_ = true;
++                else if (result < 0 && errno != EINTR) {
++                    if (errno == ECHILD) reaped_ = true;
++                    return "";
++                }
++            }
++            if (reaped_ && (!WIFEXITED(status_) || WEXITSTATUS(status_) != 0)) return "";
++            if (eof && reaped_) return header_valid(token) ? token : "";
++            if (eof) { poll(nullptr, 0, 20); continue; }
++            struct pollfd descriptor = {channel_, POLLIN, 0};
++            const int ready = poll(&descriptor, 1, 20);
++            if (ready < 0) { if (errno == EINTR) continue; return ""; }
++            if (descriptor.revents & (POLLERR | POLLNVAL)) return "";
++            if (!(descriptor.revents & (POLLIN | POLLHUP))) continue;
++            char buffer[1024];
++            const ssize_t amount = read(channel_, buffer, sizeof(buffer));
++            if (amount < 0) { if (errno == EINTR) continue; return ""; }
++            if (!amount) { eof = true; continue; }
++            if (static_cast<size_t>(amount) > kTokenLimit - token.size()) return "";
++            token.append(buffer, static_cast<size_t>(amount));
++        }
++        return "";
++    }
++private:
++    pid_t process_;
++    int channel_, status_ = 0;
++    bool reaped_ = false;
++};
++
++inline std::string read_developer_process(const std::string& directory, const char* executable) {
++    int channel[2];
++    if (pipe(channel) != 0) return "";
++    // Keep all handoff descriptors above the fixed private output descriptor.
++    for (int i = 0; i < 2; ++i) {
++        const int owned = fcntl(channel[i], F_DUPFD_CLOEXEC, 4);
++        close(channel[i]);
++        channel[i] = owned;
++        if (owned < 0) { close(channel[1 - i]); return ""; }
++    }
++    const int opened_sink = open("/dev/null", O_RDWR | O_CLOEXEC);
++    const int sink = opened_sink < 0 ? -1 : fcntl(opened_sink, F_DUPFD_CLOEXEC, 4);
++    if (opened_sink >= 0) close(opened_sink);
++    struct rlimit files;
++    if (sink < 0 || getrlimit(RLIMIT_NOFILE, &files) != 0 || files.rlim_cur > 1048576) {
++        if (sink >= 0) close(sink);
++        close(channel[0]); close(channel[1]);
++        return "";
++    }
++    char* const arguments[] = {const_cast<char*>(executable), const_cast<char*>("--waves-session-developer"),
++        const_cast<char*>("--base-dir"), const_cast<char*>(directory.c_str()), nullptr};
++    const pid_t process = fork();
++    if (process == 0) {
++        // After a multithreaded fork, perform only async-signal-safe operations
++        // until exec resets mutexes and all native SDK state.
++        if (dup2(sink, 0) < 0 || dup2(sink, 1) < 0 || dup2(sink, 2) < 0 ||
++            dup2(channel[1], 3) < 0) _exit(127);
++        for (rlim_t fd = 4; fd < files.rlim_cur; ++fd) close(static_cast<int>(fd));
++        execve(executable, arguments, ::environ);
++        _exit(127);
++    }
++    close(sink); close(channel[1]);
++    if (process < 0) { close(channel[0]); return ""; }
++    DeveloperChild child(process, channel[0]);
++    return child.receive();
++}
++
++inline bool developer_output_ready() {
++    struct stat info;
++    return fstat(3, &info) == 0 && S_ISFIFO(info.st_mode) && info.st_uid == getuid() &&
++        fcntl(3, F_SETFD, FD_CLOEXEC) == 0;
++}
++
++inline bool write_developer_token(const std::string& token) {
++    if (!header_valid(token)) return false;
++    size_t offset = 0;
++    while (offset < token.size()) {
++        const ssize_t amount = write(3, token.data() + offset, token.size() - offset);
++        if (amount < 0 && errno == EINTR) continue;
++        if (amount <= 0) return false;
++        offset += static_cast<size_t>(amount);
++    }
++    return true;
++}
++
++} // namespace waves_lite_session

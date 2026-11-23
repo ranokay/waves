@@ -1,0 +1,106 @@
+"""Provider stand-ins shared by the provider and bridge seam tests.
+
+``BareProvider`` implements the whole fused interface with no bodies: the
+seam tests instantiate it to read the neutral defaults (chooser metadata,
+capabilities, session verbs) with no real provider behind them.
+
+``StubProvider`` on top of it carries the live facts a provider-surface test
+drives (identity, capabilities, a status kind and a session flag), and
+``stub_bridge`` is the minimal bridge the module-level surface helpers read,
+so a descriptor-driven test names only what it asserts on.
+"""
+
+from __future__ import annotations
+
+from support.bridge_stub import BridgeStub
+
+from waves.desktop.providers.presentation import apple_status
+from waves.providers.base import Provider, ProviderDescriptor, StatusKind
+
+
+class BareProvider(Provider):
+    """A provider implementing the whole fused interface, with no bodies."""
+
+    id = "x"
+    name = "X"
+    capabilities = frozenset()
+
+    def login_begin(self): ...
+    def login_complete(self, payload): ...
+    def logout(self): ...
+
+    @property
+    def is_logged_in(self): ...
+
+    def apply_quality(self, tier, audio_type): ...
+    def search(self, needle): ...
+    def open_url(self, url): ...
+    def get_object(self, kind, raw_id): ...
+    def collection_items(self, obj, include_videos=True): ...
+    def user_collections(self): ...
+    def favorites_page(self, kind, offset, limit, order=None): ...
+    def favorite_ids(self, kind): ...
+    def advertised_tier(self, obj): ...
+    def advertised_deliveries(self, obj): ...
+    def advertised_ceiling(self, obj): ...
+    def resolve_stream(self, track, tier, audio_type): ...
+    def fetch_lyrics(self, track): ...
+    def cover_url(self, obj, dimension): ...
+    def track_facts(self, track): ...
+    def classify_refusal(self, exc): ...
+    def login_resume(self): ...
+    def account_id(self): ...
+    def credential_facts(self): ...
+    def reset_session(self): ...
+    def folder_tree(self, root_folders=None): ...
+    def search_tracks(self, needle, limit=10): ...
+    def browse_page(self, title, api_path): ...
+    def browse_home(self): ...
+    def browse_window(self, title, data_path, mod_type, offset, limit=50): ...
+
+
+class StubProvider(BareProvider):
+    """A provider whose identity, capabilities and session live on the instance.
+
+    The descriptor is composed from those instance facts (the neutral
+    classmethod reads class attributes, which a stand-in does not carry), so
+    a test drives the real descriptor contract without a real provider.
+    """
+
+    def __init__(self, provider_id, name, *, capabilities=frozenset(), status_kind=StatusKind.SESSION, logged_in=False):
+        self.id = provider_id
+        self.name = name
+        self.capabilities = frozenset(capabilities)
+        self._status_kind = status_kind
+        self._logged_in = logged_in
+
+    @property
+    def is_logged_in(self):
+        return self._logged_in
+
+    def descriptor(self):
+        return ProviderDescriptor(id=self.id, name=self.name, status_kind=self._status_kind)
+
+
+def stub_bridge(providers, *, logged_in=False, tracked=frozenset(), probes=None) -> BridgeStub:
+    """The minimal bridge the module-level provider-surface helpers read.
+
+    Only the attributes those helpers touch: the provider registry, the
+    bridge's own session flag (what a tracked provider's light reads), the
+    tracked-session set and the setup-status probes.
+    """
+    return BridgeStub(
+        providers=dict(providers),
+        _logged_in=logged_in,
+        _tracked_sessions=tracked,
+        _provider_status_probes=dict(probes or {}),
+        _provider_status_presenters={
+            "apple": lambda flags: apple_status(
+                bool(flags.get("enabled", False)),
+                runtime_ready=bool(flags.get("runtime_ready", False)),
+                signed_in=bool(flags.get("signed_in", False)),
+                needs_attention=bool(flags.get("needs_attention", False)),
+                cookies_ready=bool(flags.get("cookies_ready", False)),
+            )
+        },
+    )

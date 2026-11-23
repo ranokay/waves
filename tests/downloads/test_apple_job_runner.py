@@ -1,0 +1,3942 @@
+"""Apple job runner: queue entry, gates, delivery, events, settlement."""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import shutil
+import subprocess
+from pathlib import Path
+from threading import Event, Lock, Thread
+from types import MethodType, SimpleNamespace
+
+import pytest
+from support.bridge_stub import BridgeStub
+
+from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
+from waves.desktop.queue.runtime import JobRuntime
+from waves.errors import DownloadIncomplete
+from waves.events import ApplicationEvent, EventAction, EventCode, FailureScope, Lifecycle
+from waves.providers import AppleCollectionIncomplete
+from waves.providers.apple import runner
+from waves.providers.apple.provider import AppleProvider
+from waves.providers.base import AudioType
+
+
+def _ffmpeg() -> str:
+    path = shutil.which("ffmpeg")
+    assert path is not None  # guarded by the ffmpeg marker
+    return path
+
+
+def _song_resource(song_id="song-1", atmos=True):
+    traits = ["lossless"]
+    if atmos:
+        traits.append("dolby-atmos")
+    return {
+        "id": song_id,
+        "type": "songs",
+        "attributes": {
+            "name": "Xtal",
+            "artistName": "Aphex Twin",
+            "albumName": "Selected Ambient Works 85-92",
+            "url": "https://music.apple.com/us/album/x/album-1?i=song-1",
+            "artwork": {"url": "https://img/song/{w}x{h}bb.jpg"},
+            "releaseDate": "1992-02-12",
+            "durationInMillis": 293000,
+            "trackNumber": 1,
+            "discNumber": 1,
+            "audioTraits": traits,
+            "isrc": "GBAAA9200001",
+        },
+        "relationships": {"artists": {"data": [{"id": "artist-1"}]}},
+    }
+
+
+def _album_resource():
+    return {
+        "id": "album-1",
+        "type": "albums",
+        "attributes": {
+            "name": "Selected Ambient Works 85-92",
+            "artistName": "Aphex Twin",
+            "artwork": {"url": "https://img/album/{w}x{h}bb.jpg"},
+            "releaseDate": "1992-02-12",
+            "trackCount": 13,
+            "durationInMillis": 4455000,
+            "audioTraits": ["lossless"],
+        },
+        "relationships": {"tracks": {"data": [_song_resource()]}},
+    }
+
+
+def _track_row():
+    return {
+        "id": "apple:song-1",
+        "title": "Xtal",
+        "artist": "Aphex Twin",
+        "artist_id": "apple:artist-1",
+        "artists": [{"id": "apple:artist-1", "name": "Aphex Twin", "roles": []}],
+        "album": "Selected Ambient Works 85-92",
+        "album_id": "apple:album-1",
+        "num": 1,
+        "vol": 1,
+        "art": "",
+        "year": "1992",
+        "date": "1992-02-12",
+        "duration": "4:53",
+        "duration_sec": 293,
+        "quality": "HI-RES",
+        "popularity": -1,
+        "explicit": False,
+        "added": "",
+    }
+
+
+def _album_row():
+    return {
+        "id": "apple:album-1",
+        "title": "Selected Ambient Works 85-92",
+        "artist": "Aphex Twin",
+        "artist_id": "apple:artist-1",
+        "artists": [{"id": "apple:artist-1", "name": "Aphex Twin", "roles": []}],
+        "art": "",
+        "year": "1992",
+        "date": "1992-02-12",
+        "tracks": 1,
+        "duration_sec": 293,
+        "quality": "LOSSLESS",
+        "popularity": -1,
+        "explicit": False,
+        "added": "",
+    }
+
+
+class _Signal:
+    def __init__(self):
+        self.emits: list = []
+
+    def emit(self, *args):
+        self.emits.append(args[0] if len(args) == 1 else args)
+
+
+class _Relay:
+    """The _ProgressSignals shape the runner drives (captured, not queued)."""
+
+    def __init__(self):
+        self.events: list = []
+        self.pcts: list = []
+
+    class _E:
+        def __init__(self, outer, name):
+            self._outer = outer
+            self._name = name
+
+        def emit(self, value):
+            if self._name == "track_event":
+                self._outer.events.append(dict(value))
+            else:
+                self._outer.pcts.append(float(value))
+
+    def __getattr__(self, name):
+        if name in ("track_event", "list_item", "item"):
+            return _Relay._E(self, name)
+        raise AttributeError(name)
+
+
+_LINE = "Downloading Xtal…"
+
+
+class _Row(dict):
+    """Job 1's running queue row behind its status hooks, with the bridge's
+    rules: a cancelled row stands (the write answers False), and a resume
+    moves only a held row. A write for another qid misses it. It also
+    records the status line, which the job's waits replace and restore."""
+
+    qid = 1
+
+    def __init__(self):
+        super().__init__(status="running", reason="")
+        self.held: list[str] = []
+        self.lines: list[str] = []
+
+    def seen(self) -> dict:
+        """The row and the status line as the user reads them right now."""
+        return {**self, "line": self.lines[-1] if self.lines else ""}
+
+    def queue_status(self, qid, state, detail=""):
+        if qid != self.qid:
+            return False
+        if self["status"] == "cancelled":
+            return state == "cancelled"
+        self.update(status=state, reason=detail)
+        if state == "queued":
+            self.held.append(detail)
+        return True
+
+    def resume_held_row(self, qid):
+        if qid == self.qid and self["status"] == "queued":
+            self.update(status="running", reason="")
+
+    def bind(self, hooks) -> None:
+        hooks.queue_status = self.queue_status
+        hooks.resume_held_row = self.resume_held_row
+        hooks.status = self.lines.append
+
+
+class _FakeProvider:
+    """The Apple seam, with a scripted fetch (copies a fixture file)."""
+
+    def __init__(self, fixture: Path | None = None):
+        self.fixture = fixture
+        self.fetched: list = []
+        self.tiers: list = []
+        self.discarded: list = []
+
+    def row_for(self, kind, item):
+        if kind == "track":
+            return _track_row()
+        if kind == "album":
+            return _album_row()
+        raise KeyError(kind)
+
+    def collection_items(self, obj, include_videos=True):
+        return [_track_row()]
+
+    def collection_has_tracks(self, obj):
+        return True
+
+    def cached(self, kind, raw_id):
+        return None
+
+    def get_object(self, kind, raw_id):
+        if kind == "track":
+            return _song_resource()
+        return _album_resource()
+
+    def has_atmos(self, item):
+        return True
+
+    def fetch_lyrics(self, track):
+        return "[00:01.00]timed", "plain"
+
+    def track_facts(self, raw):
+        return {
+            "item_id": "apple:song-1",
+            "artist_ids": ["apple:artist-1"],
+            "album_artist_ids": ["apple:artist-1"],
+            "artists": [("apple:artist-1", "Aphex Twin")],
+            "album_artists": ["Aphex Twin"],
+            "copyright": "",
+            "isrc": "GBAAA9200001",
+            "explicit": False,
+            "share_url": "https://music.apple.com/x",
+            "volume_num": 1,
+            "track_num": 1,
+            "release_date": "1992-02-12",
+            "release_type": "",
+            "album": {
+                "name": "Selected Ambient Works 85-92",
+                "num_tracks": 1,
+                "num_volumes": None,
+                "upc": "",
+                "type": "",
+            },
+        }
+
+    def cover_url(self, obj, dimension):
+        return ""
+
+    def advertised_ceiling(self, obj):
+        return quality_rank(QualityTier.HIGH)
+
+    def classify_refusal(self, exc):
+        from waves.providers.base import Refusal, RefusalKind
+
+        return Refusal(RefusalKind.FAILURE, str(exc))
+
+    def resolve_stream(self, raw, tier, audio_type):
+        staged = Path(str(self.fixture))
+        assert staged.is_file()
+        self.fetched.append(audio_type)
+        self.tiers.append(tier)
+        delivered_tier = str(getattr(tier, "value", tier) or QualityTier.HIGH.value)
+        return SimpleNamespace(
+            local_file=str(staged),
+            delivered={"tier": delivered_tier, "audio_type": str(audio_type)},
+            codecs="mp4a.40.2",
+        )
+
+    def discard_delivery(self, local_file):
+        self.discarded.append(local_file)
+
+
+def _settings(base: Path, **overrides):
+    data = SimpleNamespace(
+        download_base_path=str(base),
+        skip_existing=True,
+        lyrics_embed=False,
+        lyrics_file=False,
+        lyrics_prefer_lrclib=True,
+        lyrics_file_synced_only=False,
+        metadata_cover_embed=False,
+        metadata_cover_dimension="320",
+        metadata_cover_file_dimension="follow",
+        cover_album_file=False,
+        cover_single_track_file=False,
+        mark_explicit=False,
+        metadata_target_upc="UPC",
+        apple_quality_audio="HIGH",
+        default_audio_type="stereo",
+        apple_cookies_path="",
+        path_binary_ffmpeg="",
+        format_track="{artist_name}/{track_title}",
+        format_album="{artist_name}/{album_title}/{track_title}",
+        format_playlist="Playlists/{playlist_name}/{track_title}",
+        album_track_num_pad_min=1,
+        filename_delimiter_artist=", ",
+        filename_delimiter_album_artist=", ",
+        filename_illegal_replacement="",
+        filename_illegal_map=None,
+    )
+    for key, value in overrides.items():
+        setattr(data, key, value)
+    return SimpleNamespace(data=data)
+
+
+def _stub(base: Path, provider, **overrides):
+    stub = BridgeStub(
+        settings=_settings(base),
+        providers={CTX_APPLE: provider},
+        _ownership=SimpleNamespace(ownership_of=lambda tid: None),
+        _redownload_overrides=set(),
+        _queue_index={1: {"askQuality": "HIGH", "quality": "HIGH"}},
+        _settings_save_lock=Lock(),
+        downloadState=_Signal(),
+        downloadProgress=_Signal(),
+    )
+    stub._queue_item = lambda qid: stub._queue_index.get(qid)
+    stub._job_quality = lambda qid: WavesBridge._job_quality(stub, qid)
+    stub._jobs = JobRuntime()
+    for key, value in overrides.items():
+        setattr(stub, key, value)
+    return stub
+
+
+def _bind(stub):
+    for name in (
+        "_apple_audio_type",
+        "_apple_wants_atmos",
+        "_apple_target_rank",
+        "_apple_options",
+        "_apple_emit_progress",
+        "_apple_gate_track",
+        "_apple_track_relative",
+        "_apple_relative_path",
+        "_apple_deliver_track",
+        "_apple_guess_ext",
+        "_apple_wants_flac",
+        "_apple_flac_scope_all",
+        "_apple_flac_mode",
+        "_apple_flac_ffmpeg",
+        "_apple_extract_flac",
+        "_apple_verify_staged",
+        "_apple_probe",
+        "_apple_place_file",
+        "_apple_lyrics",
+        "_apple_lyrics_full",
+        "_apple_wants_cover",
+        "_apple_cover_bytes",
+        "_apple_write_sidecars",
+        "_apple_cookies_ready",
+        "_apple_provider_enabled",
+        "_apple_account_ready",
+        "_apple_wrapper_signed_in",
+        "_apple_job_hooks",
+    ):
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
+    # Per-provider option + template-flag readers used by the bound bodies.
+    for name in ("_psetting", "_tag_write_flags"):
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
+    return stub
+
+
+def _tone(path: Path, codec: str = "aac"):
+    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
+        [
+            _ffmpeg(),
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:a",
+            codec,
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _write_item_id(path: Path, item_id: str) -> None:
+    """Stamp an MP4 fixture with the atom the download gates read."""
+    import mutagen.mp4
+
+    handle = mutagen.mp4.MP4(str(path))
+    if handle.tags is None:
+        handle.add_tags()
+    handle["----:com.apple.iTunes:WAVES_ITEM_ID"] = [item_id.encode("utf-8")]
+    handle.save()
+
+
+@pytest.mark.ffmpeg
+def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert landed.is_file()
+    statuses = [ev["status"] for ev in relay.events if ev["id"] == "apple:song-1"]
+    assert statuses[0] == "running" and statuses[-1] == "done"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["quality"]["tier"] == QualityTier.HIGH.value
+    assert done["path"] == str(landed)
+    import mutagen.mp4
+
+    tags = mutagen.mp4.MP4(str(landed)).tags
+    assert bytes(tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
+    assert not any("WAVES_TIDAL" in key for key in tags)
+    assert relay.pcts[-1] == 100.0
+    assert provider.discarded == [str(staged)]
+
+
+@pytest.mark.ffmpeg
+def test_landing_with_the_url_preference_off_writes_no_catalog_url(tmp_path, monkeypatch):
+    """Disabling metadata_write_url keeps the catalog URL out of landed
+    Apple files, while the rest of the tag still lands."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub.settings = _settings(base, metadata_write_url=False)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert landed.is_file()
+    import mutagen.mp4
+
+    tags = mutagen.mp4.MP4(str(landed)).tags
+    assert tags["\xa9nam"] == ["Xtal"], "the tag itself landed; only the URL is withheld"
+    assert all(not url for url in tags.get("\xa9url", []))
+
+
+@pytest.mark.ffmpeg
+def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkeypatch):
+    """The row's pinned ask reaches resolve_stream even when Settings disagree."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+
+    def _run(tag, settings_word, queued_word):
+        provider = _FakeProvider(fixture=staged)
+        stub = _bind(_stub(tmp_path / tag, provider))
+        stub.settings = _settings(tmp_path / tag, apple_quality_audio=settings_word)
+        stub._queue_index = {1: {"askQuality": queued_word, "quality": queued_word}}
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        assert summary == ""
+        return provider
+
+    pinned_high = _run("a", "HI_RES_LOSSLESS", "HIGH")
+    assert pinned_high.tiers == [QualityTier.HIGH]
+    pinned_hires = _run("b", "HIGH", "HI_RES_LOSSLESS")
+    assert pinned_hires.tiers == [QualityTier.HI_RES_LOSSLESS]
+    agreed = _run("c", "HIGH", "HIGH")
+    assert agreed.tiers == [QualityTier.HIGH]
+
+
+@pytest.mark.ffmpeg
+def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
+    """Sidecar-only lyrics land as files; the audio embeds only when on."""
+    import mutagen.mp4
+
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+
+    def _run(tag, *, embed, sidecar):
+        provider = _FakeProvider(fixture=staged)
+        stub = _bind(_stub(tmp_path / tag, provider))
+        stub.settings = _settings(
+            tmp_path / tag,
+            apple_lyrics_embed=embed,
+            apple_lyrics_file=sidecar,
+            apple_lyrics_word_timed=False,
+            apple_lyrics_ttml_file=False,
+            apple_lyrics_prefer_lrclib=False,
+        )
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        assert summary == ""
+        return tmp_path / tag / "Aphex Twin" / "Xtal.m4a"
+
+    filed_only = _run("a", embed=False, sidecar=True)
+    tags = mutagen.mp4.MP4(str(filed_only)).tags
+    assert not tags or "\xa9lyr" not in tags
+    assert (filed_only.parent / "Xtal.lrc").read_text() == "[00:01.00]timed"
+
+    embedded_only = _run("b", embed=True, sidecar=False)
+    tags = mutagen.mp4.MP4(str(embedded_only)).tags
+    assert tags["\xa9lyr"][0] == "[00:01.00]timed"
+    assert not (embedded_only.parent / "Xtal.lrc").exists()
+
+
+@pytest.mark.ffmpeg
+def test_chooser_toggles_layer_over_settings_for_one_job(tmp_path, monkeypatch):
+    """A job spec's per-click toggles win over the contradicting Settings."""
+    import mutagen.mp4
+
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    # Settings file the sidecar and skip the embed; the click asks the opposite.
+    stub.settings = _settings(
+        base,
+        apple_lyrics_embed=False,
+        apple_lyrics_file=True,
+        apple_lyrics_word_timed=False,
+        apple_lyrics_ttml_file=False,
+        apple_lyrics_prefer_lrclib=False,
+    )
+    relay = _Relay()
+    spec = SimpleNamespace(
+        kind="track",
+        collection=False,
+        media_id="apple:song-1",
+        chooser_toggles={"lyrics_embed": True, "lyrics_file": False},
+    )
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert mutagen.mp4.MP4(str(landed)).tags["\xa9lyr"][0] == "[00:01.00]timed"
+    assert not (landed.parent / "Xtal.lrc").exists()
+
+
+def test_apple_folder_hold_replays_with_the_same_toggle_pins():
+    """A held Apple job replays the click's toggles, not Settings."""
+    calls: list = []
+    provider = SimpleNamespace(row_for=lambda kind, obj: {"id": "apple:song-1", "title": "Xtal"})
+    stub = BridgeStub(
+        providers={CTX_APPLE: provider},
+        _download_apple=lambda *a, **k: calls.append(k),
+        # The gate stashes the replay and reports a hold.
+        _gate_reachability=lambda retry, media_id: (retry(), False)[1],
+        downloadState=_Signal(),
+        _set_queue_status=lambda *a, **k: None,
+        _bump_download_groups=lambda *a, **k: None,
+        _jobs=JobRuntime(),
+        _release_job_signals=lambda qid: None,
+        _remove_row=lambda qid: None,
+        _withdraw_queue_row_for_hold=lambda qid: True,
+        _emit_queue=lambda: None,
+    )
+    stub._jobs.aborts = {7: Event()}
+    stub._jobs.dls = {7: object()}
+    for name in ("_finish_job", "_apple_job_hooks"):
+        setattr(stub, name, MethodType(getattr(WavesBridge, name), stub))
+    spec = SimpleNamespace(
+        kind="track",
+        file_template="{artist_name}/{track_title}",
+        collection=False,
+        media_id="apple:song-1",
+        is_retry=False,
+        chooser_toggles={"lyrics_embed": True},
+    )
+
+    runner.run_job_body(
+        stub._apple_job_hooks(), 7, spec, object(), signals=None, job_abort=Event(), row_ask=None, name="Xtal"
+    )
+
+    assert calls and calls[0]["chooser_toggles"] == {"lyrics_embed": True}
+
+
+@pytest.mark.ffmpeg
+def test_owned_track_skips_without_fetching(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    rec = {
+        "path": str(base / "Aphex Twin" / "Xtal.m4a"),
+        "quality_rank": quality_rank(QualityTier.HIGH),
+        "requested_rank": quality_rank(QualityTier.HIGH),
+        "ceiling_rank": quality_rank(QualityTier.HIGH),
+        "audio_mode": "STEREO",
+    }
+    stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid: rec)))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded)"
+    assert provider.fetched == []
+    assert any(ev.get("status") == "skipped" for ev in relay.events)
+
+
+def test_gate_force_and_miss():
+    provider = _FakeProvider()
+    stub = _bind(_stub(Path("/tmp"), provider))
+
+    assert runner.gate_track(
+        stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), True
+    ) == (
+        "force",
+        None,
+    )
+    assert runner.gate_track(
+        stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), False
+    ) == (
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "names_a_copy"),
+    [("/lib/Aphex Twin/Xtal_01.m4a", True), ("/lib/Aphex Twin/[None]/Xtal.m4a", False)],
+    ids=["record", "broken-record"],
+)
+def test_gate_force_returns_the_record_it_can_read(path, names_a_copy):
+    """A REDOWNLOAD never skips, and it still reads the ownership record so its
+    placement replaces the copy the record names; a record of a spelling the
+    formatter never produces names no copy."""
+    provider = _FakeProvider()
+    rec = {"path": path}
+    stub = _bind(_stub(Path("/tmp"), provider, _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec)))
+
+    answer = runner.gate_track(stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), True)
+
+    assert answer == ("force", rec if names_a_copy else None)
+
+
+def test_gate_without_a_store_never_gates():
+    provider = _FakeProvider()
+    stub = _bind(_stub(Path("/tmp"), provider, _ownership=None))
+
+    assert runner.gate_track(
+        stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), False
+    ) == (
+        None,
+        None,
+    )
+
+
+@pytest.mark.ffmpeg
+def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "eac3", "sample_rate": "48000"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    settings = _settings(base, default_audio_type="both")
+    stub = _bind(_stub(base, provider))
+    stub.settings = settings
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.ATMOS]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["quality"]["audio_mode"] == "DOLBY_ATMOS"
+
+
+@pytest.mark.ffmpeg
+def test_the_atmos_row_is_not_skipped_by_the_stereo_file(tmp_path, monkeypatch):
+    """A blank format_atmos aims both Versions at one name, so the stereo row
+    runs first and its file sits at the Atmos row's destination. The Atmos
+    skip must ask the occupant's on-disk Version: it fetches, lands as the
+    numbered copy beside the stereo file, and leaves that file alone."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "eac3", "sample_rate": "48000"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    # The stereo row's file, already there (a real AAC .m4a: stereo by codec).
+    stereo_file = base / "Aphex Twin" / "Xtal.m4a"
+    stereo_file.parent.mkdir(parents=True)
+    _tone(stereo_file)
+    stub = _bind(_stub(base, provider))
+    stub.settings = _settings(base, default_audio_type="both")
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        # The blank format_atmos the blank fragment produces: the stereo
+        # template unchanged (see atmos_file_template).
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.ATMOS], "the Atmos Version was silently skipped"
+    assert stereo_file.is_file()  # the stereo copy is untouched
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file(), "the Atmos Version did not land as the numbered copy"
+    import mutagen.mp4
+
+    assert bytes(mutagen.mp4.MP4(str(landed)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
+
+
+def _skip_case(tmp_path, monkeypatch, occupant_item_id):
+    """Run the one-track job over a library whose rendered path is taken.
+
+    The occupant is a staged tone stamped with ``occupant_item_id`` (None for
+    a file from before the id tags). Returns
+    (summary, provider, relay, occupant, base).
+    """
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    occupant = base / "Aphex Twin" / "Xtal.m4a"
+    occupant.parent.mkdir(parents=True)
+    _tone(occupant)
+    if occupant_item_id is not None:
+        _write_item_id(occupant, occupant_item_id)
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, provider, relay, occupant, base
+
+
+@pytest.mark.ffmpeg
+def test_a_different_tracks_tag_at_the_path_does_not_skip_the_fetch(tmp_path, monkeypatch):
+    """Two distinct Apple tracks can render one relative path. A tagged file
+    for a DIFFERENT track is not this track's copy: the skip must read the
+    occupant's item id, let the fetch run, and land it at the numbered
+    variant beside the stranger."""
+    summary, provider, relay, stranger, base = _skip_case(tmp_path, monkeypatch, "apple:other-song")
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.STEREO], "a different track's file silently skipped this fetch"
+    assert not any(ev.get("status") == "skipped" for ev in relay.events)
+    import mutagen.mp4
+
+    assert (
+        bytes(mutagen.mp4.MP4(str(stranger)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:other-song"
+    ), "the stranger's file must be left alone"
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file(), "the colliding track did not land at the numbered variant"
+    assert bytes(mutagen.mp4.MP4(str(landed)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("occupant_item_id", ["apple:song-1", None], ids=["this-tracks-id", "untagged"])
+def test_an_own_or_untagged_occupant_still_skips(tmp_path, monkeypatch, occupant_item_id):
+    """This track's own id skips without fetching, and an untagged occupant
+    skips too: identity unknown is never evidence of a DIFFERENT track, so a
+    library from before the id tags must not be duplicated wholesale."""
+    summary, provider, relay, _occupant, base = _skip_case(tmp_path, monkeypatch, occupant_item_id)
+
+    assert summary == " (already downloaded)"
+    assert provider.fetched == []
+    assert any(ev.get("status") == "skipped" for ev in relay.events)
+    assert not (base / "Aphex Twin" / "Xtal_01.m4a").exists()
+
+
+@pytest.mark.ffmpeg
+def test_a_stranger_at_the_true_extension_does_not_skip_the_fetch(tmp_path, monkeypatch):
+    """When the delivery's true extension differs from the guessed one, the
+    post-stream skip asks identity too: a DIFFERENT track's tagged file at the
+    true name must not settle the fetch, which lands at the numbered variant."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    resolve_stream = provider.resolve_stream
+
+    def resolve_without_a_codec(raw, tier, audio_type):
+        # Scope "all" guesses .flac before the fetch, but the delivery names no
+        # codec, so the true extension falls back to .m4a.
+        info = resolve_stream(raw, tier, audio_type)
+        info.codecs = ""
+        info.delivered = {"tier": info.delivered["tier"], "audio_type": info.delivered["audio_type"]}
+        return info
+
+    provider.resolve_stream = resolve_without_a_codec
+    base = tmp_path / "lib"
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    stub = _bind(_stub(base, provider))
+    stub.settings = _settings(base, extract_flac_all=True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.STEREO], "a different track's file at the true extension skipped the fetch"
+    assert stranger.is_file(), "the stranger's file must be left alone"
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file(), "the fetch did not land at the numbered variant"
+    assert not (base / "Aphex Twin" / "Xtal.flac").exists()
+
+
+@pytest.mark.parametrize("kind", ["album", "track"])
+def test_runtime_context_change_settles_the_job_incomplete(tmp_path, kind):
+    from waves.providers.apple.engine import _AppleAborted
+
+    # An account or runtime change revokes the fetch without the user's STOP:
+    # the job's abort stays clear, so nothing may read the run as finished.
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(_AppleAborted())
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    collection = kind == "album"
+    spec = SimpleNamespace(kind=kind, collection=collection, media_id=f"apple:{kind}-1")
+
+    with pytest.raises(DownloadIncomplete, match="account or runtime changed") as excinfo:
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _album_resource() if collection else _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert excinfo.value.failure.retryable is True
+
+
+@pytest.mark.parametrize("meanwhile", ["nothing", "provider-stop", "stop"])
+def test_a_runtime_that_fails_to_restart_mid_run_fails_the_track(tmp_path, monkeypatch, meanwhile):
+    from waves.providers.apple.engine import AppleWrapperDown
+
+    row = _Row()
+    abort = Event()
+
+    def restart_failed(*args, **kwargs):
+        if meanwhile == "provider-stop":
+            # A provider-disable stop words the row before it sets the abort.
+            row.queue_status(1, "cancelled", "Apple Music was turned off")
+        elif meanwhile == "stop":
+            abort.set()
+        raise RuntimeError("synthetic restart failure")
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(AppleWrapperDown("down"))
+    monkeypatch.setattr(runner, "ensure_sidecar", restart_failed)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    row.bind(hooks)
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    def run():
+        return runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _album_resource(),
+            signals=_Relay(),
+            job_abort=abort,
+            file_template="{artist_name}/{track_title}",
+        )
+
+    if meanwhile == "stop":
+        # A STOP during the failed restart ends the run as a stop: no failed
+        # track, and the row stays held for the job body to settle cancelled.
+        assert run() == ""
+        assert row["status"] == "queued"
+        return
+    with pytest.raises(DownloadIncomplete, match="1 failed") as excinfo:
+        run()
+    assert "account or runtime changed" not in str(excinfo.value)
+    if meanwhile == "provider-stop":
+        assert row == {"status": "cancelled", "reason": "Apple Music was turned off"}
+    else:
+        # The run moves past the failed track, so its row is no longer Held:
+        # Clear Queued must not take a row that is still downloading.
+        assert row["status"] == "running"
+
+
+def test_a_first_ensure_that_errors_after_holding_fetches_with_the_row_resumed(tmp_path, monkeypatch):
+    from waves.providers.apple.engine import AppleTrackUnavailable
+
+    # A poll held the row, then the ensure itself errored: the run proceeds
+    # to fetch, so the row cannot stay Held under Queued while it downloads.
+    def held_then_errored(hooks, qid, job_abort, *, need_wrapper, line=""):
+        runner.set_held(hooks, qid)
+        raise RuntimeError("synthetic poll failure")
+
+    row = _Row()
+    fetched_under: list[dict] = []
+
+    def fetch(raw, tier, audio_type):
+        fetched_under.append(row.seen())
+        raise AppleTrackUnavailable("not in this storefront")
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = fetch
+    monkeypatch.setattr(runner, "ensure_sidecar", held_then_errored)
+    stub = _bind(_stub(tmp_path / "lib", provider, _queue_index={1: {"askQuality": "LOSSLESS", "quality": "LOSSLESS"}}))
+    hooks = stub._apple_job_hooks()
+    row.bind(hooks)
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with contextlib.suppress(DownloadIncomplete):
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+            status_line=_LINE,
+        )
+
+    assert row.held, "the ensure held the row before it errored"
+    assert fetched_under == [{"status": "running", "reason": "", "line": _LINE}], "the fetch ran under a Held row"
+
+
+@pytest.mark.ffmpeg
+def test_a_revoked_album_publishes_no_playlist(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import _AppleAborted
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _ThreeTrackProvider(staged)
+    deliver = provider.resolve_stream
+
+    def revoke_after_the_first(raw, tier, audio_type):
+        if provider.fetched:
+            raise _AppleAborted()
+        return deliver(raw, tier, audio_type)
+
+    provider.resolve_stream = revoke_after_the_first
+    base = tmp_path / "lib"
+    hooks = _three_track_hooks(provider, base, settings=_settings(base, playlist_create=True))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    with pytest.raises(DownloadIncomplete, match="1 of 3 tracks downloaded"):
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _album_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    # Revocation can precede the provider stop's abort; like a stop, the run
+    # writes nothing more into the library once its context is gone.
+    assert list(base.rglob("*.m3u8")) == []
+
+
+def test_stop_during_an_album_still_ends_as_a_stop(tmp_path):
+    from waves.providers.apple.engine import _AppleAborted
+
+    abort = Event()
+
+    def stop(raw, tier, audio_type):
+        abort.set()
+        raise _AppleAborted()
+
+    provider = _FakeProvider(fixture=None)
+    provider.resolve_stream = stop
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=abort,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("skip_existing", [True, False])
+def test_skip_existing_off_fetches_a_track_owned_elsewhere(tmp_path, monkeypatch, skip_existing):
+    """#693: with the row's "Skip existing" off, a copy the ownership ledger
+    holds in another folder no longer skips the track; on, it still does."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    asked = []
+
+    def owned_elsewhere(hooks, provider, track_id, requested_rank, force, audio_type=None, **kwargs):
+        asked.append(track_id)
+        return "skip", {"path": "/music/Album Folder/Xtal.m4a"}
+
+    monkeypatch.setattr(runner, "gate_track", owned_elsewhere)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: skip_existing
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    if skip_existing:
+        assert summary == " (already downloaded)"
+        assert provider.fetched == []
+    else:
+        # The ledger is read only for where the own copy sits: in another
+        # folder it stays, and this job lands its own beside nothing.
+        assert summary == ""
+        assert asked == ["apple:song-1"]
+        assert len(provider.fetched) == 1
+        assert not Path("/music/Album Folder/Xtal.m4a").exists()
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_replaces_the_copy_in_the_same_folder(tmp_path, monkeypatch):
+    """#693: fetching again into the folder that holds this track's own copy
+    replaces it in place, never a numbered duplicate beside it."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    def run(qid, skip_existing):
+        hooks = stub._apple_job_hooks()
+        hooks.job_skip_existing = lambda qid: skip_existing
+        return runner.run_apple_job(
+            hooks,
+            qid,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    assert run(1, True) == ""
+    first = sorted(p.relative_to(base) for p in base.rglob("*.m4a"))
+    assert run(2, False) == ""
+
+    assert sorted(p.relative_to(base) for p in base.rglob("*.m4a")) == first
+    assert len(provider.fetched) == 2, "the second run fetched again"
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_replaces_a_numbered_own_copy_in_place(tmp_path, monkeypatch):
+    """#693: when another track holds the template name, this track's own copy
+    sits at a numbered name; fetching again replaces that copy, never _02."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    stub = _bind(_stub(base, provider))
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    owned: list = []
+
+    def ledger(hooks, provider, track_id, requested_rank, force, audio_type=None, **kwargs):
+        return ("skip", {"path": str(owned[0])}) if owned else (None, None)
+
+    monkeypatch.setattr(runner, "gate_track", ledger)
+
+    def run(qid, skip_existing):
+        hooks = stub._apple_job_hooks()
+        hooks.job_skip_existing = lambda qid: skip_existing
+        return runner.run_apple_job(
+            hooks,
+            qid,
+            spec,
+            _song_resource(),
+            signals=_Relay(),
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert run(1, True) == ""
+    first = sorted(p.name for p in base.rglob("*.m4a"))
+    assert first == ["Xtal.m4a", "Xtal_01.m4a"]
+    owned.append(base / "Aphex Twin" / "Xtal_01.m4a")
+    assert run(2, False) == ""
+    assert run(3, False) == ""
+
+    assert sorted(p.name for p in base.rglob("*.m4a")) == first
+    assert len(provider.fetched) == 3
+    assert stranger.is_file(), "the stranger's file is never replaced"
+
+
+def _skip_off_run(stub, qid=1, signals=None):
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: False
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    return runner.run_apple_job(
+        hooks,
+        qid,
+        spec,
+        _song_resource(),
+        signals=signals or _Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+
+def _skip_off_setup(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    return provider, base, _bind(_stub(base, provider))
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_path, monkeypatch):
+    """The ledger proves only that its path exists: a sibling that took the
+    recorded name after this track's copy went keeps its file."""
+    from waves.metadata.tags import read_item_id
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    sibling = base / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    _tone(sibling)
+    _write_item_id(sibling, "apple:other-song")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(sibling)}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert read_item_id(sibling) == "apple:other-song"
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_never_replaces_the_other_versions_copy(tmp_path, monkeypatch):
+    """A legacy stereo row whose whole-track query answers the Dolby Atmos
+    record leaves that copy alone."""
+    import mutagen.mp4
+
+    from waves.metadata.tags import read_file_audio_type
+
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    atmos = base / "Aphex Twin" / "Xtal_01.m4a"
+    atmos.parent.mkdir(parents=True)
+    _tone(atmos)
+    _write_item_id(atmos, "apple:song-1")
+    handle = mutagen.mp4.MP4(str(atmos))
+    handle["----:com.apple.iTunes:WAVES_AUDIO_TYPE"] = [b"atmos"]
+    handle.save()
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(atmos), "audio_type": "atmos"}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert read_file_audio_type(atmos) == "atmos"
+    assert len(provider.fetched) == 1
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_recognises_the_folder_however_the_root_is_spelled(tmp_path, monkeypatch):
+    """The ledger records the real path; a download root reached through a
+    symlink still names the same folder, so the own copy is replaced, under the
+    root's own spelling like every other file the job lands."""
+    from waves.metadata.tags import read_item_id
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    real = tmp_path / "real"
+    (real / "Aphex Twin").mkdir(parents=True)
+    base = tmp_path / "lib"
+    base.symlink_to(real, target_is_directory=True)
+    stranger = real / "Aphex Twin" / "Xtal.m4a"
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    own = real / "Aphex Twin" / "Xtal_01.m4a"
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own.resolve())}))
+    relay = _Relay()
+
+    assert _skip_off_run(stub, signals=relay) == ""
+
+    assert sorted(p.name for p in real.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+    assert read_item_id(stranger) == "apple:other-song"
+    assert [e["path"] for e in relay.events if e["status"] == "done"] == [str(base / "Aphex Twin" / "Xtal_01.m4a")]
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_replaces_an_untagged_own_copy_left_as_it_was(tmp_path, monkeypatch):
+    """A copy whose tag write failed is still this track's: unchanged since the
+    check, it is replaced in place rather than numbered beside."""
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+
+    assert _skip_off_run(stub) == ""
+
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a"]
+    assert len(provider.fetched) == 1
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_never_replaces_a_song_moved_in_during_the_fetch(tmp_path, monkeypatch):
+    """The untagged copy checked before the fetch is gone by the swap: another
+    untagged song took its name meanwhile, and keeps it."""
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    other = tmp_path / "other.m4a"
+    _tone(other)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+    deliver = provider.resolve_stream
+
+    def swap_in_another_song(raw, tier, audio_type):
+        own.unlink()
+        shutil.copy(other, own)
+        return deliver(raw, tier, audio_type)
+
+    provider.resolve_stream = swap_in_another_song
+
+    assert _skip_off_run(stub) == ""
+
+    assert own.read_bytes() == other.read_bytes(), "the song moved in keeps its name"
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+
+
+@pytest.mark.ffmpeg
+def test_skip_existing_off_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
+    """An own .m4a whose re-fetch lands as FLAC does not take the .flac name a
+    sibling already holds."""
+    import tempfile
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = base / "Aphex Twin" / "Xtal.flac"
+    sibling.write_bytes(b"SIBLING-FLAC-BYTES")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("skip", {"path": str(own)}))
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
+    monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
+    monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
+
+    def extract(hooks, staged):
+        workdir = tempfile.mkdtemp(dir=tmp_path)
+        out = Path(workdir) / "x.flac"
+        subprocess.run([_ffmpeg(), "-y", "-v", "error", "-i", str(staged), "-c:a", "flac", str(out)], check=True)  # noqa: S603 (fixed argv: local fixture)
+        return out, workdir
+
+    monkeypatch.setattr(runner, "extract_flac", extract)
+
+    assert _skip_off_run(stub) == ""
+
+    assert sibling.read_bytes() == b"SIBLING-FLAC-BYTES"
+
+
+def test_the_rows_pin_beats_the_live_setting_for_an_apple_job(tmp_path):
+    provider = _FakeProvider(fixture=None)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    hooks = stub._apple_job_hooks()
+    hooks.settings().data.skip_existing = True
+    hooks.job_skip_existing = lambda qid: False
+    assert runner.job_skip_existing(hooks, 1) is False
+    hooks.job_skip_existing = None
+    assert runner.job_skip_existing(hooks, 1) is True
+
+
+def test_album_job_reports_a_partial_shortfall(tmp_path):
+    provider = _FakeProvider(fixture=None)
+
+    def fail_resolve(raw, tier, audio_type):
+        raise RuntimeError("network died")
+
+    provider.resolve_stream = fail_resolve
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    with pytest.raises(DownloadIncomplete):
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _album_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert any(ev.get("status") == "failed" for ev in relay.events)
+
+
+def _entry_stub(base: Path, provider, cookies: Path | None):
+    from collections import deque
+    from threading import Lock
+
+    stub = _bind(_stub(base, provider))
+    stub._queue_seq = 0
+    stub._queue = []
+    stub._queue_index = {}
+    stub._qdirty_added = []
+    stub._queue_lock = Lock()
+    stub._pending_qids = deque()
+    stub._jobs.specs = {}
+    stub._jobs.objs = {}
+    stub.statuses = []
+    stub._set_status = stub.statuses.append
+    stub._enqueue = lambda *a, **k: WavesBridge._enqueue(stub, *a, **k)
+    stub._skip_existing_on = lambda: True  # "Skip existing" on, its default
+    stub._emit_queue = lambda: None
+    stub._pump_queue = lambda: None
+    stub._download_gate = lambda: "ok"
+    stub._ffmpeg_gate_holds = lambda *a: False
+    stub._library_bulk_skip_on = lambda: False
+    # The provider's download surface: the bridge implements Apple's and binds
+    # it where the providers are wired, so a stub that drives the real entry
+    # points binds it too.
+    provider.downloads = backend._AppleDownloads(stub)
+    if cookies is not None:
+        provider.cookies_path = str(cookies)
+    return stub
+
+
+def test_entry_without_cookies_explains_instead_of_queueing(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+
+    WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    assert stub._queue == []
+    assert any("cookies" in status for status in stub.statuses)
+
+
+def test_entry_while_apple_is_off_refuses_even_a_retry(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+    stub.settings.data.apple_enabled = False
+
+    queued = WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    assert queued is False and stub._queue == []
+    assert any("is off" in status for status in stub.statuses)
+
+
+def test_entry_with_cookies_queues_an_apple_job(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+
+    WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    (row,) = stub._queue
+    assert row["type"] == "album" and row["status"] == "queued"
+    assert row["expected"] == "HIGH" and row["quality"] == "HIGH"
+    qid, spec = next(iter(stub._jobs.specs.items()))
+    assert spec.provider_id == "apple" and spec.object_id == "apple:album-1"
+    assert list(stub._pending_qids) == [qid]
+
+
+class _InlinePool:
+    @staticmethod
+    def start(worker, priority: int = 0):
+        worker.fn()
+
+
+def test_track_slot_queues_from_provider_cache_without_network(tmp_path):
+    provider = _FakeProvider()
+    provider.cached = lambda kind, raw_id: _song_resource() if kind == "track" else None
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+    stub.threadpool = _InlinePool()
+    stub.downloadTrack = lambda tid: WavesBridge.downloadTrack(stub, tid)
+    stub._download_apple_track = lambda tid: WavesBridge._download_apple_track(stub, tid)
+    stub._download_apple = lambda *a, **k: WavesBridge._download_apple(stub, *a, **k)
+    stub._objs = {"track": {}}
+    stub._refetch_apple_for_download = lambda *a: (_ for _ in ()).throw(AssertionError("no refetch expected"))
+
+    stub.downloadTrack("apple:song-1")
+
+    assert len(stub._queue) == 1
+    assert stub._queue[0]["media_id"] == "apple:song-1"
+
+
+def test_wrapper_only_account_queues_without_a_cookies_file(tmp_path):
+    """The full tier's sign-in needs no cookies export (S01)."""
+    provider = _FakeProvider()
+    provider.cached = lambda kind, raw_id: _song_resource() if kind == "track" else None
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    stub.threadpool = _InlinePool()
+    stub.apple_wrapper_auth_state = lambda *a, **k: {
+        "reachable": True,
+        "state": "authenticated",
+        "logged_in": True,
+        "account": "me@example.com",
+        "error": "",
+    }
+    stub.downloadTrack = lambda tid: WavesBridge.downloadTrack(stub, tid)
+    stub._download_apple_track = lambda tid: WavesBridge._download_apple_track(stub, tid)
+    stub._download_apple = lambda *a, **k: WavesBridge._download_apple(stub, *a, **k)
+    stub._objs = {"track": {}}
+    stub._refetch_apple_for_download = lambda *a: (_ for _ in ()).throw(AssertionError("no refetch expected"))
+
+    stub.downloadTrack("apple:song-1")
+
+    assert len(stub._queue) == 1
+    assert stub._queue[0]["media_id"] == "apple:song-1"
+
+
+def test_track_slot_refetches_a_cache_miss_on_a_worker(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    stub.threadpool = _InlinePool()
+    stub._objs = {"track": {}}
+    stub._refetch_inflight = set()
+    stub._browse_gen = 0
+    stub._mediaRefetched = _Signal()
+    stub._bump_download_groups = lambda *a: None
+    stub.downloadTrack = lambda tid: WavesBridge.downloadTrack(stub, tid)
+    stub._download_apple_track = lambda tid: WavesBridge._download_apple_track(stub, tid)
+    stub._refetch_apple_for_download = lambda *a, **k: WavesBridge._refetch_apple_for_download(stub, *a, **k)
+
+    stub.downloadTrack("apple:song-1")
+
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    assert stub._mediaRefetched.emits == [("track", "apple:song-1", provider_contexts(stub).capture(CTX_APPLE))]
+    assert ("track", "apple:song-1") in stub._refetch_inflight
+
+
+def test_incomplete_apple_collection_refetch_reports_the_partial_failure(tmp_path):
+    """A refetch that stops partway fails with the provider's words (S04)."""
+    provider = _FakeProvider()
+
+    def _partway(kind, raw_id):
+        raise AppleCollectionIncomplete(kind)
+
+    provider.get_object = _partway
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    stub.threadpool = _InlinePool()
+    stub._refetch_inflight = set()
+    stub._browse_gen = 0
+    stub._mediaRefetched = _Signal()
+    stub._bump_download_groups = lambda *a: None
+    stub._chooser_drop_refetch = lambda *a: None
+    stub._refetch_apple_for_download = lambda *a, **k: WavesBridge._refetch_apple_for_download(stub, *a, **k)
+
+    stub._refetch_apple_for_download("playlist", "apple:pl.1")
+
+    assert any("part of this playlist" in status for status in stub.statuses)
+    assert ("apple:pl.1", "failed") in stub.downloadState.emits
+    assert ("playlist", "apple:pl.1") not in stub._refetch_inflight
+
+
+def test_incomplete_apple_collection_retry_refetch_reports_the_partial_failure(tmp_path):
+    """The RETRY refetch keeps the provider's words too (S04)."""
+    provider = _FakeProvider()
+
+    def _partway(kind, raw_id):
+        raise AppleCollectionIncomplete(kind)
+
+    provider.get_object = _partway
+    stub = _entry_stub(tmp_path / "lib", provider, None)
+    stub.threadpool = _InlinePool()
+    stub._refetch_inflight = set()
+    stub._browse_gen = 0
+    stub._queueRetryRefetched = _Signal()
+
+    backend._refetch_retry(stub, {"type": "playlist", "media_id": "apple:pl.1", "qid": 3})
+
+    assert any("part of this playlist" in status for status in stub.statuses)
+    assert ("playlist", "apple:pl.1") not in stub._refetch_inflight
+
+
+def test_configure_apple_provider_reads_settings(tmp_path):
+    provider = _FakeProvider()
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = BridgeStub(
+        providers={CTX_APPLE: provider},
+        settings=_settings(tmp_path, apple_cookies_path=str(cookies)),
+        _settings_save_lock=Lock(),
+    )
+    stub._configure_apple_provider = lambda: WavesBridge._configure_apple_provider(stub)
+    stub._apple_cookies_ready = lambda: WavesBridge._apple_cookies_ready(stub)
+
+    stub._configure_apple_provider()
+
+    assert provider.cookies_path == str(cookies)
+    assert stub._apple_cookies_ready() is True
+    provider.cookies_path = str(tmp_path / "missing.txt")
+    assert stub._apple_cookies_ready() is False
+
+
+def test_second_click_on_a_queued_row_acknowledges_without_requeueing(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+
+    WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+    WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    assert len(stub._queue) == 1
+    assert ("apple:album-1", "queued") in stub.downloadState.emits
+
+
+@pytest.mark.ffmpeg
+def test_stale_owned_copy_forces_an_in_place_overwrite(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    dest = base / "Aphex Twin" / "Xtal.m4a"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"stale-copy")
+    rec = {
+        "path": str(dest),
+        "quality_rank": quality_rank(QualityTier.LOW),
+        "requested_rank": quality_rank(QualityTier.LOW),
+        "ceiling_rank": quality_rank(QualityTier.HIGH),
+        "audio_mode": "STEREO",
+    }
+    stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid: rec)))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert dest.is_file() and dest.stat().st_size != len(b"stale-copy")
+    assert not (base / "Aphex Twin" / "Xtal_01.m4a").exists()
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(dest)
+
+
+def test_retry_reroutes_an_apple_row_through_the_apple_entry(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    row = {
+        "qid": 7,
+        "type": "album",
+        "name": "N",
+        "template": "T",
+        "collection": True,
+        "media_id": "apple:album-1",
+        "askQuality": "HIGH",
+        "quality": "HIGH",
+        "status": "failed",
+    }
+    calls = []
+    stub._download_apple = lambda *a, **k: calls.append((a, k))
+
+    WavesBridge._start_retry(stub, row, _album_row())
+
+    ((args, kwargs),) = calls
+    assert args[0] == "album" and args[5] == "apple:album-1"
+    assert kwargs["keep_ask"] == ("HIGH", "HIGH", None)
+
+
+def test_row_object_falls_back_to_the_provider_cache(tmp_path):
+    provider = _FakeProvider()
+    provider.cached = lambda kind, raw_id: _album_resource()
+    stub = BridgeStub(
+        _jobs=JobRuntime(),
+        _objs={"album": {}},
+        providers={CTX_APPLE: provider},
+    )
+    provider.downloads = backend._AppleDownloads(stub)
+    stub._row_object = lambda item: WavesBridge._row_object(stub, item)
+
+    row = stub._row_object({"qid": 9, "type": "album", "media_id": "apple:album-1"})
+
+    assert row["id"] == "apple:album-1"
+
+
+@pytest.mark.ffmpeg
+def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert not (base / "Aphex Twin" / "cover.jpg").exists()
+
+
+@pytest.mark.ffmpeg
+def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    settings = _settings(base, playlist_create=True)
+    stub = _bind(_stub(base, provider))
+    stub.settings = settings
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    playlist = base / "Aphex Twin" / "_Selected Ambient Works 85-92.m3u8"
+    assert playlist.is_file()
+    assert playlist.read_text().splitlines() == ["Xtal.m4a"]
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("countdown", ["ticks", "cannot run"])
+def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch, countdown):
+    from waves.providers.apple import AppleProvider as _RealProvider
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+    tiers = []
+    row = _Row()
+    retried_on: list[dict] = []
+
+    def flaky_resolve(raw, tier, audio_type):
+        calls.append(audio_type)
+        tiers.append(tier)
+        if len(calls) == 1:
+            raise RuntimeError("HTTP 429 too many requests")
+        retried_on.append(row.seen())
+        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+
+    provider.resolve_stream = flaky_resolve
+    provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    # The queue pinned HIGH while Settings asks hi-res: both the first
+    # attempt and the throttle retry must ask the pinned tier.
+    stub.settings = _settings(base, apple_quality_audio="HI_RES_LOSSLESS")
+    stub._queue_index = {1: {"askQuality": "HIGH", "quality": "HIGH"}}
+    monkeypatch.setattr(runner, "sleep_abortable", lambda *a: True)
+    if countdown == "cannot run":
+        monkeypatch.setattr(runner, "throttle_wait", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no clock")))
+    hooks = stub._apple_job_hooks()
+    row.bind(hooks)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+        status_line=_LINE,
+    )
+
+    assert summary == ""
+    assert len(calls) == 2
+    assert tiers == [QualityTier.HIGH, QualityTier.HIGH]
+    # The wait showed, then ended: the retry downloads under the job's own
+    # line, not the wait's words for the rest of the job.
+    shown = "Throttled" if countdown == "ticks" else "Apple is rate-limiting"
+    assert any(line.startswith(shown) for line in row.lines)
+    assert retried_on == [{"status": "running", "reason": "", "line": _LINE}]
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+
+
+@pytest.mark.ffmpeg
+def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    sibling = base / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"sibling-audio")
+    owned = base / "Aphex Twin" / "Xtal_01.m4a"
+    owned.write_bytes(b"stale-copy")
+    rec = {
+        "path": str(owned),
+        "quality_rank": quality_rank(QualityTier.LOW),
+        "requested_rank": quality_rank(QualityTier.LOW),
+        "ceiling_rank": quality_rank(QualityTier.HIGH),
+        "audio_mode": "STEREO",
+    }
+    stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid: rec)))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert sibling.read_bytes() == b"sibling-audio"
+    assert owned.stat().st_size != len(b"stale-copy")
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(owned)
+
+
+def _run_forced_upgrade(
+    tmp_path,
+    monkeypatch,
+    recorded: Path,
+    provider_cls: type[_FakeProvider] = _FakeProvider,
+    default_audio_type: str = "stereo",
+):
+    """Run the one-track job as an upgrade of the copy the ownership record
+    names at ``recorded``: the gate answers "force" with that record, and
+    "Skip existing" is on. Returns (summary, relay)."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = provider_cls(fixture=staged)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(recorded)}))
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    stub.settings.data.default_audio_type = default_audio_type
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: True
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, relay
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_never_replaces_a_sibling_at_a_stale_recorded_name(tmp_path, monkeypatch):
+    """The ownership record proves only that its path exists. A sibling that
+    took the recorded name after this track's copy went keeps its file."""
+    from waves.metadata.tags import read_item_id
+
+    sibling = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    _tone(sibling)
+    _write_item_id(sibling, "apple:other-song")
+    before = sibling.read_bytes()
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=sibling)
+
+    assert summary == ""
+    assert sibling.read_bytes() == before
+    landed = sibling.with_name("Xtal_01.m4a")
+    assert read_item_id(landed) == "apple:song-1"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(landed)
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_with_a_stale_record_replaces_the_own_copy_at_the_template_name(tmp_path, monkeypatch):
+    """When a sibling holds the recorded name, this track's own copy at
+    the template name is the one the upgrade replaces, never a third file."""
+    base = tmp_path / "lib"
+    own = base / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = own.with_name("Xtal_01.m4a")
+    _tone(sibling)
+    _write_item_id(sibling, "apple:other-song")
+    before = sibling.read_bytes()
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=sibling)
+
+    assert summary == ""
+    assert sibling.read_bytes() == before
+    assert sorted(p.name for p in base.rglob("*.m4a")) == ["Xtal.m4a", "Xtal_01.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+class _StereoOnlyProvider(_FakeProvider):
+    """A track with no Dolby Atmos: every fetch delivers stereo."""
+
+    def has_atmos(self, item):
+        return False
+
+    def resolve_stream(self, raw, tier, audio_type):
+        info = super().resolve_stream(raw, tier, audio_type)
+        info.delivered["audio_type"] = str(AudioType.STEREO)
+        return info
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_asked_as_atmos_replaces_the_stereo_only_tracks_own_copy(tmp_path, monkeypatch):
+    """An unpinned row with Dolby Atmos on asks for Atmos, but a stereo-only
+    track delivers stereo: its own stereo copy is the one replaced in place,
+    never a numbered duplicate beside it."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_forced_upgrade(
+        tmp_path, monkeypatch, recorded=own, provider_cls=_StereoOnlyProvider, default_audio_type="both"
+    )
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_never_replaces_the_other_versions_copy_at_the_recorded_name(tmp_path, monkeypatch):
+    """A legacy stereo row whose whole-track record names the Dolby Atmos copy
+    leaves that copy alone and lands its stereo copy beside it."""
+    import mutagen.mp4
+
+    from waves.metadata.tags import read_file_audio_type
+
+    atmos = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    atmos.parent.mkdir(parents=True)
+    _tone(atmos)
+    _write_item_id(atmos, "apple:song-1")
+    handle = mutagen.mp4.MP4(str(atmos))
+    handle["----:com.apple.iTunes:WAVES_AUDIO_TYPE"] = [b"atmos"]
+    handle.save()
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=atmos)
+
+    assert summary == ""
+    assert read_file_audio_type(atmos) == "atmos"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(atmos.with_name("Xtal_01.m4a"))
+
+
+def _deliver_as_flac(tmp_path, monkeypatch) -> None:
+    """Every fetch lands as FLAC: lossless mode, with the extraction a real
+    ffmpeg transcode of the staged file."""
+    import tempfile
+
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
+    monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
+    monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
+
+    def extract(hooks, staged):
+        workdir = tempfile.mkdtemp(dir=tmp_path)
+        out = Path(workdir) / "x.flac"
+        subprocess.run([_ffmpeg(), "-y", "-v", "error", "-i", str(staged), "-c:a", "flac", str(out)], check=True)  # noqa: S603 (fixed argv: local fixture)
+        return out, workdir
+
+    monkeypatch.setattr(runner, "extract_flac", extract)
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_that_lands_as_flac_takes_the_recorded_name(tmp_path, monkeypatch):
+    """An own .m4a whose forced re-fetch lands as FLAC takes the recorded
+    name at .flac while that name is free."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    _deliver_as_flac(tmp_path, monkeypatch)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_suffix(".flac"))
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_upgrade_never_replaces_a_siblings_file_at_the_new_extension(tmp_path, monkeypatch):
+    """An own .m4a whose forced re-fetch lands as FLAC does not take the
+    .flac name a sibling already holds."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    sibling = own.with_suffix(".flac")
+    sibling.write_bytes(b"SIBLING-FLAC-BYTES")
+    _deliver_as_flac(tmp_path, monkeypatch)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sibling.read_bytes() == b"SIBLING-FLAC-BYTES"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_name("Xtal_01.flac"))
+
+
+@pytest.mark.ffmpeg
+def test_a_sibling_written_during_a_forced_upgrades_fetch_keeps_its_file(tmp_path, monkeypatch):
+    """The recorded copy is this track's when the job starts, and a sibling
+    takes the name during the fetch: the placement leaves the sibling's file."""
+    from waves.metadata.tags import read_item_id
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+    real_place = runner.place_file
+    calls: list[Path] = []
+
+    def sibling_takes_the_name(staged_file, dest, **kwargs):
+        if not calls:
+            _write_item_id(dest, "apple:other-song")
+        calls.append(dest)
+        return real_place(staged_file, dest, **kwargs)
+
+    monkeypatch.setattr(runner, "place_file", sibling_takes_the_name)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert read_item_id(own) == "apple:other-song"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_name("Xtal_01.m4a"))
+
+
+@pytest.mark.ffmpeg
+def test_a_forced_retry_never_replaces_a_song_moved_in_during_the_fetch(tmp_path, monkeypatch):
+    """The recorded copy is untagged (its tag write failed) and is gone by the
+    pick: another untagged song took its name during the fetch, and keeps it."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    other = tmp_path / "other.m4a"
+    _tone(other)
+
+    class _SongMovesIn(_FakeProvider):
+        def resolve_stream(self, raw, tier, audio_type):
+            own.unlink()
+            shutil.copy(other, own)
+            return super().resolve_stream(raw, tier, audio_type)
+
+    summary, relay = _run_forced_upgrade(tmp_path, monkeypatch, recorded=own, provider_cls=_SongMovesIn)
+
+    assert summary == ""
+    assert own.read_bytes() == other.read_bytes(), "the song moved in keeps its name"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own.with_name("Xtal_01.m4a"))
+
+
+def _run_redownload(tmp_path, monkeypatch, recorded: Path | None = None):
+    """Run the one-track job as an explicit REDOWNLOAD of song-1, through the
+    real ownership gate: the store names ``recorded`` as song-1's copy, or
+    nothing when it is None. "Skip existing" is on. Returns (summary, relay)."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    rec = None if recorded is None else {"path": str(recorded)}
+    stub = _bind(
+        _stub(
+            tmp_path / "lib",
+            provider,
+            _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec),
+            _redownload_overrides={"apple:song-1"},
+        )
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_skip_existing = lambda qid: True
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, relay
+
+
+@pytest.mark.ffmpeg
+def test_redownload_replaces_the_untagged_copy_its_record_names(tmp_path, monkeypatch):
+    """A copy whose tag write failed carries no item id; the ownership record
+    is what names it as this track's, so a REDOWNLOAD replaces it in place."""
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"stale-copy")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert own.stat().st_size != len(b"stale-copy")
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_redownload_replaces_the_own_copy_at_the_template_name(tmp_path, monkeypatch):
+    """With no ownership record, the copy at the template name that carries
+    this track's item id in the delivered Version is replaced in place."""
+    import mutagen.mp4
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    assert mutagen.mp4.MP4(str(own)).tags["\xa9nam"] == ["Xtal"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_redownload_replaces_the_recorded_copy_never_a_siblings_at_the_template_name(tmp_path, monkeypatch):
+    """Two tracks render to one name: song-2 owns Xtal.m4a, so song-1's own
+    copy is Xtal_01.m4a. A REDOWNLOAD of song-1 replaces Xtal_01.m4a and
+    leaves song-2's audio alone."""
+    sibling = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    _tone(sibling)
+    _write_item_id(sibling, "apple:song-2")
+    before = sibling.read_bytes()
+    own = sibling.with_name("Xtal_01.m4a")
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sibling.read_bytes() == before
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a", "Xtal_01.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_redownload_never_follows_the_record_into_another_folder(tmp_path, monkeypatch):
+    """The store answers the best copy in any folder. A REDOWNLOAD whose record
+    names a copy in a playlist folder lands at this job's template name and
+    leaves that copy alone."""
+    elsewhere = tmp_path / "lib" / "Playlists" / "Mix" / "Xtal.m4a"
+    elsewhere.parent.mkdir(parents=True)
+    _tone(elsewhere)
+    _write_item_id(elsewhere, "apple:song-1")
+    before = elsewhere.read_bytes()
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=elsewhere)
+
+    assert summary == ""
+    assert elsewhere.read_bytes() == before
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a")
+
+
+@pytest.mark.ffmpeg
+def test_redownload_lands_under_the_templates_spelling_of_the_recorded_folder(tmp_path, monkeypatch):
+    """The ledger records absolute paths, while the download root may be a
+    symlink: the recorded copy is replaced in place, under the template's
+    spelling, so every file the job lands shares one folder spelling."""
+    real = tmp_path / "real"
+    (real / "Aphex Twin").mkdir(parents=True)
+    (tmp_path / "lib").symlink_to(real, target_is_directory=True)
+    own = real / "Aphex Twin" / "Xtal.m4a"
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch, recorded=own)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a")
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("guess", [".m4a", ".flac"], ids=["guess-m4a", "guess-flac"])
+@pytest.mark.parametrize("occupant_id", ["", "apple:song-2"], ids=["untagged", "another-song"])
+def test_redownload_without_a_record_lands_beside_a_file_it_cannot_prove_is_its_own(
+    tmp_path, monkeypatch, guess, occupant_id
+):
+    """With no ownership record, a file at the template name is replaced only
+    when it proves it is this track's. An untagged one cannot be told from the
+    user's own (a Finder copy carries no item id) and another song's never is,
+    so the REDOWNLOAD lands beside either, whatever the extension guess (a
+    .flac guess the delivery keeps as .m4a aims at the same name)."""
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: guess)
+    occupant = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    occupant.parent.mkdir(parents=True)
+    _tone(occupant)
+    if occupant_id:
+        _write_item_id(occupant, occupant_id)
+    before = occupant.read_bytes()
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch)
+
+    assert summary == ""
+    assert occupant.read_bytes() == before
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(occupant.with_name("Xtal_01.m4a"))
+
+
+@pytest.mark.ffmpeg
+def test_redownload_with_a_wrong_extension_guess_replaces_the_own_copy_in_place(tmp_path, monkeypatch):
+    """The ask reads as FLAC but the delivery stays .m4a (an AAC-only master,
+    or no FFmpeg after "Continue anyway"): the track's own .m4a at the template
+    name is replaced in place, never numbered beside it."""
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".flac")
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    summary, relay = _run_redownload(tmp_path, monkeypatch)
+
+    assert summary == ""
+    assert sorted(p.name for p in own.parent.iterdir()) == ["Xtal.m4a"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(own)
+
+
+@pytest.mark.ffmpeg
+def test_a_sibling_written_during_a_redownloads_fetch_keeps_its_file(tmp_path, monkeypatch):
+    """The copy at the template name is this track's when the REDOWNLOAD picks
+    it, and a sibling takes the name during the fetch: the placement leaves the
+    sibling's file."""
+    from waves.metadata.tags import read_item_id
+
+    own = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    own.parent.mkdir(parents=True)
+    _tone(own)
+    _write_item_id(own, "apple:song-1")
+
+    def sibling_takes_the_name(dest: Path, call: int) -> None:
+        if call == 0:
+            _write_item_id(dest, "apple:other-song")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(
+        tmp_path, monkeypatch, sibling_takes_the_name, _redownload_overrides={"apple:song-1"}
+    )
+
+    assert summary == ""
+    assert read_item_id(own) == "apple:other-song"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+
+
+@pytest.mark.ffmpeg
+def test_an_untagged_file_moved_onto_the_recorded_name_during_a_redownload_keeps_its_bytes(tmp_path, monkeypatch):
+    """The record names an untagged copy (its tag write failed), and another
+    untagged file takes its name during the fetch: the absent id passes only
+    for the very file the record named, so the newcomer keeps its bytes."""
+    recorded = tmp_path / "lib" / "Aphex Twin" / "Xtal.m4a"
+    recorded.parent.mkdir(parents=True)
+    recorded.write_bytes(b"stale-copy")
+    rec = {"path": str(recorded)}
+
+    def finder_copy_takes_the_name(dest: Path, call: int) -> None:
+        if call == 0:
+            dest.unlink()
+            dest.write_bytes(b"finder-copy")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(
+        tmp_path,
+        monkeypatch,
+        finder_copy_takes_the_name,
+        _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec),
+        _redownload_overrides={"apple:song-1"},
+    )
+
+    assert summary == ""
+    assert recorded.read_bytes() == b"finder-copy"
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(base / "Aphex Twin" / "Xtal_01.m4a")
+
+
+def _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, on_place, **stub_overrides):
+    """Run the one-track job while a writer strikes the picked destination.
+
+    ``on_place(dest, call)`` runs right before each real placement (``call`` is
+    0 for the picked name, 1 for the step-aside) and writes the file the race
+    is about there: the fetch window DL-03 names, simulated at its last
+    moment. ``stub_overrides`` reach the bridge stub. Returns (summary, relay,
+    base).
+    """
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    real_place = runner.place_file
+    calls: list[Path] = []
+
+    def racing_place(staged_file, dest, **kwargs):
+        on_place(dest, len(calls))
+        calls.append(dest)
+        return real_place(staged_file, dest, **kwargs)
+
+    monkeypatch.setattr(runner, "place_file", racing_place)
+    stub = _bind(_stub(base, provider, **stub_overrides))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, relay, base
+
+
+@pytest.mark.ffmpeg
+def test_a_foreign_occupant_takes_the_numbered_name_and_keeps_its_bytes(tmp_path, monkeypatch):
+    def occupy_once(dest: Path, call: int) -> None:
+        if call == 0:
+            dest.write_bytes(b"foreign-audio")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, occupy_once)
+
+    assert summary == ""
+    assert (base / "Aphex Twin" / "Xtal.m4a").read_bytes() == b"foreign-audio"
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file() and landed.stat().st_size != len(b"foreign-audio")
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(landed)
+
+
+@pytest.mark.ffmpeg
+def test_a_foreign_occupant_that_follows_every_name_fails_the_item(tmp_path, monkeypatch, caplog):
+    def occupy_always(dest: Path, _call: int) -> None:
+        # A writer that beats the item to every name it is offered.
+        dest.write_bytes(b"foreign-audio")
+
+    # The app's diagnostics setup can leave the "waves" tree non-propagating;
+    # caplog reads through the root, so restore it (the same guard as
+    # tests/library/test_move_errno_breadcrumb.py).
+    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
+    with caplog.at_level(logging.ERROR), pytest.raises(DownloadIncomplete):
+        _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, occupy_always)
+
+    base = tmp_path / "lib"
+    assert (base / "Aphex Twin" / "Xtal.m4a").read_bytes() == b"foreign-audio"
+    assert (base / "Aphex Twin" / "Xtal_01.m4a").read_bytes() == b"foreign-audio"
+    # The failure is loud with the move's own words, not a bare traceback.
+    assert any(
+        "Destination is already occupied by another writer, leaving the download out of the library"
+        in str(record.exc_info[1])
+        for record in caplog.records
+        if record.exc_info
+    )
+
+
+@pytest.mark.ffmpeg
+def test_a_proven_own_occupant_is_replaced_in_place(tmp_path, monkeypatch):
+    def own_copy_once(dest: Path, call: int) -> None:
+        if call == 0:
+            _tone(dest)
+            _write_item_id(dest, "apple:song-1")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, own_copy_once)
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert landed.is_file(), "the proven own copy was not replaced in place"
+    assert not (base / "Aphex Twin" / "Xtal_01.m4a").exists(), "an own copy was stepped aside"
+    import mutagen.mp4
+
+    assert mutagen.mp4.MP4(str(landed)).tags["\xa9nam"] == ["Xtal"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(landed)
+
+
+def test_place_file_leaves_no_partials(tmp_path):
+    src = tmp_path / "src.m4a"
+    src.write_bytes(b"audio")
+    dest = tmp_path / "lib" / "Xtal.m4a"
+    dest.parent.mkdir(parents=True)
+
+    runner.place_file(src, dest)
+
+    assert dest.read_bytes() == b"audio"
+    assert list(tmp_path.rglob("*.part-*")) == []
+
+
+@pytest.mark.ffmpeg
+def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch):
+    from waves.providers.apple import AppleProvider as _RealProvider
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+
+    def stubborn(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) <= 12:  # past the retired 8-attempt cap
+            raise RuntimeError("HTTP 429 too many requests")
+        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+
+    provider.resolve_stream = stubborn
+    provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "throttle_wait", lambda *args, **kwargs: True)
+    monkeypatch.setattr(runner, "throttle_delay", lambda *args: 0.0)
+    stub._set_status = lambda *args: None
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert len(calls) == 13, "throttling retries in place until it succeeds"
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleCredentialsError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+    row = _Row()
+    retried_on: list[dict] = []
+
+    def flaky(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) == 1:
+            raise AppleCredentialsError("The cookies export is not signed in")
+        retried_on.append(row.seen())
+        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+
+    provider.resolve_stream = flaky
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub._apple_clear_session_expired = MethodType(WavesBridge._apple_clear_session_expired, stub)
+    emitted = []
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    stub._set_status = lambda *args: None
+    waited = []
+    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort, **k: waited.append(True) or True)
+    hooks = stub._apple_job_hooks()
+    row.bind(hooks)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+        status_line=_LINE,
+    )
+
+    assert summary == ""
+    assert len(calls) == 2, "the same track retries in place once the session returns"
+    assert waited == [True]
+    assert row.held
+    assert "cookies export" in row.held[0]
+    assert retried_on == [{"status": "running", "reason": "", "line": _LINE}], "the retry ran under a Held row"
+    assert stub._apple_session_expired is False, "a landed track lifts the marker"
+    assert emitted, "the light re-reads on the failure and the recovery"
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkeypatch):
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleCredentialsError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(
+        AppleCredentialsError("The cookies export is not signed in")
+    )
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    held = []
+    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort, **k: False)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    abort = Event()
+
+    def _wait_then_stop(hooks, provider, job_abort, **k):
+        job_abort.set()
+        return False
+
+    # A STOP pressed while the row is held ends the run as a stop, never a
+    # failed track: the runner's settlement reports "no file", and the job
+    # starter routes that to the cancelled row because job_abort is set.
+    monkeypatch.setattr(runner, "wait_for_session", _wait_then_stop)
+    with pytest.raises(DownloadIncomplete):
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=abort,
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert held, "the boundary held the row before the stop landed"
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_signed_in(tmp_path, monkeypatch):
+    """The fetch needs cookies, the wrapper guest is signed in, and the export
+    never changes. Reading the wrapper probe as recovery would re-run the
+    identical failing fetch forever; the hold watches the cookies export alone,
+    and past its bound the run ends with the cookies setup words (the row is
+    retryable once the export is replaced)."""
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+
+    provider = _FakeProvider()
+    provider.classify_failure = AppleProvider().classify_failure
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(
+        AppleCredentialsError("Apple downloads need a signed-in cookies export", credential=AppleCredential.COOKIES)
+    )
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    application_events: list[ApplicationEvent] = []
+    settled: list[tuple] = []
+    finished: list[int] = []
+    group_states: list[tuple] = []
+    setup_requests: list[str] = []
+    hooks.event = application_events.append
+    hooks.queue_status = lambda *args: settled.append(args)
+    hooks.finish_job = finished.append
+    hooks.gate_reachability = lambda _retry, _media_id: True
+    hooks.download_failed_with_folder = lambda *_args: False
+    hooks.bump_groups = lambda *args: group_states.append(args)
+    hooks.setup_requested = setup_requests.append
+    probes = []
+    hooks.refresh_wrapper_auth = lambda **kw: probes.append(kw) or {"logged_in": True}
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 1)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(
+        kind="track", collection=False, media_id="apple:song-1", file_template="{artist_name}/{track_title}"
+    )
+
+    runner.run_job_body(hooks, 1, spec, _song_resource(), signals=relay, job_abort=Event(), row_ask=None, name="Xtal")
+
+    assert settled[-1][1] == "failed" and finished == [1]
+    assert group_states == [("apple:song-1", None, "failed")]
+    assert setup_requests == ["setup"]
+    surfaced = settled[-1][2]
+    assert "cookies export" in surfaced and "Settings" in surfaced
+    assert probes == [], "the wrapper probe cannot answer for a cookies fetch"
+    held_rows = [row for row in settled if row[1] == "queued"]
+    assert held_rows and "cookies export" in held_rows[0][2]
+    assert stub._apple_session_expired is True, "the light reads needs attention"
+    assert not any(ev.get("status") == "done" for ev in relay.events)
+    assert len(application_events) == 2
+    held, failed = application_events
+    assert held.id == failed.id and held.references.job_id == failed.references.job_id == 1
+    assert held.scope == failed.scope == FailureScope.ACCOUNT
+    assert failed.code == EventCode.ACCOUNT_REQUIRED and failed.retryable
+    assert failed.references.runtime_id == "apple:cookies-client"
+    assert EventAction.OPEN_SETTINGS in failed.actions and EventAction.RETRY_JOB in failed.actions
+    assert EventAction.RETRY_JOB not in held.actions
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("failure_kind", ["credential", "runtime"])
+def test_a_wrapper_hold_recovers_with_one_event_lifecycle(tmp_path, monkeypatch, failure_kind):
+    """A restored wrapper account or runtime retries the same track in place.
+
+    The row leaves its hold before the retry, so Clear Queued cannot take a
+    row that is downloading. The runner publishes one held event and
+    resolves that event only after the retried delivery lands.
+    """
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError, AppleWrapperDown
+
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        # The wrapper tier's delivery is stereo ALAC: the landing must read as
+        # the wrapper's proof, not the cookies tier's AAC.
+        lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100", "bit_depth": 16},
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    provider.classify_failure = AppleProvider().classify_failure
+    calls = []
+    row = _Row()
+    retried_on: list[dict] = []
+
+    def _flaky(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) > 1:
+            retried_on.append(row.seen())
+        if len(calls) == 1:
+            if failure_kind == "runtime":
+                raise AppleWrapperDown("token=account-secret-value /Users/private-account/wrapper")
+            raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
+        info = _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+        # The wrapper tier's delivery is stereo ALAC, and its own words must
+        # say so: the landing's credential proof reads the delivered codecs.
+        info.codecs = "alac"
+        info.delivered = {**info.delivered, "tier": QualityTier.LOSSLESS.value, "codecs": "alac"}
+        return info
+
+    provider.resolve_stream = _flaky
+    provider.wrapper_url = "http://127.0.0.1:1234"  # the guest tier is set up, its session expired
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub._apple_clear_session_expired = MethodType(WavesBridge._apple_clear_session_expired, stub)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    application_events: list[ApplicationEvent] = []
+    started_ports: list[int] = []
+    sidecar_guard = Lock()
+    runtime = SimpleNamespace(read_port=lambda: 1234, app_dir=str(tmp_path))
+    supervisor = SimpleNamespace(
+        ensure_started=lambda *, http_port: started_ports.append(http_port) or True,
+        note_activity=lambda: None,
+    )
+    hooks.event = application_events.append
+    row.bind(hooks)
+    hooks.runtime = lambda: runtime
+    hooks.wrapper_port = runtime.read_port
+    hooks.supervisor = lambda: supervisor
+    hooks.sidecar_guard = lambda: sidecar_guard
+    hooks.note_activity = supervisor.note_activity
+    hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+        status_line=_LINE,
+    )
+
+    assert summary == ""
+    assert len(calls) == 2, "the same track retries in place once the guest returns"
+    assert started_ports == ([1234] if failure_kind == "runtime" else [])
+    assert row.held
+    assert ("wrapper session" if failure_kind == "credential" else "not running") in row.held[0]
+    assert retried_on == [{"status": "running", "reason": "", "line": _LINE}], "the retry ran under a Held row"
+    assert getattr(stub, "_apple_session_expired", False) is False, "a landed track lifts the marker"
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+    assert len(application_events) == 2
+    failure, recovered = application_events
+    assert failure.id == recovered.id and failure.references.job_id == recovered.references.job_id == 1
+    assert failure.scope == (FailureScope.ACCOUNT if failure_kind == "credential" else FailureScope.RUNTIME)
+    assert failure.references.runtime_id == "apple:wrapper-v2"
+    assert EventAction.OPEN_SETTINGS in failure.actions and EventAction.RETRY_JOB not in failure.actions
+    assert recovered.lifecycle == Lifecycle.RESOLVED and recovered.actions == ()
+    assert "account-secret-value" not in str([event.payload() for event in application_events])
+
+
+@pytest.mark.ffmpeg
+def test_a_credential_that_keeps_reading_recovered_ends_at_setup(tmp_path, monkeypatch):
+    """The wait's poll bound covers a credential that never changes; this caps
+    the other shape, "N immediate re-failures": the probe keeps saying the
+    guest is back and the fetch keeps failing, so every hold reads as recovery
+    and the track would retry forever. After the hold cap the run ends with
+    the credential's setup words."""
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+
+    provider = _FakeProvider()
+    provider.wrapper_url = "http://127.0.0.1:1234"
+    calls = []
+
+    def _always_broken(raw, tier, audio_type):
+        calls.append(audio_type)
+        raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
+
+    provider.resolve_stream = _always_broken
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = MethodType(WavesBridge._apple_mark_session_expired, stub)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}  # the probe keeps reading recovered
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_RETRIES", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert "wrapper session" in str(excinfo.value)
+    assert len(calls) == 3, "held at most the cap; then setup, not another retry"
+    assert not any(ev.get("status") == "done" for ev in relay.events)
+
+
+def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path, monkeypatch):
+    """A sidecar that cannot start ends the fetch with the wizard words.
+
+    The ensure's terminal verdict must become the job's failure reason (the
+    row repeats it), never an abort (which reads as a user stop) and never a
+    fetch that goes ahead against a dead wrapper.
+    """
+    from waves.providers.apple.runner import _AppleSetupRequired
+
+    provider = _FakeProvider()
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    stub.settings = _settings(tmp_path / "lib", apple_quality_audio="LOSSLESS")
+    stub._queue_index = {1: {"askQuality": "LOSSLESS", "quality": "LOSSLESS"}}
+    monkeypatch.setattr(runner, "needs_wrapper", lambda requested_rank: True)
+    message = "Apple's runtime did not start. Finish setup in Settings, Providers, Apple Music, then retry."
+
+    def _refuse(hooks, qid, job_abort, *, need_wrapper, line=""):
+        raise _AppleSetupRequired(message)
+
+    monkeypatch.setattr(runner, "ensure_sidecar", _refuse)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    surfaced = str(excinfo.value)
+    assert "Settings" in surfaced and "Apple Music" in surfaced
+
+
+# ---------------------------------------------------------------------------
+# Reuse: one verified probe, one fetch session per job
+# ---------------------------------------------------------------------------
+
+
+def _numbered_track_row(n: int) -> dict:
+    row = _track_row()
+    row["id"] = f"apple:song-{n}"
+    row["title"] = f"Track {n}"
+    row["num"] = n
+    return row
+
+
+class _ThreeTrackProvider(_FakeProvider):
+    """A three-track album whose deliveries may carry a verified probe."""
+
+    def __init__(self, fixture: Path, probe: dict | None = None):
+        super().__init__(fixture=fixture)
+        self.probe = dict(probe) if probe else None
+
+    def collection_items(self, obj, include_videos=True):
+        return [_numbered_track_row(n) for n in (1, 2, 3)]
+
+    def get_object(self, kind, raw_id):
+        if kind == "track":
+            raw = _song_resource(song_id=str(raw_id))
+            raw["attributes"]["name"] = f"Track {str(raw_id)[-1]}"
+            raw["attributes"]["trackNumber"] = int(str(raw_id)[-1])
+            return raw
+        return _album_resource()
+
+    def resolve_stream(self, raw, tier, audio_type):
+        staged = Path(str(self.fixture))
+        self.fetched.append(audio_type)
+        delivered = {"tier": QualityTier.HIGH.value, "audio_type": str(audio_type)}
+        if self.probe is not None:
+            delivered["probe"] = dict(self.probe)
+        return SimpleNamespace(local_file=str(staged), delivered=delivered, codecs="mp4a.40.2")
+
+
+def _three_track_hooks(provider, base: Path, settings=None):
+    """Minimal hooks: only the services this album path actually reaches."""
+    return runner.AppleJobHooks(
+        provider=lambda: provider,
+        settings=lambda: settings or _settings(base, playlist_create=False),
+        psetting=lambda provider_id, key, default=None: default,
+        ownership=lambda: None,
+        job_quality=lambda qid: QualityTier.HIGH,
+        status=lambda text: None,
+    )
+
+
+def _run_three_track_album(provider, base: Path):
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+    summary = runner.run_apple_job(
+        _three_track_hooks(provider, base),
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, relay
+
+
+@pytest.mark.ffmpeg
+def test_album_job_reuses_a_carried_probe_without_probing_or_decoding(tmp_path, monkeypatch):
+    """A delivery carrying the engine's verified probe costs the runner zero
+    ffprobe and zero decode calls, for every track of the album."""
+    from waves.providers.apple import engine as apple_engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    probes: list = []
+    decodes: list = []
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": probes.append(str(path)) or {"codec": "aac", "sample_rate": "44100"},
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+    provider = _ThreeTrackProvider(staged, probe={"codec": "aac", "sample_rate": "44100", "bit_depth": None})
+    base = tmp_path / "lib"
+
+    summary, relay = _run_three_track_album(provider, base)
+
+    assert summary == ""
+    assert probes == [], "the carried probe answers the pre-swap and landed reads"
+    assert decodes == [], "the engine's decode is the track's only decode"
+    assert len([ev for ev in relay.events if ev.get("status") == "done"]) == 3
+    assert sorted(path.name for path in base.rglob("*.m4a")) == ["Track 1.m4a", "Track 2.m4a", "Track 3.m4a"]
+
+
+@pytest.mark.ffmpeg
+def test_album_job_still_verifies_tracks_without_a_carried_probe(tmp_path, monkeypatch):
+    """Probe-less deliveries keep the pre-swap verification and the landed
+    read: one ffprobe each per track, one decode for the verification."""
+    from waves.providers.apple import engine as apple_engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    probes: list = []
+    decodes: list = []
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": probes.append(str(path)) or {"codec": "aac", "sample_rate": "44100"},
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+    provider = _ThreeTrackProvider(staged)
+    base = tmp_path / "lib"
+
+    summary, relay = _run_three_track_album(provider, base)
+
+    assert summary == ""
+    # Three pre-swap codec probes plus three landed-file probes; the landed
+    # copies are separate paths, so no landed read is a duplicate.
+    assert len(probes) == 6
+    assert len(decodes) == 3
+    assert len(relay.events) and relay.events[-1].get("status") == "done"
+
+
+class _ScopeTrackingProvider(_ThreeTrackProvider):
+    """Records the fetch scope's enter/exit; optionally fails every fetch."""
+
+    def __init__(self, fixture: Path, events: list, *, fail: bool = False):
+        super().__init__(fixture, probe={"codec": "aac", "sample_rate": "44100"})
+        self.events = events
+        self.fail = fail
+
+    @contextlib.contextmanager
+    def fetch_job_session(self):
+        self.events.append("enter")
+        try:
+            yield self
+        finally:
+            self.events.append("exit")
+
+    def resolve_stream(self, raw, tier, audio_type):
+        if self.fail:
+            raise RuntimeError("fetch died")
+        return super().resolve_stream(raw, tier, audio_type)
+
+
+def test_job_body_opens_one_fetch_session_for_the_whole_album(tmp_path):
+    """The worker opens the provider's scope once, around every track."""
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"tone-bytes")
+    events: list = []
+    provider = _ScopeTrackingProvider(staged, events)
+    hooks = _three_track_hooks(provider, tmp_path / "lib")
+    spec = SimpleNamespace(
+        kind="album",
+        collection=True,
+        media_id="apple:album-1",
+        is_retry=False,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    runner.run_job_body(
+        hooks,
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        row_ask=None,
+        name="Measure Album",
+    )
+
+    assert events == ["enter", "exit"], "one scope for the whole job, not one per track"
+    assert len(provider.fetched) == 3
+
+
+def test_job_body_closes_the_fetch_session_when_the_job_fails(tmp_path):
+    """The scope exits on failure too: clients and loop never leak a job."""
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"tone-bytes")
+    events: list = []
+    provider = _ScopeTrackingProvider(staged, events, fail=True)
+    hooks = _three_track_hooks(provider, tmp_path / "lib")
+    spec = SimpleNamespace(
+        kind="album",
+        collection=True,
+        media_id="apple:album-1",
+        is_retry=False,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    runner.run_job_body(
+        hooks,
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        row_ask=None,
+        name="Measure Album",
+    )
+
+    assert events == ["enter", "exit"]
+
+
+@pytest.mark.ffmpeg
+def test_atmos_album_reuses_a_carried_atmos_probe(tmp_path, monkeypatch):
+    """An Atmos delivery's carried eac3 probe answers the runner's checks."""
+    from waves.providers.apple import engine as apple_engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    probes: list = []
+    decodes: list = []
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": probes.append(str(path)) or {"codec": "eac3", "sample_rate": "48000"},
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+    provider = _ThreeTrackProvider(staged, probe={"codec": "eac3", "sample_rate": "48000", "bit_depth": None})
+    base = tmp_path / "lib"
+    hooks = _three_track_hooks(
+        provider, base, settings=_settings(base, playlist_create=False, default_audio_type="both")
+    )
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert probes == [] and decodes == []
+    done = [ev for ev in relay.events if ev.get("status") == "done"]
+    assert len(done) == 3
+    assert all(ev["quality"]["audio_mode"] == "DOLBY_ATMOS" for ev in done)
+
+
+# --------------------------------------------------------------------------- #
+# Cancel-after-probe: a press landing while the folder probe runs reaches the
+# hold the gate has just taken (the TIDAL twin reads the same way).
+# --------------------------------------------------------------------------- #
+def _probe_gate_setup(*, abort_during_probe: bool, row_present: bool):
+    """run_job_body hooks with the reachability gate under test control."""
+    abort = Event()
+    stashed: list = []
+    pending: list = []
+    calls: dict = {"replays": 0, "released": [], "statuses": [], "finished": [], "removed": []}
+
+    def gate(retry, media_id=""):
+        # The press lands while the probe runs; the gate stashes regardless.
+        if abort_during_probe:
+            abort.set()
+        stashed.append(media_id)
+        pending.append((media_id, retry))
+        return False
+
+    def discard(media_ids):
+        wanted = {str(mid) for mid in media_ids}
+        dropped = [mid for mid, _ in pending if mid in wanted]
+        pending[:] = [(mid, fn) for mid, fn in pending if mid not in wanted]
+        return dropped
+
+    hooks = runner.AppleJobHooks(
+        provider=lambda: None,
+        settings=lambda: SimpleNamespace(data=SimpleNamespace(download_base_path="/tmp/waves-out")),
+        queue_item=lambda qid: {"qid": qid} if row_present else None,
+        queue_status=lambda qid, status, reason="": calls["statuses"].append(status),
+        download_state=lambda media_id, state: None,
+        download_progress=lambda media_id, pct: None,
+        bump_groups=lambda *args: None,
+        status=lambda text: None,
+        finish_job=lambda qid: calls["finished"].append(qid),
+        remove_row=lambda qid: calls["removed"].append(qid),
+        emit_queue=lambda: None,
+        gate_reachability=gate,
+        download_apple=lambda *args, **kwargs: calls.__setitem__("replays", calls["replays"] + 1) or False,
+        download_failed_with_folder=lambda *args, **kwargs: False,
+        redact=lambda text: text,
+        devlog_event=lambda *args, **kwargs: None,
+        devlog_done=lambda *args, **kwargs: None,
+        devlog_clock=lambda: 0.0,
+        discard_pending_downloads=discard,
+        release_abandoned_hold=lambda media_ids: calls["released"].extend(media_ids),
+    )
+    return SimpleNamespace(hooks=hooks, abort=abort, stashed=stashed, pending=pending, calls=calls)
+
+
+def _run_probe_gated_body(setup) -> None:
+    spec = SimpleNamespace(
+        kind="track",
+        collection=False,
+        media_id="apple:song-1",
+        file_template="{artist_name}/{track_title}",
+        is_retry=False,
+    )
+    runner.run_job_body(
+        setup.hooks, 1, spec, {"id": "song-1"}, signals=_Relay(), job_abort=setup.abort, row_ask=None, name="Xtal"
+    )
+
+
+def test_cancel_during_the_probe_discards_the_stashed_replay():
+    setup = _probe_gate_setup(abort_during_probe=True, row_present=True)
+    _run_probe_gated_body(setup)
+
+    assert setup.stashed == ["apple:song-1"], "the gate stashed regardless"
+    assert setup.pending == [], "the cancel reached the stash: nothing replays on recovery"
+    assert setup.calls["replays"] == 0, "the cancelled job never replayed"
+    assert "cancelled" in setup.calls["statuses"]
+    assert "running" not in setup.calls["statuses"], "the cancelled row never went back to running"
+    assert setup.calls["finished"] == [1]
+
+
+def test_cancel_during_the_probe_releases_the_hold_when_the_row_is_gone():
+    setup = _probe_gate_setup(abort_during_probe=True, row_present=False)
+    _run_probe_gated_body(setup)
+
+    assert setup.pending == []
+    assert setup.calls["released"] == ["apple:song-1"]
+
+
+def test_cancel_during_the_probe_keeps_the_stopped_rows_hold():
+    setup = _probe_gate_setup(abort_during_probe=True, row_present=True)
+    _run_probe_gated_body(setup)
+
+    assert setup.calls["released"] == [], "a Stopped row stays retryable: its force rides the retry"
+
+
+def test_a_probe_hold_whose_row_a_clear_took_ends_as_that_clear():
+    # The clear removed the row before it set the abort: the withdrawal is
+    # refused, so nothing stays held to resume, and the job settles stopped.
+    setup = _probe_gate_setup(abort_during_probe=False, row_present=False)
+    bumps: list[tuple] = []
+    lines: list[str] = []
+    setup.hooks.withdraw_row_for_hold = lambda qid: False
+    setup.hooks.bump_groups = lambda *args: bumps.append(args)
+    setup.hooks.status = lines.append
+    _run_probe_gated_body(setup)
+
+    assert setup.pending == []
+    assert setup.calls["released"] == ["apple:song-1"], "the gone row's hold outlived it"
+    assert bumps == [("apple:song-1", None, "failed")]
+    assert lines[-1] == "Cancelled Xtal"
+
+
+def test_probe_block_without_a_cancel_still_stashes_for_recovery():
+    setup = _probe_gate_setup(abort_during_probe=False, row_present=True)
+    _run_probe_gated_body(setup)
+
+    assert setup.pending and [mid for mid, _ in setup.pending] == ["apple:song-1"]
+    assert setup.calls["replays"] == 0
+    assert "cancelled" not in setup.calls["statuses"]
+    assert setup.calls["removed"] == [1], "the held row withdraws; the replay brings it back"
+
+
+# --------------------------------------------------------------------------- #
+# Pause gate: the track loop waits between tracks, abort-wakeable (the
+# engine's _wait_while_paused polling shape).
+# --------------------------------------------------------------------------- #
+def test_pause_wait_returns_at_once_when_nothing_is_paused():
+    event = Event()
+    event.set()
+    hooks = runner.AppleJobHooks(pause_event=lambda: event)
+    assert runner.wait_while_paused(hooks, Event()) is False
+
+
+def test_pause_wait_without_an_event_never_waits():
+    assert runner.wait_while_paused(runner.AppleJobHooks(), Event()) is False
+
+
+def test_abort_wakes_the_pause_wait():
+    paused = Event()  # cleared: still paused
+    abort = Event()
+    abort.set()
+    hooks = runner.AppleJobHooks(pause_event=lambda: paused)
+    assert runner.wait_while_paused(hooks, abort) is True
+
+
+def test_a_paused_queue_keeps_its_line_through_a_hold_and_its_resume():
+    paused = Event()  # cleared: the user paused the queue
+    row = _Row()
+    hooks = runner.AppleJobHooks(pause_event=lambda: paused)
+    row.bind(hooks)
+
+    runner.set_held(hooks, 1, "The wrapper tier has no port yet.")
+    assert row["status"] == "queued"
+    assert "no port yet" in row["reason"], "the held row carries its words"
+    runner.resume_held(hooks, 1, line=_LINE)
+
+    assert row.seen() == {"status": "running", "reason": "", "line": ""}, "a wait wrote over the paused line"
+
+
+def test_a_job_that_waited_out_a_pause_names_itself_again():
+    class _ResumesOnSecondLook:
+        def __init__(self):
+            self.looks = 0
+
+        def is_set(self):
+            self.looks += 1
+            return self.looks > 1
+
+        def wait(self, timeout):
+            pass
+
+    lines: list[str] = []
+    resumes = _ResumesOnSecondLook()
+    paused = runner.AppleJobHooks(pause_event=lambda: resumes, status=lines.append)
+    running = Event()
+    running.set()
+    never_paused = runner.AppleJobHooks(pause_event=lambda: running, status=lines.append)
+
+    assert runner.wait_while_paused(never_paused, Event(), line=_LINE) is False
+    assert lines == [], "a job that never waited rewrote the line"
+    assert runner.wait_while_paused(paused, Event(), line=_LINE) is False
+    assert lines == [_LINE], "the queue's resume line names no job"
+
+
+def test_pause_wait_blocks_until_resumed():
+    paused = Event()
+    hooks = runner.AppleJobHooks(pause_event=lambda: paused)
+    done = Event()
+    outcome: list = []
+    worker = Thread(target=lambda: (outcome.append(runner.wait_while_paused(hooks, Event())), done.set()))
+    worker.start()
+    try:
+        assert not done.wait(0.4), "the wait walked through a pause"
+        paused.set()
+        assert done.wait(10), "resume never released the wait"
+    finally:
+        paused.set()
+        worker.join(10)
+    assert outcome == [False]
+
+
+def test_pause_holds_the_track_loop_before_the_first_fetch(tmp_path):
+    """A paused queue fetches nothing further; STOP wakes the loop and the
+    job settles without fetching."""
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"staged bytes, never fetched")
+    provider = _ThreeTrackProvider(staged)
+    base = tmp_path / "lib"
+    hooks = _three_track_hooks(provider, base)
+    paused = Event()  # cleared: the queue is paused
+    hooks.pause_event = lambda: paused
+    abort = Event()
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+    finished = Event()
+
+    def _run():
+        try:
+            runner.run_apple_job(
+                hooks,
+                1,
+                spec,
+                _album_resource(),
+                signals=relay,
+                job_abort=abort,
+                file_template="{artist_name}/{track_title}",
+            )
+        finally:
+            finished.set()
+
+    worker = Thread(target=_run)
+    worker.start()
+    try:
+        assert not finished.wait(0.4), "a paused queue finished without waiting"
+        assert worker.is_alive(), "the job died instead of waiting out the pause"
+        assert provider.fetched == [], "a paused queue fetched"
+        abort.set()
+        assert finished.wait(10), "STOP never woke the paused loop"
+    finally:
+        abort.set()
+        worker.join(10)
+    assert provider.fetched == []
+    assert not [ev for ev in relay.events if ev.get("status") == "done"]
+
+
+@pytest.mark.ffmpeg
+def test_tag_failure_surfaces_on_the_done_event(tmp_path, monkeypatch):
+    """A tag writer returning False is a visible done, not a debug log."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "tag_apple_file", lambda *a, **k: False)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done.get("tagged") is False
+    assert done.get("reason") == "saved, tags failed"
+
+
+@pytest.mark.ffmpeg
+def test_owned_untagged_file_retries_tagging_while_tagged_skips(tmp_path, monkeypatch):
+    """An owned but untagged file re-fetches; a tagged own file still skips."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+
+    def _run_over(occupant_item_id):
+        staged = tmp_path / f"staged-{occupant_item_id or 'untagged'}.m4a"
+        _tone(staged)
+        provider = _FakeProvider(fixture=staged)
+        base = tmp_path / "lib"
+        occupant = base / "Aphex Twin" / "Xtal.m4a"
+        occupant.parent.mkdir(parents=True, exist_ok=True)
+        _tone(occupant)
+        if occupant_item_id is not None:
+            _write_item_id(occupant, occupant_item_id)
+        rec = {
+            "path": str(occupant),
+            "quality_rank": quality_rank(QualityTier.HIGH),
+            "requested_rank": quality_rank(QualityTier.HIGH),
+            "ceiling_rank": quality_rank(QualityTier.HIGH),
+            "audio_mode": "STEREO",
+        }
+        stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec)))
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        return summary, provider, relay
+
+    summary, provider, relay = _run_over(None)
+    assert provider.fetched != [], "an owned untagged file must retry tagging, not skip"
+    assert not any(ev.get("status") == "skipped" for ev in relay.events)
+
+    summary, provider, relay = _run_over("apple:song-1")
+    assert summary == " (already downloaded)"
+    assert provider.fetched == []
+    assert any(ev.get("status") == "skipped" for ev in relay.events)
+
+
+def test_queued_engine_pin_and_priority_survive_a_default_change_and_retry(tmp_path):
+    from waves.providers.apple.provider import AppleProvider
+
+    provider = AppleProvider()
+    provider.engine_selection = "gamdl"
+    provider.engine_preferences = ("gamdl", "future")
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(tmp_path / "lib", provider, cookies)
+    stub._download_apple = lambda *args, **kwargs: WavesBridge._download_apple(stub, *args, **kwargs)
+    args = ("album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1")
+    assert stub._download_apple(*args)
+    original = stub._queue[0]
+    original_spec = stub._jobs.specs[original["qid"]]
+    provider.engine_selection = "auto"
+    provider.engine_preferences = ("future", "gamdl")
+    original["status"] = "failed"
+    assert provider.downloads.serve_retry(original, _album_row())
+    retried = stub._queue[-1]
+    retry_spec = stub._jobs.specs[retried["qid"]]
+    assert retried["askEngine"] == "gamdl"
+    assert retried["enginePreferences"] == ["gamdl", "future"]
+    assert retry_spec.engine_policy == original_spec.engine_policy
+    retried["status"] = "done"
+    assert stub._download_apple(*args)
+    assert stub._queue[-1]["askEngine"] == "auto"
+    assert stub._queue[-1]["enginePreferences"] == ["future", "gamdl"]
+
+
+def test_chooser_engine_pin_is_distinct_from_a_provider_auto_choice(tmp_path):
+    from waves.providers.apple.provider import AppleProvider
+
+    provider = AppleProvider()
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(tmp_path / "lib", provider, cookies)
+    args = ("album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1")
+    assert WavesBridge._download_apple(stub, *args, chooser_toggles={"engine": "gamdl"})
+    assert WavesBridge._download_apple(stub, *args)
+    assert [row["askEngine"] for row in stub._queue] == ["gamdl", "auto"]
+    assert all("engine" not in row["askToggles"] for row in stub._queue)
+    assert all("engine" not in spec.chooser_toggles for spec in stub._jobs.specs.values())
+    assert provider.engine_selection == "auto"
+
+
+def _policy_run(stub, policy, qid=1, signals=None):
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: policy
+    hooks.job_skip_existing = lambda _qid: policy == "keep_existing"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    return runner.run_apple_job(
+        hooks,
+        qid,
+        spec,
+        _song_resource(),
+        signals=signals or _Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_both_lands_beside_with_the_readable_suffix(tmp_path, monkeypatch):
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    names = sorted(path.name for path in base.rglob("*.m4a"))
+    assert len(names) == 2
+    assert "Xtal.m4a" in names
+    assert any(name.startswith("Xtal [Apple Music") for name in names)
+    assert existing.read_bytes() != b""
+
+
+@pytest.mark.ffmpeg
+def test_a_below_minimum_delivery_is_not_retained_for_another_tracks_file_under_keep_both(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    original = provider.resolve_stream
+
+    def below_minimum(raw, tier, audio_type):
+        info = original(raw, tier, audio_type)
+        info.delivered["tier"] = QualityTier.LOSSLESS.value
+        return info
+
+    provider.resolve_stream = below_minimum
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_both"
+    hooks.job_quality_strategy = lambda _qid: "minimum_required"
+    hooks.job_quality = lambda _qid: QualityTier.HI_RES_LOSSLESS
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert "kept" not in summary
+    assert len(list(base.rglob("*.m4a"))) == 2
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_protects_an_untagged_file(tmp_path, monkeypatch):
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    before = existing.read_bytes()
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("force", {"path": str(existing)}))
+
+    assert _policy_run(stub, "replace_owned") == " (1 track kept both)"
+
+    assert existing.read_bytes() == before
+    assert len(list(base.rglob("*.m4a"))) == 2
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_replaces_a_proven_unchanged_copy(tmp_path, monkeypatch):
+    from waves.metadata.digest import audio_digest
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    _write_item_id(existing, "apple:song-1")
+    before = existing.read_bytes()
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("force", {"path": str(existing), "audio_digest": audio_digest(existing)}),
+    )
+
+    assert _policy_run(stub, "replace_owned") == ""
+
+    assert len(list(base.rglob("*.m4a"))) == 1
+    assert existing.read_bytes() != before
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_existing_below_the_minimum_retains_without_a_fetch(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    relay = _Relay()
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("retain", {"path": str(existing), "quality_rank": 1, "quality_tier": "HIGH"}),
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_existing"
+    hooks.job_quality_strategy = lambda _qid: "minimum_required"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded) (1 track kept)"
+    assert provider.fetched == []
+    assert any(event["status"] == "retained" for event in relay.events)
+
+
+def _gate_hooks(rec):
+    return runner.AppleJobHooks(
+        ownership=lambda: SimpleNamespace(ownership_of=lambda *_a, **_k: rec),
+        settings=lambda: SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo")),
+    )
+
+
+def test_apple_ceiling_capped_copy_still_reports_retained():
+    rec = {"path": "/music/Song.m4a", "quality_rank": 2, "quality_tier": "LOSSLESS", "ceiling_rank": 2}
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: 2)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "retain"
+
+
+def test_apple_settled_degraded_copy_still_reports_retained():
+    rec = {
+        "path": "/music/Song.m4a",
+        "quality_rank": 2,
+        "quality_tier": "LOSSLESS",
+        "ceiling_rank": 3,
+        "degraded_tries": 2,
+    }
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: None)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "retain"
+
+
+def test_apple_atmos_copy_below_the_minimum_is_retained_not_skipped():
+    rec = {"path": "/music/Song.m4a", "quality_rank": 1, "quality_tier": "HIGH", "audio_type": "atmos"}
+    provider = SimpleNamespace(
+        get_object=lambda *_a: SimpleNamespace(),
+        advertised_ceiling=lambda *_a: None,
+        has_atmos=lambda _obj: True,
+    )
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="atmos",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "retain"
+
+
+def _guess_miss_setup(tmp_path, monkeypatch):
+    import tempfile
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "guess_ext", lambda *a, **k: ".m4a")
+    monkeypatch.setattr(runner, "flac_mode", lambda *a, **k: "lossless")
+    monkeypatch.setattr(runner, "flac_ffmpeg", lambda *a, **k: True)
+
+    def extract(hooks, staged):
+        workdir = tempfile.mkdtemp(dir=tmp_path)
+        out = Path(workdir) / "x.flac"
+        _tone(out, "flac")
+        return out, workdir
+
+    monkeypatch.setattr(runner, "extract_flac", extract)
+    return base, stub
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_both_guess_miss_keeps_the_sibling_and_readable_suffix(tmp_path, monkeypatch):
+    base, stub = _guess_miss_setup(tmp_path, monkeypatch)
+    sibling = base / "Aphex Twin" / "Xtal.flac"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"SIBLING-FLAC")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    assert sibling.read_bytes() == b"SIBLING-FLAC"
+    assert any("[Apple Music" in path.name and path.suffix == ".flac" for path in base.rglob("*.flac"))
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_guess_miss_never_replaces_an_unproven_copy(tmp_path, monkeypatch):
+    base, stub = _guess_miss_setup(tmp_path, monkeypatch)
+    sibling = base / "Aphex Twin" / "Xtal.flac"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"SIBLING-FLAC")
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, {"path": str(sibling)}))
+
+    # The unproven copy is protected, and the kept-both copy says so.
+    assert _policy_run(stub, "replace_owned") == " (1 track kept both)"
+
+    assert sibling.read_bytes() == b"SIBLING-FLAC"
+
+
+@pytest.mark.ffmpeg
+def test_apple_replace_owned_free_corrected_name_is_not_protected(tmp_path, monkeypatch):
+    _base, stub = _guess_miss_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    relay = _Relay()
+
+    assert _policy_run(stub, "replace_owned", signals=relay) == ""
+
+    done = [event for event in relay.events if event["status"] in ("done", "protected")]
+    assert done and done[-1]["status"] == "done"
+
+
+@pytest.mark.ffmpeg
+def test_apple_redownload_replaces_the_own_copy_under_keep_both(tmp_path, monkeypatch):
+    from waves.metadata.digest import audio_digest
+
+    _provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    _write_item_id(existing, "apple:song-1")
+    import mutagen.mp4
+
+    tagged = mutagen.mp4.MP4(str(existing))
+    tagged["\xa9gen"] = "Shoegaze"
+    tagged.save()
+    before = existing.read_bytes()
+    stub._redownload_overrides = {"apple:song-1"}
+    monkeypatch.setattr(
+        runner,
+        "gate_track",
+        lambda *a, **k: ("force", {"path": str(existing), "audio_digest": audio_digest(existing)}),
+    )
+
+    assert _policy_run(stub, "keep_both") == ""
+
+    assert len(list(base.rglob("*.m4a"))) == 1
+    assert existing.read_bytes() != before
+    assert mutagen.mp4.MP4(str(existing))["\xa9gen"] == ["Shoegaze"]
+
+
+@pytest.mark.ffmpeg
+def test_apple_keep_both_names_the_delivered_tier_not_the_ask(tmp_path, monkeypatch):
+    provider, base, stub = _skip_off_setup(tmp_path, monkeypatch)
+    existing = base / "Aphex Twin" / "Xtal.m4a"
+    existing.parent.mkdir(parents=True)
+    _tone(existing)
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: (None, None))
+    provider.resolve_stream = lambda raw, tier, audio_type: SimpleNamespace(
+        local_file=str(provider.fixture),
+        delivered={"tier": "HIGH", "audio_type": str(audio_type)},
+        codecs="mp4a.40.2",
+    )
+    hooks = stub._apple_job_hooks()
+    hooks.job_duplicate_policy = lambda _qid: "keep_both"
+    hooks.job_quality = lambda _qid: "HI_RES_LOSSLESS"
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    names = [path.name for path in base.rglob("*.m4a")]
+    assert any("[Apple Music HIGH" in name for name in names)
+    assert not any("HI_RES" in name for name in names)
+
+
+def test_an_album_summary_names_kept_copies(tmp_path, monkeypatch):
+    provider = _FakeProvider(fixture=None)
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    monkeypatch.setattr(runner, "gate_track", lambda *a, **k: ("retain", {"path": "/music/Song.m4a"}))
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == " (already downloaded) (1 track kept)"
+    assert provider.fetched == []
+
+
+def test_apple_tierless_copy_is_not_below_minimum():
+    rec = {"path": "/music/Song.m4a", "quality_rank": -1}
+    provider = SimpleNamespace(get_object=lambda *_a: SimpleNamespace(), advertised_ceiling=lambda *_a: None)
+
+    verdict, _rec = runner.gate_track(
+        _gate_hooks(rec),
+        provider,
+        "apple:song-1",
+        3,
+        False,
+        audio_type="stereo",
+        duplicate_policy="keep_existing",
+        quality_strategy="minimum_required",
+    )
+
+    assert verdict == "skip"

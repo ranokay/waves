@@ -1,0 +1,920 @@
+"""Entry point for the Waves QML UI.
+
+Launch with::
+
+    mise run app
+
+or import :func:`waves_activate` and call it (optionally passing an existing
+``Tidal`` session).
+"""
+
+from __future__ import annotations
+
+import faulthandler
+import gc
+import logging
+import math
+import os
+import sys
+import threading
+import time
+import traceback
+from collections.abc import Callable
+from pathlib import Path
+from typing import cast
+
+from PySide6.QtCore import SIGNAL, QDateTime, QObject, QSettings, Qt, QTimer, QUrl, Slot
+from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QWindow
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkDiskCache, QNetworkRequest, QSslConfiguration
+from PySide6.QtQml import QQmlApplicationEngine, QQmlIncubationController, QQmlNetworkAccessManagerFactory
+
+from waves import redaction
+from waves.config import Tidal
+
+from . import proc
+from .backend import _ART_CACHE_DIR, WavesBridge
+from .diagnostics import export as diagnostics
+
+
+def _data_dir(name: str) -> Path:
+    """The bundled ``qml``/``fonts`` directory, wherever this run keeps it.
+
+    From source it sits beside this file. A packaged build cannot ship it
+    there: next to the binary, a ``waves/`` data directory would collide with
+    the ``Waves`` executable on the case-insensitive filesystems macOS and
+    Windows ship with, so the build lands the data at ``desktop/<name>``
+    beside the binary instead (the --include-data-dir directives in the
+    repo-root waves.py). Candidate order mirrors the window-icon lookup
+    below: source first, then the packaged locations.
+    """
+    for root in (
+        Path(__file__).parent,  # from source: waves/desktop/
+        Path(sys.argv[0]).resolve().parent / "desktop",  # packaged: beside the binary
+        Path(sys.executable).resolve().parent / "desktop",  # Nuitka phantom-python fallback
+    ):
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parent / name
+
+
+_QML_MAIN = _data_dir("qml") / "Main.qml"
+_FONT_DIR = _data_dir("fonts")
+
+
+class _CacheFirstNAM(QNetworkAccessManager):
+    """A network manager that trusts its disk cache for cover art.
+
+    TIDAL cover URLs are content-addressed: a given URL always yields the exact
+    same bytes, so a cached cover can never go stale. Yet the default policy
+    (``PreferNetwork``) still checks freshness with the CDN on every launch, a
+    round-trip per cover, which is why a page of already-downloaded covers can
+    still sit on the loading placeholder at startup. Forcing ``PreferCache`` on
+    GETs serves a cached cover straight from disk with no network hop; only a
+    cover we have never fetched goes to the network. Safe precisely because the
+    URLs are immutable."""
+
+    def createRequest(self, op, request, outgoingData=None):
+        if op == QNetworkAccessManager.Operation.GetOperation:
+            request.setAttribute(
+                QNetworkRequest.Attribute.CacheLoadControlAttribute,
+                QNetworkRequest.CacheLoadControl.PreferCache,
+            )
+        # Plain HTTP/1.1 for cover fetches. Qt defaults to HTTP/2, which
+        # multiplexes a whole page of covers onto one connection; under load
+        # Qt's H2 client desyncs ("HEADERS on invalid stream", then
+        # "HTTP/2 protocol error") and kills every art request in flight at
+        # once (8 streams in one burst). HTTP/1.1 gives covers ~6 independent
+        # connections instead: no shared-connection failure mode, and during
+        # audio downloads those extra TCP flows also claim a fairer share of
+        # the link for the small image payloads.
+        request.setAttribute(QNetworkRequest.Attribute.Http2AllowedAttribute, False)
+        return super().createRequest(op, request, outgoingData)
+
+
+def _warm_tls() -> None:
+    """Pay Qt's one-time TLS setup on a background thread at launch.
+
+    The first HTTPS request in the process makes QtNetwork build its default
+    QSslConfiguration: the system CA store is read (~160 certificates from
+    the keychain on macOS), ~90-100ms measured. Left alone that happened
+    inside the FIRST cover-art request, i.e. inside _CacheFirstNAM's Python
+    createRequest override on the QML network thread, with the interpreter
+    held for the whole call: sampled live as a ~110ms GUI-thread stall
+    landing right in the launch animation. Here it runs on its own thread
+    while the QML is still loading, and PySide releases the interpreter for
+    the call, so nothing waits on it. If a request outruns it the override
+    simply pays as before."""
+    try:
+        QSslConfiguration.defaultConfiguration()
+    except Exception:
+        logging.getLogger(__name__).debug("TLS warm-up failed", exc_info=True)
+
+
+class _ImmutableArtCache(QNetworkDiskCache):
+    """A disk cache that never lets a stored cover expire.
+
+    The cover CDN answers with ``Cache-Control: max-age=3600``, so Qt stamps
+    every stored cover as stale an hour later. From then on the cache-first
+    policy still sends a conditional GET per cover before painting it (a
+    304 round trip, ~100 ms each measured, 1955 of 2238 held covers on one
+    machine were in that state), which is why a page of covers the app has
+    shown many times still crept in one by one. The URLs are content
+    addressed and immutable, so the freshness question has one answer: a
+    held cover is fresh. The read side is what Qt's freshness check asks,
+    ``metaData(url)``, so the expiry is rewritten there, which also covers
+    every cover stored before this class existed."""
+
+    _FRESH_YEARS = 10
+
+    def metaData(self, url):  # (Qt virtual)
+        md = super().metaData(url)
+        if md.isValid():
+            md.setExpirationDate(QDateTime.currentDateTimeUtc().addYears(self._FRESH_YEARS))
+        return md
+
+
+class _ArtCacheFactory(QQmlNetworkAccessManagerFactory):
+    """Give the QML image loader a cache-first HTTP disk cache.
+
+    Every ``Image`` in the UI fetches cover art through the engine's network
+    manager, which by default has NO cache, so each launch re-downloaded every
+    cover it showed. A disk cache plus the cache-first policy (see
+    :class:`_CacheFirstNAM`) makes search results, browse shelves and tile
+    mosaics paint from local storage on every launch after the first, spending
+    zero network on repeat art. The cache is sized to hold far more than one
+    browsing session's covers so they do not evict (and re-download) each
+    other, small thumbnails at ~tens of KB each fit tens of thousands in 1 GB."""
+
+    def __init__(self, cache_dir: str) -> None:
+        super().__init__()
+        self._cache_dir = cache_dir
+
+    def create(self, parent) -> QNetworkAccessManager:
+        nam = _CacheFirstNAM(parent)
+        cache = _ImmutableArtCache(nam)
+        cache.setCacheDirectory(self._cache_dir)
+        # ~1 GB. Covers are tens of KB each, so this holds tens of thousands:
+        # a season of browsing rather than one session. Measured at the old
+        # 256 MB the cache ran full (9,233 covers) and had already evicted
+        # nearly half the covers of pages the user had visited, so those pages
+        # went back to the network (and back to the placeholder) on the next
+        # visit. This is disk only: the in-memory warm pool that keeps recently
+        # shown covers decoded is a separate, much smaller budget (Main.qml).
+        cache.setMaximumCacheSize(1024 * 1024 * 1024)
+        nam.setCache(cache)
+        return nam
+
+
+class _BootPacedIncubation(QQmlIncubationController):
+    """Keep incubation bounded while the GUI serves boot and page frames.
+
+    Install before QML loads and retain for the session. Boot always runs
+    on a timer; after reveal, a queued GUI-thread relay serves short slices
+    after window frames. The timer covers quiet windows or failed hooks and
+    slows down when no objects incubate. Neither path needs QtQuick's Python
+    binding, which the packaged application trims.
+    """
+
+    _BOOT_SLICE_MS = 12
+    _TICK_MS = 16
+    _IDLE_TICK_MS = 50
+    _FRAME_FRESH_S = 0.05
+
+    @staticmethod
+    def _slices_for(refresh_rate: float) -> tuple[int, int, float]:
+        """Use a third of a frame after presentation, twice that otherwise."""
+        rate = refresh_rate if math.isfinite(refresh_rate) and refresh_rate > 0 else 60.0
+        third = max(1, int(1000 / rate) // 3)
+        return third, 2 * third, 1.0 / rate
+
+    def __init__(self, timer_parent: QObject) -> None:
+        super().__init__()
+        self._boot = True
+        self._released = False
+        self._notify: Callable[[int], None] | None = None
+        self._last_frame = 0.0
+        self._win: QWindow | None = None
+        self._relay: _FrameRelay | None = None
+        self._frame_slice_ms, self._open_slice_ms, self._frame_period_s = self._slices_for(60.0)
+        self._timer = QTimer(timer_parent)
+        self._timer.setInterval(self._TICK_MS)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+
+    def set_count_notifier(self, fn: Callable[[int], None]) -> None:
+        """Clear the reveal gate once; live counts are polled separately."""
+        self._notify = fn
+
+    def count_reader(self) -> Callable[[], int]:
+        return self.incubatingObjectCount
+
+    def attach_window(self, win: QWindow) -> None:
+        """Read display sizing now; connect frame delivery only at reveal."""
+        self._win = win
+        self._read_screen()
+        win.screenChanged.connect(lambda _screen: self._read_screen())
+
+    def _read_screen(self) -> None:
+        try:
+            screen = self._win.screen() if self._win is not None else None
+            rate = float(screen.refreshRate()) if screen is not None else 60.0
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            logging.getLogger(__name__).debug("screen refresh rate unavailable", exc_info=True)
+            rate = 60.0
+        self._frame_slice_ms, self._open_slice_ms, self._frame_period_s = self._slices_for(rate)
+
+    def _hook_frames(self) -> bool:
+        if self._win is None:
+            return False
+        try:
+            relay = _FrameRelay(self, self._timer.parent())
+            # frameSwapped originates on the render thread. Find it by name
+            # on the plain QWindow wrapper and land it on the GUI thread.
+            connection = QObject.connect(
+                self._win, SIGNAL("frameSwapped()"), relay.frame, Qt.ConnectionType.QueuedConnection
+            )
+        except (RuntimeError, TypeError):
+            logging.getLogger(__name__).debug("frame hook not attached", exc_info=True)
+            return False
+        if not connection:
+            relay.deleteLater()
+            return False
+        self._relay = relay
+        return True
+
+    # Do not override incubatingObjectCountChanged: it would cross into
+    # Python on every card incubation. The reveal gate polls the live count.
+
+    def _set_tick(self, ms: int) -> None:
+        if self._timer.interval() != ms:
+            if ms == self._TICK_MS and self._timer.interval() == self._IDLE_TICK_MS:
+                self._read_screen()
+            self._timer.setInterval(ms)
+
+    def _tick(self) -> None:
+        if self._boot:
+            self.incubateFor(self._BOOT_SLICE_MS)
+            return
+        if not self.incubatingObjectCount():
+            if self._timer.interval() != self._IDLE_TICK_MS:
+                self._set_tick(self._IDLE_TICK_MS)
+                self._read_screen()
+            return
+        self._set_tick(self._TICK_MS)
+        if time.monotonic() - self._last_frame < self._FRAME_FRESH_S:
+            return
+        self.incubateFor(self._open_slice_ms)
+
+    def _frame(self) -> None:
+        if self._boot:
+            return
+        now = time.monotonic()
+        # Queued frames can arrive in one batch after a GUI pause. Serve one
+        # slice for that batch so it cannot starve the next event-loop turn.
+        backlog = now - self._last_frame < self._frame_period_s / 2
+        self._last_frame = now
+        if not backlog and self.incubatingObjectCount():
+            self._set_tick(self._TICK_MS)
+            self.incubateFor(self._frame_slice_ms)
+
+    def release_throttle(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._boot = False
+        try:
+            self._hook_frames()
+        except (RuntimeError, TypeError):
+            logging.getLogger(__name__).debug("frame hook failed at release", exc_info=True)
+        if self._notify is not None:
+            self._notify(0)
+
+
+class _FrameRelay(QObject):
+    """GUI-thread receiver for the window's render-thread frame signal."""
+
+    def __init__(self, pacer: _BootPacedIncubation, parent: QObject | None) -> None:
+        super().__init__(parent)
+        self._pacer = pacer
+
+    @Slot()
+    def frame(self) -> None:
+        self._pacer._frame()
+
+
+def _content_item(win: QObject) -> QObject | None:
+    """Find the content root even when QtQuick's Python binding is absent."""
+    getter = getattr(win, "contentItem", None)
+    if callable(getter):
+        try:
+            content = getter()
+            if content is not None:
+                return content
+        except (RuntimeError, TypeError):
+            logging.getLogger(__name__).debug("contentItem() failed on the root window", exc_info=True)
+    for child in win.children():
+        try:
+            if child.metaObject().className() == "QQuickRootItem":
+                return child
+        except RuntimeError:
+            logging.getLogger(__name__).debug("unreadable child on the root window", exc_info=True)
+    return None
+
+
+def _load_mono() -> str:
+    """Register the bundled monospace font and return its family name.
+
+    The Console UI uses a monospace face for numeric readouts, the ASCII
+    download bar (█/░) and the ASCII wave logo. Bundling JetBrains Mono (OFL)
+    guarantees identical rendering and block-glyph coverage across platforms;
+    if the files are missing we fall back to the platform's generic monospace.
+    """
+    families: list[str] = []
+    for name in ("JetBrainsMono-Regular.ttf", "JetBrainsMono-Bold.ttf"):
+        font_id = QFontDatabase.addApplicationFont(str(_FONT_DIR / name))
+        if font_id != -1:
+            families += QFontDatabase.applicationFontFamilies(font_id)
+    return families[0] if families else "Monospace"
+
+
+def _icon_usable(icon: QIcon) -> bool:
+    """True only if ``icon`` carries a frame the Windows taskbar can actually use.
+
+    The taskbar asks for ~32-48px and Qt never *upscales* a QIcon, so a 16x16-only
+    icon (or the non-null-but-empty icon you get from ``addFile`` on a missing
+    path) yields a 16px pixmap that Windows rejects in favour of a generic glyph.
+    Requiring a >=32px frame refuses those degenerate icons so we can leave the
+    EXE-embedded resource icon standing instead of blanking the taskbar with a
+    bad ``setWindowIcon``. (A truncated single-frame ``icon.ico`` shipped once and
+    caused exactly this.)
+    """
+    return not icon.isNull() and any(s.width() >= 32 for s in icon.availableSizes())
+
+
+_icon_debug_pending: list[str] = []
+
+
+def _icon_debug(msg: str) -> None:
+    """Emit an icon-resolution diagnostic when ``WAVES_DEBUG`` is set.
+
+    The packaged Windows build is console-less (``--windows-console-mode=disable``),
+    so a stderr line is invisible there. Mirror the line to ``waves-icon-debug.log``
+    beside the app's own log (the config folder, where a diagnostics bundle is
+    read from), never the home directory, and scrubbed first: the line names
+    the icon's resolved root, which is an absolute path carrying the account
+    name. Best-effort: never let logging break startup.
+    """
+    msg = redaction.scrub(msg)
+    print(msg, file=sys.stderr)
+    # The icon and AUMID lines run before the bridge installs diagnostics, so
+    # the log folder is not known yet: hold them, and write them out with the
+    # first line that arrives once it is (the window line, after the bridge).
+    _icon_debug_pending.append(msg)
+    log = diagnostics.log_path()
+    if log is None:
+        return
+    try:
+        with open(log.parent / "waves-icon-debug.log", "a", encoding="utf-8") as fh:
+            fh.write("".join(line + "\n" for line in _icon_debug_pending))
+        _icon_debug_pending.clear()
+    except Exception:
+        logging.getLogger(__name__).debug("icon debug log write failed", exc_info=True)
+
+
+def _app_icon() -> QIcon | None:
+    """Window/taskbar icon for the running app.
+
+    The Nuitka ``--windows-icon-from-ico`` / ``--macos-app-icon`` flags only
+    brand the executable (what Explorer/Finder show); the live window's icon is
+    Qt's to set. We build from the individual PNG size ladder rather than the
+    single ``icon.ico`` blob: the PNGs are addressed per size, so one bad frame
+    can't cripple every surface the way a truncated ``.ico`` did. The ``.ico`` is
+    only a fallback, and whatever we return must pass :func:`_icon_usable`.
+    """
+    debug = bool(os.environ.get("WAVES_DEBUG"))
+    roots = (
+        Path(sys.executable).resolve().parent / "desktop" / "icons",  # packaged: beside the binary
+        Path(sys.argv[0]).resolve().parent / "desktop" / "icons",  # Nuitka: sys.executable is a phantom
+        Path(__file__).resolve().parent / "icons",  # from source: waves/desktop/icons
+    )
+    for root in roots:
+        icon: QIcon | None = None
+        source = ""
+        pngs = sorted(root.glob("icon*.png"))
+        if pngs:
+            icon = QIcon()
+            for png in pngs:
+                icon.addFile(str(png))
+            source = "png"
+        else:
+            ico = root / "icon.ico"
+            if ico.is_file():
+                icon = QIcon(str(ico))
+                source = "ico"
+        if icon is not None and _icon_usable(icon):
+            if debug:
+                sizes = sorted(s.width() for s in icon.availableSizes())
+                _icon_debug(f"WAVES icon: root={root} source={source} sizes={sizes} px48={icon.pixmap(48, 48).width()}")
+            return icon
+    if debug:
+        _icon_debug("WAVES icon: no usable icon found in any root")
+    return None
+
+
+def _ui_font() -> str:
+    """Family for button/tab labels: the platform's native UI sans.
+
+    The Console button spec sets labels in the system sans, SF on macOS,
+    Segoe on Windows, the desktop default on Linux, so buttons read native
+    everywhere with nothing to bundle.
+    """
+    return QGuiApplication.font().family()
+
+
+# Handle kept module-global: faulthandler holds the fd for the process lifetime.
+_crash_log_file = None
+
+
+def _crash_log_path() -> Path:
+    """The persistent crash log, next to settings.json so it is easy to name in
+    a bug report: crash.log in the platform's config folder (Application
+    Support on macOS, %APPDATA% on Windows, ~/.config elsewhere)."""
+    from waves.paths import path_config_base
+
+    return Path(path_config_base()) / "crash.log"
+
+
+def _make_private(folder: Path) -> None:
+    """Owner-only access to the folder that holds settings, sign-in, the
+    ownership and library databases, logs and the cover cache. Files inside
+    are created with the process umask (often world-readable on Linux); a
+    0700 folder keeps other local accounts out of all of them at once."""
+    if os.name != "posix":
+        return  # %APPDATA% is already per-user
+    try:
+        if folder.stat().st_uid == os.getuid() and folder.stat().st_mode & 0o077:
+            folder.chmod(0o700)
+    except OSError:
+        logging.getLogger(__name__).debug("could not restrict the config folder", exc_info=True)
+
+
+def _open_crash_log():
+    """Open crash.log for appending (rotating one old copy past ~512 KB) and
+    stamp a session header. Returns the open handle, or None on any failure.
+    The handle deliberately outlives this function: faulthandler holds it for
+    the life of the process."""
+    path = _crash_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _make_private(path.parent)
+    try:
+        if path.is_file() and path.stat().st_size > 512 * 1024:
+            path.replace(path.with_suffix(".log.1"))
+    except OSError:
+        pass
+    fh = open(path, "a", encoding="utf-8")  # noqa: SIM115
+    from waves.desktop import __version__
+
+    fh.write(f"\n=== Waves {__version__} session start ===\n")
+    fh.flush()
+    return fh
+
+
+def _install_crash_diagnostics() -> None:
+    """Make crashes and swallowed background errors diagnosable.
+
+    The download/scan work runs on background threads; a native fault (a Qt
+    object misused across threads, a segfault in a C dependency) or an uncaught
+    Python exception on a worker would otherwise leave no trace. ``faulthandler``
+    dumps a C-level traceback on SIGSEGV/SIGABRT/SIGFPE, and the excepthooks
+    route any uncaught Python exception (main thread or worker thread) through
+    the logger instead of a bare stderr print.
+
+    A packaged app's stderr is invisible to the user, so both are also pointed
+    at a persistent crash.log in the config folder; the bug-report template
+    tells users where to find it. This is diagnostics only: it records stack
+    traces of our own code, never user data. Best-effort and idempotent."""
+    global _crash_log_file
+    log = logging.getLogger(__name__)
+    try:
+        _crash_log_file = _open_crash_log()
+    except Exception:
+        _crash_log_file = None
+        log.debug("could not open crash.log", exc_info=True)
+    try:
+        if not faulthandler.is_enabled():
+            faulthandler.enable(file=_crash_log_file or sys.stderr)
+    except Exception:
+        log.debug("faulthandler.enable() failed", exc_info=True)
+
+    def _record(prefix: str, exc_info) -> None:
+        log.critical(prefix, exc_info=exc_info)
+        if _crash_log_file is not None:
+            try:
+                # Scrub before writing. The logger call above passes through
+                # _RedactingFilter, but this handle is a bare open() with no
+                # filter, formatter or scrubber attached, so an unscrubbed
+                # write here puts the home path and the exception's own
+                # message (which routinely carries a media file path) into the
+                # very file the bug-report template asks users to paste
+                # publicly.
+                text = f"{prefix}:\n" + "".join(traceback.format_exception(*exc_info))
+                _crash_log_file.write(redaction.scrub(text))
+                _crash_log_file.flush()
+            except Exception:
+                log.debug("could not append to crash.log", exc_info=True)
+
+    def _hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        _record("Uncaught exception", (exc_type, exc, tb))
+
+    sys.excepthook = _hook
+    # Uncaught exceptions on threading.Thread workers (Python 3.8+).
+    threading.excepthook = lambda args: (
+        None
+        if issubclass(args.exc_type, SystemExit)
+        else _record(
+            f"Uncaught exception in thread {getattr(args.thread, 'name', '?')}",
+            (args.exc_type, args.exc_value, args.exc_traceback),
+        )
+    )
+
+
+def _raise_fd_limit() -> None:
+    """Lift the open-file-descriptor soft limit toward the hard limit.
+
+    A macOS app launched from Finder/Launchpad inherits a low RLIMIT_NOFILE soft
+    limit (often 256), while a large download session opens many at once: HTTP
+    sockets for concurrent scans and downloads, per-segment sockets, output
+    files, ffmpeg pipes, and the QML network manager's cover-art connections.
+    Queueing several discographies pushes toward that ceiling; once crossed,
+    socket()/open() start failing and the session degrades or dies. Raising the
+    soft limit (never above the hard limit) is safe, reversible per-process, and
+    standard for I/O-heavy apps. No-op on platforms without ``resource``."""
+    try:
+        import resource
+    except ImportError:
+        return  # Windows: no POSIX resource limits
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = 10240 if hard == resource.RLIM_INFINITY else min(hard, 10240)
+        if soft != resource.RLIM_INFINITY and soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        logging.getLogger(__name__).debug("could not raise fd limit", exc_info=True)
+
+
+def _tune_interpreter_for_gui() -> None:
+    """Interpreter settings for a GUI process with busy background threads.
+
+    Every one of these bounds a launch-animation stall seen while the
+    library scan, the ownership refresh pool and the network workers were all
+    running:
+
+    * The switch interval. A QML binding or handler that calls into the bridge
+      needs the interpreter, and when a worker is running Python it gets it
+      only when the worker is asked to hand it over, which happens once per
+      switch interval. At the default 5ms every one of the ~100 bridge calls
+      a shelf makes as it builds could wait that long; 2ms bounds the wait
+      without measurably slowing the workers (they only ever switch when
+      someone is waiting).
+    * Full garbage collections. The collector walks the whole heap with the
+      interpreter held, and the heap here is large (the library index alone
+      is hundreds of thousands of objects); each pass measured 15-60ms, and
+      the default cadence ran one every few hundred milliseconds while that
+      index was being built at launch, each a dropped frame or two. The young
+      generations keep their defaults (short-lived cycles are still collected
+      promptly); only the full pass is made rare.
+    """
+    sys.setswitchinterval(0.002)
+    gc.set_threshold(700, 10, 100)
+    _memoize_macos_proxy_lookups()
+
+
+def _memoize_macos_proxy_lookups(ttl: float = 60.0) -> None:
+    """Cache macOS system-proxy answers for a minute.
+
+    On macOS, ``requests`` consults the system proxy settings for EVERY
+    request through urllib's ``getproxies_macosx_sysconf`` and
+    ``proxy_bypass_macosx_sysconf`` (both C calls into SystemConfiguration
+    that hold the interpreter for their duration). Normally sub-millisecond,
+    they were sampled taking 100-150ms during launch, with every other
+    Python thread, the GUI thread included, waiting behind them; the launch
+    animation stalled for exactly that long. The answers rarely change, so
+    the app-wide network workers (dozens of requests at launch) now share
+    one lookup per minute instead of two per request. urllib's own
+    ``getproxies``/``proxy_bypass`` look these names up at call time, so
+    patching the module attributes is enough for requests too."""
+    if sys.platform != "darwin":
+        return
+    import urllib.request as ur
+
+    orig_get = getattr(ur, "getproxies_macosx_sysconf", None)
+    orig_bypass = getattr(ur, "proxy_bypass_macosx_sysconf", None)
+    if orig_get is None or orig_bypass is None:
+        return
+    lock = threading.Lock()
+    memo: dict = {}
+
+    def getproxies_macosx_sysconf():
+        now = time.monotonic()
+        with lock:
+            hit = memo.get("proxies")
+            if hit is not None and now - hit[0] < ttl:
+                return dict(hit[1])
+        val = orig_get()
+        with lock:
+            memo["proxies"] = (now, dict(val))
+        return val
+
+    def proxy_bypass_macosx_sysconf(host):
+        now = time.monotonic()
+        key = ("bypass", host)
+        with lock:
+            hit = memo.get(key)
+            if hit is not None and now - hit[0] < ttl:
+                return hit[1]
+        val = orig_bypass(host)
+        with lock:
+            memo[key] = (now, val)
+            if len(memo) > 512:  # a session visits few hosts; never let this grow unbounded
+                memo.clear()
+                memo[key] = (now, val)
+        return val
+
+    ur.getproxies_macosx_sysconf = getproxies_macosx_sysconf  # ty: ignore[unresolved-attribute]  # urllib's macOS-only hooks; typeshed omits them
+    ur.proxy_bypass_macosx_sysconf = proxy_bypass_macosx_sysconf  # ty: ignore[unresolved-attribute]  # urllib's macOS-only hooks; typeshed omits them
+
+
+def _log_config_migration() -> None:
+    """Breadcrumb the legacy-config migration outcome (never the path itself:
+    home paths are PII). The migration ran as a side effect of the first
+    config-folder resolution, inside _install_crash_diagnostics.
+
+    Called AFTER the bridge is built, because that is what installs the
+    diagnostics handlers: the outcome has to be able to reach the ring."""
+    from waves import paths as _path_helper
+
+    if _path_helper.CONFIG_MIGRATION == "moved":
+        logging.getLogger("waves.config").info("config migrated to the platform-native folder")
+    elif _path_helper.CONFIG_MIGRATION == "failed":
+        logging.getLogger("waves.config").warning("config migration failed; the legacy folder stays in use")
+
+
+def _install_test_quit(app: QGuiApplication) -> None:
+    """Test seam: quit a launched app by itself a fixed delay after its event
+    loop starts.
+
+    Integration tests need the real entry point (settings load, migrations,
+    the geometry restore, the quit flush) to run in a subprocess and exit
+    cleanly. ``WAVES_QUIT_AFTER_BOOT_MS`` is that request, timed from
+    ``run()`` so the boot sequence has certainly run; it only fires when
+    ``WAVES_TEST_SEAM=1`` is also set, so a normal launch inheriting the
+    delay never quits itself."""
+    if os.environ.get("WAVES_TEST_SEAM") != "1":
+        return
+    quit_after_ms = os.environ.get("WAVES_QUIT_AFTER_BOOT_MS", "")
+    if quit_after_ms.isdigit() and int(quit_after_ms) > 0:
+        QTimer.singleShot(int(quit_after_ms), app.quit)
+
+
+def _block_gui_for_test() -> None:
+    """Test seam: freeze the GUI thread before the event loop starts, so the
+    watchdog integration test can prove the always-on dump fires on a real
+    default install. ``WAVES_BLOCK_GUI_MS`` is that freeze; like the quit
+    seam above it only fires when ``WAVES_TEST_SEAM=1`` is also set, so a
+    normal launch never blocks."""
+    if os.environ.get("WAVES_TEST_SEAM") != "1":
+        return
+    block_ms = os.environ.get("WAVES_BLOCK_GUI_MS", "")
+    if block_ms.isdigit() and int(block_ms) > 0:
+        time.sleep(int(block_ms) / 1000.0)
+
+
+def _log_after_shutdown_probe() -> None:
+    """Test seam: log one line after the bridge shutdown routine has run, so
+    the cold-boot test can prove the post-shutdown tail reaches the dev log
+    before the standalone ``os._exit``. Like the quit seam above it only fires
+    when ``WAVES_TEST_SEAM=1`` is also set, so a normal launch never logs it.
+    ``WAVES_PROBE_AFTER_SHUTDOWN`` carries the marker text."""
+    if os.environ.get("WAVES_TEST_SEAM") != "1":
+        return
+    marker = os.environ.get("WAVES_PROBE_AFTER_SHUTDOWN", "")
+    if marker:
+        logging.getLogger("waves").warning("%s", marker)
+
+
+def _start_boot_threads() -> None:
+    """Every thread the app itself (not the bridge) starts before the reveal.
+
+    One function so tests/test_boot_quiet_window.py can run it alongside the
+    bridge and see the same launch the user gets: the guard builds the bridge
+    directly, so a thread started here, inline in waves_activate, was invisible
+    to it."""
+    threading.Thread(target=_warm_tls, name="waves-tls-warm", daemon=True).start()
+
+
+def waves_activate(tidal: Tidal | None = None) -> int:
+    if sys.platform != "darwin":
+        return _run_waves(tidal, None)
+    from waves.desktop.providers.profile_owner import OwnerBusy, OwnerUnavailable, ProfileOwner
+    from waves.desktop.providers.session_control import activate_existing, profile_path
+
+    try:
+        profile = profile_path()
+        profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+        owner = ProfileOwner.acquire(profile)
+    except OwnerBusy:
+        return 0 if activate_existing(profile) else 1
+    except (OwnerUnavailable, OSError):
+        print("Waves could not safely own its profile.", file=sys.stderr)
+        return 1
+    try:
+        return _run_waves(tidal, owner)
+    finally:
+        owner.close()
+
+
+def _run_waves(tidal: Tidal | None, owner) -> int:  # noqa: C901 - application boot and shutdown
+    _tune_interpreter_for_gui()
+    _install_crash_diagnostics()
+    # The freeze watchdog's stuck-event-loop tracebacks belong in the same
+    # crash.log faulthandler already writes to.
+    diagnostics.set_crash_file(_crash_log_file)
+    _raise_fd_limit()
+    # Download conversions go through python-ffmpeg, which would flash a
+    # console window per spawn on the console-less Windows build.
+    proc.silence_python_ffmpeg()
+    if sys.platform == "win32":
+        # Give the taskbar an explicit AppUserModelID BEFORE the first window is
+        # created. Without this, a Qt app's taskbar button is generic even when
+        # the EXE itself carries a valid icon (Explorer shows it, the taskbar
+        # doesn't); the running button's icon is resolved through the process
+        # AUMID, not the EXE resource. This must run in the PACKAGED build too:
+        # Nuitka does NOT set an AUMID (it only writes company/product into the
+        # VERSION resource), so gating this to from-source runs left every frozen
+        # build with a generic taskbar icon. is_frozen() no longer gates it.
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Waves.Waves")
+            if os.environ.get("WAVES_DEBUG"):
+                _icon_debug("WAVES aumid: set Waves.Waves")
+        except Exception:
+            logging.getLogger(__name__).debug("could not set AppUserModelID", exc_info=True)
+            if os.environ.get("WAVES_DEBUG"):
+                _icon_debug("WAVES aumid: FAILED to set")
+    owns_app = QGuiApplication.instance() is None
+    # instance() is declared on QCoreApplication in the stubs; asking through
+    # QGuiApplication always answers with the GUI application (or None).
+    app = cast(QGuiApplication, QGuiApplication.instance()) or QGuiApplication(sys.argv)
+    # macOS defaults to text/list controls; Waves also exposes button tab stops.
+    app.styleHints().setTabFocusBehavior(Qt.TabFocusBehavior.TabFocusAllControls)
+    app.setApplicationName("Waves")
+    app.setOrganizationName("Waves")
+    # Native QSettings ignores XDG on macOS. Test-seam launches keep QML
+    # preferences in the same disposable profile as the bridge.
+    if os.environ.get("WAVES_TEST_SEAM") == "1" and os.environ.get("XDG_CONFIG_HOME"):
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, os.environ["XDG_CONFIG_HOME"])
+    icon = _app_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
+
+    _start_boot_threads()
+
+    engine = QQmlApplicationEngine()
+    bridge = WavesBridge(tidal=tidal)
+    # After the bridge, because the bridge is what installs diagnostics: logged
+    # any earlier, no logger had a level and no handler existed, so the "moved"
+    # line was dropped at the root default and the "failed" one reached stderr
+    # only, which a packaged build has nowhere to show. Either way it never
+    # reached the breadcrumb ring, the disk log or an exported bundle, which is
+    # the one thing this line is for.
+    _log_config_migration()
+    # Where the bundled ambient wave loop lives (packaged vs from-source is
+    # this module's _data_dir knowledge); the bridge serves playback from a
+    # local cached copy of it so boot never streams video off the install
+    # volume (see WavesBridge.motionVideoUrl).
+    bridge.set_motion_video_source(str(_data_dir("qml") / "assets" / "wave_loop.mp4"))
+    # HTTP disk cache for artwork (must be installed before the QML loads).
+    art_cache = _ArtCacheFactory(os.path.join(os.path.dirname(bridge.settings.file_path), _ART_CACHE_DIR))
+    engine.setNetworkAccessManagerFactory(art_cache)
+    app._waves_art_cache = art_cache  # ty: ignore[unresolved-attribute]  # keep alive
+    engine.rootContext().setContextProperty("waves", bridge)
+    # Monospace family for the QML layer (numeric readouts + ASCII art).
+    engine.rootContext().setContextProperty("monoFont", _load_mono())
+    # UI-label family for buttons/tabs (Console button spec).
+    engine.rootContext().setContextProperty("uiFontFamily", _ui_font())
+    # Keep a reference so it isn't garbage-collected.
+    app._waves_bridge = bridge  # ty: ignore[unresolved-attribute]
+    # Paced incubation while the launch overlay is up (see the class): must be
+    # installed before load so the window never installs its own controller.
+    incubation = _BootPacedIncubation(app)
+    engine.setIncubationController(incubation)
+    app._waves_incubation = incubation  # ty: ignore[unresolved-attribute]  # keep alive
+    bridge.set_boot_reveal_hook(incubation.release_throttle)
+    incubation.set_count_notifier(bridge.note_incubation_count)
+    bridge.set_incubation_count_reader(incubation.count_reader())
+    # Belt and braces: if the reveal hook is somehow never reached, open the
+    # throttle anyway; by then every boot path has long finished.
+    QTimer.singleShot(20_000, incubation.release_throttle)
+    # Abort downloads and drain the worker pools before the Qt object graph is
+    # torn down, otherwise quitting mid-download hangs in QThreadPool teardown.
+    engine.load(QUrl.fromLocalFile(str(_QML_MAIN)))
+    root_objects = engine.rootObjects()
+    if not root_objects:
+        # app.exec never runs, so aboutToQuit never fires: drain the pools and
+        # abort anything the bridge started (the token login, the library
+        # sweep) here, and say so where a crash report can see it.
+        logging.getLogger("waves").error("Failed to load the Waves QML UI")
+        print("Failed to load Waves QML UI", file=sys.stderr)
+        bridge.shutdown()
+        # wait_for_disk_log is this fork's flush_disk_log: the same bounded
+        # queue drain (2s), so the shutdown breadcrumbs land in the file.
+        diagnostics.wait_for_disk_log()
+        return 1
+
+    # The macOS back-swipe filter: installed on the window's CONTENT ITEM,
+    # not the window and not the application. A Python event filter costs a
+    # crossing into the interpreter for every event its target receives, and
+    # the GUI thread waits for the interpreter on each one behind whatever
+    # worker holds it. On the application that is every ChildAdded /
+    # DeferredDelete / MetaCall of a page build (object creation runs ~3.5x
+    # longer). On the window it is still one crossing per FRAME: the render
+    # loop's update request is delivered to the window, so every frame of the
+    # launch water queues for the interpreter behind the launch workers (the
+    # largest single GUI-thread cost while the landing builds). The content
+    # item receives only what no item under the pointer accepted: the swipe
+    # gesture, which nothing else claims, and nothing at all while the scene
+    # is idle. The mouse side buttons are read by a MouseArea at the top of
+    # the scene (Main.qml).
+    incubation.attach_window(cast(QWindow, root_objects[0]))
+    content = _content_item(root_objects[0])
+    (content or root_objects[0]).installEventFilter(bridge)
+
+    # Also set the icon on the actual top-level window, not just the application
+    # default. app.setWindowIcon only sets a fallback that a Nuitka-compiled
+    # PySide6 build may fail to surface to the Windows taskbar; QWindow.setIcon
+    # is the per-window API the taskbar reads directly.
+    if icon is not None and isinstance(root_objects[0], QWindow):
+        root_objects[0].setIcon(icon)
+    if os.environ.get("WAVES_DEBUG"):
+        _icon_debug(
+            f"WAVES window: root_type={type(root_objects[0]).__name__} "
+            f"is_qwindow={isinstance(root_objects[0], QWindow)} icon_set={icon is not None}"
+        )
+
+    _install_test_quit(app)  # WAVES_QUIT_AFTER_BOOT_MS, the integration tests' seam
+    _block_gui_for_test()  # WAVES_BLOCK_GUI_MS, the watchdog integration test's freeze
+
+    server = None
+    if owner is not None:
+        from waves.desktop.providers.session_dispatch import SessionDispatcher
+        from waves.desktop.providers.session_ipc import SessionServer
+
+        def activate_window() -> None:
+            window = root_objects[0]
+            if isinstance(window, QWindow):
+                if window.visibility() == QWindow.Visibility.Minimized:
+                    window.showNormal()
+                window.raise_()
+                window.requestActivate()
+
+        adapter = SessionDispatcher(bridge, activate_window)
+        try:
+            server = SessionServer(owner, adapter.dispatch, on_close=adapter.close)
+        except Exception:
+            adapter.close()
+            bridge.shutdown()
+            diagnostics.wait_for_disk_log()
+            return 1
+        app.aboutToQuit.connect(server.close)
+    app.aboutToQuit.connect(bridge.shutdown)
+    try:
+        rc = app.exec()
+    finally:
+        if server is not None:
+            server.close()
+    _log_after_shutdown_probe()
+    if owns_app:
+        # Standalone launch: background workers (e.g. the search popularity
+        # enrichment that fires a request per artist, or a download) may still
+        # be parked in a network read, and on macOS the QML render thread can
+        # deadlock during teardown, either makes a normal exit hang until the
+        # user force-quits. State is already persisted and downloads are aborted
+        # (shutdown(), via aboutToQuit), so skip the fragile C++ teardown.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # os._exit skips atexit, so the disk log's writer thread never gets its
+        # stop: give the queued tail (the shutdown breadcrumbs) its bounded
+        # chance to land in the file first.
+        diagnostics.wait_for_disk_log()
+        os._exit(rc)
+    return rc
+
+
+if __name__ == "__main__":
+    raise SystemExit(waves_activate())

@@ -9,7 +9,7 @@ You can contribute in many ways:
 
 ## Report Bugs
 
-Report bugs at https://github.com/iamprivacy/Waves/issues
+Report bugs at https://github.com/ranokay/waves/issues
 
 If you are reporting a bug, please include:
 
@@ -33,7 +33,7 @@ Waves could always use more documentation, whether as part of the official docs,
 
 ## Submit Feedback
 
-The best way to send feedback is to file an issue at https://github.com/iamprivacy/Waves/issues.
+The best way to send feedback is to file an issue at https://github.com/ranokay/waves/issues.
 
 If you are proposing a new feature:
 
@@ -45,7 +45,7 @@ If you are proposing a new feature:
 # Get Started!
 
 Ready to contribute? Here's how to set up `Waves` for local development.
-Please note this documentation assumes you already have `poetry` and `Git` installed and ready to go.
+Please note this documentation assumes you already have `mise` (which brings `uv` and the pinned Python) and `Git` installed and ready to go.
 
 1. Fork the `Waves` repo on GitHub.
 
@@ -62,75 +62,80 @@ git clone git@github.com:YOUR_NAME/Waves.git
 cd Waves
 ```
 
-If you are using `pyenv`, select a version to use locally. (See installed versions with `pyenv versions`)
+Then install the environment with:
 
 ```bash
-pyenv local <x.y.z>
+mise run install
 ```
 
-Then, install and activate the environment with:
+`mise` reads `mise.toml`, which pins Python, uv, hk, Node and Prettier. The
+task creates the locked uv environment and installs repository-local hk hooks
+through mise. Install mise from <https://mise.jdx.dev>, then run `mise install`
+and `mise run install`.
+
+Installation saves recognised generated hooks as `*.before-hk`. It refuses
+foreign hooks, symlinked hooks or hook directories, and a configured `core.hooksPath`; coordinate
+with their owner before changing them. It never changes global hook settings.
+
+4. Create a branch for local development:
 
 ```bash
-poetry install --with dev
-poetry env activate
+git switch develop
+git switch -c name-of-your-bugfix-or-feature
 ```
 
-(The `dev` group is optional in `pyproject.toml`, so a bare `poetry install`
-leaves out pytest, pre-commit and the linters the steps below rely on.)
+This fork integrates into `develop`; `main` mirrors upstream and takes no
+PRs. Follow [the implementation workflow](docs/agents/implementation-workflow.md)
+for issue branches and synchronization. Locate the feature's code and tests
+in [the domain map](docs/architecture.md).
 
-4. Install pre-commit to run linters/formatters at commit time:
+5. Don't forget to add test cases for your added functionality to the `tests` directory.
+
+6. When you're done making changes, check that your changes pass the formatting tests.
 
 ```bash
-poetry run pre-commit install
+mise run check
 ```
 
-5. Create a branch for local development:
+7. Before raising a pull request, run the gate for your change class in
+   [the gate matrix](docs/agents/implementation-workflow.md#gate-matrix). It
+   defines the prose, isolated-logic and full-gate checks.
+
+The merge stands on the local gate. Every PR to `develop` also runs `quality`
+(`mise run check`) and the Ubuntu `test-fast` group automatically, because this
+fork is public and standard GitHub-hosted runners are not metered; the strict
+matrix across Python 3.12, 3.13 and 3.14 and the macOS/Windows fast legs stay
+manual-only (`workflow_dispatch`). Automatic scanners (CodeQL, SonarCloud)
+are advisory. Record the commands, tested head, exits, counts and review
+dispositions in the PR body, as in
+[the PR template](.github/pull_request_template.md). To run another Python
+version locally, re-sync the venv onto it first:
+`uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
+
+8. Commit your changes and push your branch to GitHub:
 
 ```bash
-git checkout -b name-of-your-bugfix-or-feature
-```
-
-Now you can make your changes locally.
-
-6. Don't forget to add test cases for your added functionality to the `tests` directory.
-
-7. When you're done making changes, check that your changes pass the formatting tests.
-
-```bash
-make check
-```
-
-8. Now, validate that all unit tests are passing:
-
-```bash
-make test
-```
-
-9. Before raising a pull request you should also run tox.
-   This will run the tests across different versions of Python:
-
-```bash
-tox
-```
-
-This requires you to have multiple versions of Python installed.
-This step is also triggered in the CI/CD pipeline, so you could also choose to skip this step locally.
-
-10. Commit your changes and push your branch to GitHub:
-
-```bash
-git add .
-git commit -m "Your detailed description of your changes."
+git add path/to/changed-file.py path/to/new-file.py
+git commit -m "fix(domain): describe the corrected behavior" -- path/to/changed-file.py path/to/new-file.py
 git push origin name-of-your-bugfix-or-feature
 ```
 
-11. Submit a pull request through the GitHub website.
+Run `mise run check` again after committing and before pushing: the changelog
+guard compares committed `HEAD` with its merge-base.
+
+9. Submit a pull request through the GitHub website.
+
+The full branch, check, review and merge loop lives in
+[the implementation workflow](docs/agents/implementation-workflow.md). Follow
+it; the steps above are its contributor-facing minimum.
 
 # Pull Request Guidelines
 
 Before you submit a pull request, check that it meets these guidelines:
 
-1. The pull request should include tests.
+1. Include focused behavior tests for changed functionality. Test design and
+   evidence guidance is in [testing guidance](docs/agents/testing.md).
+   Prose-only changes need the checks described in the implementation workflow.
 
 2. If the pull request adds functionality, the docs should be updated.
-   Put your new functionality into a function with a docstring, and add the feature to the list in `README.md`.
+   Put your new functionality into a function with a docstring, and add the feature to the "What Waves can do" section in `README.md`.

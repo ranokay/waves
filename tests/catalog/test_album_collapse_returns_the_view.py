@@ -1,0 +1,227 @@
+"""Collapsing an expanded album row brings the page back to where it was.
+
+WHAT THIS FENCES OFF
+--------------------
+Expanding an album row pulls the row up to the expand anchor line so the
+panel has room, which scrolls the rows above it off the top of the view.
+Collapsing the row must bring the view back to where it was: leaving it
+there strands the albums the user had been looking at off screen and owes
+a scroll back up every time. The expand keeps the spot the view left, and
+the collapse returns to it with the same motion. A view the user has since
+scrolled back above that spot is left alone, and an expand that did not
+move the view (the row was already high enough) owes nothing.
+
+The panel also has to FOLD over that same beat: a Column drops an invisible
+child from its layout in the frame it goes invisible, so a panel hidden on
+the press shut the gap at once and left the scroll gliding after it, which
+is what made the collapse feel abrupt.
+
+Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
+installs process-global handlers that must not leak into the suite.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from support.qml import (
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    boot_main_qml,
+    run_scenario,
+    wait_until,
+)
+
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
+
+@pytest.mark.qml
+def test_collapsing_an_album_row_returns_the_view_to_where_it_was():
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        timeout=180,
+        sandbox_prefix="waves-collapse-test-",
+        failure_message="the collapse scroll regressed.",
+    )
+
+
+_ROW = {
+    "artist": "Lab Artist",
+    "artist_id": "",
+    "artists": [],
+    "art": "",
+    "year": "2024",
+    "date": "2024-03-11",
+    "explicit": False,
+    "added": "",
+    "popularity": 50,
+}
+
+_ALBUMS = 30
+
+
+def _payload() -> dict:
+    from search.fakes import qml_search_payload
+
+    albums = [
+        dict(_ROW, id=f"a{i}", title=f"Album {i}", tracks=10, duration_sec=2400, quality="HI-RES")
+        for i in range(_ALBUMS)
+    ]
+    return qml_search_payload(albums=albums)
+
+
+_FIND_BLOCKS = """
+(function() {
+    var out = {};
+    function walk(o) {
+        if (!o) return;
+        var kids = o.children;
+        if (!kids) return;
+        for (var i = 0; i < kids.length; ++i) {
+            var c = kids[i];
+            if (c && typeof c.albumId !== "undefined" && typeof c.toggle === "function"
+                && typeof c.trackList !== "undefined" && c.visible)
+                out[c.albumId] = c;
+            walk(c);
+        }
+    }
+    walk(root.contentItem);
+    return out;
+})()
+"""
+
+
+def _run_scenario() -> int:
+    booted = boot_main_qml()
+    if isinstance(booted, int):
+        return booted
+    _, evaluate, settle, bridge = booted
+    type(bridge).refreshBrowse = lambda self: None  # type: ignore[method-assign]
+    type(bridge).loadAlbumTracks = lambda self, album_id: None  # type: ignore[method-assign]
+
+    def q(expr: str):
+        expr = expr.replace("root._ab", "(" + _FIND_BLOCKS + ")")
+        r = evaluate(expr)
+        return r.toVariant() if hasattr(r, "toVariant") else r
+
+    failures: list[str] = []
+
+    def check(cond, what: str) -> None:
+        if not cond:
+            failures.append(what)
+
+    bridge._logged_in = True
+    bridge.loggedInChanged.emit()
+    q("openSearch()")
+    settle(120)
+    q("_searchSeq = _navSeq")
+    bridge.searchResults.emit(_payload())
+    # The albums chip lifts the five-row cap, so the page is long enough to
+    # scroll; the panels have their (empty) track lists so no fetch is owed.
+    q("root.filterType = 'albums'")
+    q(
+        f"root.trackCache = (function(){{ var m = {{}}; for (var i = 0; i < {_ALBUMS}; ++i) m['a' + i] = []; return m }})()"
+    )
+    wait_until(
+        lambda: q(
+            f"!root.searchBuilding && Object.keys(root._ab).length === {_ALBUMS} "
+            "&& results.contentHeight > results.height * 2"
+        ),
+        timeout_ms=10000,
+        message="album results finished loading and are scrollable",
+    )
+
+    # Scroll so a row sits low in the view, the way a row you reach by
+    # scrolling does, then expand it: the view moves up to the anchor line.
+    q("results.contentY = Math.floor(results.contentHeight * 0.35)")
+    settle(200)
+    y0 = q("results.contentY")
+    keys = q("Object.keys(root._ab)")
+    low = None
+    for k in keys:
+        rel = q(f"root._ab['{k}'].mapToItem(results, 0, 0).y")
+        if rel is not None and results_h(q) * 0.55 < rel < results_h(q) * 0.85:
+            low = k
+            break
+    if low is None:
+        print("no album row sits low in the view:", keys, file=sys.stderr)
+        return EXIT_PRECONDITION
+    q(f"root._ab['{low}'].toggle()")
+    settle(700)
+    check(bool(q(f"root.expandedAlbums['{low}'] === true")), "the row did not expand")
+    y1 = q("results.contentY")
+    check(y1 > y0 + 20, f"expanding did not bring the row up (contentY {y0} -> {y1})")
+
+    # Collapse: the panel folds shut over the same beat as the scroll back.
+    # A Column drops an invisible child from its layout outright, so a panel
+    # that went invisible on the press closed the whole gap in one frame while
+    # the view was still gliding: the page snapped and the scroll trailed it.
+    # children[1] is the expanded panel (children[0] is the 64px row).
+    panel = f"root._ab['{low}'].children[1]"
+    full = q(f"{panel}.height")
+    check(full > 40, f"the expanded panel has no height to fold ({full})")
+    # The gap between the row and the panel has to fold with it. A fixed
+    # spacing survives to the frame the folded panel leaves the layout and
+    # then goes in one step: a small extra collapse after the motion has
+    # visibly ended.
+    check(q(f"root._ab['{low}'].spacing") == 6, "an expanded row lost the gap under it")
+    q(f"root._ab['{low}'].toggle()")
+    settle(60)
+    mid = q(f"{panel}.height")
+    check(bool(q(f"{panel}.visible")), "the panel left the layout the instant it was collapsed")
+    check(mid is not None and 0 < mid < full, f"the panel snapped shut instead of folding ({full} -> {mid})")
+    settle(700)
+    check(q(f"{panel}.height") <= 0.5, f"the panel never finished folding ({q(f'{panel}.height')})")
+    check(not bool(q(f"{panel}.visible")), "the folded panel stayed in the layout")
+    check(
+        q(f"root._ab['{low}'].spacing") == 0,
+        f"the gap under the row outlived the fold, a step left over ({q(f'root._ab[{low!r}].spacing')})",
+    )
+    check(not bool(q(f"root.expandedAlbums['{low}'] === true")), "the row did not collapse")
+    y2 = q("results.contentY")
+    check(abs(y2 - y0) <= 1.5, f"collapsing left the view pushed down (contentY {y0} -> {y1} -> {y2})")
+    check(q(f"root.expandReturnY['{low}'] === undefined"), "the spot outlived the collapse")
+
+    # Scrolled back above the spot while expanded: the collapse leaves the
+    # view alone (there is nothing to return to).
+    q(f"root._ab['{low}'].toggle()")
+    settle(700)
+    above = max(0, y0 - 150)
+    q(f"results.contentY = {above}")
+    settle(200)
+    q(f"root._ab['{low}'].toggle()")
+    settle(700)
+    check(abs(q("results.contentY") - above) <= 1.5, "a collapse moved a view the user had already scrolled back")
+
+    # A row already high in the view expands without moving it, and its
+    # collapse owes nothing.
+    q("results.contentY = 0")
+    settle(200)
+    top = keys[0]
+    q(f"root._ab['{top}'].toggle()")
+    settle(700)
+    check(q("results.contentY") == 0, "expanding the first row moved the view")
+    check(q(f"root.expandReturnY['{top}'] === undefined"), "an expand that did not move the view kept a spot")
+    q(f"root._ab['{top}'].toggle()")
+    settle(700)
+    check(q("results.contentY") == 0, "collapsing the first row moved the view")
+
+    if failures:
+        for f in failures:
+            print("REGRESSED:", f, file=sys.stderr)
+        return EXIT_REGRESSED
+    print("album collapse returns the view: OK")
+    return EXIT_OK
+
+
+def results_h(q) -> float:
+    return float(q("results.height"))
+
+
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

@@ -1,0 +1,194 @@
+"""A cold app launch boots, persists and rehydrates through the real entry point.
+
+WHAT THIS FENCES OFF
+--------------------
+Every other boot test builds the bridge in-process and, at best, reloads the
+QML over the same objects, so the state that only the real entry point touches
+-- the first-run defaults, the settings/migration load, the window-frame
+restore, the quit flush -- is fenced here: a change that breaks a true restart
+cannot stay green.
+
+The child runs the packaged entry point (``waves.py``) offscreen against an
+isolated XDG config, asks it to quit after its boot (``WAVES_TEST_SEAM=1`` plus
+``WAVES_QUIT_AFTER_BOOT_MS``, the test seam in app.py) and must exit 0. A second launch over the files the
+first one wrote then proves that state is a valid launch state: the settings
+file the first boot created is read back, a pref and a setting changed between
+the runs survive (no re-default, no re-migration), and the saved window frame
+is restored through the real startup path.
+
+The frame restore logs at INFO (``waves_dev.log``) only while ``WAVES_DEBUG``
+is on, which is also what makes a failing run diagnosable.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from support.paths import REPO_ROOT
+
+# `qml` because the child needs a working offscreen Qt, `integration` because
+# the assertion only means something across a real process boundary, and
+# `slow` because two full app boots are one of the heaviest cases in the
+# suite (the marker means: not part of the quick QML pass).
+pytestmark = [pytest.mark.qml, pytest.mark.slow, pytest.mark.integration]
+
+_CONFIG_DIR = "Waves"
+_SEEDED_FRAME = (640, 480)
+_SEEDED_PREF = "name"
+
+
+def _launch(env: dict[str, str]) -> subprocess.CompletedProcess:
+    return subprocess.run(  # noqa: S603 (fixed argv: this interpreter, the entry file)
+        [sys.executable, str(REPO_ROOT / "waves.py")],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def _isolated_env(tmp_path: Path) -> dict[str, str]:
+    """The child's environment: offscreen Qt, isolated dirs, self-quit."""
+    env = dict(os.environ)
+    env.update(
+        {
+            "QT_QPA_PLATFORM": "offscreen",
+            "WAVES_TEST_SEAM": "1",
+            "WAVES_QUIT_AFTER_BOOT_MS": "3000",
+            "WAVES_DEBUG": "1",
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        }
+    )
+    env.pop("WAVES_ACCOUNT_TESTS", None)
+    return env
+
+
+def _wrong(proc: subprocess.CompletedProcess, tmp_path: Path) -> str:
+    log = tmp_path / "config" / _CONFIG_DIR / "waves_dev.log"
+    tail = log.read_text(encoding="utf-8")[-2500:] if log.exists() else "(no dev log)"
+    return f"rc={proc.returncode}\nstdout:\n{proc.stdout[-1500:]}\nstderr:\n{proc.stderr[-1500:]}\nlog tail:\n{tail}"
+
+
+def _load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_a_cold_launch_boots_persists_and_rehydrates(tmp_path):
+    config = tmp_path / "config" / _CONFIG_DIR
+    config.mkdir(parents=True)
+    # Seed only the Waves prefs: the frame to restore and a pref whose
+    # non-default value a later boot must not re-default. The engine settings
+    # file is deliberately absent, so run 1 is a real fresh install that
+    # writes it (the first-run defaults + the migrations).
+    (config / "waves.json").write_text(
+        json.dumps(
+            {"win_w": _SEEDED_FRAME[0], "win_h": _SEEDED_FRAME[1], "win_x": 0, "win_y": 0, "search_sort": _SEEDED_PREF}
+        ),
+        encoding="utf-8",
+    )
+    env = _isolated_env(tmp_path)
+
+    first = _launch(env)
+    assert first.returncode == 0, f"the first cold launch did not exit clean:\n{_wrong(first, tmp_path)}"
+    log_path = config / "waves_dev.log"
+    assert log_path.exists(), "the launch wrote no dev log at all"
+    # The fresh install persisted its own settings, and restored the frame the
+    # seeded prefs asked for.
+    settings_path = config / "settings.json"
+    assert settings_path.exists(), "the first-run settings were never written"
+    assert _load(settings_path).get("download_base_path") is not None, "the written settings lost their base path"
+    assert f"restore window {_SEEDED_FRAME[0]}x{_SEEDED_FRAME[1]}" in log_path.read_text(encoding="utf-8")
+
+    # A change a user could make between launches: the download folder. A
+    # later boot that re-applied the first-run defaults, or re-ran a
+    # migration over the file, would clobber it.
+    library = tmp_path / "library"
+    library.mkdir()
+    written = _load(settings_path)
+    written["download_base_path"] = str(library)
+    settings_path.write_text(json.dumps(written), encoding="utf-8")
+
+    second = _launch(env)
+    assert second.returncode == 0, f"the second launch did not exit clean:\n{_wrong(second, tmp_path)}"
+    second_log = log_path.read_text(encoding="utf-8")
+    assert second_log.count("restore window") == 2, _wrong(second, tmp_path)
+    assert _load(settings_path)["download_base_path"] == str(library), "a later boot re-defaulted a saved setting"
+    prefs = _load(config / "waves.json")
+    assert prefs["search_sort"] == _SEEDED_PREF, "a later boot re-defaulted a saved pref"
+    assert (prefs["win_w"], prefs["win_h"]) == _SEEDED_FRAME, "a later boot dropped the saved frame"
+
+
+def test_a_default_install_arms_the_freeze_watchdog(tmp_path):
+    """A non-verbose launch still records a freeze: the always-on watchdog
+    fires exactly one dump into crash.log on a synthetic 20s GUI block, while
+    the disk log stays quiet (WARNING, no sampler, no recovered warnings).
+
+    WHAT THIS FENCES OFF
+    --------------------
+    The watchdog used to start only through the verbose toggle, so a hang on
+    a release build left no stack. This proves the shipped default -- real
+    entry point, default prefs, no WAVES_DEBUG -- arms the 15s dump, and that
+    always-on means dump-only: the sampler stays off and no [freeze] warning
+    accompanies the recovered block.
+    """
+    config = tmp_path / "config" / _CONFIG_DIR
+    config.mkdir(parents=True)
+    env = _isolated_env(tmp_path)
+    env.pop("WAVES_DEBUG", None)  # default prefs: verbose off, disk WARNING
+    env["WAVES_BLOCK_GUI_MS"] = "20000"
+
+    proc = _launch(env)
+    assert proc.returncode == 0, f"the blocked launch did not exit clean:\n{_wrong(proc, tmp_path)}"
+    crash = config / "crash.log"
+    assert crash.exists(), "the launch wrote no crash log at all"
+    dumps = crash.read_text(encoding="utf-8")
+    assert "Timeout (0:00:15)" in dumps, f"no 15s watchdog dump in crash.log:\n{dumps[-800:]}"
+    assert dumps.count("Timeout") == 1, f"the 20s block fired more than one dump:\n{dumps[-800:]}"
+    log_path = config / "waves_dev.log"
+    assert log_path.exists(), "the launch wrote no dev log at all"
+    log = log_path.read_text(encoding="utf-8")
+    assert "[sys]" not in log, "the perf sampler ran on a non-verbose launch"
+    assert "[freeze]" not in log, "always-on is dump-only: a recovered block must not warn"
+    # The disk level itself: every timestamped record is WARNING or above.
+    # Continuation lines (traceback text) carry no level column and are skipped.
+    levels = {
+        m.group(1) for line in log.splitlines() for m in [re.match(r"^\d{2}:\d{2}:\d{2}\.\d{3}  ([A-Z]+)", line)] if m
+    }
+    assert levels, "no parseable log lines at all"
+    assert levels <= {"WARN", "ERROR", "CRITICAL"}, f"disk log carries sub-WARNING records: {sorted(levels)}"
+
+
+def test_a_line_logged_after_shutdown_still_reaches_the_dev_log(tmp_path):
+    """The post-shutdown tail survives the standalone exit path.
+
+    WHAT THIS FENCES OFF
+    --------------------
+    Standalone launch ends in ``os._exit``, which skips the interpreter-exit
+    hooks that otherwise stop the disk-log writer thread. The entry point
+    gives the queued tail a bounded chance to land before that exit; without
+    it, a line logged after the bridge shutdown routine (the quit flush, the
+    shutdown breadcrumbs) is still in the writer queue when the process dies.
+    A marker logged at WARNING (the default disk level) after shutdown must be
+    in the file after exit.
+    """
+    config = tmp_path / "config" / _CONFIG_DIR
+    config.mkdir(parents=True)
+    env = _isolated_env(tmp_path)
+    env["WAVES_PROBE_AFTER_SHUTDOWN"] = "shutdown tail probe"
+
+    proc = _launch(env)
+    assert proc.returncode == 0, f"the probed launch did not exit clean:\n{_wrong(proc, tmp_path)}"
+    log_path = config / "waves_dev.log"
+    assert log_path.exists(), "the launch wrote no dev log at all"
+    assert "shutdown tail probe" in log_path.read_text(encoding="utf-8"), (
+        "a line logged after shutdown never reached the dev log; the pre-exit flush did not land the tail"
+    )

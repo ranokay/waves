@@ -1,0 +1,150 @@
+"""The failed row's reason reaches the drawer, not just the bridge.
+
+The bridge stores WHY a download failed on the queue row ("6 of 501 tracks
+failed"). That value is worth nothing unless the drawer can read it, and QML
+fails at exactly this silently: a ListModel fixes its roles from the first
+object appended, so a role missing from ``queueRowObject`` does not exist on
+any row, reads as ``undefined`` in the delegate, and produces no warning and no
+binding error. The reported symptom was a row whose entire diagnosis was the
+word "Failed", so a check that only asked the bridge would pass over the very
+gap this is about.
+
+So the real Main.qml is booted offscreen, driven through the real bridge slots,
+and asked what the row holds and what the sub-status line renders.
+
+Runs in a SUBPROCESS like the other Main.qml scenarios (shares
+``support.qml.boot_main_qml``).
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from support.qml import EXIT_OK, boot_main_qml, run_scenario
+
+_REASON = "6 of 501 tracks failed after the provider stopped returning audio for this playlist"
+
+
+def _row_reason(q, qid: int) -> str:
+    return str(
+        q(f"(function(){{ var i = queueRowIndexOf({qid}); return i < 0 ? '<no row>' : queueModel.get(i).reason }})()")
+    )
+
+
+def _row_status(q, qid: int) -> str:
+    return str(
+        q(f"(function(){{ var i = queueRowIndexOf({qid}); return i < 0 ? '<no row>' : queueModel.get(i).status }})()")
+    )
+
+
+def _scenario() -> int:
+    booted = boot_main_qml()
+    if not isinstance(booted, tuple):
+        return booted
+    _root, q, settle, bridge = booted
+    problems: list[str] = []
+
+    qid = bridge._enqueue("Pa Que Hablen", "playlist", media_id="pl-35", artist="", tracks=501, collection=True)
+    settle(80)
+
+    # Born with the role, so it exists on every row the model ever holds.
+    if _row_reason(q, qid) != "":
+        problems.append(f"a fresh row already carries a reason: {_row_reason(q, qid)!r}")
+
+    bridge._set_queue_status(qid, "running")
+    bridge._set_queue_status(qid, "failed", _REASON)
+    settle(120)
+
+    if _row_status(q, qid) != "failed":
+        problems.append(f"the row did not reach failed: {_row_status(q, qid)!r}")
+    if _row_reason(q, qid) != _REASON:
+        problems.append(f"the reason did not reach the model: {_row_reason(q, qid)!r}")
+
+    # And what the row actually SAYS. The sub-status expression is the thing
+    # the reporter photographed; a role that exists but is not read would pass
+    # every check above and still show "Failed". The drawer has to be open for
+    # its delegates to exist at all.
+    q("queueDrawer.open()")
+    settle(250)
+    said = str(
+        q(
+            "(function(){"
+            " function walk(it){"
+            "  if (!it) return null;"
+            "  if (it.text !== undefined && String(it.text).indexOf('tracks failed') >= 0) return it;"
+            "  for (var i = 0; i < it.children.length; i++) {"
+            "   var hit = walk(it.children[i].item || it.children[i]);"
+            "   if (hit) return hit;"
+            "  }"
+            "  return null;"
+            " }"
+            " var hit = walk(queueDrawer.contentItem);"
+            " return hit ? String(hit.text) : '<not rendered>';"
+            "})()"
+        )
+    )
+    tooltip = q(
+        "(function(){"
+        " function walk(it){"
+        "  if (!it) return null;"
+        "  if (it.objectName === 'queueReason') return it;"
+        "  for (var i = 0; i < it.children.length; i++) {"
+        "   var hit = walk(it.children[i].item || it.children[i]);"
+        "   if (hit) return hit;"
+        "  }"
+        "  return null;"
+        " }"
+        " var hit = walk(queueDrawer.contentItem);"
+        " return hit ? JSON.stringify({truncated: hit.truncated, words: hit.ToolTip.text}) : '';"
+        "})()"
+    )
+    if _REASON not in said or '"truncated":true' not in tooltip or _REASON not in tooltip:
+        problems.append(f"the failed row does not expose its full reason: row={said!r}, tooltip={tooltip!r}")
+
+    # The full-resync path is a SEPARATE writer from the per-row delta, and a
+    # rebuild (or a STOP over a big queue) is delivered that way. Poke the row
+    # directly so only the resync can carry the change, which is the shape
+    # that would leave a row explaining a failure it no longer has.
+    bridge._queue_item(qid)["reason"] = "2 of 501 tracks failed"
+    bridge._queue_resync()
+    settle(120)
+    if _row_reason(q, qid) != "2 of 501 tracks failed":
+        problems.append(f"a resync did not carry the reason: {_row_reason(q, qid)!r}")
+
+    bridge._queue_item(qid)["reason"] = ""
+    bridge._queue_resync()
+    settle(120)
+    if _row_reason(q, qid) != "":
+        problems.append(f"a resync kept a stale reason: {_row_reason(q, qid)!r}")
+
+    # A row that is retried in place and settles may not keep explaining a
+    # failure that no longer stands.
+    bridge._set_queue_status(qid, "failed", _REASON)
+    settle(120)
+    bridge._set_queue_status(qid, "done")
+    settle(120)
+    if _row_reason(q, qid) != "":
+        problems.append(f"a settled row kept its old reason: {_row_reason(q, qid)!r}")
+
+    if problems:
+        print("\n".join(problems), file=sys.stderr)
+        return 1
+    print("REASON: OK")
+    return EXIT_OK
+
+
+@pytest.mark.qml
+def test_a_failed_queue_row_shows_why_it_failed():
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        sandbox_prefix="waves-queue-reason-test-",
+        failure_message="the failed queue row lost its reason again",
+        drop=("waves.qt",),
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(_scenario())

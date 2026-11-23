@@ -1,10 +1,10 @@
 [project]
 name = "waves"
 authors = [{ name = "iamprivacy" }]
-# Kept equal to waves.waves_ui.__version__, which is the version the app and
-# the updater actually report; tests/test_package_version.py fails the build if
+# Kept equal to waves.desktop.__version__, which is the version the app and
+# the updater actually report; tests/packaging/test_package_version.py fails the build if
 # the two drift. Bump both in the same commit that cuts a release.
-version = "0.2.8"
+version = "0.1.32"
 description = "Waves: a native desktop app for saving music from your own TIDAL account for offline listening"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -15,72 +15,165 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
-requires-python = ">=3.12,<3.14"
-dynamic = ["dependencies"]
+requires-python = ">=3.12,<3.15"
+
+dependencies = [
+  "requests>=2.34.2,<3",
+  "mutagen>=1.48.1,<2",
+  "dataclasses-json>=0.6.7,<0.7",
+  "pathvalidate>=3.3.1,<4",
+  "m3u8>=6.0.0,<7",
+  "gamdl>=3.8.5,<3.9",
+  "tidalapi>=0.8.11,<0.9",
+  "python-ffmpeg>=2.0.12,<3",
+  # Direct import in waves/providers/apple/engine.py (the cookies-tier fallback shells
+  # through it); pinned to gamdl's own floor so the two can never disagree.
+  "yt-dlp>=2025.10.22",
+  # Direct import in waves/providers/apple/gamdl_logs.py, which configures the
+  # structlog gamdl logs through; floored at gamdl's own requirement.
+  "structlog>=26.1.0",
+  "pycryptodome>=3.24.0,<4",
+  "certifi>=2026.7.22",
+  "urllib3>=2.8.0,<3",
+]
 
 [project.urls]
 homepage = "https://getwaves.dev"
 repository = "https://github.com/iamprivacy/Waves"
 documentation = "https://getwaves.dev"
 
-[tool.poetry]
-packages = [{ include = "waves" }]
-
-[tool.poetry.dependencies]
-requests = "~2.34.2"
-mutagen = "^1.48.1"
-dataclasses-json = "^0.6.7"
-pathvalidate = "^3.3.1"
-m3u8 = "^6.0.0"
+[project.optional-dependencies]
 # Exact pin. PySide6 6.10.0 through 6.11.1 ship macOS binding libraries built
 # for macOS 15 despite their macosx_13_0 wheel tag, so on macOS this version
-# really requires Sequoia (dyld kills the app on anything older, issue #14).
+# really requires Sequoia (dyld kills the app on anything older).
 # The release handles that with two macOS flavors: the regular build uses this
 # pin (floor 15.0), and CI's legacy macOS legs overlay pyside6==6.9.3 (the
 # newest release whose binaries honor their macOS 12 wheel tag) on top of the
 # locked venv for a "_legacy" bundle with floor 12.0 (see WAVES_MACOS_MIN in
-# the Makefile and the legacy legs in release-or-test-build.yml). CI's "Assert
+# mise.toml and the legacy legs in release-or-test-build.yml). CI's "Assert
 # macOS version floor" step enforces each flavor's floor on every macOS build;
 # when a PySide6 release honors its wheel tags again the legacy legs can go.
-pyside6 = { version = "6.11.1", optional = true }
-# Optional on purpose: waves_ui.notify degrades to "no banner" without it, and
-# Settings shows the notification switch only when it is importable.
-desktop-notifier = { version = "^6.2.0", optional = true }
-tidalapi = "^0.8.10"
-python-ffmpeg = "^2.0.12"
-pycryptodome = "^3.23.0"
-certifi = ">=2026.7.22"
-urllib3 = "^2.8.0"
+gui = ["pyside6==6.11.1"]
 
-[project.optional-dependencies]
-gui = ["pyside6", "desktop-notifier"]
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^9.0.1"
-deptry = "^0.24.0"
-pre-commit = "^4.5.0"
-tox = "^4.32.0"
-pyupgrade = "^3.21.2"
-pillow = "^12.0.0"
-black = "^25.11.0"
-nuitka = "4.2.2"
+[dependency-groups]
+dev = [
+  "pytest>=9.1.1,<10",
+  "deptry>=0.25.1,<0.26",
+  "pyyaml==6.0.3",
+  # Same parser as the migrated YAML hook, including duplicate-key rejection.
+  "ruamel-yaml==0.19.1",
+  # Hooks and CI lint with this one version. Dependabot may bump it.
+  "ruff==0.17.0",
+  "pyupgrade>=3.22.0,<4",
+  # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
+  # bump invalidates it (docs/dependency-updates.md). 4.x is AGPL-3.0-only, a
+  # license accepted for this build-only tool; 4.x is also what supports
+  # Python 3.14.
+  "nuitka==4.2.2",
+  # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
+  # Dependabot may bump it like any other dev tool, and a bump re-baselines
+  # the rule exceptions below.
+  "ty==0.0.86",
+]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ty]
+# ty (Astral's type checker, in beta) over the shipped package (waves/); tests
+# and tools are outside the gate (the suite's fakes are deliberately dynamic,
+# and the runtime suite is what exercises them). The point is catching
+# call/return and assignment mistakes in shipped code, not a full annotation
+# campaign; the inherited engine's residue is handled by the path overrides
+# below.
+
+[tool.ty.src]
+include = ["waves"]
+
+[tool.ty.terminal]
+# Warnings do not fail the gate, the same shape as the basedpyright warning
+# level this replaces: errors exit non-zero, warnings exit zero. The warnings
+# that remain are the accepted baseline of the files the overrides below
+# name; tools/typecheck.sh counts those and prints every other diagnostic.
+# Every other module is held to the error level. Re-check each override
+# reason when a seam, a stub, or the inherited engine moves.
+error-on-warning = false
+
+# The accepted baseline, scoped to the files that carry it; the reasons the
+# rules are accepted are recorded here. These three rules are errors
+# everywhere else: a new diagnostic in a hand-written module fails the gate
+# instead of joining a burn-down. In these files they are warnings, which
+# tools/typecheck.sh counts rather than prints, while ty's own default-warn
+# rules (redundant-condition, deprecated) still print; error-level categories
+# fail the gate.
+# - unresolved-attribute: catalog/engine objects cross the provider seam as
+#   plain objects by design (the row-dict contract), and the cooperative
+#   library mixin's methods resolve `self` to the mixin, so its Qt members
+#   read as unresolved. Covers the basedpyright reportAttributeAccessIssue
+#   and reportOptionalMemberAccess noise.
+# - invalid-argument-type: the same seam, plus PySide6/Qt stubs (property type
+#   strings like "QVariant", QByteArray buffers) and the urllib/tidalapi
+#   stubs' narrow parameter types. Covers reportArgumentType.
+# - invalid-attribute-access: PySide6 Signal descriptors accessed from the
+#   library mixin's methods; the descriptor's typed receiver is QObject and
+#   the mixin itself is not one (the WavesBridge subclass is).
+[[tool.ty.overrides]]
+include = [
+  "waves/desktop/backend.py",
+  "waves/desktop/queue/bridge.py",
+  "waves/desktop/library/bridge.py",
+  "waves/download.py",
+]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "warn"
+invalid-argument-type = "warn"
+invalid-attribute-access = "warn"
+
+# The inherited TIDAL engine (upstream Tidaler code, kept close to upstream;
+# see the download.py entry in [tool.ruff.lint.per-file-ignores]) predates the
+# gate: its Optional-vs-declared attributes, string-vs-enum/path assignments,
+# m3u8 union and raise path need upstream-shaped fixes, so those diagnostics
+# are accepted warnings rather than failing the gate. Hand-written
+# modules are not covered by this override.
+[[tool.ty.overrides]]
+include = ["waves/download.py"]
+
+[tool.ty.overrides.rules]
+invalid-assignment = "warn"
+invalid-return-type = "warn"
+invalid-raise = "warn"
+
+# The TOML/YAML validator uses this developer-only parser.
+[tool.deptry.per_rule_ignores]
+DEP004 = ["ruamel"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config"]
+xfail_strict = true
+markers = [
+  "qml: drives the real QML tree offscreen (needs PySide6; skipped without it)",
+  "ffmpeg: uses a real ffmpeg/ffprobe binary (skipped when none is on PATH)",
+  "integration: crosses a real process, disk store or service boundary (opt-in groups)",
+  "platform: behavior that depends on the host platform",
+  "slow: the long tail of the qml group: one of the heaviest boots (8 s or more), always marked beside qml",
+  "account: runs against the real Apple/TIDAL accounts (opt-in via WAVES_ACCOUNT_TESTS=1)",
+]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 120
-fix = true
+fix = false
 # Overview: https://docs.astral.sh/ruff/rules/
+
+[tool.ruff.lint]
 select = [
   # flake8-2020
   "YTT",
@@ -109,6 +202,10 @@ select = [
   "PGH",
   # pyupgrade
   "UP",
+  # perflint
+  "PERF",
+  # refurb
+  "FURB",
   # ruff
   "RUF",
   # tryceratops
@@ -132,190 +229,180 @@ ignore = [
   "RUF003",
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
+# Tooling invokes fixed executables with fixed argv, never a shell or user command.
+"tools/check_pyupgrade.py" = ["S603"]
+"tools/check_changelog_entry.py" = ["S603"]
+"tools/check_qml_format.py" = ["S603", "S607"]
+"tools/install_hooks.py" = ["S603", "S607"]
+# Disposable Git fixtures exercise real commands with an argument list.
+"tests/packaging/test_verification_preserves_work.py" = ["S603", "S607"]
+
 # Tests use asserts (S101), terse error messages (TRY003) and throwaway temp
 # paths like "/tmp/x" as never-touched dummy dirs (S108).
 "tests/*" = ["S101", "TRY003", "S108"]
-# The Back-to-Browse scroll guard re-runs itself in a subprocess to isolate the
-# Qt boot (S603, fixed argv), and its boot -> drive -> assert scenario is one
+# One deliberately linear end-to-end journey (pick a provider -> Settings ->
+# sign in -> sign out -> relaunch); the branching is the journey (C901).
+"tests/ui/test_account_journey.py" = ["C901"]
+# The boot scenarios replay one launch sequence start to finish; the
+# branching is the sequence (C901).
+"tests/ui/test_boot_fade_landing_park.py" = ["C901"]
+"tests/ui/test_boot_reveal_prewarm.py" = ["C901"]
+"tests/ui/test_boot_shield_cursor_release.py" = ["C901"]
+"tests/ui/test_boot_version_drain_order.py" = ["C901"]
+# The ported browse scenarios keep their boot -> drive -> assert shape as one
 # deliberately linear function (C901).
-"tests/test_browse_back_scroll.py" = ["S603", "C901"]
-# The Settings fit scenario re-runs itself in a subprocess the same way
-# (S603, fixed argv), and its scenario is one linear function too (C901).
-"tests/test_settings_fit.py" = ["S603", "C901"]
-"tests/test_settings_unsaved_marks.py" = ["S603", "C901"]
-"tests/test_releases_search_restore.py" = ["S603"]
-"tests/test_releases_feed_reveal.py" = ["S603"]
-"tests/test_waves_scrollbar.py" = ["S603", "C901"]
-"tests/test_queue_row_bar_follows_drag.py" = ["S603", "C901"]
-"tests/test_queue_button_echo.py" = ["S603", "C901"]
-"tests/test_releases_badge_flare.py" = ["S603", "C901"]
-"tests/test_queue_button_finishing.py" = ["S603", "C901"]
-"tests/test_queue_button_chart_history.py" = ["S603", "C901"]
-"tests/test_queue_button_badge_scale.py" = ["S603", "C901"]
-"tests/test_queue_button_long_batch.py" = ["S603", "C901"]
+"tests/browse/test_browse_back_scroll.py" = ["C901"]
+"tests/browse/test_browse_card_library_state.py" = ["C901"]
+"tests/browse/test_browse_card_line_fits.py" = ["C901"]
+"tests/browse/test_browse_card_openable.py" = ["C901"]
+"tests/browse/test_browse_console_wayfinding.py" = ["C901"]
+"tests/browse/test_browse_row_window.py" = ["C901"]
+"tests/browse/test_browse_strip_fits_the_card.py" = ["C901"]
+# The ported search scenarios keep their boot -> drive -> assert shape as one
+# deliberately linear function (C901).
+"tests/search/test_search_artists_show_all_empty.py" = ["C901"]
+"tests/search/test_search_playlist_block.py" = ["C901"]
+"tests/search/test_search_refresh_in_place.py" = ["C901"]
+"tests/search/test_search_scroll_reset.py" = ["C901"]
+"tests/search/test_search_tab_artist_restore.py" = ["C901"]
+"tests/search/test_search_top_result.py" = ["C901"]
+# The ported queue/progress scenarios keep their boot -> drive -> assert shape
+# as one deliberately linear function (C901).
+"tests/ui/test_card_progress_outline.py" = ["C901"]
+"tests/downloads/test_progress_carved_percent.py" = ["C901"]
+"tests/downloads/test_progress_jump_ramp.py" = ["C901"]
+"tests/downloads/test_progress_matrix_stable_width.py" = ["C901"]
+"tests/downloads/test_progress_pad_cells.py" = ["C901"]
+"tests/queue/test_queue_drawer_close_button.py" = ["C901"]
+"tests/queue/test_queue_clear_confirm.py" = ["C901"]
+"tests/queue/test_queue_drawer_resize.py" = ["C901"]
+"tests/queue/test_queue_expected_tier.py" = ["C901"]
+"tests/queue/test_queue_failed_section.py" = ["C901"]
+"tests/queue/test_queue_ledger_scroll.py" = ["C901"]
+"tests/queue/test_queue_owned_prediction.py" = ["C901"]
+"tests/queue/test_queue_playlist_expands.py" = ["C901"]
+"tests/queue/test_queue_repeated_track_state.py" = ["C901"]
+"tests/queue/test_queue_row_index.py" = ["C901"]
+"tests/queue/test_queue_row_progress_density.py" = ["C901"]
+"tests/queue/test_queue_row_quality.py" = ["C901"]
+"tests/queue/test_queue_unavailable_word.py" = ["C901"]
+# The ported hover/video scenarios keep their boot -> drive -> assert shape as
+# one deliberately linear function (C901).
+"tests/ui/test_hover_prefetch_scenario.py" = ["C901"]
+"tests/settings/test_hover_swell_fade.py" = ["C901"]
+"tests/catalog/test_video_grid_hover_dwell.py" = ["C901"]
+# The ported update-toast scenario keeps its boot -> drive -> assert shape as
+# one deliberately linear function (C901).
+"tests/updates/test_update_toast_staged.py" = ["C901"]
+# The ported folder/playlist/nav scenarios keep their boot -> drive -> assert
+# shape as one deliberately linear function (C901).
+"tests/library/test_folder_badge_and_crumb_labels.py" = ["C901"]
+"tests/ui/test_forward_history_account_switch.py" = ["C901"]
+"tests/catalog/test_playlist_folder_qml.py" = ["C901"]
+"tests/catalog/test_playlist_selection_and_reset.py" = ["C901"]
+# The ported library scenarios keep their boot -> drive -> assert shape as one
+# deliberately linear function (C901).
+"tests/library/test_library_downloaded_state.py" = ["C901"]
+"tests/library/test_library_presence_surfaces.py" = ["C901"]
+"tests/library/test_library_track_claim.py" = ["C901"]
+"tests/library/test_presence_call_budget.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
-"tests/test_apple_double_cleanup.py" = ["S603"]
-# Runs a throwaway test file in a fresh interpreter to prove the profile guard
-# refuses it (S603, fixed argv: this interpreter and a file it just wrote).
-"tests/test_profile_guard.py" = ["S603"]
+"tests/metadata/test_apple_double_cleanup.py" = ["S603"]
 # Runs the README's own verification commands through bash against a manifest
 # signed with a throwaway key (S603, S607: the commands are the README's text).
-"tests/test_release_verify_notes.py" = ["S603", "S607"]
+"tests/packaging/test_release_verify_notes.py" = ["S603", "S607"]
 # Measures import-time metadata cost in a fresh interpreter: this interpreter
 # runs a literal probe script (S603, fixed argv).
-"tests/test_lazy_metadata.py" = ["S603"]
-# Builds a real bridge offline in a fresh interpreter to check the ownership
-# max-age timer: re-runs this file (S603, fixed argv).
-"tests/test_final_audit_pins_2026_09_24.py" = ["S603"]
+"tests/catalog/test_lazy_metadata.py" = ["S603"]
 # The exit-time cancel of the freeze-watchdog countdown can only be observed
 # in a fresh interpreter: this one runs a literal probe script (S603, fixed argv).
-"tests/test_freeze_watchdog_quit.py" = ["S603"]
-# The quality badge menu scenario re-runs itself in a subprocess to isolate the
-# Qt boot (S603, fixed argv).
-"tests/test_quality_pick_qml.py" = ["S603"]
-# The ATMOS badge scenario, likewise (S603, fixed argv).
-"tests/test_atmos_badge_qml.py" = ["S603"]
-# The Releases pane scenario, likewise (S603, fixed argv).
-"tests/test_releases_just_in.py" = ["S603"]
-"tests/test_releases_pane_buckets.py" = ["S603"]
-"tests/test_releases_pane_search.py" = ["S603"]
-# The audio output scenario, likewise (S603, fixed argv; C901, one straight scenario).
-"tests/test_audio_output_qml.py" = ["S603", "C901"]
-"tests/test_now_credits_qml.py" = ["S603", "C901"]
-"tests/test_artist_card_qml.py" = ["S603", "C901"]
-"tests/test_artist_bio_qml.py" = ["S603", "C901"]
-"tests/test_now_rail_loading_qml.py" = ["S603", "C901"]
-"tests/test_releases_pane_scroll.py" = ["S603"]
-"tests/test_momentum_guard.py" = ["S603"]
-"tests/test_momentum_guard_cursor.py" = ["S603"]
-# The My Tidal list-top scenario re-runs itself in a subprocess to isolate the
-# Qt boot (S603, fixed argv).
-"tests/test_my_tidal_list_top_scenario.py" = ["S603"]
-"tests/test_album_collapse_returns_the_view.py" = ["S603"]
-# The search in-place refresh scenario re-runs itself in a subprocess to
-# isolate the Qt boot (S603, fixed argv), and its build -> correct -> assert
-# scenario is one deliberately linear function (C901).
-"tests/test_search_refresh_in_place.py" = ["S603", "C901"]
-# The artist page async-build scenario: the same subprocess isolation (S603,
-# fixed argv) and the same build -> correct -> assert linear shape (C901).
-"tests/test_artist_page_async_build.py" = ["S603", "C901"]
-# The search page's twin of it: the same isolation and the same linear shape.
-"tests/test_search_page_async_build.py" = ["S603", "C901"]
-# The incubation handback check loads a real window offscreen in a fresh
-# interpreter (S603, fixed argv).
-"tests/test_incubation_open_pacing.py" = ["S603", "C901"]
-# The Browse growth scenario: subprocess isolation (S603, fixed argv) and one
-# deliberately linear grow -> correct -> assert flow (C901).
-"tests/test_browse_growth_in_place.py" = ["S603", "C901"]
-"tests/test_browse_landing_refresh_in_place.py" = ["S603", "C901"]
+"tests/diagnostics/test_freeze_watchdog_quit.py" = ["S603"]
 # The library scanner's directory walk (_walk_album_dirs) is a small state
 # machine over each folder's probe result (unchanged / relist / transient error /
 # vanished / root offline); the branching is the point and the function was kept
 # whole so it reads (and was reviewed) as one flow, so exempt mccabe (C901).
-"waves/library_index.py" = ["C901"]
+"waves/library/index.py" = ["C901"]
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
-"tests/test_forward_history_account_switch.py" = ["S603", "C901"]
-"tests/test_playlist_folder_qml.py" = ["S603", "C901"]
-"tests/test_folder_back_navigation.py" = ["S603", "C901"]
-"tests/test_search_results_surface_steal.py" = ["S603", "C901"]
-"tests/test_search_scroll_reset.py" = ["S603", "C901"]
-"tests/test_search_top_result.py" = ["S603", "C901"]
-"tests/test_breadcrumb_navigation.py" = ["S603", "C901"]
-"tests/test_boot_handover_gate.py" = ["S603", "C901"]
-"tests/test_boot_fade_landing_park.py" = ["S603", "C901"]
-"tests/test_boot_shield_cursor_release.py" = ["S603", "C901"]
-"tests/test_browse_card_library_state.py" = ["S603", "C901"]
-# The done-strip scenario (a finished download drops the card strip and words
-# it by the library) re-runs itself the same way.
-"tests/test_art_card_done_strip.py" = ["S603", "C901"]
-"tests/test_browse_strip_fits_the_card.py" = ["S603", "C901"]
-"tests/test_library_track_claim.py" = ["S603", "C901"]
-"tests/test_my_tidal_download_all_scenario.py" = ["S603", "C901"]
-"tests/test_boot_version_drain_order.py" = ["S603", "C901"]
-"tests/test_boot_scroll_dressing_hidden.py" = ["S603", "C901"]
-"tests/test_search_tab_artist_restore.py" = ["S603", "C901"]
-"tests/test_boot_input_shield.py" = ["S603", "C901"]
-"tests/test_boot_reveal_prewarm.py" = ["S603", "C901"]
+"tests/ui/test_gates_sit_above_drawers.py" = ["S603", "C901"]
+"tests/ui/test_qml_loads.py" = ["S603", "C901"]
+# The launch probe runs a fixed-argv subprocess the same way (S603).
 "tools/launch_probe.py" = ["S603"]
-"tests/test_boot_quiet_window.py" = ["S603", "C901"]
-"tests/test_search_paste_autosearch.py" = ["S603", "C901"]
-"tests/test_search_query_collapse_qml.py" = ["S603", "C901"]
-"tests/test_queue_failed_section.py" = ["S603", "C901"]
-"tests/test_queue_row_index.py" = ["S603", "C901"]
-"tests/test_queue_row_quality.py" = ["S603", "C901"]
-"tests/test_queue_unavailable_word.py" = ["S603", "C901"]
-"tests/test_queue_drawer_resize.py" = ["S603", "C901"]
-"tests/test_queue_drawer_close_button.py" = ["S603", "C901"]
-"tests/test_queue_delta_mirror.py" = ["S603", "C901"]
-"tests/test_queue_failure_reason_qml.py" = ["S603", "C901"]
-"tests/test_close_gate_qml.py" = ["S603", "C901"]
-"tests/test_support_note_qml.py" = ["S603", "C901"]
-"tests/test_login_feedback_qml.py" = ["S603"]
-"tests/test_gates_sit_above_drawers.py" = ["S603", "C901"]
-"tests/test_library_downloaded_state.py" = ["S603", "C901"]
-"tests/test_qml_loads.py" = ["S603", "C901"]
-"tests/test_presence_call_budget.py" = ["S603", "C901"]
-"tests/test_library_presence_surfaces.py" = ["S603", "C901"]
-"tests/test_badges_survive_navigation.py" = ["S603", "C901"]
-"tests/test_library_page_dressed_and_veiled.py" = ["S603", "C901"]
-"tests/test_browse_card_line_fits.py" = ["S603", "C901"]
-"tests/test_browse_art_card_words.py" = ["S603", "C901"]
+# The ported launch/search/queue scenarios keep their boot -> drive -> assert
+# child as one deliberately linear function (C901); the subprocess call
+# itself lives in support.qml's runner.
+"tests/ui/test_boot_quiet_window.py" = ["C901"]
+"tests/catalog/test_new_release_mark.py" = ["C901"]
+"tests/catalog/test_explicit_mark.py" = ["C901"]
+"tests/browse/test_browse_combined_qml.py" = ["C901"]
+"tests/queue/test_queue_section_pulse.py" = ["C901"]
+"tests/queue/test_queue_single_row_has_nothing_to_expand.py" = ["C901"]
+"tests/search/test_search_query_collapse_qml.py" = ["C901"]
+# The provider-logo scenario is the same boot -> drive -> assert shape: one
+# deliberately linear function (C901).
+"tests/providers/test_provider_logos.py" = ["C901"]
+# The live account suite probes a downloaded file with a fixed-argv ffprobe.
+"tests/account/test_live_account.py" = ["S603"]
+# These QML scenarios keep the same shape: boot the real Main.qml, drive one flow and
+# assert on the rendered tree, as one deliberately linear function (C901).
+# The subprocess call itself lives in support.qml's runner.
+"tests/providers/apple/test_apple_setup_guidance.py" = ["C901"]
+"tests/providers/apple/test_apple_probe_responsive.py" = ["C901"]
+"tests/queue/test_dual_version_queue_scenario.py" = ["C901"]
+"tests/ui/test_track_row_hover_stable.py" = ["C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
-"tests/test_library_bridge.py" = ["S603"]
-"tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
-"tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
-"tests/test_hover_swell_fade.py" = ["S603", "C901"]
-"tests/test_browse_console_wayfinding.py" = ["S603", "C901"]
-"tests/test_browse_row_window.py" = ["S603", "C901"]
-"tests/test_video_grid_hover_dwell.py" = ["S603", "C901"]
-"tests/test_hover_prefetch_scenario.py" = ["S603", "C901"]
-"tests/test_playing_glow_scenario.py" = ["S603", "C901"]
-"tests/test_releases_auto_kinds_qml.py" = ["S603", "C901"]
-"tests/test_releases_quality_badge.py" = ["S603", "C901"]
-"tests/test_offscreen_qt_is_usable.py" = ["S603"]
+"tests/library/test_library_bridge.py" = ["S603"]
+# Imports the download engine with PySide6 blocked to prove it stays Qt-free
+# (S603, fixed argv: sys.executable -c with a literal probe).
+"tests/downloads/test_engine_without_pyside.py" = ["S603"]
+# The startup picker scenario re-runs itself in a subprocess to isolate the
+# Qt boot (S603, fixed argv).
+"tests/providers/test_startup_provider_picker_qml.py" = ["S603"]
+# The TIDAL sign-in reachability scenario re-runs itself in a subprocess to
+# isolate the Qt boot (S603, fixed argv), and its build -> click -> assert
+# scenario is one deliberately linear function (C901).
+"tests/providers/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
+# The setup-CTA scenarios keep the same boot -> drive -> assert shape as one
+# deliberately linear function (C901); the subprocess call itself lives in
+# support.qml's runner.
+"tests/providers/test_setup_ctas_qml.py" = ["C901"]
+"tests/ui/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
-"tests/test_final_audit_updater.py" = ["S603", "S607"]
-# Same subprocess-isolation + linear-scenario shape as the scroll guard.
-"tests/test_update_toast_staged.py" = ["S603", "C901"]
-"tests/test_video_card_date_no_overlap.py" = ["S603", "C901"]
-"tests/test_search_playlist_block.py" = ["S603", "C901"]
-"tests/test_playlist_selection_and_reset.py" = ["S603", "C901"]
-"tests/test_progress_matrix_stable_width.py" = ["S603", "C901"]
-"tests/test_progress_carved_percent.py" = ["S603", "C901"]
-"tests/test_queue_row_progress_density.py" = ["S603", "C901"]
-"tests/test_card_progress_outline.py" = ["S603", "C901"]
-"tests/test_queue_playlist_expands.py" = ["S603", "C901"]
-"tests/test_queue_single_row_has_nothing_to_expand.py" = ["S603", "C901"]
-"tests/test_queue_expected_tier.py" = ["S603", "C901"]
-"tests/test_queue_in_library_row.py" = ["S603", "C901"]
-"tests/test_queue_ledger_scroll.py" = ["S603", "C901"]
-"tests/test_queue_section_pulse.py" = ["S603", "C901"]
-"tests/test_new_release_mark.py" = ["S603", "C901"]
-"tests/test_queue_repeated_track_state.py" = ["S603", "C901"]
-"tests/test_queue_owned_prediction.py" = ["S603", "C901"]
-"tests/test_progress_jump_ramp.py" = ["S603", "C901"]
-"tests/test_progress_pad_cells.py" = ["S603", "C901"]
-"tests/test_search_artists_show_all_empty.py" = ["S603", "C901"]
-"tests/test_explicit_track_mark.py" = ["S603", "C901"]
-# Drives the real release.sh (bash) and git against throwaway sandbox repos;
-# both are resolved from PATH on purpose (S603/S607, fixed argv).
-"tests/test_release_star_history.py" = ["S603", "S607"]
+"tests/updates/test_updater_backup_keep.py" = ["S603", "S607"]
 # The Waves bridge has several inherently branchy but linear functions (the
 # settings-schema builder, the settings dispatcher and the search/discography
 # orchestration) that trip mccabe (C901) without being genuinely complex.
-"waves/waves_ui/backend.py" = ["C901"]
+# The queue bridge has the same orchestration shape.
+"waves/desktop/backend.py" = ["C901"]
+"waves/desktop/queue/bridge.py" = ["C901"]
 # The ffmpeg manager's job is to download and run a static ffmpeg build, so it
 # intentionally shells out (S603/S607); install() is one linear sequence (C901);
 # and its raised errors carry deliberately descriptive messages (TRY003).
-"waves/waves_ui/ffmpeg_manager.py" = ["S603", "S607", "C901", "TRY003"]
+"waves/desktop/ffmpeg/manager.py" = ["S603", "S607", "C901", "TRY003"]
+# The user-install discovery probes the binary the user chose to install, so it
+# intentionally shells out to a resolved path (S603) with a fixed argv.
+"waves/system_ffmpeg.py" = ["S603"]
+# Same shape for the managed Apple runtime : it downloads and runs
+# the N_m3u8DL-RE binary and probes the container runtime (S603/S607), its
+# install is one linear sequence (C901), and its errors carry deliberately
+# descriptive messages (TRY003).
+"waves/providers/apple/runtime.py" = ["S603", "S607", "C901", "TRY003"]
+# Session supervision : it starts/stops the wrapper sidecar via the
+# container runtime and probes its health endpoint (S603/S607), and its
+# helpers carry deliberately descriptive messages (TRY003).
+"waves/providers/apple/supervision.py" = ["S603", "S607", "TRY003"]
+# The Apple job runner owns the orchestration: the
+# per-track delivery and the job settlement are deliberately linear sequences
+# (C901), and their raised messages are the queue row's own user-facing words
+# (TRY003), same rationale as the bridge itself.
+"waves/providers/apple/runner.py" = ["C901", "TRY003"]
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).
-"waves/waves_ui/updater.py" = ["S603", "S606", "S607", "C901", "TRY003"]
+"waves/desktop/updates/updater.py" = ["S603", "S606", "S607", "C901", "TRY003"]
 # download.py is upstream Tidaler code (kept as-is apart from the keep_album flag);
 # its downsample/transcode raises carry deliberately descriptive messages (TRY003),
 # same rationale as ffmpeg_manager/updater above.
@@ -323,26 +410,4 @@ ignore = [
 # The untrusted-listing recovery mounts a share a second time to read the names
 # the first mount will not list, so it intentionally shells out to the system's
 # own mount and umount binaries (S603, fixed argv, no shell).
-"waves/waves_ui/smb_relist.py" = ["S603"]
-
-[tool.black]
-# https://github.com/psf/black
-target-version = ["py312", "py313"]
-line-length = 120
-color = true
-preview = true
-
-exclude = '''
-/(
-    \.git
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | _build
-    | buck-out
-    | build
-    | dist
-    | env
-    | venv
-)/
-'''
+"waves/library/smb_relist.py" = ["S603"]

@@ -1,0 +1,153 @@
+"""Network work must not run on the GUI thread, nor under a held lock.
+
+WHAT THIS FENCES OFF
+--------------------
+1. ``previewArtist`` and ``downloadArtist`` must resolve the artist inside
+   ``work()``, never in the **slot body**. A QML-to-slot call is a synchronous
+   call on the GUI thread, and on an ``_objs`` miss ``_get_artist`` issues
+   ``session.artist(...)``, which reaches tidalapi's request layer. tidalapi
+   passes no ``timeout`` anywhere and its session is a bare
+   ``requests.Session``, so the window freezes for the length of that request.
+   Every sibling (``previewMedia``, ``_refetch_for_download``, ``loadArtist``)
+   resolves inside ``work()``; ``_try_token_login``'s docstring records the
+   same hazard hanging the app at launch.
+
+   Misses are ordinary, not exotic: every fresh search clears all ``_objs``
+   buckets, and a cache-hit re-search re-emits the payload without repopulating
+   them, so any artist card shown from a cached search has no live object.
+
+2. ``TidalProvider.browse_page`` (reached through the bridge's Browse fetch) must not hold the process-wide, non-reentrant
+   ``_browse_lock`` across that same untimed request. Only tidalapi's shared
+   page parser needs serializing; the request does not. A wedged peer would
+   otherwise block every other acquirer, including ``_refetch_for_download``,
+   and because all acquirers sit on the shared UI pool, a few blocked workers
+   saturate it and take search and artist pages down with Browse.
+
+These are structural guards: they assert *where* the call sits, because the
+failure is a freeze, which a functional test cannot observe without hanging.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import textwrap
+
+from waves.desktop.backend import WavesBridge
+
+
+def _slot_ast(name: str) -> ast.FunctionDef:
+    source = textwrap.dedent(inspect.getsource(getattr(WavesBridge, name)))
+    return ast.parse(source).body[0]
+
+
+def _nested_function_names(node: ast.FunctionDef) -> set[str]:
+    return {n.name for n in node.body if isinstance(n, ast.FunctionDef)}
+
+
+def _calls_in_body_excluding_nested(node: ast.FunctionDef) -> set[str]:
+    """Attribute-call names made directly in the slot body, skipping anything
+    inside a nested function (which is what runs on the worker)."""
+    names: set[str] = set()
+    for statement in node.body:
+        if isinstance(statement, ast.FunctionDef):
+            continue  # the worker body: this is where slow work belongs
+        for sub in ast.walk(statement):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                names.add(sub.func.attr)
+    return names
+
+
+def _calls_inside_workers(node: ast.FunctionDef) -> set[str]:
+    """Attribute-call names made inside ANY nested function of the slot: the
+    worker itself, or a sibling it delegates to (downloadArtist's work() wraps
+    scan() so a STOP mid-scan has one place to land)."""
+    return {
+        sub.func.attr
+        for nested in node.body
+        if isinstance(nested, ast.FunctionDef)
+        for sub in ast.walk(nested)
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+    }
+
+
+def test_preview_and_download_artist_resolve_off_the_gui_thread():
+    """_get_artist can issue an untimed HTTP request, so it must sit inside the
+    worker, not in the slot body Qt runs on the GUI thread."""
+    for slot in ("previewArtist", "downloadArtist"):
+        node = _slot_ast(slot)
+        assert "work" in _nested_function_names(node), f"{slot} no longer has a work() worker; update this guard"
+
+        assert "_get_artist" not in _calls_in_body_excluding_nested(node), (
+            f"{slot} resolves the artist on the GUI thread; on an _objs miss that is a "
+            "synchronous, untimed network request and the window freezes"
+        )
+        assert "_get_artist" in _calls_inside_workers(node), f"{slot} no longer resolves the artist at all"
+
+
+def test_no_slot_resolves_media_objects_on_the_gui_thread():
+    """The same rule for the sibling resolvers, so a new slot cannot quietly
+    reintroduce the freeze."""
+    resolvers = {"_get_artist", "_get_album", "_get_track"}
+    offenders: list[str] = []
+
+    # Walk the MRO, not just WavesBridge's own dict: bridge behavior lives in
+    # mixins (library/bridge.py, queue/bridge.py), and a vars() sweep would go blind
+    # to every moved slot.
+    members: dict[str, object] = {}
+    for klass in WavesBridge.__mro__:
+        for key, value in vars(klass).items():
+            members.setdefault(key, value)
+
+    for name, member in members.items():
+        if not callable(member) or name.startswith("__"):
+            continue
+        try:
+            node = _slot_ast(name)
+        except (OSError, TypeError, SyntaxError, IndexError):
+            continue
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if "work" not in _nested_function_names(node):
+            continue  # no worker: nothing to be off-thread relative to
+        hit = resolvers & _calls_in_body_excluding_nested(node)
+        if hit:
+            offenders.append(f"{name}: {sorted(hit)}")
+
+    assert not offenders, "slots resolving media objects on the GUI thread:\n" + "\n".join(offenders)
+
+
+def test_browse_page_does_not_hold_the_lock_across_the_request():
+    """The HTTP request must be issued before the lock is taken.
+
+    The read-and-parse live behind the Provider seam, so the
+    discipline lives there too: TidalProvider.browse_page owns the lock,
+    and its shape is pinned there -- the request issued outside,
+    the parse (the reason the lock exists; tidalapi's shared parser is not
+    thread-safe) inside."""
+    import inspect
+    import textwrap
+
+    from waves.providers.tidal import TidalProvider
+
+    node = ast.parse(textwrap.dedent(inspect.getsource(TidalProvider.browse_page)))
+
+    # The request is issued while NOT inside any with-block.
+    with_blocks = [n for n in ast.walk(node) if isinstance(n, ast.With)]
+    assert with_blocks, "browse_page stopped taking the browse lock; update this guard"
+
+    def _inside_with(n: ast.AST) -> bool:
+        for w in with_blocks:
+            if w.lineno <= n.lineno and getattr(n, "end_lineno", n.lineno) <= getattr(w, "end_lineno", w.lineno):
+                return True
+        return False
+
+    calls = [n for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    under = {n.func.attr for n in calls if _inside_with(n)}
+    assert "request" not in under, (
+        "browse_page issues its HTTP request while holding the provider's browse "
+        "lock; a wedged peer blocks every other acquirer (and get_object) for good"
+    )
+
+    # ...and the parse, which is the reason the lock exists, must stay inside.
+    assert "parse" in under, "the page parse escaped the lock; tidalapi's shared parser is not thread-safe"

@@ -1,25 +1,44 @@
 import base64
 from enum import StrEnum
 
-from tidalapi import Quality
-
 CTX_TIDAL: str = "tidal"
+CTX_APPLE: str = "apple"
+# Library folder segment per provider: the {provider_name}
+# template token renders these, so the same song saved from both providers
+# coexists instead of colliding. Unknown ids render "" (the segment drops
+# away), so contexts that predate the token keep their old paths.
+PROVIDER_FOLDER_NAMES: dict[str, str] = {"tidal": "Tidal", "apple": "Apple Music"}
+
+
+def provider_folder_name(provider_id: object) -> str:
+    """One provider's library folder segment for the {provider_name} token.
+
+    Unknown ids render "" so the segment drops away (the pre-token layout),
+    never a literal unknown word in a folder name.
+    """
+    return PROVIDER_FOLDER_NAMES.get(str(provider_id or "").strip().lower(), "")
+
+
+# One page of the signed-in user's favorites (My Tidal windows and the
+# favorite-id sweep share the window, so a page size change moves both).
+LIBRARY_PAGE: int = 100
 REQUESTS_TIMEOUT_SEC: int = 45
+# A download's re-fetch by id: TIDAL said the item is gone, or the fetch failed.
+# Only TIDAL's own not-found proves delisting; a rate limit or a dropped
+# connection is a fetch to try again (never claim a takedown on weak evidence).
+ITEM_GONE: str = "That item is no longer available"
+ITEM_FETCH_FAILED: str = "Could not fetch that item, try again"
 EXTENSION_LYRICS: str = ".lrc"
 UNIQUIFY_THRESHOLD: int = 99
 FILENAME_SANITIZE_PLACEHOLDER: str = "_"
 # What a path segment that is nothing but "." or ".." is written as. Neither
 # survives being a folder name: "." is what every platform calls "this folder",
 # so the segment evaporates in the join that builds the destination and the
-# album's tracks land loose in the artist folder (issue #29), and ".." walks up
+# album's tracks land loose in the artist folder, and ".." walks up
 # out of the download folder. Fullwidth full stop for the same reason "?" takes
 # "？": the folder still reads as the release's own name.
 DOT_SEGMENT_STANDIN: str = "．"
-# The saved cover's shipped name. Settings can rename it ("folder" for Windows
-# Explorer and players that look for folder.jpg, issue #66); the engine asks
-# helper.path.cover_file_name for the name in use.
-COVER_STEM_DEFAULT: str = "cover"
-COVER_NAME: str = COVER_STEM_DEFAULT + ".jpg"
+COVER_NAME: str = "cover.jpg"
 BLOCK_SIZE: int = 4096
 BLOCKS: int = 1024
 CHUNK_SIZE: int = BLOCK_SIZE * BLOCKS
@@ -74,7 +93,90 @@ ATMOS_CLIENT_ID = base64.b64decode(ATMOS_ID_B64).decode("utf-8")
 # Empty on purpose: this client authenticates without a private secret (tidalapi
 # then sends the public id in the secret's place). Nothing sensitive is shipped.
 ATMOS_CLIENT_SECRET = ""
-ATMOS_REQUEST_QUALITY = Quality.low_320k
+
+
+class QualityTier(StrEnum):
+    """A rung on Waves' own quality ladder, provider-independent (spec §4.3:
+    one quality model). Every shared path -- the queue's pinned quality, the
+    ownership rank scale, session quality apply, the per-provider settings --
+    speaks this enum; each provider maps its engine's codecs onto it at its
+    own boundary (TIDAL: ``config.tidal_quality_for_tier``). Audio type
+    (stereo/Atmos, ``providers.base.AudioType``) stays orthogonal: never a
+    rung on this ladder."""
+
+    LOW = "LOW"
+    HIGH = "HIGH"
+    LOSSLESS = "LOSSLESS"
+    HI_RES_LOSSLESS = "HI_RES_LOSSLESS"
+
+
+# The ladder as plain integers (LOW = 0), so a caller asks "is a better tier
+# available than what is on disk" with an integer comparison and the ownership
+# DB can ORDER BY the stored rank. Bit depth and sample rate are deliberately
+# not used for ranking: TIDAL omits them for some tiers (they default to
+# 16 / 44100), so the tier string is the only trustworthy signal.
+TIER_RANK: dict[str, int] = {tier.value: rank for rank, tier in enumerate(QualityTier)}
+
+
+def quality_rank(tier: QualityTier | str | None) -> int:
+    """The integer rank of a tier on the shared ladder (LOW = 0).
+
+    Unknown, empty or missing ranks below every real tier (-1), so an
+    unreadable value never wins a "best surviving copy" comparison."""
+    return TIER_RANK.get(str(getattr(tier, "value", tier) or "").upper(), -1)
+
+
+def tier_from_word(word: str | None) -> QualityTier | None:
+    """Fold any quality spelling a shared path can be handed onto the ladder.
+
+    Accepts the enum's own values ("HIGH"), its member names ("low_320k" --
+    the same strings TIDAL's wire values and legacy rows carry), and the UI's
+    tier words ("HI-RES"). "DEFAULT" and anything unreadable fold to None:
+    every caller decides its own fallback, exactly as the old per-site parse
+    points did."""
+    raw = str(word or "").strip().upper()
+    if not raw:
+        return None
+    try:
+        return QualityTier(raw)
+    except ValueError:
+        pass
+    # Compact form ("HI-RES", "HI RES", "HIRES" -> "HIRES"): the UI words are
+    # the enum values with the underscores dropped.
+    compact = raw.replace("-", "").replace("_", "").replace(" ", "")
+    for tier in QualityTier:
+        if tier.value.replace("_", "") == compact:
+            return tier
+    # TIDAL spells its stereo tiers with the bitrate (LOW_96K / LOW_320K).
+    if "320" in raw:
+        return QualityTier.HIGH
+    if "96" in raw:
+        return QualityTier.LOW
+    for needle, tier in (
+        ("HIRES", QualityTier.HI_RES_LOSSLESS),
+        ("LOSSLESS", QualityTier.LOSSLESS),
+        ("HIGH", QualityTier.HIGH),
+        ("LOW", QualityTier.LOW),
+    ):
+        if needle in compact:
+            return tier
+    return None
+
+
+def tier_word(name: str | None) -> str:
+    """The one word the UI shows for a quality, from any spelling a path can
+    carry: an enum member, an enum value, a TIDAL wire name, or an already
+    delivered tier word."""
+    lowered = str(name or "").lower()
+    if "hi_res" in lowered or "hires" in lowered:
+        return "HI-RES"
+    if "lossless" in lowered:
+        return "LOSSLESS"
+    if "320" in lowered or lowered == "high":
+        return "HIGH"
+    if "96" in lowered or lowered == "low":
+        return "LOW"
+    return str(name).replace("_", " ").upper() if name else ""
 
 
 class QualityVideo(StrEnum):
@@ -82,6 +184,63 @@ class QualityVideo(StrEnum):
     P480 = "480"
     P720 = "720"
     P1080 = "1080"
+
+
+class DefaultAudio(StrEnum):
+    """The Chooser one-click audio default: stereo, or both
+    Versions side by side. Atmos-alone has no Settings spelling; it stays a
+    per-click choice only."""
+
+    STEREO = "stereo"
+    BOTH = "both"
+
+
+def default_audio_is_both(value: object) -> bool:
+    """Whether a default-audio setting value means dual-download.
+
+    Accepts the stored word ("both"), the enum member, and anything
+    unreadable (missing stubs, hand-edited configs) as stereo: only an
+    explicit "both" fetches twice.
+    """
+    try:
+        return str(getattr(value, "value", value) or "").strip().lower() == "both"
+    except Exception:
+        return False
+
+
+# TIDAL's audioModes spelling for a Dolby Atmos delivery, as a literal so this
+# shared decision needs no engine import (waves.library.ownership spells the same word).
+ATMOS_MODE: str = "DOLBY_ATMOS"
+
+
+def wants_atmos_delivery(modes, pinned_version: object, default_audio_type: object) -> bool:
+    """Whether a fetch asks for the Dolby Atmos Version: the ONE Atmos
+    decision, shared by the engine's stream resolver and the bridge's
+    ownership/delivered sinks, so fetching and ranking cannot drift.
+
+    Args:
+        modes: The track's advertised audio modes as the provider reports them.
+        pinned_version: The job's per-click Version ("stereo" / "atmos"), or
+            None when it pinned none (a legacy row).
+        default_audio_type: The stored audio-type default, consulted only for
+            an unpinned row (through ``default_audio_is_both``).
+
+    The rules: an Atmos-pinned job wants Atmos whenever the track offers it; a
+    stereo-pinned job takes it only when the track has NOTHING ELSE (TIDAL
+    lists the Atmos version as its own id with no stereo stream, so the
+    alternative is a hole in the album); an unpinned job follows the stored
+    default, with that same nothing-else clause.
+    """
+    modes = [str(mode) for mode in modes or []]
+    if ATMOS_MODE not in modes:
+        return False
+    pin = str(pinned_version or "").strip().lower()
+    if pin == "atmos":
+        return True
+    nothing_else = all(mode == ATMOS_MODE for mode in modes)
+    if pin == "stereo":
+        return nothing_else
+    return nothing_else or default_audio_is_both(default_audio_type)
 
 
 class MediaType(StrEnum):
@@ -102,27 +261,20 @@ class CoverDimensions(StrEnum):
     PxORIGIN = "origin"
 
 
-class TidalLists(StrEnum):
-    Playlists = "Playlists"
-    Favorites = "Favorites"
-    Mixes = "Mixes"
+def cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimensions:
+    """Resolve the SEPARATE cover file's size from its preference.
 
-
-class QueueDownloadStatus(StrEnum):
-    Waiting = "⏳️"
-    Downloading = "▶️"
-    Finished = "✅"
-    Failed = "❌"
-    Skipped = "↪️"
-
-
-FAVORITES: dict[str, dict[str, str]] = {
-    "fav_videos": {"name": "Videos", "function_name": "videos"},
-    "fav_tracks": {"name": "Tracks", "function_name": "tracks_paginated"},
-    "fav_mixes": {"name": "Mixes & Radio", "function_name": "mixes"},
-    "fav_artists": {"name": "Artists", "function_name": "artists_paginated"},
-    "fav_albums": {"name": "Albums", "function_name": "albums_paginated"},
-}
+    "follow" (or any unknown word) uses the embedded size; otherwise a
+    ``CoverDimensions`` member name. One rule for every provider: TIDAL's
+    engine and the Apple runner both ask here, so a saved cover size cannot
+    apply to one provider's card and be ignored by the other.
+    """
+    if pref == "follow":
+        return embedded
+    try:
+        return CoverDimensions[pref]
+    except KeyError:
+        return embedded
 
 
 class AudioExtensionsValid(StrEnum):
@@ -150,17 +302,6 @@ METADATA_LOOKUP_UPC: dict[str, dict[str, str]] = {
 class InitialKey(StrEnum):
     ALPHANUMERIC = "alphanumeric"
     CLASSIC = "classic"
-
-
-class CoverBaseline(StrEnum):
-    """Whether cover art is rewritten as baseline (non-progressive) JPEG for
-    players that cannot decode progressive ones, and which way the rewrite
-    leans: SMALL always stores color at half resolution (4:2:0), FAITHFUL
-    keeps full-resolution color where the source has it, at a larger size."""
-
-    OFF = "off"
-    SMALL = "small"
-    FAITHFUL = "faithful"
 
 
 class DownsampleTarget(StrEnum):

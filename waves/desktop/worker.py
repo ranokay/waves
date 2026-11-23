@@ -1,0 +1,41 @@
+import logging
+
+from PySide6 import QtCore
+
+logger = logging.getLogger(__name__)
+
+
+# Taken from https://www.pythonguis.com/tutorials/multithreading-pyside6-applications-qthreadpool/
+class Worker(QtCore.QRunnable):
+    """Run a callback on QThreadPool and contain failures at the Qt boundary."""
+
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+
+    @QtCore.Slot()
+    def run(self):
+        # Never let an exception escape into Qt's C++ QThreadPool: depending on
+        # the PySide/Qt build that boundary can abort the whole process, and even
+        # when it doesn't the failure vanishes into stderr with no context. Log it
+        # here so a failed background job (a discography scan, a download, an art
+        # fetch) is diagnosable instead of a silent stuck button or a hard crash.
+        try:
+            self.fn(*self.args, **self.kwargs)
+        except RuntimeError as error:
+            # A worker that outlived the bridge on quit (a page crawl, a search
+            # enrichment, an ownership refresh mid-network-read) reaches its
+            # emit after the QObject is gone. Nobody is left to receive it, so
+            # it is not a crash: at ERROR it dumped the breadcrumb ring into a
+            # clean session's log on every quit.
+            if "deleted" in str(error).lower():
+                logger.debug("Background worker outlived the bridge in %r", getattr(self.fn, "__name__", self.fn))
+            else:
+                logger.exception("Background worker crashed in %r", getattr(self.fn, "__name__", self.fn))
+        except Exception:
+            logger.exception("Background worker crashed in %r", getattr(self.fn, "__name__", self.fn))
+
+    def thread(self) -> QtCore.QThread:
+        return QtCore.QThread.currentThread()

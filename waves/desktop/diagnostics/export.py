@@ -1,0 +1,826 @@
+"""Privacy-guarded diagnostic logging for Waves.
+
+This module turns "a user says the app is slow/frozen/crashed" into a log the
+maintainer can act on, without the log ever being unsafe to attach to a public
+GitHub issue. It builds on the pieces the app already has (``faulthandler``,
+the excepthooks in :mod:`.app`, the timing helpers in :mod:`.devlog`) and adds
+the four missing layers:
+
+* **Redaction at the handler layer.** Every handler that can persist or show a
+  log line carries :class:`waves.redaction._RedactingFilter`, so no call site anywhere in the
+  app (present or future) can write identity PII to disk. Identity PII is
+  always scrubbed: usernames, home paths (all OS forms), hostnames, IP/MAC
+  addresses, emails, tokens/keys, and any value registered via
+  :func:`waves.redaction.register_secret` (e.g. the TIDAL account id after login).
+* **Breadcrumbs, always on.** A bounded in-memory ring of recent INFO events
+  (a ``deque``, deliberately not ``MemoryHandler``, which flushes-and-clears
+  rather than dropping oldest). When an ERROR is logged, the trail is dumped
+  into the on-disk log so even a first-ever failure arrives with leading
+  context. Costs memory only; nothing extra is written during normal runs.
+* **Verbose mode, off by default.** The user-facing "Verbose diagnostics"
+  toggle raises the on-disk level from WARNING to DEBUG, narrows the freeze
+  watchdog to its debugging thresholds and starts the perf sampler. The
+  watchdog itself is always armed (a 15s dump-only mode off verbose). The
+  ``WAVES_DEBUG`` env var still force enables verbose for developers.
+* **A shareable export.** :func:`export_bundle` concatenates crash.log and the
+  rotating app log, prepends a redacted system header and the current
+  breadcrumb trail, re-scrubs every line (idempotent), optionally hashes
+  content spans, and writes a single file safe for a public issue tracker.
+
+Growing the app does not require growing this module. New subsystems get
+breadcrumbs by logging INFO on any ``waves.*`` logger (or via
+:func:`.devlog.event`); new secrets call :func:`waves.redaction.register_secret`
+once at acquisition; new thread pools call :func:`register_pool`. Content that a
+user may prefer to hide (search text, titles) is wrapped in
+:func:`waves.redaction.content` at the call site, which the optional export
+checkbox reduces to an opaque hash.
+"""
+
+from __future__ import annotations
+
+import atexit
+import contextlib
+import faulthandler
+import logging
+import os
+import platform
+import queue as _queue
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from collections import deque
+from datetime import datetime
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from pathlib import Path
+from typing import Protocol, cast
+
+from waves.redaction import _RedactingFilter, scrub
+
+logger = logging.getLogger("waves.diag")
+
+#: One id per launch, stamped on the session divider and the export header so
+#: interleaved sessions in a rotated log can be told apart.
+SESSION_ID = uuid.uuid4().hex[:8]
+
+LOG_FILENAME = "waves_dev.log"
+_LOG_MAX_BYTES = 2_000_000
+_LOG_BACKUPS = 3
+
+# How often the breadcrumb trail may be re-dumped into the file log. An error
+# storm (one ERROR per failed track, say) should not write the same trail
+# dozens of times.
+_CRUMB_DUMP_INTERVAL_SEC = 30.0
+
+# Freeze watchdog: re-arm every _WATCHDOG_TICK_MS from the GUI thread; if the
+# event loop stalls past _WATCHDOG_DUMP_SEC the pending faulthandler dump
+# fires (all-thread tracebacks into crash.log). Stalls that recover before the
+# dump are still recorded, as a WARNING with the observed gap. A 6s dump wait
+# would let a multi-second freeze pass with only the WARNING and no stack to
+# name the caller, so it aims at the same 2.5s gap the WARNING reports from.
+#
+# The dump wait is that target PLUS one tick, and it has to be. Each tick
+# re-arms the countdown, so what the dump actually measures is the gap between
+# two ticks: at a 2.5s wait on a 2s tick only 0.5s of it was headroom, and a
+# block starting just before a tick was due fired a full dump after half a
+# second. The threshold was 0.5s or 2.5s depending on nothing but phase.
+_WATCHDOG_TICK_MS = 2_000
+_WATCHDOG_STALL_TARGET_SEC = 2.5
+_WATCHDOG_DUMP_SEC = _WATCHDOG_STALL_TARGET_SEC + _WATCHDOG_TICK_MS / 1000.0
+_WATCHDOG_WARN_GAP_SEC = 2.5
+
+#: Always-on freeze watchdog: every install arms the dump, verbose or not, at
+#: a threshold far above ordinary jank. Stacks only, no message content, so a
+#: hang report without one names nothing; crash.log rotates at process start
+#: and ships only through an explicit export, and the disk log stays WARNING.
+_WATCHDOG_ALWAYS_DUMP_SEC = 15.0
+
+_SAMPLER_INTERVAL_MS = 5_000
+
+# Native stall capture (macOS, verbose only): the faulthandler dump names
+# Python frames, and a block inside Qt/QML has none -- crash.log shows
+# `app.exec()` with nothing under it. A watchdog thread runs `sample` on this
+# process while the GUI loop is still stuck, so the stall's native stack
+# lands next to crash.log and a future report can name the culprit.
+_STALL_SAMPLE_SEC = 2
+_STALL_SAMPLE_INTERVAL_MS = 1
+# One capture per stall, at most this many per session: a pathological run
+# must not spawn a sampler on every check.
+_STALL_SAMPLE_MAX_PER_SESSION = 3
+_STALL_MONITOR_TICK_SEC = 0.25
+#: How many native samples the diagnostic export carries (newest first).
+_STALL_SAMPLE_EXPORT_MAX = 3
+
+# Event-loop occupancy probe: a fast GUI-thread timer whose own lateness reveals
+# how saturated the main loop is (a coarse 2s watchdog tick cannot). Verbose
+# only; reported as a bucket in the perf line, never a raw number tied to an
+# action. See _PerfSampler._probe_tick.
+_PROBE_INTERVAL_MS = 250
+
+
+# --------------------------------------------------------------------------
+# Breadcrumbs
+# --------------------------------------------------------------------------
+
+
+class _BreadcrumbHandler(logging.Handler):
+    """Bounded drop-oldest ring of recent formatted records. Memory only."""
+
+    def __init__(self, capacity: int = 250) -> None:
+        super().__init__(level=logging.INFO)
+        self.ring: deque[str] = deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # A breadcrumb must never take the app down.
+        with contextlib.suppress(Exception):
+            self.ring.append(self.format(record))
+
+
+class _CrumbDumpHandler(logging.Handler):
+    """On any ERROR+, writes the breadcrumb trail into the file log (rate
+    limited), so the error arrives with the events that led up to it."""
+
+    def __init__(self, crumbs: _BreadcrumbHandler, target: logging.Handler) -> None:
+        super().__init__(level=logging.ERROR)
+        self._crumbs = crumbs
+        self._target = target
+        self._last_dump = 0.0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "_crumb_dump", False):
+            return
+        now = time.monotonic()
+        if now - self._last_dump < _CRUMB_DUMP_INTERVAL_SEC:
+            return
+        self._last_dump = now
+        with contextlib.suppress(Exception):  # a failed dump must not cascade
+            trail = list(self._crumbs.ring)
+            lines = [f"---- breadcrumb trail (last {len(trail)} events) ----", *trail, "---- end trail ----"]
+            for line in lines:
+                rec = logging.LogRecord("waves.crumbs", logging.WARNING, "", 0, line, None, None)
+                rec._crumb_dump = True
+                self._target.handle(rec)
+
+
+# --------------------------------------------------------------------------
+# Qt plumbing (message handler, freeze watchdog, perf sampler)
+# --------------------------------------------------------------------------
+
+_qt_log = logging.getLogger("waves.qt")
+
+
+def _install_qt_handler() -> None:
+    """Route QML/Qt warnings through the (redacted) app log. One handler per
+    process; QML errors are the messages users can never relay verbally."""
+    try:
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+    except Exception:
+        return
+
+    level_map = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+
+    def _handler(mode, _context, message):
+        # Release builds carry no file/line context (QT_MESSAGELOGCONTEXT is
+        # not defined), so only the message text is usable. Never raise out of
+        # a Qt callback.
+        with contextlib.suppress(Exception):
+            _qt_log.log(level_map.get(mode, logging.WARNING), "%s", message)
+
+    qInstallMessageHandler(_handler)
+
+
+class _Watchdog:
+    """GUI-thread freeze detector: always armed, verbose narrows it.
+
+    A QTimer on the GUI thread re-arms ``faulthandler.dump_traceback_later``
+    on every tick; each re-arm resets the countdown, so the dump (all-thread
+    tracebacks into crash.log) fires only when the event loop is genuinely
+    stuck past the timeout. The always-on mode arms only the dump at a high
+    threshold; verbose additionally reports recovered stalls as WARNINGs at a
+    debugging threshold.
+    """
+
+    def __init__(self) -> None:
+        self._timer = None
+        self._last_tick = 0.0
+        self._dump_sec = _WATCHDOG_DUMP_SEC
+        self._warn_gap_sec: float | None = _WATCHDOG_WARN_GAP_SEC
+
+    def start(self, crash_file, *, dump_sec=_WATCHDOG_DUMP_SEC, warn_gap_sec=_WATCHDOG_WARN_GAP_SEC) -> None:
+        if self._timer is not None:
+            if (dump_sec, warn_gap_sec) == (self._dump_sec, self._warn_gap_sec):
+                return
+            self.stop()
+        try:
+            from PySide6.QtCore import QTimer
+        except Exception:
+            return
+        self._crash_file = crash_file
+        self._dump_sec = dump_sec
+        self._warn_gap_sec = warn_gap_sec
+        self._timer = QTimer()
+        self._timer.setInterval(_WATCHDOG_TICK_MS)
+        self._timer.timeout.connect(self._tick)
+        self._last_tick = time.monotonic()
+        self._timer.start()
+        self._tick()
+
+    def stop(self) -> None:
+        if self._timer is None:
+            return
+        self._timer.stop()
+        self._timer = None
+        with contextlib.suppress(Exception):
+            faulthandler.cancel_dump_traceback_later()
+
+    def _tick(self) -> None:
+        now = time.monotonic()
+        gap = now - self._last_tick
+        self._last_tick = now
+        _stall_monitor.heartbeat(now)
+        if self._warn_gap_sec is not None and gap > self._warn_gap_sec:
+            logger.warning("[freeze] event loop blocked ~%.1fs (recovered)", gap)
+        with contextlib.suppress(Exception):  # a failed re-arm only skips one tick
+            kwargs = {"file": self._crash_file} if self._crash_file else {}
+            faulthandler.dump_traceback_later(self._dump_sec, repeat=False, **kwargs)
+
+
+class _StallMonitor:
+    """Record the GUI thread's native stack while it is stalled (verbose, macOS).
+
+    The always-on faulthandler dump proves *that* the loop stopped, not what
+    stopped it: a block inside Qt/QML leaves the Python stack at `app.exec()`.
+    This thread watches the same heartbeat the watchdog QTimer writes; the
+    first check that finds it overdue by the warn gap runs macOS's `sample`
+    on this process and files the output beside crash.log. Best-effort by
+    design: a missing `sample`, a refused attach, or the session's capture
+    budget is a no-op, and each stall is captured at most once.
+    """
+
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._log_dir: Path | None = None
+        self._sample: str | None = None
+        self._warn_gap: float | None = None
+        self._last_tick = 0.0
+        self._captures = 0
+
+    def start(self, log_dir: Path | None, warn_gap_sec: float | None) -> None:
+        if self._thread is not None or log_dir is None or not warn_gap_sec:
+            return
+        sample = shutil.which("sample")
+        if sys.platform != "darwin" or sample is None:
+            return
+        self._log_dir = log_dir
+        self._sample = sample
+        self._warn_gap = float(warn_gap_sec)
+        # A fresh Event per run: a stop/start while the old loop is inside a
+        # capture must retire that loop, not hand it the new run's Event.
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, args=(self._stop,), name="waves-stall-sample", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread = None
+
+    def heartbeat(self, at: float) -> None:
+        self._last_tick = at
+
+    def _due(self, now: float, stop: threading.Event) -> bool:
+        return (
+            not stop.is_set()
+            and self._thread is not None
+            and self._warn_gap is not None
+            and self._last_tick > 0.0
+            and self._captures < _STALL_SAMPLE_MAX_PER_SESSION
+            and now - self._last_tick > self._warn_gap
+        )
+
+    def _loop(self, stop: threading.Event) -> None:
+        while not stop.wait(_STALL_MONITOR_TICK_SEC):
+            if self._due(time.monotonic(), stop):
+                self._capture(stop)
+
+    def _capture(self, stop: threading.Event) -> None:
+        log_dir, sample = self._log_dir, self._sample
+        if stop.is_set() or log_dir is None or sample is None:  # not armed (see start/_due)
+            return
+        self._captures += 1
+        # This capture covers the current stall; the next one needs a fresh gap.
+        self._last_tick = time.monotonic()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        path = log_dir / f"freeze-{stamp}.sample.txt"
+        try:
+            done = subprocess.run(  # noqa: S603 (resolved binary, fixed argv)
+                [
+                    sample,
+                    str(os.getpid()),
+                    str(_STALL_SAMPLE_SEC),
+                    str(_STALL_SAMPLE_INTERVAL_MS),
+                    "-file",
+                    str(path),
+                ],
+                capture_output=True,
+                timeout=_STALL_SAMPLE_SEC + 5,
+                check=False,
+            )
+        except Exception:  # a failed capture must never take the app down
+            logger.warning("[freeze] native stack capture failed", exc_info=True)
+            return
+        if done.returncode == 0 and path.exists():
+            logger.warning("[freeze] native stack captured -> %s", path.name)
+        else:
+            logger.warning("[freeze] native stack capture produced nothing (sample exit %s)", done.returncode)
+
+
+def _occ_bucket(ratio: float) -> str:
+    """Coarsen an event-loop occupancy ratio into a low-cardinality bucket."""
+    for hi, label in ((0.1, "<10%"), (0.3, "10-30%"), (0.6, "30-60%"), (0.9, "60-90%")):
+        if ratio < hi:
+            return label
+    return ">90%"
+
+
+def _stall_bucket(sec: float) -> str:
+    """Coarsen the worst single event-loop stall in a window into a bucket."""
+    for hi, label in ((0.1, "<0.1s"), (0.25, "0.1-0.25s"), (0.5, "0.25-0.5s"), (1.0, "0.5-1s")):
+        if sec < hi:
+            return label
+    return ">1s"
+
+
+class _PoolLike(Protocol):
+    """The two Qt ThreadPool readings the sampler takes off a registered pool."""
+
+    def activeThreadCount(self) -> int: ...
+    def maxThreadCount(self) -> int: ...
+
+
+class _PerfSampler:
+    """Low-rate resource snapshot (verbose only): RSS plus per-pool activity.
+
+    One DEBUG line per interval; the numbers that make a saturation or leak
+    visible in a user's log without a reproduction on the maintainer's side.
+    """
+
+    def __init__(self) -> None:
+        self._timer = None
+        self._pools: list[tuple[str, _PoolLike]] = []
+        # Event-loop occupancy accumulators, drained each _sample (see
+        # _probe_tick). Busy = time the fast probe fired later than scheduled;
+        # wall = total elapsed; max_stall = worst single overrun in the window.
+        self._probe_timer = None
+        self._probe_last = 0.0
+        self._probe_busy = 0.0
+        self._probe_wall = 0.0
+        self._probe_max_stall = 0.0
+
+    def register_pool(self, name: str, pool: _PoolLike) -> None:
+        self._pools.append((name, pool))
+
+    def start(self) -> None:
+        if self._timer is not None:
+            return
+        try:
+            from PySide6.QtCore import QTimer
+        except Exception:
+            return
+        self._timer = QTimer()
+        self._timer.setInterval(_SAMPLER_INTERVAL_MS)
+        self._timer.timeout.connect(self._sample)
+        self._timer.start()
+        self._probe_last = time.monotonic()
+        self._probe_timer = QTimer()
+        self._probe_timer.setInterval(_PROBE_INTERVAL_MS)
+        self._probe_timer.timeout.connect(self._probe_tick)
+        self._probe_timer.start()
+
+    def stop(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        if self._probe_timer is not None:
+            self._probe_timer.stop()
+            self._probe_timer = None
+
+    @staticmethod
+    def _rss_mb() -> float | None:
+        try:
+            import resource
+
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # ru_maxrss is bytes on macOS/BSD, kilobytes on Linux.
+            return peak / (1024 * 1024) if sys.platform == "darwin" else peak / 1024
+        except Exception:
+            return None  # Windows: no resource module; skip rather than dep on psutil
+
+    def _probe_tick(self) -> None:
+        """Measure GUI-thread event-loop occupancy. This fixed-interval timer
+        lives on the GUI thread, so however much later than _PROBE_INTERVAL_MS it
+        actually fires is time the loop spent busy (or CPU-starved) instead of
+        servicing it. sum(overrun)/sum(elapsed) approximates occupancy. Records
+        only aggregate durations, never an identity, path, or content."""
+        now = time.monotonic()
+        elapsed = now - self._probe_last
+        self._probe_last = now
+        overrun = elapsed - (_PROBE_INTERVAL_MS / 1000.0)
+        if overrun > 0.0:
+            self._probe_busy += overrun
+            if overrun > self._probe_max_stall:
+                self._probe_max_stall = overrun
+        self._probe_wall += elapsed
+
+    def _sample(self) -> None:
+        # Sampling is best-effort; a probe failure must never surface.
+        with contextlib.suppress(Exception):
+            parts = []
+            rss = self._rss_mb()
+            if rss is not None:
+                parts.append(f"peak_rss={rss:.0f}MB")
+            for name, pool in self._pools:
+                with contextlib.suppress(Exception):
+                    part = f"{name}={pool.activeThreadCount()}/{pool.maxThreadCount()}"
+                    # Plus the high-water mark for the pools that keep one
+                    # (PoolGauge, written as ^N). This samples on a timer, and
+                    # a per-job fan-out can saturate and drain entirely between
+                    # two ticks: reading the instantaneous count alone, a pool
+                    # that spent three seconds pinned at its ceiling reports
+                    # 0/10 in every line of the export, which is the exact
+                    # blindness the mark exists to cure.
+                    peak = getattr(pool, "peak", 0)
+                    if peak:
+                        part += f"^{peak}"
+                    parts.append(part)
+            if self._probe_wall > 0.0:
+                occ = max(0.0, min(1.0, self._probe_busy / self._probe_wall))
+                parts.append(f"uiloop_busy={_occ_bucket(occ)} uiloop_maxstall={_stall_bucket(self._probe_max_stall)}")
+                self._probe_busy = 0.0
+                self._probe_wall = 0.0
+                self._probe_max_stall = 0.0
+            if parts:
+                logger.debug("[sys] %s threads=%d", " ".join(parts), threading.active_count())
+
+
+# --------------------------------------------------------------------------
+# Installation and the verbose switch
+# --------------------------------------------------------------------------
+
+_installed = False
+_log_dir: Path | None = None
+_file_handler: RotatingFileHandler | None = None
+# What the loggers actually hold for disk output: a QueueHandler that filters
+# (level + redaction) on the logging thread and hands the record to a writer
+# thread, which owns _file_handler. Disk writes never run on the caller's
+# thread: a file handler sitting on the loggers directly would block the
+# caller, and a WARNING logged from the GUI thread while the disk was busy (the
+# library scan and the ownership stats hammering it at launch) blocks the event
+# loop for the write, 50-130ms, seen as the launch animation stalling.
+_disk_handler: QueueHandler | None = None
+_disk_listener: QueueListener | None = None
+_stream_handler: logging.StreamHandler | None = None
+_crumbs = _BreadcrumbHandler()
+_watchdog = _Watchdog()
+_stall_monitor = _StallMonitor()
+_sampler = _PerfSampler()
+# A countdown still armed when the interpreter exits fires from inside
+# Py_FinalizeEx, where faulthandler walks frames that are already being torn
+# down and can spin forever (the process then sits at 100% CPU and never
+# exits). shutdown() stops the watchdog on the normal quit path; this is the
+# net for every other way out, including a test process that built a bridge
+# with verbose diagnostics on. atexit runs before faulthandler's own teardown.
+atexit.register(_watchdog.stop)
+_crash_file = None
+_verbose = False
+
+#: Developer override: WAVES_DEBUG=1 forces verbose regardless of the setting.
+FORCED_VERBOSE = os.environ.get("WAVES_DEBUG", "0") != "0"
+
+
+def set_crash_file(handle) -> None:
+    """Give the watchdog the open crash.log handle faulthandler already uses,
+    so freeze tracebacks land next to crash tracebacks."""
+    global _crash_file
+    _crash_file = handle
+
+
+def register_pool(name: str, pool: _PoolLike) -> None:
+    """Register a QThreadPool for the perf sampler. One line per new pool."""
+    _sampler.register_pool(name, pool)
+
+
+#: log_tail's wait for the disk writer to catch up. The logs drawer polls every
+#: second, so a writer wedged in a file write must cost the GUI thread tens of
+#: milliseconds, not the export path's full 2s: that wait would be the stall
+#: class the console exists to diagnose.
+_LOG_TAIL_WAIT_SEC = 0.05
+
+
+def log_path() -> Path | None:
+    return (_log_dir / LOG_FILENAME) if _log_dir else None
+
+
+def log_tail(max_lines: int = 500, max_bytes: int = 262144) -> str:
+    """The on-disk log's tail for the in-app console.
+
+    Waits briefly for the disk writer to catch up so just-written lines show
+    up, then reads at most max_bytes off the end and keeps the last max_lines.
+    The wait is bounded and observes only the writer's queue, so a write in
+    progress cannot stall the poll; bounded both ways so a runaway log cannot
+    stall the GUI thread that asked. "" when there is no log file yet.
+    """
+    try:
+        lines = max(1, min(int(max_lines), 2000))
+        cap = max(4096, min(int(max_bytes), 1_048_576))
+    except (TypeError, ValueError):
+        lines, cap = 500, 262144
+    wait_for_disk_log(_LOG_TAIL_WAIT_SEC)
+    path = log_path()
+    if path is None:
+        return ""
+    text = _read_tail(path, cap)
+    if not text:
+        return ""
+    tail = text.splitlines()
+    return "\n".join(tail[-lines:])
+
+
+def install(log_dir: str) -> Path | None:
+    """Wire redaction, breadcrumbs and the on-disk log. Idempotent.
+
+    Called once at startup (before verbose state is known); the default disk
+    level is WARNING plus breadcrumb dumps, per the privacy model. Returns the
+    log-file path, or None if the directory is unwritable.
+    """
+    global _installed, _log_dir, _file_handler, _stream_handler, _disk_handler, _disk_listener
+    if _installed:
+        return log_path()
+    _installed = True
+
+    fmt = logging.Formatter("%(asctime)s.%(msecs)03d  %(levelname)-5s %(name)s %(message)s", datefmt="%H:%M:%S")
+    logging.addLevelName(logging.WARNING, "WARN")
+    redact = _RedactingFilter()
+
+    waves = logging.getLogger("waves")
+    waves.propagate = False
+    waves.setLevel(logging.DEBUG)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # stderr: genuine problems always surface on a from-source run.
+    _stream_handler = logging.StreamHandler(sys.stderr)
+    _stream_handler.setFormatter(fmt)
+    _stream_handler.setLevel(logging.DEBUG if FORCED_VERBOSE else logging.WARNING)
+    _stream_handler.addFilter(redact)
+
+    # Disk: bounded rotating file next to settings.json and crash.log.
+    try:
+        path = Path(log_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        _log_dir = path
+        _file_handler = RotatingFileHandler(
+            path / LOG_FILENAME, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUPS, encoding="utf-8"
+        )
+        _file_handler.setFormatter(fmt)
+        # Level and redaction are decided by the QueueHandler in front (on the
+        # logging thread, before anything is queued); the file handler behind
+        # it writes whatever arrives. The QueueHandler merges each record's
+        # message and (already scrubbed) traceback text before queueing, so
+        # what crosses to the writer thread is plain text plus metadata.
+        _disk_handler = QueueHandler(_queue.Queue())
+        _disk_handler.setLevel(logging.WARNING)
+        _disk_handler.addFilter(redact)
+        _disk_listener = QueueListener(_disk_handler.queue, _file_handler)
+        _disk_listener.start()
+        atexit.register(_stop_disk_listener)
+    except OSError:
+        _log_dir = None
+        _file_handler = None
+        _disk_handler = None
+        _disk_listener = None
+
+    _crumbs.setFormatter(fmt)
+    _crumbs.addFilter(redact)
+
+    # ONE dump handler on both trees, not one each: the limiter is per handler,
+    # and the waves tree does not propagate to the root, so two instances each
+    # kept their own clock. An error from a waves.* logger and one from a
+    # third-party root-tree logger seconds later then wrote the whole trail
+    # twice inside the window the limiter exists to hold, padding the rotating
+    # log with a duplicate and evicting that much real history.
+    _crumb_dump = None if _disk_handler is None else _CrumbDumpHandler(_crumbs, _disk_handler)
+
+    for target in (waves, root):
+        target.addHandler(_stream_handler)
+        target.addHandler(_crumbs)
+        if _disk_handler is not None and _crumb_dump is not None:
+            target.addHandler(_disk_handler)
+            target.addHandler(_crumb_dump)
+
+    _install_qt_handler()
+    logger.info("[init] session=%s waves diagnostics installed", SESSION_ID)
+    return log_path()
+
+
+def set_verbose(on: bool) -> None:
+    """Flip verbose diagnostics at runtime (the Advanced Settings toggle).
+
+    Verbose narrows the freeze watchdog to its debugging thresholds, raises
+    the disk level to DEBUG and runs the perf sampler; off returns to
+    WARNING-plus-breadcrumb-dumps while the watchdog stays armed at its
+    always-on threshold. Must be called from the GUI thread (it owns QTimers).
+    """
+    global _verbose
+    on = bool(on) or FORCED_VERBOSE
+    _verbose = on
+    if _disk_handler is not None:
+        _disk_handler.setLevel(logging.DEBUG if on else logging.WARNING)
+    if on:
+        logger.warning("[init] verbose diagnostics ON (session=%s, v%s)", SESSION_ID, _app_version())
+        _watchdog.start(_crash_file)
+        _stall_monitor.start(_log_dir, _WATCHDOG_WARN_GAP_SEC)
+        _sampler.start()
+    else:
+        _watchdog.start(_crash_file, dump_sec=_WATCHDOG_ALWAYS_DUMP_SEC, warn_gap_sec=None)
+        _stall_monitor.stop()
+        _sampler.stop()
+        logger.warning("[init] verbose diagnostics OFF")
+
+
+def stop_freeze_watchdog() -> None:
+    """Stop the freeze watchdog and cancel any pending dump (teardown).
+
+    Quitting is the one time the GUI thread blocks on purpose: shutdown()
+    drains four worker pools after the event loop has already exited, up to
+    eight seconds of it, and the watchdog cannot tick through that. The
+    countdown armed by the last tick then expired and faulthandler appended a
+    full all-thread traceback to crash.log, so a quit during a download wrote
+    a freeze record for a freeze that never happened. Worse, that dump goes
+    straight to the file descriptor without passing the scrubber, and
+    crash.log is rotated only at process start, so the fabricated stacks piled
+    up and crowded the window export_bundle ships.
+
+    Idempotent, and safe to call when the watchdog was never started."""
+    _watchdog.stop()
+    _stall_monitor.stop()
+
+
+def detach_disk_log() -> None:
+    """Close and detach the on-disk log handlers (factory reset).
+
+    The open RotatingFileHandler would otherwise re-create waves_dev.log on
+    the first warning after the config wipe, and holds the file open on
+    Windows where an open file cannot be deleted. Breadcrumbs and the stderr
+    handler keep running; only disk output stops. One-way: the app quits
+    right after a factory reset, so nothing re-attaches."""
+    global _file_handler, _disk_handler
+    if _file_handler is None:
+        return
+    _watchdog.stop()
+    _stall_monitor.stop()
+    _sampler.stop()
+    for target in (logging.getLogger("waves"), logging.getLogger()):
+        for handler in list(target.handlers):
+            if handler is _disk_handler or isinstance(handler, _CrumbDumpHandler):
+                target.removeHandler(handler)
+    _stop_disk_listener()
+    with contextlib.suppress(Exception):
+        _file_handler.close()
+    _file_handler = None
+    _disk_handler = None
+
+
+def _stop_disk_listener() -> None:
+    """Drain the disk-log queue and stop its writer thread (exit / detach).
+    Idempotent: the writer joins once, and a second call finds it gone."""
+    global _disk_listener
+    listener, _disk_listener = _disk_listener, None
+    if listener is not None:
+        with contextlib.suppress(Exception):
+            listener.stop()
+
+
+def wait_for_disk_log(timeout: float = 2.0) -> None:
+    """Best-effort wait for the disk writer to consume what is queued (before
+    an export or a console poll reads the file back).
+
+    Bounded, and it observes only the queue: a writer wedged inside its file
+    write keeps the queue backed up and holds the handler lock, so waiting on
+    either past ``timeout`` would be the stall the queue exists to prevent.
+    Each record is flushed as the writer writes it, so a drained queue means
+    everything the writer has finished has landed; the record being written
+    right now may or may not, and nothing is left in a buffer for a caller to
+    flush out."""
+    handler = _disk_handler
+    if handler is None:
+        return
+    deadline = time.monotonic() + timeout
+    while not cast(_queue.Queue[object], handler.queue).empty() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+# --------------------------------------------------------------------------
+# Export
+# --------------------------------------------------------------------------
+
+
+def _app_version() -> str:
+    try:
+        from waves.desktop import __version__
+    except Exception:
+        return "?"
+    else:
+        return __version__
+
+
+def _qt_version() -> str:
+    try:
+        from PySide6.QtCore import qVersion
+
+        return qVersion()
+    except Exception:
+        return "?"
+
+
+def _read_tail(path: Path, max_bytes: int) -> str:
+    try:
+        size = path.stat().st_size
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+                fh.readline()  # drop the partial first line
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def export_bundle(redact_content: bool = False) -> str:
+    """Build one redacted, shareable diagnostic file; returns its path ("" on
+    failure). Every line is re-scrubbed on the way out (the final pass), and
+    content spans are hashed when the user asked for that too."""
+    if _log_dir is None:
+        return ""
+    # The disk log is written by its own thread; wait for it to catch up so
+    # the bundle carries every line the writer has finished.
+    wait_for_disk_log()
+    # Sub-second suffix: two exports in the same second (double-click, or one
+    # with and one without content redaction) must not overwrite each other.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+    out_path = _log_dir / f"waves-diagnostics-{stamp}.txt"
+
+    sections: list[tuple[str, str]] = []
+    header = "\n".join(
+        [
+            f"Waves diagnostic bundle  ·  {datetime.now().isoformat(timespec='seconds')}",
+            f"app={_app_version()} qt={_qt_version()} python={platform.python_version()}",
+            f"os={platform.system()} {platform.release()} ({platform.machine()})",
+            f"session={SESSION_ID} verbose={_verbose} content_redacted={bool(redact_content)}",
+            "identity PII (usernames, paths, addresses, tokens, account ids) is always scrubbed",
+        ]
+    )
+    sections.append(("SYSTEM", header))
+    sections.append(("RECENT ACTIVITY (this session, newest last)", "\n".join(_crumbs.ring) or "(none)"))
+
+    crash = _log_dir / "crash.log"
+    # Native stall samples (the verbose freeze watchdog's macOS captures) are
+    # the one artifact that names a GUI stall the Python traceback cannot, so
+    # the bundle carries the newest few, bounded like every other section and
+    # re-scrubbed on the way out like the rest.
+    for sample_path in sorted(_log_dir.glob("freeze-*.sample.txt"), reverse=True)[:_STALL_SAMPLE_EXPORT_MAX]:
+        body = _read_tail(sample_path, 256_000)
+        if body.strip():
+            sections.append((f"NATIVE STALL SAMPLE ({sample_path.name})", body))
+    for path, cap, title in [
+        (crash.with_suffix(".log.1"), 256_000, "CRASH LOG (previous)"),
+        (crash, 512_000, "CRASH LOG"),
+        *[
+            (_log_dir / f"{LOG_FILENAME}.{i}", _LOG_MAX_BYTES, f"APP LOG (older .{i})")
+            for i in range(_LOG_BACKUPS, 0, -1)
+        ],
+        (_log_dir / LOG_FILENAME, _LOG_MAX_BYTES, "APP LOG (current)"),
+    ]:
+        if path.is_file():
+            body = _read_tail(path, cap)
+            if body.strip():
+                sections.append((title, body))
+
+    try:
+        with open(out_path, "w", encoding="utf-8") as out:
+            for title, body in sections:
+                out.write(f"\n======== {title} ========\n")
+                out.writelines(scrub(line, redact_content=redact_content) + "\n" for line in body.splitlines())
+    except OSError:
+        logger.exception("diagnostic export failed")
+        return ""
+    else:
+        logger.info("[export] diagnostic bundle written (%d sections)", len(sections))
+        return str(out_path)

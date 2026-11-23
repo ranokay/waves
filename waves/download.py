@@ -19,119 +19,106 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent import futures
+from dataclasses import dataclass
 from threading import Event, Lock, local
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import certifi
 import m3u8
 import requests
 from ffmpeg import FFmpeg, FFmpegError
 from mutagen import MutagenError
 from mutagen.flac import FLAC
-from mutagen.mp4 import MP4
-from pathvalidate import sanitize_filename
 from requests.adapters import Retry
 from requests.exceptions import HTTPError
 from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
-from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable, TooManyRequests
+from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable
 from tidalapi.media import (
     AudioExtensions,
-    AudioMode,
     Codec,
     Quality,
-    Stream,
-    StreamManifest,
     VideoExtensions,
 )
-from urllib3.util.ssl_ import create_urllib3_context
 
 from waves import flac_verify
-from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for
+from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for, tidal_quality_for_tier
 from waves.constants import (
     CHUNK_SIZE,
     EXTENSION_LYRICS,
-    FILENAME_LENGTH_MAX,
     METADATA_EXPLICIT,
     METADATA_LOOKUP_UPC,
-    PLAYLIST_EXTENSION,
-    PLAYLIST_EXTENSION_LEGACY,
-    PLAYLIST_PREFIX,
     REQUESTS_TIMEOUT_SEC,
     UNIQUIFY_THRESHOLD,
-    AudioExtensionsValid,
-    CoverBaseline,
     CoverDimensions,
     DownsampleTarget,
     MediaType,
     MetadataTargetUPC,
+    QualityTier,
     QualityVideo,
+    cover_file_dimension,
+    provider_folder_name,
+    quality_rank,
+    tier_from_word,
+    wants_atmos_delivery,
 )
-from waves.download_slots import STREAM_SLOTS, JobToken, Ticket
+from waves.errors import MediaMissing
 from waves.flac_verify import seal_file
-from waves.helper.camelot import format_initial_key
-from waves.helper.exceptions import MediaMissing
-from waves.helper.path import (
-    PATH_LENGTH_MAX,
-    _text_length,
+from waves.http import pooled_session
+from waves.ids import credited_artist_ids, download_identity_id, owned_item_ids
+from waves.library.ownership import copy_is_current as _copy_is_current
+from waves.library.placement import (
+    CARRY_OVER_FAILED_REASON,
+    RETAINED_REASON,
+    UPGRADE_RETAINED_REASON,
+    ExistingCopy,
+    PlacementDecision,
+    decide_placement,
+    keep_both_name,
+)
+from waves.library.upgrade import UpgradePlan, commit_upgrade
+from waves.metadata.camelot import format_initial_key
+from waves.metadata.digest import audio_digest, digest_matches
+from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
+from waves.metadata.naming import name_builder_item, name_builder_title
+from waves.metadata.provenance import album_path_facts, path_facts, resolve_track_facts
+from waves.metadata.tags import (
+    Metadata,
+    MetadataUnreadable,
+    carry_over_tags,
+    normalize_audio_type_tag,
+    occupant_is_version,
+    read_file_audio_type,
+    read_item_id,
+)
+from waves.model.cfg import Settings as SettingsData
+from waves.model.cfg import metadata_tag_write, provider_setting
+from waves.model.downloader import DownloadSegmentResult, ProgressGui, TrackStreamInfo
+from waves.paths import (
     check_file_exists,
-    cover_file_name,
     format_path_media,
     name_comparison_key,
     path_file_sanitize,
     path_file_uniquify,
     safe_filename_replacement,
     safe_filename_replacement_map,
-    sanitize_name_component,
     strip_apple_double,
-    truncate_to_byte_limit,
     unique_variant_name,
     url_to_filename,
 )
-from waves.helper.tidal import (
-    get_album_artist_ids,
-    get_album_artists,
-    instantiate_media,
-    items_results_all,
-    name_builder_item,
-    name_builder_title,
+from waves.paths import (
+    staging_path as _staging_path,
 )
-from waves.http_pool import IdleDropAdapter
-from waves.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
-from waves.metadata import Metadata, MetadataUnreadable, carry_over_tags, join_genres, read_item_id
-from waves.model.downloader import DownloadSegmentResult, TrackStreamInfo
-from waves.model.gui_data import ProgressBars
+from waves.playlists import populate_playlists
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress, TaskID
-from waves.waves_ui.diagnostics import content as log_content
-from waves.waves_ui.ffmpeg_manager import working_system_ffmpeg
-from waves.waves_ui.manifest import overgenerated_tail_urls
-
-if TYPE_CHECKING:
-    from waves.genres import GenreLookup
-
-# Characters _stage_and_swap adds around the destination name: a leading dot,
-# a dot-separated uuid4 (36) and the ".tmp" suffix.
-_STAGING_NAME_OVERHEAD: int = len(f"..{uuid4()}.tmp")
-
-# The platform's cap on a WHOLE path, one under the documented maximum so the
-# terminating NUL it includes is never the difference (MAX_PATH 260 on Windows,
-# PATH_MAX 1024 on macOS). Windows measures UTF-16 units and POSIX measures
-# bytes; the staging budget below measures the parent in fsencoded bytes, which
-# is never smaller than either unit, so a name that fits the byte arithmetic
-# fits the real cap too. Linux allows 4096, but a staging name has no use for
-# the headroom: past this budget only the throwaway readable part shrinks.
-# One number with the sanitizer's own cap (helper.path.PATH_LENGTH_MAX), so
-# the path a destination is approved against and the path its staging sibling
-# is budgeted against can never drift apart.
-_PATH_LENGTH_MAX: int = PATH_LENGTH_MAX
+from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
+from waves.providers.catalog_offers import DeliveryFacts
+from waves.providers.tidal_client import instantiate_media, items_results_all
+from waves.redaction import content as log_content
+from waves.system_ffmpeg import working_system_ffmpeg
 
 # Child of "waves", so it inherits the app's handlers and its INFO records join
 # the always-on breadcrumb ring crash reports are stitched from.
 logger = logging.getLogger("waves.download")
-# Cover art handling, as its own subsystem logger: what it logs at INFO (a
-# cover kept as served instead of rewritten) joins the same breadcrumb ring.
-logger_covers = logging.getLogger("waves.covers")
 
 # The engine's two fan-outs, as gauges for the verbose perf sampler: the
 # executors themselves are job-scoped (segments) or built per fan-out (items),
@@ -141,114 +128,40 @@ logger_covers = logging.getLogger("waves.covers")
 SEGMENT_GAUGE = PoolGauge(10)
 COLLECTION_GAUGE = PoolGauge(3)
 
-# Every stream byte the engine has received this process, for the header's
-# speed readout (the bridge samples bytes_received() twice a second). Segment
-# workers add from many threads, so the count is guarded.
-_bytes_lock = Lock()
-_bytes_in = 0
-
-
-def bytes_received() -> int:
-    """Stream bytes received so far this process, across every download."""
-    return _bytes_in
-
-
-def _count_bytes(n: int) -> None:
-    global _bytes_in
-    with _bytes_lock:
-        _bytes_in += n
-
-
-# TIDAL's subStatus family for "your session, not the content": 11001 user not
-# authorised, 11002 invalid token, 11003 expired token. A 401 carrying one of
-# these is a login problem and must never be read as "this track is gone".
-_TIDAL_SUBSTATUS_AUTH_MIN: int = 11000
-_TIDAL_SUBSTATUS_AUTH_MAX: int = 11999
-
 # What libswresample prints when a build was made without the resampler an
 # aresample filter asks for (soxr is a build option). Only this error sends a
 # downsample to the built-in resampler; any other failure is the real one.
-_SOXR_MISSING_MARKER: str = "requested resampling engine is unavailable"
+_SOXR_MISSING_MARKER = "requested resampling engine is unavailable"
 
 # The ffmpeg binaries known to lack soxr, so after the first track of a run
 # every later one goes straight to the built-in resampler instead of paying a
-# failing spawn first. Keyed by the binary's path: a changed ffmpeg setting
-# is asked afresh. Tracks downsample on several worker threads at once.
-_SOXR_MISSING: set[str] = set()
+# failing spawn first. Keyed by the binary itself: a changed ffmpeg setting, or
+# a binary an update replaced at the same path, is asked afresh. Tracks
+# downsample on several worker threads at once.
+_SOXR_MISSING: set[tuple[str, int, int, int]] = set()
 _SOXR_MISSING_LOCK = Lock()
 
 
-def _soxr_known_missing(ffmpeg: str) -> bool:
-    with _SOXR_MISSING_LOCK:
-        return ffmpeg in _SOXR_MISSING
-
-
-def _note_soxr_missing(ffmpeg: str) -> None:
-    with _SOXR_MISSING_LOCK:
-        _SOXR_MISSING.add(ffmpeg)
-
-
-# The CDN's answer to a segment link that has lapsed. The signed links in a
-# stream manifest only live so long, and a track that waited behind a long
-# queue, or sat paused, can reach its segments after they died. Such a track
-# asks for its stream once more (see _download_with_link_refresh).
-_LINK_LAPSED_STATUSES: frozenset[int] = frozenset({403, 410})
-
-# Statuses in the 4xx range that say "not now" rather than "never": a request
-# the server timed out on (408), one it would not risk replaying yet (425),
-# and a rate limit (429). A segment fetch that meets one is tried again.
-_SEGMENT_STATUSES_TRY_AGAIN: frozenset[int] = frozenset({408, 425, 429})
-
-# Per item thread: whether the last _download pass failed on a lapsed link.
-# Set by _download, read and cleared by _download_with_link_refresh, so the
-# return shape of _download (and every stub of it) stays as it was.
-# ``refetch_left`` is True during a first pass that still has its one fresh-link
-# rerun in hand, so a lapsed segment there is not reported as a lost track.
-_PASS_NOTE = local()
-
-
-def _http_status(error: BaseException | None) -> int | None:
-    """The HTTP status a requests error carries, or None."""
-    return getattr(getattr(error, "response", None), "status_code", None)
-
-
-def _tidal_refuses_asset(error: HTTPError) -> str | None:
-    """TIDAL's own words when it refuses to serve an item, or None if this is
-    something else (a network hiccup, a dead session, a server error).
-
-    The playback-info endpoint answers a track the account cannot play with a
-    401 or 403 whose body says why (observed: ``subStatus 4005 "Asset is not
-    ready for playback"`` for tracks greyed out in the official apps). The
-    same 401 status also announces an expired or invalid token, so the body is
-    the only way to tell "TIDAL will not give you this track" from "TIDAL does
-    not know who you are"; tidalapi already retried the expired-token case
-    once with a refresh, so what reaches here is whatever survived that.
-
-    Args:
-        error (HTTPError): The requests error raised for the playback request.
-
-    Returns:
-        str | None: TIDAL's user message (or a generic one) when this is a
-            refusal of the asset itself, None otherwise.
-    """
-    response = getattr(error, "response", None)
-    status = getattr(response, "status_code", None)
-    if status not in (401, 403):
-        return None
-    body: dict = {}
+def _ffmpeg_identity(ffmpeg: str) -> tuple[str, int, int, int]:
+    """The binary behind an ffmpeg setting: its path plus the file's inode,
+    size and mtime, so an update in place reads as a different binary. A bare
+    name resolved on PATH has no file here to stat and is keyed by the name
+    alone, with zeros no real binary's inode carries."""
     try:
-        parsed = response.json()
-        if isinstance(parsed, dict):
-            body = parsed
-    except Exception:  # noqa: S110  # a body that is not JSON is still a refusal
-        pass
-    message = str(body.get("userMessage") or "")
-    if message.startswith("The token has expired"):
-        return None
-    sub_status = body.get("subStatus")
-    if isinstance(sub_status, int) and _TIDAL_SUBSTATUS_AUTH_MIN <= sub_status <= _TIDAL_SUBSTATUS_AUTH_MAX:
-        return None
-    return message or f"HTTP {status}"
+        stat = os.stat(ffmpeg)
+    except OSError:
+        return (ffmpeg, 0, 0, 0)
+    return (ffmpeg, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _soxr_known_missing(binary: tuple[str, int, int, int]) -> bool:
+    with _SOXR_MISSING_LOCK:
+        return binary in _SOXR_MISSING
+
+
+def _note_soxr_missing(binary: tuple[str, int, int, int]) -> None:
+    with _SOXR_MISSING_LOCK:
+        _SOXR_MISSING.add(binary)
 
 
 class UntaggableFile(OSError):
@@ -258,65 +171,6 @@ class UntaggableFile(OSError):
     forever. Raised where a failed metadata save already raises."""
 
 
-def _staging_path(path_destination: pathlib.Path) -> pathlib.Path:
-    """The hidden temp sibling a destination is copied through before the swap.
-
-    The staging decoration (dot prefix, uuid, ".tmp") adds 42 characters to a
-    destination name that is itself allowed to reach the filesystem's 255 cap,
-    so a long track name would make every stage attempt raise ENAMETOOLONG
-    deterministically (all retries fail the same way). Truncate the readable
-    part; the uuid alone carries the uniqueness.
-
-    The cap is bytes, not characters. Counting characters passed a name in CJK,
-    Cyrillic or emoji straight through at three or four bytes each, so the very
-    names most likely to be long were the ones that failed.
-
-    The WHOLE staging path is capped as well, not just its name (issue #17).
-    The sanitizer bounds the final path against the platform limit (260 on
-    Windows), but the staging decoration adds 42 more characters that were
-    never budgeted: a final path that fit by less than that put every staging
-    attempt past MAX_PATH, Windows answered "no such file or directory", and
-    the longest-named tracks of an album failed every retry identically. The
-    final name is untouched either way; only the throwaway readable part of
-    the staging name shrinks, down to nothing if the parent is deep enough.
-
-    Args:
-        path_destination (pathlib.Path): The final destination path.
-
-    Returns:
-        pathlib.Path: A fresh staging path beside the destination.
-    """
-    budget_name: int = FILENAME_LENGTH_MAX - _STAGING_NAME_OVERHEAD
-    # The parent is measured the way the platform measures it (UTF-16 units on
-    # Windows, bytes elsewhere): a byte count against the Windows cap charged
-    # a CJK parent three units per character and cut the unique part of the
-    # staging name down to one character, which two concurrent tracks of one
-    # album could then share.
-    budget_path: int = (
-        _PATH_LENGTH_MAX
-        - _text_length(str(path_destination.parent))
-        - 1  # the separator between parent and name
-        - _STAGING_NAME_OVERHEAD
-    )
-    base_name: str = truncate_to_byte_limit(path_destination.name, max(0, min(budget_name, budget_path)))
-    unique: str = str(uuid4())
-
-    # A parent so deep that even a bare ".<uuid>.tmp" overflows the cap: the
-    # readable part is already gone, so the unique part gives ground too, as
-    # far as the cap actually leaves room for. The floor used to be ten hex
-    # characters whatever the arithmetic said, which for parents in the last
-    # ten characters before the cap was still over it: every staging attempt
-    # failed identically while the destination itself fit (issue #17's band,
-    # one step deeper). One character is the floor now, because a name with
-    # nothing unique in it is shared by every track in the folder; at the very
-    # deepest parent the sanitizer can reach, that one character is the only
-    # thing still over the cap, where it used to be thirty-six.
-    if not base_name and budget_path < 0:
-        unique = unique.replace("-", "")[: max(1, len(unique.replace("-", "")) + budget_path)]
-
-    return path_destination.with_name(f".{base_name}.{unique}.tmp")
-
-
 def _is_truncated_leftover(path_file: pathlib.Path) -> bool:
     """Whether a destination file is an interrupted write rather than content.
 
@@ -324,8 +178,8 @@ def _is_truncated_leftover(path_file: pathlib.Path) -> bool:
     drop leaves between creating a file and writing it: no finished download is
     ever empty. check_file_exists already reads it as nothing, so the skip gate
     downloads the track again, but the move read the same file as an occupant
-    and refused to land on it. Every retry and every later run answered the same
-    way, so one empty leftover kept that track out of the library for good.
+    and refused to land on it. Every retry and every later run would answer the
+    same way, keeping that track out of the library for good.
     Finishing the interrupted write is not overwriting anybody's data, and the
     size is measured here, immediately before the swap, never carried in from an
     earlier check.
@@ -371,74 +225,28 @@ def _os_error_text(error: BaseException | None) -> str:
     return f"{head}: {' -> '.join(names)}" if names else head
 
 
-def _waves_item_id(media) -> str:
-    """The id a downloaded file is filed under, which is not always ``media.id``.
+def clean_album_artists(names: list) -> list:
+    """Reduce an album-artist list to only the primary (first) artist.
 
-    A Waves 'best of both' merge fetches a track from one edition and lands it in
-    another edition's folder, so it carries ``waves_identity_id``: the id the
-    whole app (queue rows, ownership, collection membership) keys that download
-    by, while ``media.id`` stays the source stream being fetched. Stamping the
-    source id into the file meant a later plain job over the same folder asked
-    about the identity id, failed to recognise Waves' own file, and wrote a
-    ``_01`` duplicate beside it instead of replacing it.
-
-    Args:
-        media: The track or video being written.
-
-    Returns:
-        str: The identity id when the item carries one, else its own id, else "".
+    The tag-writer's rule for the opt-in 'Clean album-artist tag' setting:
+    Plex (and some other libraries) mis-read a multi-value album-artist
+    field, so the option collapses it to just the primary artist. The pref
+    itself lives above the engine (a waves.json pref the GUI passes as a live
+    probe); the rule lives here, beside the write it shapes. Folder paths use
+    a different binding and are never collapsed.
     """
-    return str(getattr(media, "waves_identity_id", "") or getattr(media, "id", "") or "")
-
-
-def _artist_ids(media) -> list[str]:
-    """TIDAL ids for the artists credited on ``media``, in credited order.
-
-    The identity half of the artist NAMES written beside them. Two artists can
-    share a name, so a file tagged only with the name cannot later say which of
-    them it belongs to (and neither can the folder it sits in). Id-less stubs
-    are dropped rather than written blank: a missing id means unknown, and
-    unknown must never read as somebody else.
-
-    Args:
-        media: The track or video being written.
-
-    Returns:
-        list[str]: The credited artists' ids, possibly empty.
-    """
-    return [str(a.id) for a in getattr(media, "artists", None) or [] if getattr(a, "id", None)]
-
-
-def _waves_owned_ids(media) -> set[str]:
-    """Every item id a file on disk may legitimately carry for ``media``.
-
-    Normally just its own id. A best-of-both member is filed under the identity
-    edition (see :func:`_waves_item_id`), but every build up to v0.1.21 wrote the
-    SOURCE edition's id into that same file, so libraries assembled by an older
-    Waves are full of merged tracks tagged the other way. Recognising both means
-    a forced re-save replaces its own file, and re-tags it with the identity id
-    on the way, instead of leaving a numbered duplicate beside it that the app
-    will never delete.
-
-    Args:
-        media: The track or video being written.
-
-    Returns:
-        set[str]: The ids this download may treat as its own copy.
-    """
-    ids = (getattr(media, "waves_identity_id", ""), getattr(media, "id", ""))
-    return {str(i) for i in ids if i}
+    return [names[0]] if names else names
 
 
 def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
     """Whether the audio file at this path is a Dolby Atmos copy.
 
-    Read off the disk, not out of any ledger, so a user's own Atmos file is
-    recognised the same as one Waves wrote. Only an MP4 container can hold
-    Atmos (E-AC-3 JOC or AC-4, the two codings TIDAL delivers it in); every
-    other extension is stereo by construction, answered without opening the
-    file. TIDAL's stereo AAC shares the .m4a extension, which is exactly why
-    the two can collide on one name and the codec has to be asked.
+    The shared reader (waves.metadata.tags.read_file_audio_type) answers which Version
+    the file is: tag first, codec second (§5.3), so a file Waves wrote can
+    never be misread because its container shares an extension, and an
+    untagged library falls back to the codec sniff. Only an MP4 container can
+    hold Atmos (E-AC-3 JOC or AC-4, the two codings TIDAL delivers it in);
+    every other extension is stereo by construction.
 
     Args:
         path_file (pathlib.Path): The file to inspect.
@@ -448,15 +256,10 @@ def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
             when the file cannot be read. Callers treat None as "unknown"
             and keep their historical answer rather than guessing.
     """
-    if path_file.suffix.lower() not in (AudioExtensions.M4A, AudioExtensions.MP4):
-        return False
-
-    try:
-        codec: str = str(getattr(MP4(path_file).info, "codec", "") or "")
-    except Exception:
+    version = read_file_audio_type(path_file)
+    if version is None:
         return None
-
-    return codec.startswith(("ec-3", "ac-4"))
+    return version == AudioType.ATMOS
 
 
 # TODO: Set appropriate client string and use it for video download.
@@ -491,78 +294,24 @@ class RequestsClient:
         return o.text, o.url
 
 
-class _SharedContextAdapter(IdleDropAdapter):
-    """HTTPAdapter that gives every pooled connection one shared, preloaded
-    SSLContext.
-
-    requests' default cert_verify hands urllib3 a CA bundle *path* per
-    connection, and urllib3 then builds a fresh SSLContext and re-parses the
-    whole certifi PEM corpus (~150 certificates) on every TLS connect. That
-    work runs GIL-free in OpenSSL, so a burst of cold connections saturates
-    every core (the CPU spike at download start, worst on modest Windows
-    boxes). Loading certifi once and sharing the context leaves only the
-    handshake itself per connection, which is a few milliseconds.
-
-    Connections that sat through a long gap or a sleep are dropped before
-    reuse (issue #47), the rule every pooled adapter shares: see
-    waves.http_pool.
-    """
-
-    def __init__(self, ssl_context, **kwargs) -> None:
-        self._ssl_context = ssl_context
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        pool_kwargs["ssl_context"] = self._ssl_context
-        return super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
-
-    def cert_verify(self, conn, url, verify, cert) -> None:
-        # For the default verify=True case, do NOT set conn.ca_certs: that is
-        # what triggers urllib3's per-connection load_verify_locations(). The
-        # shared context already carries certifi and CERT_REQUIRED, so
-        # verification stays fully on. Custom verify paths or client certs
-        # fall back to the stock (slower, per-connection) behaviour.
-        if verify is True and cert is None:
-            return
-        super().cert_verify(conn, url, verify, cert)
-
-
-def pooled_session(
-    pool_connections: int = 10,
-    pool_maxsize: int = 10,
-    pool_block: bool = False,
-    max_retries: Retry | int = 0,
-) -> requests.Session:
-    """Build a keep-alive session whose connections share one preloaded
-    SSLContext (see _SharedContextAdapter). Callers own the pool and retry
-    policy; the download engine's process-wide instance lives in
-    Download._shared_http()."""
-    ssl_context = create_urllib3_context()
-    ssl_context.load_verify_locations(certifi.where())
-    session = requests.Session()
-    adapter = _SharedContextAdapter(
-        ssl_context,
-        pool_connections=pool_connections,
-        pool_maxsize=pool_maxsize,
-        pool_block=pool_block,
-        max_retries=max_retries,
-    )
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
-
-
 # TODO: Use pathlib.Path everywhere
+@dataclass(frozen=True)
+class _DownloadSettings:
+    data: SettingsData
+
+
 class Download:
-    """Main class for managing downloads, segment merging, file operations, and metadata for TIDAL media."""
+    """Main class for managing downloads, segment merging, file operations, and metadata for provider media."""
 
     _FILE_OPERATION_RETRIES: int = 5
     _FILE_OPERATION_RETRY_DELAY_SEC: float = 0.5
-    # A segment whose body read broke off (the CDN dropped the connection
-    # mid-stream) is fetched this many times in all, with these waits between
-    # attempts; see _download_segment.
+
+    # One segment's body-read retry: three attempts in total, separated by a
+    # short fixed pause. The shared session's Retry(total=5) cannot help here
+    # (it covers connection setup, redirects and response headers only), so a
+    # body that drops mid-stream is retried by _download_segment itself.
     _SEGMENT_ATTEMPTS: int = 3
-    _SEGMENT_RETRY_DELAYS_SEC: tuple[float, ...] = (0.5, 1.5)
+    _SEGMENT_RETRY_DELAY_SEC: float = 0.5
 
     # The batch pause's shared bookkeeping, defaulted on the CLASS so a Download
     # reached without __init__ (a stand-in) reads "no pause in force" rather
@@ -571,16 +320,28 @@ class Download:
     _pace_holds: int = 0
     _pace_until: float = 0.0
 
-    @property
-    def path_base(self) -> str:
-        return getattr(self, "_path_base", "")
+    # Which Version THIS job was pinned to fetch ("stereo" / "atmos"), or None
+    # when the job did not pin one (a legacy single row; the resolver then
+    # decides from the live settings after the stream). Defaulted on the class
+    # so a Download reached without __init__ (a stand-in) reads "unpinned".
+    _pinned_audio_type: str | None = None
 
-    @path_base.setter
-    def path_base(self, value) -> None:
-        # Resolved once here: a ".." typed into the base reached the per-part
-        # sanitizer, which rewrote it to "_" and wrote outside the chosen folder.
-        text = os.fspath(value) if value else ""
-        self._path_base = os.path.normpath(os.path.expanduser(text)) if text else ""
+    # The Waves rung THIS job was queued at, or None when it pinned none (a
+    # legacy row; the session's own quality then stands). Defaulted on the
+    # class for the same stand-in reason as _pinned_audio_type above.
+    _pinned_tier: QualityTier | None = None
+    # The rank this job targets; a stand-in without one reads -1 (no target).
+    _target_rank: int = -1
+    # Captured policy/provenance defaults for stand-ins built without
+    # __init__ (the same reason _pinned_audio_type is class-level).
+    _duplicate_policy: str = "keep_existing"
+    _quality_strategy: str = "best_available"
+    _metadata_source: str = "origin"
+    _organization_source: str = "origin"
+    _origin_facts: dict | None = None
+    _origin_consistent: bool = False
+    _upgrade_plan: UpgradePlan | None = None
+    _record_replacement: Callable[..., int] | None = None
 
     # Process-wide keep-alive HTTP session (see the comment in __init__): all
     # Download instances share one warm connection pool so an album start does
@@ -621,22 +382,18 @@ class Download:
                 )
             return cls._http_shared
 
-    settings: Settings
+    settings: Settings | _DownloadSettings
     tidal: "Tidal"
     session: Session
     skip_existing: bool = False
-    # The job's genre lookup (waves/genres.py), set by the bridge when the
-    # Genre setting is on; None writes no Genre tag.
-    genre_lookup: "GenreLookup | None" = None
-    # This instance's place in the queue's job gate (waves/download_slots.py),
-    # set by the bridge per queued item so a later item's streams wait behind
-    # this one's. None (the CLI) is not held by the gate.
-    _job_token: JobToken | None = None
     fn_logger: Callable
-    progress_gui: ProgressBars
+    progress_gui: ProgressGui
     progress: Progress
     progress_overall: Progress
-    event_abort: Event
+    # Shared never-set abort stand-in so a Download reached without __init__
+    # reads "no abort in force" rather than raising (the _pace_holds pattern).
+    # Real instances get their own in __init__ below; this one is only read.
+    event_abort: Event = Event()
     event_run: Event
 
     def __init__(
@@ -645,11 +402,25 @@ class Download:
         path_base: str,
         fn_logger: Callable,
         skip_existing: bool = False,
-        progress_gui: ProgressBars | None = None,
+        progress_gui: ProgressGui | None = None,
         progress: Progress | None = None,
         progress_overall: Progress | None = None,
         event_abort: Event | None = None,
         event_run: Event | None = None,
+        provider: Provider | None = None,
+        album_artist_tag_clean: Callable[[], bool] | None = None,
+        chooser_toggles: dict | None = None,
+        pinned_tier: QualityTier | None = None,
+        pinned_audio_type: str | None = None,
+        settings_data: SettingsData | None = None,
+        duplicate_policy: str = "keep_existing",
+        quality_strategy: str = "best_available",
+        metadata_source: str = "origin",
+        organization_source: str = "origin",
+        origin_facts: dict | None = None,
+        origin_consistent: bool = False,
+        upgrade_plan: UpgradePlan | None = None,
+        record_replacement: Callable[..., int] | None = None,
     ) -> None:
         """Initialize the Download object and its dependencies.
 
@@ -661,31 +432,100 @@ class Download:
             path_base (str): Base path for downloads.
             fn_logger (Callable): Logger function or object.
             skip_existing (bool, optional): Whether to skip existing files. Defaults to False.
-            progress_gui (ProgressBars | None, optional): GUI progress bars. Defaults to None.
-            progress (Progress | None, optional): Progress task table. Defaults to None.
+            progress_gui (ProgressGui | None, optional): GUI progress bars. Defaults to None.
+            progress (Progress | None, optional): GUI progress task table. Defaults to None.
             progress_overall (Progress | None, optional): Overall progress table. Defaults to None.
-            event_abort (Event | None, optional): Abort event. Defaults to None.
+            event_abort (Event | None, optional): Abort event. Defaults to None,
+                which becomes a fresh never-set event (no abort in force).
             event_run (Event | None, optional): Run event. Defaults to None.
+            provider (Provider | None, optional): The Provider this download is
+                composed with (the seam: stream resolution, track facts and
+                refusal classification arrive through it). Defaults to None,
+                which composes the TIDAL provider over this download's own
+                TIDAL configuration.
+            album_artist_tag_clean (Callable[[], bool] | None, optional): A
+                probe of the 'Clean album-artist tag' policy. Desktop jobs
+                supply the captured value for all tracks in the request. Defaults to None (the pref is off; every main-credit
+                album artist is written).
+            chooser_toggles (dict | None, optional): The per-click Chooser
+                lyrics/art pins (base keys, booleans). They win over the
+                provider's stored options for this job only. Defaults to None
+                (every option reads this job's settings view).
+            pinned_tier (QualityTier | None, optional): The Waves rung this job
+                was queued at. It rides ``resolve_stream`` as the job's own
+                request, so a job fetches at the quality the user started it
+                with however Settings moves afterwards. None (the default)
+                means the session's own quality stands.
+            pinned_audio_type (str | None, optional): Which Version this job
+                was pinned to fetch ("stereo" / "atmos"), for the gates that
+                must not let one Version's file answer for the other (§5.2:
+                a dual download's two rows) and for the fetch itself. None
+                (the default) means the job did not pin one and the resolver
+                decides.
         """
-        self.settings = Settings()
+        self.settings = Settings() if settings_data is None else _DownloadSettings(settings_data)
         self.tidal = tidal_obj
         self.session = tidal_obj.session
+
+        # The Provider seam (spec §4.1): the pipeline's provider-shaped answers
+        # -- StreamInfo, track facts and refusal verdicts -- come from here, not
+        # from tidalapi payloads read inline. The engine's stream fetch (per-job
+        # state: pacing, quality pinning, delivered capture) is bound around
+        # each resolve (see _get_stream_info), so a resolve_stream call crosses
+        # the seam and comes straight back to THIS engine -- never to whichever
+        # instance was constructed last (the GUI rebuilds its idle Download on
+        # every settings save while a job is running).
+        if provider is None:
+            # Deferred: the TIDAL provider imports this module's helpers.
+            from waves.providers.tidal import TidalProvider
+
+            provider = TidalProvider(tidal_obj)
+        self.provider = provider
+        # Per-thread claim context (see _claim_destination): every pool thread
+        # gets its own, so a parallel track never reads another track's values.
+        self._tls = local()
+
         self.skip_existing = skip_existing
         self.fn_logger = fn_logger
         self.progress_gui = progress_gui
         self.progress = progress
         self.progress_overall = progress_overall
         self.path_base = path_base
-        self.event_abort = event_abort
+        self.event_abort = event_abort if event_abort is not None else Event()
         self.event_run = event_run
+        self._album_artist_tag_clean = album_artist_tag_clean or (lambda: False)
+        # Per-click Chooser pins for this job's lyrics/art options; empty for
+        # every click that kept the stored defaults.
+        self._chooser_toggles = {str(key): value for key, value in dict(chooser_toggles or {}).items()}
+        # The Version this job pins (dual download rows). None is a legacy
+        # single row; the shared normalizer is the one spelling of the clamp.
+        self._pinned_audio_type = normalize_audio_type_tag(pinned_audio_type)
+        # The Waves rung this job pins, folded onto the ladder so both the
+        # seam's QualityTier and a raw word spell it the same way. None is a
+        # legacy row whose fetch follows the session's own quality.
+        self._pinned_tier = tier_from_word(pinned_tier) if pinned_tier is not None else None
+        # The captured duplicate policy. Keep existing is the default; the
+        # internal refresh_own keeps the legacy Skip-existing-off identity
+        # answer. The engine's skip behaviour follows this policy, never the
+        # live setting.
+        self._duplicate_policy = duplicate_policy or "keep_existing"
+        self._quality_strategy = quality_strategy or "best_available"
+        # Descriptive provenance (ADR 0011): origin facts and whether the
+        # match was consistent enough to fill a missing origin field.
+        self._metadata_source = metadata_source or "origin"
+        self._organization_source = organization_source or "origin"
+        self._origin_facts = dict(origin_facts or {})
+        self._origin_consistent = bool(origin_consistent)
+        self._upgrade_plan = upgrade_plan
+        self._record_replacement = record_replacement
 
         # Destination directories already ensured by this instance (one
         # instance = one queued item, so this resets naturally per album).
         # On a network mount every makedirs(exist_ok=True) of an existing
         # directory still costs real round-trips (mkdir->EEXIST plus a stat),
-        # and the moves used to re-ensure the same album directory for the
-        # audio, lyrics and cover of every track: dozens of pointless network
-        # calls per album. See _ensure_directory.
+        # and without this set the moves would re-ensure the same album
+        # directory for the audio, lyrics and cover of every track: dozens of
+        # pointless network calls per album. See _ensure_directory.
         self._dirs_ensured: set[str] = set()
 
         # Cover art fetched once per job, not once per track: cover URLs are
@@ -704,8 +544,8 @@ class Download:
         # its unique name and moving the file there. Nothing is on disk for that
         # stretch (metadata, the lyrics fetch and the cover all run first), so
         # without this two colliding same-name tracks both pick the same free
-        # name and one silently overwrites or loses the other (issue #15
-        # follow-up). One instance serves all of a queued item's concurrent
+        # name and one silently overwrites or loses the other. One instance
+        # serves all of a queued item's concurrent
         # track workers (`items` fans `self.item` across the pool), and the GUI
         # runs one queued item at a time, so instance scope covers every
         # in-process collision.
@@ -725,10 +565,8 @@ class Download:
         # name and moving the file there, which is the whole answer while the
         # disk is consulted: once the file lands it answers for itself. With
         # skipping off nothing consults the disk, so a landed file was invisible
-        # and the next track of the same name simply took it (issue #19: six
-        # same-title tracks downloaded three at a time left four files, a
-        # different four each run). This ledger is what a landed file would have
-        # said, and it is never released.
+        # and the next track of the same name simply took it. This ledger is
+        # what a landed file would have said, and it is never released.
         self._names_written: dict[str, str] = {}
         self._names_reserved_lock: Lock = Lock()
 
@@ -752,9 +590,9 @@ class Download:
         self._pace_lock: Lock = Lock()
         # Open except while a pause is being taken. A pause is a promise to
         # TIDAL, not a rest for one worker: the collection fan-out runs several
-        # at once, so while one slept the others kept asking and the request
-        # rate barely dipped (the setting looked inert at anything but one
-        # concurrent download, which is the complaint it was wired for).
+        # at once, so one worker sleeping while the others keep asking barely
+        # dips the request rate, and the setting reads as inert at anything
+        # but one concurrent download.
         self._pace_gate: Event = Event()
         self._pace_gate.set()
         # How many pauses are in force, and when the last of them is due to be
@@ -775,7 +613,7 @@ class Download:
         self._pace_until: float = 0.0
 
         # One pooled, keep-alive HTTP session shared by every segment download.
-        # The old code built a fresh requests.Session() per segment, which forced
+        # A fresh requests.Session() per segment would force
         # a full TLS handshake for each one. A HiRes album is served as dozens of
         # segments per track and fanned across up to
         # downloads_simultaneous_per_track_max x downloads_concurrent_max threads,
@@ -804,7 +642,7 @@ class Download:
         self._segment_executor_lock: Lock = Lock()
 
         if not self.settings.data.path_binary_ffmpeg:
-            self.settings.data.path_binary_ffmpeg = working_system_ffmpeg(retry_slow=True) or None
+            self.settings.data.path_binary_ffmpeg = working_system_ffmpeg() or None
 
         # True whenever ffmpeg is genuinely absent, decoupled from the two gated
         # flags: the MP4/M4A duration-repair remux also needs ffmpeg, so callers
@@ -815,31 +653,39 @@ class Download:
         if self.ffmpeg_missing and (self.settings.data.video_convert_mp4 or self.settings.data.extract_flac):
             self.settings.data.video_convert_mp4 = False
             self.settings.data.extract_flac = False
+            self.settings.data.extract_flac_all = False
 
             self.fn_logger.error(
-                "FFmpeg not found (not set and not on $PATH). FLAC extraction, video conversion, and MP4/M4A "
-                "duration repair are disabled; files may play but can report 0:00 in strict players. Install "
-                "FFmpeg from Settings, or set `path_binary_ffmpeg` (or have ffmpeg on the $PATH)."
+                "FFmpeg not found (not set and not on $PATH or in a package manager's folder). FLAC extraction, "
+                "video conversion, and MP4/M4A duration repair are disabled; files may play but can report 0:00 in "
+                "strict players. Install FFmpeg from Settings, or set `path_binary_ffmpeg` (or install it with "
+                "Homebrew, MacPorts or your package manager)."
             )
 
     def _get_media_urls(
         self,
         media: Track | Video,
-        stream_manifest: StreamManifest | None = None,
+        stream_info: StreamInfo | None = None,
     ) -> list[str]:
         """Extract URLs for the given media item.
 
         Args:
             media (Track | Video): The media item to download.
-            stream_manifest (StreamManifest | None, optional): Stream manifest for tracks. Defaults to None.
+            stream_info (StreamInfo | None, optional): The seam's stream
+                answer for a track, which already carries the URLs. Defaults to None.
 
         Returns:
             list[str]: List of URLs for the media segments.
         """
-        # Get urls for media.
-        if isinstance(media, Track):
-            return stream_manifest.get_urls()
-        elif isinstance(media, Video):
+        # Get urls for media. The kind comes from the provider's answer --
+        # the resolved StreamInfo when there is one, else the provider's own
+        # reading of the object -- never from the SDK types behind it.
+        kind = stream_info.media_kind if stream_info is not None else self.provider.media_kind(media)
+        if kind == MediaType.TRACK:
+            if stream_info is None:
+                return []
+            return list(stream_info.urls)
+        elif kind == MediaType.VIDEO:
             quality_video = self.settings.data.quality_video
             m3u8_variant: m3u8.M3U8 = m3u8.load(media.get_url(), http_client=RequestsClient())
             # Find the desired video resolution or the next best one.
@@ -968,10 +814,13 @@ class Download:
             p_task (TaskID): Progress bar task ID.
             progress_to_stdout (bool): Whether to show progress in stdout.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
-            n_tail_spurious (int | None, optional): How many trailing URLs the manifest
-                proves are over-generated padding (0 means none, so a failed final
-                segment is a real failure). None means unproven and keeps the legacy
-                last-segment leniency. Defaults to None.
+            n_tail_spurious (int | None, optional): The manifest's proven count of
+                over-generated trailing URLs: > 0 means the trailing failures are
+                harmless padding, 0 means every URL is required audio (a failed final
+                segment is a real failure), and a negative count means the list is short
+                of the timeline (``_download`` fails such an item before this pass). None
+                means unproven and keeps the legacy last-segment leniency. Defaults to
+                None.
 
         Returns:
             tuple[bool, list[DownloadSegmentResult]]: (result_segments, list of segment results)
@@ -979,11 +828,10 @@ class Download:
         result_segments: bool = True
         dl_segment_results: list[DownloadSegmentResult] = []
 
-        # One pass: download each URL exactly once. Segment-level retries are
-        # already handled inside _download_segment (requests Retry(total=5) for
-        # the connect and headers, its own attempt loop for a body that breaks
-        # off), so
-        # the old `while not self.progress.tasks[p_task].finished` loop that
+        # One pass: download each URL exactly once. A segment whose body drops
+        # is retried inside _download_segment (three attempts); the shared
+        # session's Retry(total=5) covers only connection setup, redirects and
+        # response headers. The old `while not self.progress.tasks[p_task].finished` loop that
         # re-submitted every URL added no real retry, only risk: a segment that
         # returns an empty but successful body (HTTP 200, 0 bytes) advances the
         # progress bar zero times, so `finished` (completed >= total) never flips
@@ -1013,7 +861,7 @@ class Download:
                 # On very short tracks (< 8 seconds or so) the *last* URL of a MULTI-segment
                 # track is a spurious tail (HTTP Error 500) that isn't needed; the file won't
                 # be corrupt. That is tidalapi's segment-count arithmetic over-generating one
-                # URL past the end of the audio (see waves_ui/manifest.py), so when the
+                # URL past the end of the audio (see providers/tidal_manifest.py), so when the
                 # manifest was parseable, n_tail_spurious says exactly whether the final URL
                 # is padding (> 0) or required audio (0): a required final segment failing is
                 # a REAL failure (a silently truncated file), not a tolerable quirk. Only when
@@ -1034,14 +882,13 @@ class Download:
                     # A deliberate Stop/Cancel makes every in-flight segment
                     # return failed by design, that's a cancellation, not
                     # corruption, so don't scream "corrupt" once per segment.
-                    # Nor when the link lapsed and the track will be fetched
-                    # again with fresh links: the rerun decides, and says so.
-                    stopped = self.event_abort.is_set() or (event_stop and event_stop.is_set())
-                    will_refetch = getattr(_PASS_NOTE, "refetch_left", False) and (
-                        _http_status(result_dl_segment.error) in _LINK_LAPSED_STATUSES
-                    )
-                    if not (stopped or will_refetch):
-                        self.fn_logger.error("A segment of this track could not be fetched; the track was not written.")
+                    if not (self.event_abort.is_set() or (event_stop and event_stop.is_set())):
+                        # Class only: a requests error's message prints the CDN
+                        # URL, and fn_logger may be a plain wrapper without
+                        # .exception.
+                        if result_dl_segment.failure_class:
+                            self.fn_logger.error(f"Segment download failed: {result_dl_segment.failure_class}")
+                        self.fn_logger.error("Something went wrong while downloading. File is corrupt!")
 
             # If app is terminated (CTRL+C) or item stopped
             if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
@@ -1076,7 +923,7 @@ class Download:
         path_file: pathlib.Path,
         dl_segment_results: list[DownloadSegmentResult],
         media: Track | Video,
-        stream_manifest: StreamManifest | None = None,
+        stream_info: StreamInfo | None = None,
         n_tail_spurious: int | None = None,
     ) -> tuple[bool, pathlib.Path]:
         """Merge the downloaded segments and return the final file path.
@@ -1086,9 +933,11 @@ class Download:
             path_file (pathlib.Path): Path to the output file.
             dl_segment_results (list[DownloadSegmentResult]): List of segment download results.
             media (Track | Video): The media item.
-            stream_manifest (StreamManifest | None, optional): Stream manifest for tracks. Defaults to None.
+            stream_info (StreamInfo | None, optional): The seam's stream answer
+                for a track. Defaults to None.
             n_tail_spurious (int | None, optional): Manifest-proven count of over-generated
-                trailing URLs; see ``_download_segments``. Defaults to None.
+                trailing URLs (negative means the list is short; see ``_download_segments``).
+                Defaults to None.
 
         Returns:
             tuple[bool, pathlib.Path]: (Success, path to the downloaded file)
@@ -1107,7 +956,7 @@ class Download:
                 self.fn_logger.error(
                     f"Something went wrong while writing to {log_content(media.name)}. File is corrupt!"
                 )
-            elif isinstance(media, Track) and stream_manifest.is_encrypted:
+            elif stream_info is not None and stream_info.media_kind == MediaType.TRACK and stream_info.encrypted:
                 # Waves does not process encrypted streams. TIDAL serves plain
                 # MPEG-DASH for every quality Waves requests, so this branch is
                 # not reached in normal operation. Should a stream ever arrive
@@ -1125,7 +974,7 @@ class Download:
         self,
         media: Track | Video,
         path_file: pathlib.Path,
-        stream_manifest: StreamManifest | None = None,
+        stream_info: StreamInfo | None = None,
         event_stop: Event | None = None,
     ) -> tuple[bool, pathlib.Path]:
         """Download a media item (track or video), handling segments and merging.
@@ -1133,7 +982,8 @@ class Download:
         Args:
             media (Track | Video): The media item to download.
             path_file (pathlib.Path): Path to the output file.
-            stream_manifest (StreamManifest | None, optional): Stream manifest for tracks. Defaults to None.
+            stream_info (StreamInfo | None, optional): The seam's stream answer
+                for a track. Defaults to None.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
 
         Returns:
@@ -1142,15 +992,27 @@ class Download:
         media_name: str = name_builder_item(media)
 
         try:
-            urls: list[str] = self._get_media_urls(media, stream_manifest)
+            urls: list[str] = self._get_media_urls(media, stream_info)
         except Exception:
             return False, path_file
 
         # How many trailing URLs the manifest arithmetic proves are
-        # over-generated padding (tracks only; see waves_ui/manifest.py).
+        # over-generated padding (tracks only; see providers/tidal_manifest.py).
         # None means unproven (video m3u8, BTS, or an unparseable manifest)
         # and preserves the legacy last-segment leniency downstream.
-        n_tail_spurious: int | None = overgenerated_tail_urls(stream_manifest) if stream_manifest else None
+        n_tail_spurious: int | None = stream_info.tail_spurious if stream_info is not None else None
+
+        # A NEGATIVE count is the provider proving the URL list is short of the
+        # manifest timeline. Every URL that exists may still download fine, yet
+        # the file would be missing audio, so fail the item here, before the
+        # segment fan-out, rather than merge a truncated file and report it
+        # done. The provider logged its own warning when it derived the count.
+        if n_tail_spurious is not None and n_tail_spurious < 0:
+            self.fn_logger.error(
+                f"'{log_content(media_name)}' is missing {-n_tail_spurious} segment(s) the manifest requires; "
+                "refusing to write a truncated file."
+            )
+            return False, path_file
 
         # Set the correct progress output channel.
         if self.progress_gui is None:
@@ -1175,13 +1037,8 @@ class Download:
             urls, path_file.parent, block_size, p_task, progress_to_stdout, event_stop, n_tail_spurious
         )
 
-        if not result_segments and any(
-            not r.result and _http_status(r.error) in _LINK_LAPSED_STATUSES for r in dl_segment_results
-        ):
-            _PASS_NOTE.lapsed = True
-
         result_merge, path_file_merged = self._download_postprocess(
-            result_segments, path_file, dl_segment_results, media, stream_manifest, n_tail_spurious
+            result_segments, path_file, dl_segment_results, media, stream_info, n_tail_spurious
         )
 
         return result_merge, path_file_merged
@@ -1198,7 +1055,8 @@ class Download:
             path_file (pathlib.Path): Path to the output file.
             dl_segment_results (list[DownloadSegmentResult]): List of segment download results.
             n_tail_spurious (int | None, optional): Manifest-proven count of over-generated
-                trailing URLs; see ``_download_segments``. Defaults to None.
+                trailing URLs (negative means the list is short; see ``_download_segments``).
+                Defaults to None.
 
         Returns:
             bool: True if merge succeeded, False otherwise.
@@ -1255,95 +1113,94 @@ class Download:
             bool: True if the caller should abort (abort/stop set), False to proceed.
         """
         while not self.event_run.is_set():
-            if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
+            if self._segment_stopped(event_stop):
                 return True
             # Short timeout so a resume, abort, or stop is picked up promptly.
             self.event_run.wait(0.1)
 
+        return self._segment_stopped(event_stop)
+
+    def _segment_stopped(self, event_stop: Event | None) -> bool:
+        """True when an app abort or the item's stop is in force for this segment."""
         return self.event_abort.is_set() or bool(event_stop and event_stop.is_set())
+
+    def _wait_before_segment_retry(self, event_stop: Event | None) -> bool:
+        """Wait out one segment retry delay; True when the caller must give up.
+
+        The failed attempt's response is already closed by the time this runs,
+        so a waiting segment holds no connection from the blocking shared pool.
+        Polled in short slices like _wait_while_paused because no single event
+        covers both the app abort and the item's stop.
+        """
+        deadline = time.monotonic() + self._SEGMENT_RETRY_DELAY_SEC
+        while not self._segment_stopped(event_stop):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.event_abort.wait(min(remaining, 0.1))
+        return True
 
     @staticmethod
-    def _segment_fetch_is_transient(error: Exception) -> bool:
-        """Whether a failed segment fetch is worth another attempt.
+    def _segment_error_is_retryable(error: Exception) -> bool:
+        """Whether a failed attempt is worth repeating.
 
-        A connection dropped or timed out mid-body, or a server-side status, can
-        pass on the next try, and so can the few 4xx statuses that mean "not
-        now" (408, 425, 429). Any other 4xx is the CDN's answer about the link
-        itself (expired, forbidden, gone), and asking again changes nothing.
+        HTTPError is a RequestException, so test it first: a 4xx is the server's
+        answer, not a dropped connection, and is permanent. Every other
+        requests.RequestException is transient (a connection reset, read
+        timeout or chunked-encoding break). Non-requests failures (a disk
+        write, a bad path) are permanent.
         """
         if isinstance(error, HTTPError):
-            status = _http_status(error)
-            if status in _SEGMENT_STATUSES_TRY_AGAIN:
-                return True
-            return not (status is not None and 400 <= status < 500)
+            response = error.response
+            return response is None or response.status_code >= 500
         return isinstance(error, requests.RequestException)
 
-    def _retry_wait(self, seconds: float, event_stop: Event | None = None) -> bool:
-        """Wait between two attempts at a segment, waking at once on abort or stop.
-
-        Returns:
-            bool: True when the caller should give up (abort or stop fired).
-        """
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
-                return True
-            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-        return self.event_abort.is_set() or bool(event_stop and event_stop.is_set())
-
-    def _fetch_segment_once(
+    def _stream_segment_attempt(
         self,
         url: str,
         path_segment: pathlib.Path,
         block_size: int | None,
         p_task: TaskID,
         event_stop: Event | None,
-    ) -> bool:
-        """One attempt at a segment: GET it and stream the body into path_segment.
+    ) -> tuple[bool, Exception | None]:
+        """One streamed attempt, rewriting the segment file from byte zero.
 
-        Returns:
-            bool: True when the whole body landed, False when a stop or abort cut
-            it short. A failed fetch raises (the caller decides on another try).
+        Returns ``(complete, failure)``. ``(False, None)`` means Stop/Cancel
+        interrupted the body and is not a failure to report. A raised failure
+        is returned rather than propagated, with this attempt's progress steps
+        already taken back.
         """
-        # Reuse the pooled, keep-alive session built once in __init__. Retry/backoff
-        # is configured on that shared adapter, so segments reuse connections instead
-        # of paying a TLS handshake each (the old per-segment Session was the cause of
-        # the all-core CPU spike on download).
-        #
-        # Create the request object with stream=True, so the content won't be loaded into memory at once.
-        # Context-manage the response: the shared pool blocks when full
-        # (pool_block=True), so a connection left to garbage collection on
-        # an early return would starve waiting segment workers.
-        # Steps this attempt added to the bar. A failed attempt takes them
-        # back, since the next one rewrites the segment from byte 0: without
-        # that, a single-URL track dropped at 80 percent reached 100 a fifth
-        # of the way into the retry and its row read FINISHING while most of
-        # it was still downloading. Taken back as a delta, not by restoring
-        # a saved total, because the segments of one track share the bar and
-        # finish in parallel.
-        advanced = 0
+        advanced: int = 0
         try:
+            # Create the request object with stream=True, so the content won't be loaded into memory at once.
+            # Context-manage the response: the shared pool blocks when full
+            # (pool_block=True), so a connection left to garbage collection on
+            # an early return would starve waiting segment workers.
             with self._http.get(url, stream=True, timeout=REQUESTS_TIMEOUT_SEC) as r:
                 r.raise_for_status()
 
-                # Write the content to disk. If `chunk_size` is set to `None` the whole file will be written at once.
+                # "wb" rewrites from byte zero on every attempt, so a partial
+                # body is never appended to. If `chunk_size` is set to `None`
+                # the whole file is written at once.
                 with path_segment.open("wb") as f:
                     for data in r.iter_content(chunk_size=block_size):
                         # Bail out promptly on abort (Stop/Cancel or app quit)
                         # instead of streaming the whole segment first.
-                        if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
-                            return False
+                        if self._segment_stopped(event_stop):
+                            if advanced:
+                                self.progress.advance(p_task, -advanced)
+                            return False, None
                         f.write(data)
-                        _count_bytes(len(data))
-                        # Advance progress bar.
+                        # Advance progress bar; remember how far to take back
+                        # if this attempt fails. A relative rewind stays
+                        # correct while other segments advance the same bar.
                         self.progress.advance(p_task)
                         advanced += 1
-        except Exception:
+        except Exception as exc:
             if advanced:
                 self.progress.advance(p_task, -advanced)
-            raise
-
-        return True
+            return False, exc
+        return True, None
 
     def _download_segment(
         self,
@@ -1374,61 +1231,61 @@ class Download:
         # CAUTION: This is a workaround, so BTS (LOW quality) track will work. They usually have only ONE link.
         id_segment: int = int(filename_stem) if filename_stem.isdecimal() else 0
         error: HTTPError | None = None
+        failure_class: str | None = None
+        # True when Stop/Cancel ended the fetch: quiet, no error log, no GUI emit.
+        give_up: bool = False
 
-        # If app is terminated (CTRL+C) or item stopped
-        if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
-            return DownloadSegmentResult(
-                result=False, url=url, path_segment=path_segment, id_segment=id_segment, error=error
-            )
-
-        # Honor pause, but wake promptly on resume/abort/stop instead of blocking forever.
-        if self._wait_while_paused(event_stop):
-            return DownloadSegmentResult(
-                result=False, url=url, path_segment=path_segment, id_segment=id_segment, error=error
-            )
-
-        # The pooled session's Retry only covers the connect and the response
-        # headers. The body is streamed (stream=True), so a connection the CDN
-        # drops while the body is being read raises in _fetch_segment_once,
-        # outside urllib3's retry, and used to fail the track on the spot: one
-        # dropped keep-alive in a twenty-track album, and the album came back
-        # "2 of 20 tracks failed" with nothing wrong but a blip, which the
-        # user's manual RETRY then fixed. The fetch is attempted a few times
-        # instead, each attempt rewriting the segment file from the start so a
-        # partial body is never appended to.
-        log_error = self.fn_logger.error
+        # Reuse the pooled, keep-alive session built once in __init__, so
+        # segments reuse connections instead of paying a TLS handshake each.
         for attempt in range(1, self._SEGMENT_ATTEMPTS + 1):
-            try:
-                result = self._fetch_segment_once(url, path_segment, block_size, p_task, event_stop)
+            # Honor pause between attempts too, but wake promptly on
+            # resume/abort/stop instead of blocking forever.
+            if self._wait_while_paused(event_stop):
+                give_up = True
                 break
-            except Exception as exc:
-                # The class only, never the message: a requests error prints
-                # the CDN URL. The bar is NOT advanced for a failed fetch. It
-                # used to be, as a terminator for a retry loop that no longer
-                # exists, and that pushed a failed track to 100 percent so its
-                # row read FINISHING in the instant before it went red.
-                if isinstance(exc, HTTPError):
-                    error = exc
-                stopped = self.event_abort.is_set() or bool(event_stop and event_stop.is_set())
-                if stopped or not self._segment_fetch_is_transient(exc) or attempt == self._SEGMENT_ATTEMPTS:
-                    if not stopped:
-                        # The status number names the cause in a report
-                        # (403 a lapsed link, 404 a missing segment); the
-                        # URL still never logs.
-                        status = _http_status(exc)
-                        said = f" (HTTP {status})" if isinstance(status, int) else ""
-                        log_error(f"Segment fetch failed after {attempt} attempt(s): {type(exc).__name__}{said}")
-                    break
-                self.fn_logger.warning(f"Segment fetch broke off ({type(exc).__name__}), fetching it again")
-                if self._retry_wait(self._SEGMENT_RETRY_DELAYS_SEC[attempt - 1], event_stop):
-                    break
 
-        # To send the progress to the GUI, we need to emit the percentage.
-        if not progress_to_stdout:
+            error = None
+            failure_class = None
+            complete, failure = self._stream_segment_attempt(url, path_segment, block_size, p_task, event_stop)
+            if complete:
+                result = True
+                break
+            if failure is None or self._segment_stopped(event_stop):
+                # Stop/Cancel interrupted the body, or landed while the attempt
+                # failed: either way it is not an error to log and no retry follows.
+                give_up = True
+                break
+
+            if isinstance(failure, HTTPError):
+                error = failure
+            failure_class = type(failure).__name__
+
+            # The terminal error is logged by _download_segments, which alone
+            # knows whether this segment's failure is a tolerable spurious tail.
+            if not self._segment_error_is_retryable(failure):
+                break
+            if attempt == self._SEGMENT_ATTEMPTS:
+                break
+
+            self.fn_logger.warning(
+                f"Segment fetch failed, retrying (attempt {attempt} of {self._SEGMENT_ATTEMPTS}): {failure_class}"
+            )
+            if self._wait_before_segment_retry(event_stop):
+                give_up = True
+                break
+
+        # To send the progress to the GUI, we need to emit the percentage. A
+        # Stop/Cancel skips it, as it did before the retry loop existed.
+        if not give_up and not progress_to_stdout:
             self.progress_gui.item.emit(self.progress.tasks[p_task].percentage)
 
         return DownloadSegmentResult(
-            result=result, url=url, path_segment=path_segment, id_segment=id_segment, error=error
+            result=result,
+            url=url,
+            path_segment=path_segment,
+            id_segment=id_segment,
+            error=error,
+            failure_class=failure_class,
         )
 
     def extension_guess(
@@ -1448,6 +1305,14 @@ class Download:
 
         if is_video:
             result = AudioExtensions.MP4 if self.settings.data.video_convert_mp4 else VideoExtensions.TS
+        elif getattr(self.settings.data, "extract_flac", False) and getattr(
+            self.settings.data, "extract_flac_all", False
+        ):
+            # FLAC scope "all": every stereo track lands FLAC,
+            # lossless by stream copy, lossy by re-encode (decided post-fetch).
+            # getattr-read like the lossless branch below stays silent on
+            # settings stubs that predate the split (the gate-only doubles).
+            result = AudioExtensions.FLAC
         else:
             result = (
                 AudioExtensions.FLAC
@@ -1539,7 +1404,7 @@ class Download:
 
         # Step 1: Validate and prepare media
         validated_media = self._validate_and_prepare_media(media, media_id, media_type, video_download, keep_album)
-        if validated_media is None or not isinstance(validated_media, Track | Video):
+        if validated_media is None or self.provider.media_kind(validated_media) is None:
             return False, ""
 
         media = validated_media
@@ -1550,9 +1415,9 @@ class Download:
         # where there is a choice", not "leave a hole in the album": a song you
         # cannot play today beats one you never got. _get_track_stream_info
         # takes the Atmos session for it because there is nothing else to take.
-        # It used to be skipped here, before any path work, and answered
-        # ok=True with an empty path, which is what put a permanent gap in every
-        # discography that carried a spatial-only single.
+        # Skipping it here, before any path work, would answer
+        # ok=True with an empty path, putting a permanent gap in every
+        # discography that carries a spatial-only single.
 
         # Check for stop signal
         if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
@@ -1568,19 +1433,12 @@ class Download:
 
             return True, path_media_dst
 
-        # The release's genre question leaves now, in the background, so the
-        # answer is on record by the time the tag step asks for it. After the
-        # skip check, not before: a file that is already there asks nothing.
-        self._genre_prefetch(media)
-
         # Step 3: Handle quality settings
         quality_audio_old, quality_video_old = self._adjust_quality_settings(quality_audio, quality_video)
 
         # Step 4: Download and process media.
         # The returned path reflects the TRUE stream extension and any uniquify suffix, so
         # skip/return-path/symlink below act on the file actually written, not the step-2 guess.
-        # The politeness delay rides along as the cooldown of the stream slot
-        # this item is about to take (see _download_cooldown).
         download_success, path_media_dst = self._download_and_process_media(
             media,
             path_media_dst,
@@ -1588,12 +1446,13 @@ class Download:
             is_parent_album,
             file_extension_dummy,
             event_stop,
-            cooldown_s=self._download_cooldown() if download_delay else 0.0,
         )
 
         # The file and its sidecars are fully on disk here; what follows is
-        # post-processing (symlinks). The queue row flips to its finished
-        # word now.
+        # post-processing (symlinks) and the randomized politeness delay
+        # before the NEXT download. The queue row must not sit on a full
+        # FINISHING word through a deliberate sleep, so the delivery is
+        # announced now and the delay stays invisible.
         if download_success:
             self._note_delivered(media)
 
@@ -1637,18 +1496,23 @@ class Download:
                 return None
         except MediaMissing:
             return None
-        except (ObjectNotFound, StreamNotAvailable, AssetNotAvailable):
-            # TIDAL no longer carries this item, so the re-fetch above 404s.
-            # That is a refusal, not a failure of ours, and it has to be
+        except (ObjectNotFound, StreamNotAvailable, AssetNotAvailable) as exc:
+            # The service no longer carries this item, so the re-fetch above
+            # 404s. That is a refusal, not a failure of ours, and it has to be
             # recorded as one HERE: this gate runs before any stream is
-            # fetched, so _get_stream_info's identical rule (issue #25) never
-            # gets the chance. Counting it as a plain failure is what made one
-            # delisted entry fail a whole 500-track playlist, permanently: the
-            # shortfall reappeared on every retry and the row could never
-            # settle green (issue #35).
+            # fetched, so _get_stream_info's identical rule never
+            # gets the chance. Counting it as a plain failure fails a whole
+            # 500-track playlist over one delisted entry: the shortfall
+            # reappears on every retry and the row never settles green. The
+            # words are the provider's own: the engine never names a service
+            # for another.
             self._note_unavailable_item(media)
+            try:
+                verdict = self.provider.classify_refusal(exc)
+            except Exception:
+                verdict = None
             self.fn_logger.info(
-                f"This item is not available for listening anymore on TIDAL. Skipping: "
+                f"{self._refusal_words(verdict, 'this item is not available')}. Skipping: "
                 f"{log_content(self._media_label(media, media_id))}"
             )
             return None
@@ -1669,7 +1533,7 @@ class Download:
             return None
 
         # If video download is not allowed and this is a video, return None
-        if not video_download and isinstance(media, Video):
+        if not video_download and self.provider.media_kind(media) == MediaType.VIDEO:
             self.fn_logger.info(
                 f"Video downloads are deactivated (see settings). Skipping video: {log_content(name_builder_item(media))}"
             )
@@ -1696,18 +1560,19 @@ class Download:
             # If no media instance is provided, we need to create the media instance.
             # Throws `tidalapi.exceptions.ObjectNotFound` if item is not available anymore.
             return instantiate_media(self.session, media_type, media_id)
-        if isinstance(media, Track | Video):
+        kind = self.provider.media_kind(media)
+        if kind in (MediaType.TRACK, MediaType.VIDEO):
             # Deliberately NOT gated on media.allow_streaming here. That flag
             # is a false negative for our client: TIDAL serves editions like
             # "ALICIA (With Commentary)" with allowStreaming=false on every
             # track, yet the official apps and our own account still play
             # most of them, and the ones it truly withholds answer the
-            # playback request with a 401 (issue #25). So availability is
+            # playback request with a 401. So availability is
             # decided where it is authoritative, when the stream is actually
             # fetched (_get_stream_info), and a real refusal becomes the
             # UNAVAILABLE outcome there. Gating on the flag here refused
             # tracks the account could play and painted whole albums red.
-            if isinstance(media, Track) and not keep_album:
+            if kind == MediaType.TRACK and not keep_album:
                 # Re-create media instance with full album information.
                 # Skipped when keep_album is set: a best-of-both merge passes a
                 # track deliberately re-tagged under another edition's album and
@@ -1723,7 +1588,7 @@ class Download:
             if not media.allow_streaming:
                 self._note_unavailable(media)
                 self.fn_logger.info(
-                    f"This item is not available for listening anymore on TIDAL. Skipping: {log_content(name_builder_title(media))}"
+                    f"This item is not available for listening anymore. Skipping: {log_content(name_builder_title(media))}"
                 )
                 return None
             return media
@@ -1754,17 +1619,14 @@ class Download:
         a long list is the only thing that produces one: every item costs a
         lookup plus a playback request, so a 500-track playlist asks some 1500
         questions in a row where an album asks 30. The two settings that say
-        so were shipped as Advanced fields and read by nothing at all, so a
-        user meeting rate limits could turn them and change nothing
-        (issue #35).
+        so are Advanced fields; reading them here is what makes them do
+        anything, or a user meeting rate limits could turn them and change
+        nothing.
 
         The pause belongs to the item, taken by the worker that picked it up:
         a thread pool has no batch boundary of its own, and this is the moment
         the item's own API traffic begins. A list shorter than one batch never
-        pauses, and neither does a single-item download. The fan-out runs
-        stream slots plus finishing seats worth of workers, so the count here
-        runs ahead of the streams by at most the seat count: the cadence
-        shifts by a few items, the batch size does not.
+        pauses, and neither does a single-item download.
 
         Every OTHER worker stands back with it. One worker sleeping while its
         siblings carry on is not a pause at all: with the default three, the
@@ -1818,50 +1680,6 @@ class Download:
         # and it wakes for a STOP and for the pause's own deadline like any other
         # waiter, so neither can be stranded here.
         self._wait_for_pace_gate(event_stop)
-
-    def _download_cooldown(self) -> float:
-        """The politeness delay for this download, drawn once per item.
-
-        It used to be slept by the worker after its track was done. The worker
-        now gives its stream slot back the moment the bytes are in, so a sleep
-        there would space nothing: a sibling would start the next stream at
-        once. The delay is the SLOT's cooldown instead (download_slots.py):
-        the slot cannot be taken again until it is over, so downloads stay
-        spaced on the network and the worker is free to finish its file.
-        """
-        try:
-            low = float(self.settings.data.download_delay_sec_min)
-            high = float(self.settings.data.download_delay_sec_max)
-        except (TypeError, ValueError, AttributeError):
-            return 0.0
-        if high < low:
-            low, high = high, low
-        return max(0.0, round(random.SystemRandom().uniform(low, high), 1))
-
-    def _slot_limits(self) -> tuple[Callable[[], int], Callable[[], int]]:
-        """The two live readers the slot ledger checks on every grant, so a
-        saved setting applies to the next download without a restart. A
-        settings file from a build without the finishing field means the
-        default, not a crash."""
-
-        def streams() -> int:
-            return int(getattr(self.settings.data, "downloads_concurrent_max", 3) or 3)
-
-        def seats() -> int:
-            value = getattr(self.settings.data, "downloads_finishing_max", 3)
-            return int(3 if value is None else value)
-
-        return streams, seats
-
-    def _item_workers(self) -> int:
-        """Threads for a collection's item fan-out: one per stream slot plus
-        one per finishing seat, so a track that moved to a seat leaves a
-        thread free to take the slot it gave back. Workers pick items up in
-        list order and the slot ledger serves them first come, first served,
-        so the extra threads change nothing about the order streams start
-        in; a re-submit pass's items queue behind the next job's waiters."""
-        streams, seats = self._slot_limits()
-        return max(1, streams()) + max(0, seats())
 
     def _end_pace_hold(self) -> None:
         """Hand this worker's pause back, opening the gate only for the last one.
@@ -1968,11 +1786,10 @@ class Download:
         list as refused on that evidence would settle every sibling track as
         refused too, so a missing object records nothing instead.
         """
-        if isinstance(media, Track | Video):
+        if self.provider.media_kind(media) in (MediaType.TRACK, MediaType.VIDEO):
             self._note_unavailable(media)
 
-    @staticmethod
-    def _media_label(media, media_id: str | None = None) -> str:
+    def _media_label(self, media, media_id: str | None = None) -> str:
         """The best name a log line can give ``media``, whatever survived.
 
         The preparation gate fails on half-built items (the re-fetch raised,
@@ -1980,7 +1797,7 @@ class Download:
         just an id, and a log line about a track the user asked for is worth
         nothing if it cannot say which track.
         """
-        if isinstance(media, Track | Video):
+        if self.provider.media_kind(media) in (MediaType.TRACK, MediaType.VIDEO):
             return name_builder_item(media)
         if media is not None and (getattr(media, "name", None) or getattr(media, "title", None)):
             return name_builder_title(media)
@@ -2005,6 +1822,59 @@ class Download:
         """
         return safe_filename_replacement_map(getattr(self.settings.data, "filename_illegal_map", None))
 
+    def _provider_folder(self) -> str:
+        """This download's provider folder segment for the {provider_name}
+        token. Unknown providers render "" so the segment drops
+        away (the pre-token layout), which is also what settings stubs
+        without a provider read as.
+        """
+        try:
+            return provider_folder_name(getattr(getattr(self, "provider", None), "id", ""))
+        except Exception:
+            return ""
+
+    def _path_facts(self, media) -> dict[str, str] | None:
+        """Descriptive token values from the origin, or None for delivered.
+
+        ``organization_source="fulfillment"`` (or no captured origin) renders
+        the delivered object exactly as before. An album job uses the origin
+        album's own fields; a track job uses the origin track that matches the
+        delivered entry, or the delivered facts when no unique match exists.
+        Ordering tokens ({list_pos}, {album_track_num}, ...) are never
+        overridden, so source order and collection grouping stay untouched.
+        """
+        if self._organization_source != "origin" or not self._origin_facts:
+            return None
+        try:
+            kind = self.provider.media_kind(media)
+        except Exception:
+            return None
+        if kind == MediaType.ALBUM:
+            if self._origin_facts.get("kind") != "album":
+                return None
+            return album_path_facts(self._origin_facts)
+        if kind != MediaType.TRACK:
+            return None
+        try:
+            delivered = self.provider.track_facts(media)
+        except Exception:
+            return None
+        resolved = resolve_track_facts(
+            delivered,
+            self._origin_facts,
+            "origin",
+            self._origin_consistent,
+            delivered_title=name_builder_title(media),
+        )
+        return path_facts(resolved)
+
+    def _quality_token(self, quality_audio=None) -> str:
+        """The {quality} token: the job's pinned rung, never a live setting."""
+        tier = self._pinned_tier
+        if tier is None and quality_audio is not None:
+            tier = tier_from_word(getattr(quality_audio, "value", quality_audio))
+        return str(getattr(tier, "value", tier) or "")
+
     def _collection_dir(self, relative_template: str) -> pathlib.Path:
         """The folder a collection template points at.
 
@@ -2024,7 +1894,7 @@ class Download:
         by the time an item is formatted the folder is literal text and the
         old name could no longer be recovered. Only folders exist at this
         level, so there is no file to fall back on; a spelling that dropped
-        the folder outright (issue #16) points at an ancestor, which exists
+        the folder outright points at an ancestor, which exists
         whether or not anything was ever downloaded, and is therefore no
         evidence of an older layout.
 
@@ -2035,10 +1905,15 @@ class Download:
         which only a track can answer: the spelling still carries it as
         literal text, the folder tested therefore contains a literal
         "{artist_name}" segment, never exists, and every library looked new.
-        A pre-0.1.17 album then got a second, tidy-spelled folder beside the
-        one it was already in. Without probes (an empty collection, or a
+        A pre-0.1.17 album would then get a second, tidy-spelled folder beside
+        the one it was already in. Without probes (an empty collection, or a
         caller that has no item yet) the spellings are tested as they are,
         which is the older behaviour.
+
+        A shallower spelling (the pre-provider-split layout) can
+        only win on file evidence: its probe is the item-relative path, so a
+        track file already sitting there counts, while a bare ancestor
+        directory never does.
         """
         spellings: list[str] = [tidied, *older]
         sources: list[str] = probes if probes and len(probes) == len(spellings) else spellings
@@ -2049,6 +1924,17 @@ class Download:
                 continue
             if len(older_dir.parts) == preferred_depth and older_dir.is_dir():
                 return older_relative
+        for older_relative, source in zip(spellings[1:], sources[1:], strict=True):
+            if older_relative == tidied:
+                continue
+            if len(self._collection_dir(source).parts) < preferred_depth:
+                # The probe carries no extension, and a track name with a dot
+                # ("01. Title") would lose its tail to stem-splitting, so hang
+                # a dummy suffix on it: the stem is then the whole file name
+                # and every audio extension counts as evidence.
+                probe_file = pathlib.Path(str(pathlib.Path(self.path_base).expanduser() / source) + ".x")
+                if check_file_exists(probe_file, extension_ignore=True):
+                    return older_relative
         return tidied
 
     def _keep_existing_layout(self, tidied: pathlib.Path, *older: pathlib.Path) -> pathlib.Path:
@@ -2075,8 +1961,8 @@ class Download:
         illegal characters (XXXTENTACION's album "?") empties out, its path
         segment is dropped, and the old destination is the ARTIST folder, one
         level above the preferred one. An ancestor almost always exists, so its
-        existence is no evidence at all, and taking it scattered the album's
-        tracks loose into the artist folder (issue #16). There, only a file
+        existence is no evidence at all, and taking it scatters the album's
+        tracks loose into the artist folder. There, only a file
         already sitting in the old place counts, and only for itself.
         """
         candidates = [path for path in older if path != tidied]
@@ -2099,14 +1985,35 @@ class Download:
                 return directory / old.name
         return directory / tidied.name
 
-    def _existing_same_item_at(self, path_media_dst: pathlib.Path, media: Track | Video) -> pathlib.Path | None:
+    @staticmethod
+    def _delivered_version(stream_info: StreamInfo) -> str | None:
+        """Which Version the resolved stream says it will deliver, or None when
+        it does not say (then the job's own pin answers; see
+        :meth:`_fetch_version`)."""
+        return normalize_audio_type_tag((getattr(stream_info, "delivered", None) or {}).get("audio_type"))
+
+    def _fetch_version(self, stream_info: StreamInfo | None = None) -> str | None:
+        """Which Version THIS fetch is bringing: the stream's own word when it
+        has one, else the job's pin, else None (a legacy row the resolver
+        decides for). The occupant gates all ask this one question."""
+        if stream_info is not None:
+            delivered = self._delivered_version(stream_info)
+            if delivered is not None:
+                return delivered
+        return self._pinned_audio_type
+
+    def _existing_same_item_at(
+        self,
+        path_media_dst: pathlib.Path,
+        media: Track | Video,
+        version: str | None = None,
+    ) -> pathlib.Path | None:
         """WHERE this item already lives at this destination, or None.
 
-        skip_existing used to be filename-keyed, so distinct tracks whose
-        sanitized names collide (an album carrying several mixes with one
-        title) were silently skipped after the first one downloaded (issue
-        #15). Downloads tag each file with the TIDAL item id (read_item_id);
-        when the name is taken, the ids decide:
+        A filename-keyed skip_existing would silently skip distinct tracks
+        whose sanitized names collide (an album carrying several mixes with one
+        title) after the first one downloads. Downloads tag each file with the
+        TIDAL item id (read_item_id); when the name is taken, the ids decide:
 
         - untagged occupant (a pre-id library, or a raw .ts video): identity
           unknown, keep the historical skip so re-downloading an old library
@@ -2120,6 +2027,11 @@ class Download:
           missing id is never evidence of a DIFFERENT item). Only when every
           existing variant is tagged with some other id is this a NEW colliding
           track the caller downloads (the final move uniquifies it).
+
+        ``version`` is the Version gate on top of the id question
+        (waves.metadata.tags.occupant_is_version): an occupant in the OTHER Version
+        is never this item's copy HERE, so a dual download's second row fetches
+        its own file even when the first row's file sits at the same name.
 
         The answer is the PATH holding the item, not a bare yes: when the item
         sits at a numbered variant, a yes alone left the caller acting on the
@@ -2135,14 +2047,32 @@ class Download:
         that difference is felt per track. Names are matched literally, never
         globbed, because a stem may hold glob characters of its own.
         """
-        media_id = _waves_item_id(media)
-        owned_ids = _waves_owned_ids(media)
+        media_id = download_identity_id(media)
+        owned_ids = owned_item_ids(media)
         if not media_id:
             return path_media_dst
         occupant_id = read_item_id(path_media_dst)
-        if not occupant_id or occupant_id in owned_ids:
+        # Both halves of the question, per candidate: the occupant must be
+        # THIS Version's copy (the mode gate) AND this item's. A candidate
+        # failing either is not this item HERE, and the scan goes on to the
+        # numbered variants -- the item's own copy may sit at one of those.
+        if occupant_is_version(path_media_dst, version) and (not occupant_id or occupant_id in owned_ids):
             return path_media_dst
+        return self._numbered_variant_holding(path_media_dst, owned_ids, version)
 
+    def _numbered_variant_holding(
+        self,
+        path_media_dst: pathlib.Path,
+        owned_ids: set[str],
+        version: str | None,
+    ) -> pathlib.Path | None:
+        """The stem_NN variant of this destination that holds this item, or None.
+
+        The variant half of :meth:`_existing_same_item_at`'s scan, split out so
+        each name in the family is judged once: an existing variant of the base
+        name can be this item's own copy just as the base name can (a user who
+        removed stem_01 kept stem_02 where it was).
+        """
         try:
             # Keyed the way the filesystem matches, not as exact strings: a
             # library file written in the other unicode normalization or the
@@ -2167,6 +2097,9 @@ class Download:
             sibling = path_media_dst.parent / name_on_disk
 
             if not sibling.is_file() or _is_truncated_leftover(sibling):
+                continue
+
+            if not occupant_is_version(sibling, version):
                 continue
 
             sibling_id = read_item_id(sibling)
@@ -2226,7 +2159,7 @@ class Download:
         protected too; an unreadable file keeps the historical id-only answer.
 
         ``owned_ids`` widens "its own" to every id this item may have been
-        written under (see :func:`_waves_owned_ids`), which is what lets a
+        written under (see :func:`owned_item_ids`), which is what lets a
         best-of-both member replace the copy an older Waves filed under the
         source edition's id. ``fetch_is_atmos`` is what THIS download is
         bringing; None means the caller cannot say, and the mode gate stands
@@ -2245,7 +2178,12 @@ class Download:
 
         return not occupant or occupant == media_id or occupant in (owned_ids or set())
 
-    def _already_landed_here(self, path_media_dst: pathlib.Path, media: Track | Video) -> pathlib.Path | None:
+    def _already_landed_here(
+        self,
+        path_media_dst: pathlib.Path,
+        media: Track | Video,
+        version: str | None = None,
+    ) -> pathlib.Path | None:
         """The file this item was about to write, if a twin of it has already
         landed there during this same run.
 
@@ -2291,23 +2229,32 @@ class Download:
         if not self.skip_existing:
             return None
 
-        media_id: str = _waves_item_id(media)
+        media_id: str = download_identity_id(media)
 
         if not media_id:
             return None
 
-        owned_ids: set[str] = _waves_owned_ids(media)
+        owned_ids: set[str] = owned_item_ids(media)
         # Asked before the existence check below, and not folded into it: the
         # twin may be sitting at a numbered variant with the base name empty or
         # holding somebody else entirely.
         path_landed: pathlib.Path | None = self._landed_by_this_run(path_media_dst, media_id, owned_ids)
 
         if path_landed is not None:
-            self.fn_logger.debug(f"Download skipped, since this item already landed at '{log_content(path_landed)}'.")
+            self.fn_logger.debug(
+                f"Destination already holds this item's own copy, so this pass wrote nothing: '{log_content(path_landed)}'"
+            )
 
             return path_landed
 
         if not check_file_exists(path_media_dst, extension_ignore=False):
+            return None
+
+        # The occupant must be this fetch's own Version too: a dual download
+        # with a blank template finds the OTHER Version's file at this name,
+        # and those bytes are not this fetch's landing. The
+        # ledger arm above needs no gate: one run is one Version.
+        if not occupant_is_version(path_media_dst, version):
             return None
 
         occupant_id: str = read_item_id(path_media_dst) or ""
@@ -2315,7 +2262,9 @@ class Download:
         if not occupant_id or occupant_id not in owned_ids:
             return None
 
-        self.fn_logger.debug(f"Download skipped, since this item already landed at '{log_content(path_media_dst)}'.")
+        self.fn_logger.debug(
+            f"Destination already holds this item's own copy, so this pass wrote nothing: '{log_content(path_media_dst)}'"
+        )
 
         return path_media_dst
 
@@ -2389,12 +2338,122 @@ class Download:
 
         return None
 
+    @staticmethod
+    def _delivered_facts(stream_info: StreamInfo | None) -> DeliveryFacts:
+        delivered = dict(getattr(stream_info, "delivered", None) or {})
+        return DeliveryFacts(
+            tier=tier_from_word(delivered.get("tier")),
+            audio_type=str(delivered.get("audio_type") or ""),
+            codec=str(getattr(stream_info, "codecs", "") or delivered.get("codecs") or ""),
+            bit_depth=delivered.get("bit_depth"),
+            sample_rate=delivered.get("sample_rate"),
+        )
+
+    def _existing_copy_at(
+        self,
+        path_media_dst: pathlib.Path,
+        media,
+        version: str | None,
+        target_rank: int,
+        wants_atmos: bool,
+        ceiling: int | None = None,
+    ) -> ExistingCopy | None:
+        """The destination's occupant as the shared duplicate decision sees it."""
+        media_id = download_identity_id(media)
+        rec = None
+        ownership_of = getattr(self, "_ownership_of", None)
+        if ownership_of is not None and media_id:
+            try:
+                rec = ownership_of(str(media_id), audio_type=version) if version else ownership_of(str(media_id))
+            except TypeError:
+                try:
+                    rec = ownership_of(str(media_id))
+                except Exception:
+                    rec = None
+            except Exception:
+                rec = None
+        occupant_exists = check_file_exists(path_media_dst, extension_ignore=False)
+        if not occupant_exists:
+            # A stale row for a file the user deleted is not a copy to skip,
+            # replace or protect: the destination is simply free.
+            return None
+        rec_path = str((rec or {}).get("path") or "")
+        owned = bool(rec) and bool(rec_path) and pathlib.Path(rec_path) == path_media_dst
+        occupant_id = read_item_id(path_media_dst) if occupant_exists else ""
+        # An untagged occupant is identity-unknown: the legacy refresh_own
+        # answer treats it as this track's own copy, while replace_owned still
+        # refuses it because it has no proven ownership row.
+        same_item = not occupant_id or owned
+        if occupant_id:
+            same_item = occupant_id in owned_item_ids(media)
+        same_version = occupant_is_version(path_media_dst, version) if occupant_exists else True
+        unchanged = (
+            digest_matches((rec or {}).get("audio_digest"), path_media_dst) if owned and occupant_exists else None
+        )
+        # Only the track's own record can make the occupant current: another
+        # track's file at this name is never this track's current copy.
+        current = _copy_is_current(rec, target_rank, wants_atmos, ceiling) if owned else False
+        rank = int((rec or {}).get("quality_rank", -1))
+        return ExistingCopy(
+            path=str(path_media_dst),
+            owned=owned,
+            same_item=same_item,
+            same_version=same_version,
+            unchanged=unchanged,
+            current=current,
+            # A negative rank is a tier-less copy with no quality concept: it
+            # cannot be below a minimum (same rule as retains_below_minimum).
+            minimum_met=rank < 0 or rank >= int(target_rank),
+        )
+
+    def _placement_decision(
+        self,
+        path_media_dst: pathlib.Path,
+        media,
+        version: str | None,
+        target_rank: int,
+        wants_atmos: bool,
+        ceiling: int | None = None,
+    ):
+        existing = self._existing_copy_at(path_media_dst, media, version, target_rank, wants_atmos, ceiling)
+        return decide_placement(
+            self._duplicate_policy,
+            existing,
+            minimum_required=self._quality_strategy == "minimum_required",
+        )
+
+    def _is_upgrade_target(self, media) -> bool:
+        return bool(self._upgrade_plan) and self._upgrade_plan.delivered_media_id == download_identity_id(media)
+
+    def _record_upgraded(self, media, final_path: pathlib.Path, stream_info: StreamInfo | None) -> None:
+        """Write the replacement row through the bridge's store callback."""
+        plan = self._upgrade_plan
+        if plan is None or self._record_replacement is None:
+            raise RuntimeError("An upgrade needs an ownership replacement callback")
+        delivered = self._delivered_facts(stream_info)
+        tier = str(getattr(delivered.tier, "value", delivered.tier) or "") or None
+        self._record_replacement(
+            plan.origin_id,
+            plan.origin_path,
+            download_identity_id(media),
+            str(final_path),
+            tier,
+            audio_type=delivered.audio_type or plan.audio_type or None,
+            bit_depth=delivered.bit_depth,
+            sample_rate=delivered.sample_rate,
+            codecs=delivered.codec,
+            audio_digest=audio_digest(final_path),
+        )
+
     def _claim_destination(
         self,
         path_media_dst: pathlib.Path,
         media_id: str,
         owned_ids: set[str] | None = None,
         fetch_is_atmos: bool | None = None,
+        media=None,
+        delivered_tier: str = "",
+        delivered_audio_type: str = "",
     ) -> tuple[pathlib.Path, str | None]:
         """Pick this download's final name and hold it, in one locked step.
 
@@ -2422,17 +2481,31 @@ class Download:
                 release once the file is in place, or the name unchanged and
                 None when it and all of its numbered variants are taken.
         """
+        if media is None:
+            media = getattr(getattr(self, "_tls", None), "claim_media", None)
+        if not delivered_tier:
+            delivered_tier = str(getattr(getattr(self, "_tls", None), "claim_delivered_tier", "") or "")
+        if not delivered_audio_type:
+            delivered_audio_type = str(getattr(getattr(self, "_tls", None), "claim_delivered_audio_type", "") or "")
         with self._names_reserved_lock:
-            path_media_unique: pathlib.Path | None = path_file_uniquify(
+            taken = self._names_unavailable_to(media_id)
+            placement = self._claim_placement(
                 path_media_dst,
-                names_taken=self._names_unavailable_to(media_id),
-                check_disk=self.skip_existing,
-                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+                media_id,
+                owned_ids,
+                fetch_is_atmos,
+                media,
+                taken,
+                delivered_tier,
+                delivered_audio_type,
             )
-
-            if path_media_unique is None:
+            if placement is None:
                 return path_media_dst, None
-
+            path_media_unique, decision = placement
+            tls = getattr(self, "_tls", None)
+            if tls is None:
+                tls = self._tls = local()
+            tls.placement = decision
             name_reserved: str = str(path_media_unique)
             owner, holds = self._names_reserved.get(name_reserved, (media_id, 0))
             # Counted, not just set: two workers of one item can hold the same
@@ -2441,6 +2514,128 @@ class Download:
             self._names_reserved[name_reserved] = (owner, holds + 1)
 
             return path_media_unique, name_reserved
+
+    def _own_path_for(self, media, version: str | None) -> pathlib.Path | None:
+        """The ownership record's path, when the store names one."""
+        media_id = download_identity_id(media)
+        ownership_of = getattr(self, "_ownership_of", None)
+        if not media_id or ownership_of is None:
+            return None
+        try:
+            rec = ownership_of(media_id, audio_type=version) if version else ownership_of(media_id)
+        except TypeError:
+            try:
+                rec = ownership_of(media_id)
+            except Exception:
+                return None
+        except Exception:
+            return None
+        path = str((rec or {}).get("path") or "")
+        return pathlib.Path(path) if path else None
+
+    def _claim_placement(  # noqa: C901 - one branch per captured policy
+        self,
+        path_media_dst: pathlib.Path,
+        media_id: str,
+        owned_ids: set[str] | None,
+        fetch_is_atmos: bool | None,
+        media,
+        taken: set[str],
+        delivered_tier: str = "",
+        delivered_audio_type: str = "",
+    ) -> tuple[pathlib.Path, PlacementDecision] | None:
+        """The name this duplicate policy claims, or None when none is free."""
+        if media is not None and self._is_upgrade_target(media):
+            target = pathlib.Path(self._upgrade_plan.origin_path)
+            if str(target) in taken:
+                return None
+            return target, PlacementDecision("replace", overwrite=True)
+        version = self._pinned_audio_type
+        if version is None and fetch_is_atmos is not None:
+            version = "atmos" if fetch_is_atmos else "stereo"
+        if media is not None and self._duplicate_policy in ("replace_owned", "keep_both", "refresh_own"):
+            own = self._own_path_for(media, version)
+            if own is not None and own.parent == path_media_dst.parent:
+                path_media_dst = own
+        if getattr(self, "_force_redownload", False) and media is not None:
+            # An explicit Redownload replaces this track's own copy in place
+            # under every policy, exactly as it did before the policy existed.
+            decision = decide_placement(
+                "refresh_own",
+                self._existing_copy_at(
+                    path_media_dst,
+                    media,
+                    version,
+                    self._target_rank,
+                    bool(fetch_is_atmos),
+                ),
+            )
+            if decision.action == "replace":
+                if str(path_media_dst) in taken:
+                    return None
+                return path_media_dst, PlacementDecision("replace", overwrite=True)
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
+        if media is None or self._duplicate_policy == "keep_existing":
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=self.skip_existing,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            if path_media_unique is None:
+                return None
+            return path_media_unique, PlacementDecision("download")
+        version = self._pinned_audio_type
+        if version is None and fetch_is_atmos is not None:
+            version = "atmos" if fetch_is_atmos else "stereo"
+        decision = self._placement_decision(
+            path_media_dst,
+            media,
+            version,
+            self._target_rank,
+            bool(fetch_is_atmos),
+        )
+        if decision.action == "replace":
+            if str(path_media_dst) in taken:
+                return None
+            return path_media_dst, decision
+        if decision.action == "keep_both" and decision.readable_suffix:
+            candidate = keep_both_name(
+                path_media_dst,
+                provider=self._provider_folder(),
+                quality=delivered_tier or self._quality_token(),
+                audio_type=delivered_audio_type or version or "",
+                taken=taken,
+            )
+            return (candidate, decision) if candidate is not None else None
+        if decision.action == "keep_both":
+            # refresh_own's different-track collision keeps the historical
+            # numbered step-aside.
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
+        # A plain download is free only if no sibling holds this name: a claimed
+        # name steps around to its numbered variant, never to a shared one.
+        path_key = name_comparison_key(str(path_media_dst))
+        if any(name_comparison_key(str(held)) == path_key for held in taken):
+            path_media_unique = path_file_uniquify(
+                path_media_dst,
+                names_taken=taken,
+                check_disk=False,
+                is_own_copy=lambda candidate: self._is_own_copy(candidate, media_id, owned_ids, fetch_is_atmos),
+            )
+            return (path_media_unique, decision) if path_media_unique is not None else None
+        return path_media_dst, decision
 
     def _release_name(self, name_reserved: str) -> None:
         """Let go of one hold on a claimed name (see _claim_destination)."""
@@ -2510,18 +2705,22 @@ class Download:
             tuple[pathlib.Path, str]: (path_media_dst, file_extension_dummy)
         """
         # Create file name and path
-        metadata_tags = [] if isinstance(media, Video) else (media.media_metadata_tags or [])
+        is_video = self.provider.media_kind(media) == MediaType.VIDEO
+        metadata_tags = [] if is_video else (media.media_metadata_tags or [])
         quality_for_extension = quality_audio if quality_audio is not None else Quality.high_lossless
 
         file_extension_dummy: str = self.extension_guess(
             quality_for_extension,
             metadata_tags=metadata_tags,
-            is_video=isinstance(media, Video),
+            is_video=is_video,
         )
 
-        def build(tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None) -> pathlib.Path:
+        def build(
+            tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True
+        ) -> pathlib.Path:
+            template = file_template if provider else unprefixed_template
             relative = format_path_media(
-                file_template,
+                template,
                 media,
                 self.settings.data.album_track_num_pad_min,
                 list_position,
@@ -2532,6 +2731,10 @@ class Download:
                 tidy_spacing=tidy,
                 illegal_replacement=replacement,
                 illegal_map=mapping,
+                provider_name=self._provider_folder() if provider else "",
+                quality=self._quality_token(quality_audio),
+                audio_type=self._pinned_audio_type or "",
+                facts=self._path_facts(media),
             )
             candidate = (pathlib.Path(self.path_base).expanduser() / (relative + file_extension_dummy)).absolute()
             # Sanitize final path_file to fit into OS boundaries.
@@ -2542,12 +2745,35 @@ class Download:
         # keeps its folders when overrides are added later); the two before it
         # predate the stand-in setting entirely, so they build with "" and
         # reproduce history exactly.
-        path_media_dst: pathlib.Path = self._keep_existing_layout(
+        spellings: list[pathlib.Path] = [
             build(True, self._illegal_replacement(), self._illegal_map()),
             build(True, self._illegal_replacement()),
             build(True),
             build(False),
-        )
+        ]
+        # The provider split is a new spelling era: a library
+        # built under the pre-split template keeps its folders, newest first,
+        # so a folder that exists in both spellings keeps the provider one.
+        # The split-off spelling is the template minus its leading provider
+        # segment, whether that segment is still the raw token (a single
+        # track formats its own template) or already baked literal text (a
+        # collection member's template arrives with the folder filled in).
+        # Templates with no provider opening render identically either way
+        # and need no extra candidates.
+        provider_folder = self._provider_folder()
+        unprefixed_template = file_template
+        if unprefixed_template.startswith("{provider_name}/"):
+            unprefixed_template = unprefixed_template[len("{provider_name}/") :]
+        elif provider_folder and unprefixed_template.startswith(provider_folder + "/"):
+            unprefixed_template = unprefixed_template[len(provider_folder) + 1 :]
+        if unprefixed_template != file_template:
+            spellings += [
+                build(True, self._illegal_replacement(), self._illegal_map(), False),
+                build(True, self._illegal_replacement(), None, False),
+                build(True, "", None, False),
+                build(False, "", None, False),
+            ]
+        path_media_dst: pathlib.Path = self._keep_existing_layout(*spellings)
         return path_media_dst, file_extension_dummy
 
     def _prepare_file_paths_and_skip_logic(
@@ -2579,7 +2805,7 @@ class Download:
 
         if self.skip_existing:
             path_media_found: pathlib.Path | None = (
-                self._existing_same_item_at(path_media_dst, media)
+                self._existing_same_item_at(path_media_dst, media, self._pinned_audio_type)
                 if check_file_exists(path_media_dst, extension_ignore=False)
                 else None
             )
@@ -2591,7 +2817,7 @@ class Download:
             if path_media_found is not None:
                 path_media_dst = path_media_found
 
-            if self.settings.data.symlink_to_track and not isinstance(media, Video):
+            if self.settings.data.symlink_to_track and self.provider.media_kind(media) != MediaType.VIDEO:
                 # Compute symlink tracks path, sanitize and check if file exists
                 file_name_track_dir_relative: str = format_path_media(
                     self.settings.data.format_track,
@@ -2601,19 +2827,23 @@ class Download:
                     use_primary_album_artist=self.settings.data.use_primary_album_artist,
                     illegal_replacement=self._illegal_replacement(),
                     illegal_map=self._illegal_map(),
+                    provider_name=self._provider_folder(),
+                    quality=self._quality_token(quality_audio),
+                    audio_type=self._pinned_audio_type or "",
+                    facts=self._path_facts(media),
                 )
                 path_media_track_dir: pathlib.Path = (
                     pathlib.Path(self.path_base).expanduser() / (file_name_track_dir_relative + file_extension_dummy)
                 ).absolute()
                 path_media_track_dir = pathlib.Path(path_file_sanitize(path_media_track_dir, adapt=True))
                 # Identity, not just the name: a DIFFERENT track whose name
-                # collides used to make this one look downloaded, so nothing was
-                # fetched and the playlist entry ended up pointing at the
+                # collides would make this one look downloaded, so nothing
+                # gets fetched and the playlist entry ends up pointing at the
                 # stranger. The move below (media_move_and_symlink) asks the very
                 # same question, and the two have to agree.
                 file_exists_track_dir: bool = (
                     check_file_exists(path_media_track_dir, extension_ignore=False)
-                    and self._existing_same_item_at(path_media_track_dir, media) is not None
+                    and self._existing_same_item_at(path_media_track_dir, media, self._pinned_audio_type) is not None
                 )
                 file_exists_playlist_dir: bool = (
                     not file_exists_track_dir and skip_file and not path_media_dst.is_symlink()
@@ -2659,7 +2889,6 @@ class Download:
         is_parent_album: bool,
         file_extension_dummy: str,
         event_stop: Event | None = None,
-        cooldown_s: float = 0.0,
     ) -> tuple[bool, pathlib.Path]:
         """Download and process media file.
 
@@ -2670,8 +2899,6 @@ class Download:
             is_parent_album (bool): Whether this is a parent album.
             file_extension_dummy (str): Dummy file extension.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
-            cooldown_s (float, optional): The politeness delay, applied as the cooldown of the
-                stream slot this item takes. Defaults to 0.0 (none).
 
         Returns:
             tuple[bool, pathlib.Path]: (Whether download was successful, the FINAL destination path).
@@ -2681,68 +2908,33 @@ class Download:
         if skip_download:
             return True, path_media_dst
 
-        # A paused queue hands out no slots: a worker that took one while
-        # paused would hold it idle, and resume would then start fewer streams
-        # than the setting says.
-        if getattr(self, "event_run", None) is not None and self._wait_while_paused(event_stop):
-            return False, path_media_dst
+        # Resolve the stream through the Provider seam and learn the final
+        # file extension.
+        stream_info = self._get_stream_info(media)
 
-        # The stream slot, taken here and not around the segment fetch alone:
-        # a manifest's URLs expire, so the ask for the stream must wait for the
-        # slot too. Everything from here to the end of the method holds it (or
-        # the finishing seat it moves to), and the cooldown spaces the next
-        # download whichever way this one ends: written, skipped after the
-        # stream, refused by TIDAL or failed.
-        streams, seats = self._slot_limits()
-        ticket = STREAM_SLOTS.acquire_stream(
-            self._job_token,
-            stream_limit=streams,
-            finish_limit=seats,
-            cooldown_s=cooldown_s,
-            stop_events=(getattr(self, "event_abort", None), event_stop),
-        )
-        if ticket is None:
-            return False, path_media_dst
-        try:
-            # A worker that waited minutes for a slot must not fire its API
-            # traffic into a sibling's rate-limit pause.
-            self._wait_for_pace_gate(event_stop)
-            abort = getattr(self, "event_abort", None)
-            if (abort is not None and abort.is_set()) or (event_stop and event_stop.is_set()):
+        if stream_info is None:
+            if self.provider.media_kind(media) == MediaType.TRACK:
                 return False, path_media_dst
-            self._note_stream_acquired(media)
-            return self._stream_and_finish(media, path_media_dst, is_parent_album, ticket, event_stop)
-        finally:
-            ticket.release()
-
-    def _stream_and_finish(
-        self,
-        media: Track | Video,
-        path_media_dst: pathlib.Path,
-        is_parent_album: bool,
-        ticket: Ticket,
-        event_stop: Event | None = None,
-    ) -> tuple[bool, pathlib.Path]:
-        """The part of _download_and_process_media that runs under a slot."""
-        # Get stream information and final file extension
-        stream_manifest, file_extension, do_flac_extract, media_stream = self._get_stream_info(media)
-
-        if stream_manifest is None and isinstance(media, Track):
-            return False, path_media_dst
+            # A non-track answered nothing: limp on exactly as before, into
+            # the URL fetch that fails it.
+            stream_info = StreamInfo()
 
         # Update path to the TRUE stream extension. The step-2 path was guessed from a
         # possibly-None quality (the Waves UI never passes quality_audio), so the real
         # extension is only known now. Everything downstream (skip check, returned path,
         # symlink) must use this corrected path, not the guess.
-        if path_media_dst.suffix != file_extension:
-            path_media_dst = path_media_dst.with_suffix(file_extension)
+        if path_media_dst.suffix != stream_info.file_extension:
+            path_media_dst = path_media_dst.with_suffix(stream_info.file_extension)
             path_media_dst = pathlib.Path(path_file_sanitize(path_media_dst, adapt=True))
 
         # Re-evaluate skip-existing against the TRUE extension. The step-2 check may have
         # looked for the wrong extension (e.g. .flac while the stream is .m4a) and missed
         # an already-downloaded file.
         if self.skip_existing and check_file_exists(path_media_dst, extension_ignore=False):
-            path_media_found = self._existing_same_item_at(path_media_dst, media)
+            # The stream's own word answers the Version question when it can
+            # (the pre-stream check had only the job's pin); an occupant in
+            # the other Version is not this one's copy here.
+            path_media_found = self._existing_same_item_at(path_media_dst, media, self._fetch_version(stream_info))
 
             if path_media_found is not None:
                 self.fn_logger.debug(f"Download skipped, since file exists: '{log_content(path_media_found)}'")
@@ -2771,28 +2963,32 @@ class Download:
         return self._perform_actual_download(
             media,
             path_media_dst,
-            stream_manifest,
-            do_flac_extract,
+            stream_info,
             is_parent_album,
-            media_stream,
             event_stop,
-            ticket=ticket,
         )
 
-    def _get_stream_info(self, media: Track | Video) -> tuple[StreamManifest | None, str, bool, Stream | None]:
-        """Get stream information for media.
+    def _get_stream_info(self, media: Track | Video) -> StreamInfo | None:
+        """Resolve a stream for media through the Provider seam.
+
+        The kind comes from the provider's own reading of the object; each
+        arm then resolves through the seam method that owns its session
+        work (tracks through ``resolve_stream`` with the job's pinned
+        request, videos through ``resolve_video`` with the caller's
+        extension choice).
 
         Args:
             media (Track | Video): Media item.
 
         Returns:
-        tuple[StreamManifest | None, str, bool, Stream | None]: Stream info.
+            StreamInfo | None: The neutral stream answer for the pipeline.
+                None means "nothing to fetch": a track whose stream the
+                provider could not resolve, a video whose session could not
+                be restored, or an unknown media kind. A video on a failed
+                restore historically limped on to fail inside the URL fetch,
+                which stays exactly the shape here: the caller hands a None
+                answer for a non-track an empty StreamInfo, extension and all.
         """
-        stream_manifest: StreamManifest | None = None
-        media_stream: Stream | None = None
-        do_flac_extract: bool = False
-        file_extension: str = ""
-
         # CRITICAL: This lock is intentionally broad and serializes all
         # stream-fetching (Phase 1) to prevent a critical race condition.
         #
@@ -2815,48 +3011,55 @@ class Download:
         # DO NOT "OPTIMIZE" THIS by making the lock more granular.
         # Correctness > Performance.
 
-        with self.tidal.stream_lock:
+        kind = self.provider.media_kind(media)
+
+        if kind == MediaType.TRACK:
+            with self.tidal.stream_lock:
+                try:
+                    # The job's request -- the Waves rung it was queued at and
+                    # the Version it pins -- rides the seam as the resolve's
+                    # own arguments (spec §4.1/§5.5: one immutable ask, never
+                    # live Settings). TIDAL's fetch applies them inside this
+                    # engine, fenced behind this resolver -- bound around the
+                    # resolve, so the answer is THIS engine's fetch even though
+                    # the provider instance is shared with idle engines (a
+                    # settings save rebuilds one mid-job).
+                    bind = getattr(self.provider, "stream_resolver_bound", None)
+                    binding = bind(self._get_track_stream_info) if bind is not None else contextlib.nullcontext()
+                    requested_version = AudioType(self._pinned_audio_type) if self._pinned_audio_type else None
+                    with binding:
+                        stream_info = self.provider.resolve_stream(media, self._pinned_tier, requested_version)
+                except Exception as error:
+                    # Every arm ends the same way (nothing fetched and the
+                    # caller is told so identically); only what gets recorded
+                    # about it differs, so the deciding lives in one place.
+                    self._note_stream_info_failure(media, error)
+                    return None
+            if not stream_info.urls:
+                # The seam's no-stream answer (an empty StreamInfo).
+                return None
+            return stream_info
+
+        elif kind == MediaType.VIDEO:
             try:
-                if isinstance(media, Track):
-                    track_info = self._get_track_stream_info(media)
-
-                    if track_info.stream_manifest is None:
-                        return None, "", False, None
-
-                    stream_manifest = track_info.stream_manifest
-                    file_extension = track_info.file_extension
-                    do_flac_extract = track_info.requires_flac_extraction
-                    media_stream = track_info.media_stream
-
-                elif isinstance(media, Video):
-                    # Videos always require the normal session
-                    if not self.tidal.restore_normal_session():
-                        self.fn_logger.error(f"Failed to restore normal session for video: {media.id}")
-                        return None, "", False, None
-
-                    file_extension = AudioExtensions.MP4 if self.settings.data.video_convert_mp4 else VideoExtensions.TS
-
-                    stream_manifest = None
-                    media_stream = None
-                    do_flac_extract = False
-
-                else:
-                    self.fn_logger.error(f"Unknown media type for stream info: {type(media)}")
-                    return None, "", False, None
-
+                # The extension is the caller's choice from its own settings;
+                # the session restore that gates it is the provider's work.
+                file_extension = AudioExtensions.MP4 if self.settings.data.video_convert_mp4 else VideoExtensions.TS
+                return self.provider.resolve_video(media, file_extension)
             except Exception as error:
-                # Every arm ends the same way (the fetch produced nothing and
-                # the caller is told so identically); only what gets recorded
-                # about it differs, so the deciding lives in one place.
                 self._note_stream_info_failure(media, error)
-                return None, "", False, None
+                return None
 
-        return stream_manifest, file_extension, do_flac_extract, media_stream
+        else:
+            self.fn_logger.error(f"Unknown media type for stream info: {type(media)}")
+            return None
 
     def _note_stream_info_failure(self, media: Track | Video, error: Exception) -> None:
         """Log, and where appropriate mark, a stream-info fetch that produced
         nothing. Called from inside the handler, so ``.exception`` still has
-        the live traceback.
+        the live traceback. The verdict is the provider's own: its
+        classify_refusal maps the engine error onto the shared
+        refusal-vs-failure vocabulary, and this records exactly that.
 
         Args:
             media (Track | Video): The item whose stream could not be fetched.
@@ -2870,62 +3073,88 @@ class Download:
             self.fn_logger.debug("Catalog call abandoned: the download was stopped")
             return
 
-        if isinstance(error, TooManyRequests):
+        verdict = self.provider.classify_refusal(error)
+
+        if verdict.kind is RefusalKind.THROTTLED:
             self.fn_logger.exception(
-                f"Too many requests against TIDAL backend. Skipping '{log_content(name_builder_item(media))}'. "
+                f"{self._refusal_words(verdict, 'the service is rate-limiting')}. "
+                f"Skipping '{log_content(name_builder_item(media))}'. "
                 f"Consider to activate delay between downloads."
             )
             return
 
-        # TIDAL knows the track but will not serve a stream for it: the 404 /
-        # "no stream" answer for an asset that is genuinely gone, or a 401/403
-        # whose body says the asset itself is withheld (e.g. subStatus 4005
-        # "Asset is not ready for playback"), which is TIDAL refusing the
-        # content and not our session. A refusal, not a failure, so mark it
-        # UNAVAILABLE (issue #25). Anything else (a dead session, a 5xx, a
-        # network error) keeps the "something went wrong" path.
-        refused = isinstance(error, StreamNotAvailable | ObjectNotFound | AssetNotAvailable) or (
-            isinstance(error, HTTPError) and _tidal_refuses_asset(error) is not None
-        )
-        if refused:
+        if verdict.kind is RefusalKind.UNAVAILABLE:
+            # The service knows the track but will not serve a stream for it:
+            # the 404 / "no stream" answer for an asset that is genuinely gone,
+            # or a 401/403 whose body says the asset itself is withheld (e.g.
+            # subStatus 4005 "Asset is not ready for playback"). A refusal, not
+            # a failure, so mark it UNAVAILABLE. Anything else (a
+            # dead session, a 5xx, a network error) keeps the "something went
+            # wrong" path.
             self._note_unavailable(media)
             self.fn_logger.info(
-                f"This item is not available for listening anymore on TIDAL. Skipping: "
+                f"{self._refusal_words(verdict, 'this item is not available')}. Skipping: "
                 f"{log_content(name_builder_item(media))}"
             )
             return
 
         self.fn_logger.exception(f"Something went wrong. Skipping '{log_content(name_builder_item(media))}'.")
 
-    def _atmos_preferred(self) -> bool:
-        """Whether this run fetches Dolby Atmos where a track offers both
-        Atmos and stereo: the "Download Dolby Atmos" setting. The GUI's
-        tracked download answers with what its own job was queued with, so a
-        stereo tier chosen on one item fetches that item in stereo."""
-        return bool(self.settings.data.download_dolby_atmos)
+    @staticmethod
+    def _refusal_words(verdict: Refusal | None, fallback: str) -> str:
+        """The provider's own words for a refusal, or the engine's fallback.
 
-    def _get_track_stream_info(self, media: Track) -> TrackStreamInfo:
+        User-facing refusal text is provider-owned (``classify_refusal``
+        restates the engine's error in the provider's vocabulary and the caller
+        already computed that verdict); the engine supplies only a neutral
+        fallback for a provider that says nothing, so a third provider never
+        reads TIDAL's words.
+        """
+        message = str(getattr(verdict, "message", "") or "").strip()
+        return message or fallback
+
+    def _get_track_stream_info(
+        self,
+        media: Track,
+        tier: QualityTier | None = None,
+        audio_type: AudioType | None = None,
+    ) -> TrackStreamInfo:
         """
         Gets stream info for a Track, handling Atmos/Normal session switching.
 
+        This is the engine resolver the Provider seam calls back: registered
+        with the provider at construction, invoked through
+        ``provider.resolve_stream`` under the stream lock. The job's request --
+        the Waves rung it was queued at and the Version it pins -- arrives as
+        these arguments, so the fetch answers to the click that queued it and
+        never to live Settings; a legacy job that pinned neither (both None)
+        keeps the historical defaults.
+
         Args:
             media: The track to get stream information for.
+            tier: The Waves rung this job asks at, or None to follow the
+                session's own quality.
+            audio_type: The Version this job pins (stereo / Atmos), or None
+                for a legacy row the settings decide for.
 
         Returns:
             TrackStreamInfo: Container with stream manifest, file extension,
                             FLAC extraction flag, and media stream object.
                             Returns TrackStreamInfo with None/empty values if fails.
         """
-        # The Atmos session serves two cases: the user asked for Atmos and the
-        # track has it, or the track has NOTHING ELSE (TIDAL lists the Atmos
-        # version as its own id with no stereo stream, so the normal session
-        # has no stream to offer). The second clause is what downloads an
-        # Atmos-only track when the setting is off, instead of skipping it and
-        # leaving a hole in the album.
-        modes = getattr(media, "audio_modes", None) or []
-        has_atmos = AudioMode.dolby_atmos.value in modes
-        atmos_only = bool(modes) and all(mode == AudioMode.dolby_atmos.value for mode in modes)
-        want_atmos = has_atmos and (self._atmos_preferred() or atmos_only)
+        # The Atmos session serves two cases: the request asked for Atmos (a
+        # pinned Atmos Version) and the track has it, or the track has NOTHING
+        # ELSE (TIDAL lists the Atmos version as its own id with no stereo
+        # stream, so the normal session has no stream to offer). The decision
+        # is shared with the bridge's ownership gate (wants_atmos_delivery),
+        # so what a row fetches is what it ranks. The track facts still gate
+        # it: a catalog object that advertises no Atmos has no Atmos stream to
+        # ask for, and the bridge skips such a row before this fetch.
+        want_atmos = wants_atmos_delivery(
+            getattr(media, "audio_modes", None),
+            audio_type,
+            getattr(self.settings.data, "default_audio_type", "stereo"),
+        )
 
         if want_atmos:
             if not self.tidal.switch_to_atmos_session():
@@ -2936,19 +3165,25 @@ class Download:
                 self.fn_logger.error(f"Failed to restore normal session for track: {media.id}")
                 return TrackStreamInfo(None, "", False, None)
 
-        media_stream = self.session.track(media.id).get_stream() if want_atmos else media.get_stream()
-
-        if want_atmos and str(getattr(media_stream, "audio_mode", "") or "") != AudioMode.dolby_atmos.value:
-            # Asked for Dolby Atmos, answered in stereo: TIDAL is not granting
-            # Atmos to this account, its region or the Atmos client. The file
-            # still lands, labelled with the tier it really came at. This line
-            # is what lets a diagnostic report tell that apart from a copy that
-            # is Atmos but was labelled wrong (TIDAL files Atmos under LOW).
-            logger.warning(
-                "Asked TIDAL for Dolby Atmos and got a %s stream at %s",
-                str(getattr(media_stream, "audio_mode", "") or "unlabeled"),
-                str(getattr(media_stream, "audio_quality", "") or "no stated tier"),
-            )
+        # This job's rung, written onto the shared session for this fetch only.
+        # It goes on AFTER the restore above (which re-reads the setting when
+        # it rebuilds a normal session, so what is captured below is that
+        # session's own quality rather than whatever an earlier Atmos track
+        # left behind), and the fetch and the put-back both run inside the
+        # stream lock the caller holds, so no other fetch can see it. An Atmos
+        # fetch is left entirely alone: it carries its own fixed request
+        # quality, which the switch above sets.
+        prev_quality = None
+        if tier is not None and not want_atmos:
+            prev_quality = self.session.audio_quality
+            self.session.audio_quality = tidal_quality_for_tier(tier)
+        try:
+            media_stream = self.session.track(media.id).get_stream() if want_atmos else media.get_stream()
+        finally:
+            # The fetch's answer wins even if the put-back fails.
+            if prev_quality is not None:
+                with contextlib.suppress(Exception):
+                    self.session.audio_quality = prev_quality
 
         stream_manifest = media_stream.get_stream_manifest()
         file_extension = stream_manifest.file_extension
@@ -2957,6 +3192,17 @@ class Download:
         if self.settings.data.extract_flac and (
             stream_manifest.codecs.upper() == Codec.FLAC and file_extension != AudioExtensions.FLAC
         ):
+            file_extension = AudioExtensions.FLAC
+            requires_flac_extraction = True
+        elif (
+            self.settings.data.extract_flac
+            and getattr(self.settings.data, "extract_flac_all", False)
+            and not want_atmos
+            and file_extension != AudioExtensions.FLAC
+        ):
+            # FLAC scope "all": lossy stereo is re-encoded to
+            # FLAC post-fetch. Atmos never converts (it stays .m4a), and a
+            # track already serving native FLAC needs no flag.
             file_extension = AudioExtensions.FLAC
             requires_flac_extraction = True
 
@@ -2982,16 +3228,25 @@ class Download:
         captured for that stream, so a skipped file never records a quality it
         did not actually deliver."""
 
+    def _note_retained(self, media: Track | Video, reason: str) -> None:
+        """The existing copy was kept: below the minimum, a failed carry-over,
+        or an upgrade that did not prove itself. A no-op here; the GUI's
+        tracked download overrides it to report a visible KEPT outcome."""
+
+    def _note_protected(self, media: Track | Video, reason: str) -> None:
+        """The new copy landed beside a file the Replace policy protected.
+        A no-op here; the GUI's tracked download reports KEPT BOTH."""
+
+    def _note_upgraded(self, media: Track | Video, origin_id: str, origin_path: str) -> None:
+        """A verified cross-provider replacement committed over the origin
+        copy. A no-op here; the GUI's tracked download records the ownership
+        replacement from the event."""
+
     def _note_delivered(self, media: Track | Video) -> None:
         """The item's file and sidecars are fully on disk; only post-processing
-        remains. A no-op here; the GUI's tracked download overrides it to flip
-        the queue row to its finished word right away."""
-
-    def _note_stream_acquired(self, media: Track | Video) -> None:
-        """This item holds a stream slot and is about to ask for its stream.
-        A no-op here; the GUI's tracked download overrides it to count the
-        job's streams started, which is what lets the next queued item begin
-        while this one finishes."""
+        and the deliberate inter-download delay remain. A no-op here; the GUI's
+        tracked download overrides it to flip the queue row to its finished
+        word right away instead of letting it sit through the delay."""
 
     def _note_unavailable(self, media: Track | Video | Album) -> None:
         """TIDAL refuses to stream this item, so the engine skips it. A no-op
@@ -3018,10 +3273,9 @@ class Download:
 
     def _finalize_plan(
         self,
-        media: Track | Video,
         path_media_dst: pathlib.Path,
         do_flac_extract: bool,
-        media_stream: Stream | None,
+        stream_info: StreamInfo,
     ) -> dict[str, float]:
         """Cumulative FINISHING-fill fractions per finalize step: weight only
         the steps this item will actually run, so each step's share is awarded
@@ -3031,17 +3285,17 @@ class Download:
         library) was squeezed into the last quarter. The weights are rough
         step costs; a step predicted here but skipped at runtime just passes
         its share through instantly, which is invisible."""
-        will_convert = isinstance(media, Video) and self.settings.data.video_convert_mp4
-        will_extract = isinstance(media, Track) and self.settings.data.extract_flac and do_flac_extract
+        will_convert = stream_info.media_kind == MediaType.VIDEO and self.settings.data.video_convert_mp4
+        will_extract = stream_info.media_kind == MediaType.TRACK and self.settings.data.extract_flac and do_flac_extract
         will_downsample = (
-            isinstance(media, Track)
+            stream_info.media_kind == MediaType.TRACK
             and self.settings.data.downsample_enabled
             and (will_extract or path_media_dst.suffix == AudioExtensions.FLAC)
         )
         will_remux = (
-            isinstance(media, Track)
+            stream_info.media_kind == MediaType.TRACK
             and path_media_dst.suffix in (AudioExtensions.M4A, AudioExtensions.MP4)
-            and not getattr(media_stream, "is_bts", False)
+            and not stream_info.single_file
             and bool(self.settings.data.path_binary_ffmpeg)
         )
         plan = {
@@ -3060,92 +3314,25 @@ class Download:
             cum[step_name] = 100.0 * acc / total_weight
         return cum
 
-    def _stop_requested(self, event_stop: Event | None) -> bool:
-        event_abort: Event | None = getattr(self, "event_abort", None)
-        return bool((event_abort is not None and event_abort.is_set()) or (event_stop and event_stop.is_set()))
-
-    def _download_with_link_refresh(
-        self,
-        media: Track | Video,
-        path_file: pathlib.Path,
-        path_media_dst: pathlib.Path,
-        stream_manifest: StreamManifest | None,
-        do_flac_extract: bool,
-        media_stream: Stream | None,
-        event_stop: Event | None = None,
-    ) -> tuple[bool, pathlib.Path, bool, Stream | None]:
-        """Run _download, and when the pass failed on a lapsed segment link
-        (403 or 410) with nothing stopped, ask for the stream once more and run
-        the whole track again, once.
-
-        The whole track, not the missing segments: two manifests are not
-        promised to cut a track the same way, so mixing their segments could
-        write a broken file. The fresh stream must land on the same file
-        extension and the same FLAC step, or the path and the finish planned
-        for the first one would be wrong; then the track fails as before.
-
-        Returns:
-            tuple: (success, the downloaded file, do_flac_extract, media_stream),
-            the last two from whichever stream the file came from.
-        """
-        _PASS_NOTE.lapsed = False
-        _PASS_NOTE.refetch_left = True
-        try:
-            result, path_out = self._download(
-                media=media, stream_manifest=stream_manifest, path_file=path_file, event_stop=event_stop
-            )
-        finally:
-            _PASS_NOTE.refetch_left = False
-        lapsed = bool(getattr(_PASS_NOTE, "lapsed", False))
-        _PASS_NOTE.lapsed = False
-
-        if result or not lapsed or self._stop_requested(event_stop):
-            return result, path_out, do_flac_extract, media_stream
-
-        self.fn_logger.warning("The stream links lapsed before the track was fetched; asking for fresh ones once")
-        fresh_manifest, fresh_ext, fresh_extract, fresh_stream = self._get_stream_info(media)
-
-        if self._stop_requested(event_stop):
-            return False, path_out, do_flac_extract, media_stream
-
-        if not fresh_ext or (isinstance(media, Track) and fresh_manifest is None):
-            self.fn_logger.error("No fresh stream links came back; the track was not written.")
-            return False, path_out, do_flac_extract, media_stream
-
-        if fresh_ext != path_media_dst.suffix or fresh_extract != do_flac_extract:
-            self.fn_logger.error("The fresh stream is a different format; the track was not written.")
-            return False, path_out, do_flac_extract, media_stream
-
-        result, path_out = self._download(
-            media=media, stream_manifest=fresh_manifest, path_file=path_file, event_stop=event_stop
-        )
-        _PASS_NOTE.lapsed = False
-        return result, path_out, fresh_extract, fresh_stream
-
     def _perform_actual_download(  # noqa: C901 - one linear pipeline, see below
         self,
         media: Track | Video,
         path_media_dst: pathlib.Path,
-        stream_manifest: StreamManifest | None,
-        do_flac_extract: bool,
+        stream_info: StreamInfo,
         is_parent_album: bool,
-        media_stream: Stream | None,
         event_stop: Event | None = None,
-        ticket: Ticket | None = None,
     ) -> tuple[bool, pathlib.Path]:
         """Perform the actual download and processing.
 
         Args:
             media (Track | Video): Media item.
             path_media_dst (pathlib.Path): Destination file path.
-            stream_manifest (StreamManifest | None): Stream manifest.
-            do_flac_extract (bool): Whether to extract FLAC.
+            stream_info (StreamInfo): The Provider seam's neutral stream
+                answer: the URLs to fetch, the true extension, the extraction
+                and remux steering flags, the delivered audio type, and the
+                ReplayGain facts the tag writer consumes.
             is_parent_album (bool): Whether this is a parent album.
-            media_stream (Stream | None): Media stream.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
-            ticket (Ticket | None, optional): The stream slot this item holds. Once the bytes
-                are in it is asked for a finishing seat, so the slot goes back to the pool
-                while this method converts, tags and copies. Defaults to None (no slot held).
 
         Returns:
             tuple[bool, pathlib.Path]: (Whether download was successful, the final destination path).
@@ -3165,55 +3352,52 @@ class Download:
             tmp_path_file: pathlib.Path = pathlib.Path(tmp_path_dir) / str(uuid4())
             tmp_path_file.touch()
 
-            # Download media (once more with fresh links if the first ones lapsed).
-            result_download, tmp_path_file, do_flac_extract, media_stream = self._download_with_link_refresh(
-                media, tmp_path_file, path_media_dst, stream_manifest, do_flac_extract, media_stream, event_stop
+            # Download media.
+            result_download, tmp_path_file = self._download(
+                media=media,
+                stream_info=stream_info,
+                path_file=tmp_path_file,
+                event_stop=event_stop,
             )
-
-            # The stream is over, well or badly: the slot goes back now if a
-            # finishing seat is free, so the next track starts streaming while
-            # this one converts, tags and copies. A refused seat (every seat
-            # taken, temp disk nearly full) keeps the slot through the finish.
-            if ticket is not None:
-                ticket.try_finishing_seat()
 
             if not result_download:
                 return False, path_media_dst
 
-            cum = self._finalize_plan(media, path_media_dst, do_flac_extract, media_stream)
+            cum = self._finalize_plan(path_media_dst, stream_info.requires_flac_extraction, stream_info)
             self._note_stage(media, 0)
 
             # Convert video from TS to MP4
-            if isinstance(media, Video) and self.settings.data.video_convert_mp4:
+            if stream_info.media_kind == MediaType.VIDEO and self.settings.data.video_convert_mp4:
                 tmp_path_file = self._video_convert(tmp_path_file)
 
             self._note_stage(media, cum["convert"])
 
             # Extract FLAC from MP4 container using ffmpeg
-            if isinstance(media, Track) and self.settings.data.extract_flac and do_flac_extract:
-                tmp_path_file = self._extract_flac(tmp_path_file, event_stop)
+            if (
+                stream_info.media_kind == MediaType.TRACK
+                and self.settings.data.extract_flac
+                and stream_info.requires_flac_extraction
+            ):
+                # Lossless arrives as FLAC-in-MP4 (stream copy); scope "all"
+                # re-encodes lossy sources instead.
+                transcode = str(stream_info.codecs or "").upper() != Codec.FLAC
+                tmp_path_file = self._extract_flac(tmp_path_file, transcode=transcode, event_stop=event_stop)
 
                 # A stop during the seal leaves the header unsealed (MD5 unset,
                 # and a DASH copy's sample count 0). Such a file must not land:
                 # bail out like every other stop, and the temp dir goes with it.
-                event_abort: Event | None = getattr(self, "event_abort", None)
-
-                if (event_abort is not None and event_abort.is_set()) or (event_stop and event_stop.is_set()):
+                if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
                     return False, path_media_dst
 
             self._note_stage(media, cum["extract"])
 
             # Downsample FLAC to the configured target rate/depth (no-op for low-res sources)
             if (
-                isinstance(media, Track)
+                stream_info.media_kind == MediaType.TRACK
                 and self.settings.data.downsample_enabled
                 and tmp_path_file.suffix == AudioExtensions.FLAC
             ):
                 tmp_path_file = self._downsample_audio(tmp_path_file)
-            elif isinstance(media, Track) and self.settings.data.downsample_enabled:
-                # Downsampling works on FLAC only, which needs Extract FLAC: say
-                # so rather than landing a hi-res .m4a with no word about it.
-                self.fn_logger.info("Downsample skipped: it needs Extract FLAC, which is off.")
 
             self._note_stage(media, cum["downsample"])
 
@@ -3228,9 +3412,9 @@ class Download:
             # bare merge output (a uuid with no extension), the true .m4a/.mp4 is only
             # known on path_media_dst.
             if (
-                isinstance(media, Track)
+                stream_info.media_kind == MediaType.TRACK
                 and path_media_dst.suffix in (AudioExtensions.M4A, AudioExtensions.MP4)
-                and not getattr(media_stream, "is_bts", False)
+                and not stream_info.single_file
                 and self.settings.data.path_binary_ffmpeg
             ):
                 tmp_path_file = self._faststart_remux(tmp_path_file, path_media_dst.suffix)
@@ -3241,10 +3425,13 @@ class Download:
             # skipped upstream, so an occupied destination is a different track). Resolve the
             # unique name BEFORE writing lyrics/cover so those sidecars align with the final
             # audio file.
-            overwrite: bool = not self.skip_existing
-            media_id: str = _waves_item_id(media)
+            media_id: str = download_identity_id(media)
             path_media_dst = pathlib.Path(path_file_sanitize(path_media_dst, adapt=True))
-            path_media_own: pathlib.Path | None = self._already_landed_here(path_media_dst, media)
+            # Which Version this fetch brings, resolved once: the stream's own
+            # word first, else the job's pin (an empty delivered word would
+            # read stereo here while the skip gate falls back to the pin).
+            fetch_version = self._fetch_version(stream_info)
+            path_media_own: pathlib.Path | None = self._already_landed_here(path_media_dst, media, fetch_version)
 
             if path_media_own is not None:
                 # Nothing was written for this pass, so the caller must not
@@ -3253,14 +3440,21 @@ class Download:
                 self._note_skipped_after_stream(media)
 
                 return True, path_media_own
-            # What THIS fetch delivers, off the stream's own word. A missing or
-            # empty audio_mode reads stereo, which errs the safe way: a stereo
-            # verdict can only make the claim step aside from an Atmos file,
-            # never replace one.
-            fetch_is_atmos: bool = str(getattr(media_stream, "audio_mode", "") or "") == AudioMode.dolby_atmos.value
+            # What THIS fetch delivers, off the resolved Version. Nothing said
+            # anywhere reads stereo, which errs the safe way: a stereo verdict
+            # can only make the claim step aside from an Atmos file, never
+            # replace one.
+            fetch_is_atmos: bool = fetch_version == AudioType.ATMOS
+            delivered_facts = self._delivered_facts(stream_info)
             path_media_asked: pathlib.Path = path_media_dst
+            tls = getattr(self, "_tls", None)
+            if tls is None:
+                tls = self._tls = local()
+            tls.claim_media = media
+            tls.claim_delivered_tier = str(getattr(delivered_facts.tier, "value", delivered_facts.tier) or "")
+            tls.claim_delivered_audio_type = delivered_facts.audio_type or fetch_version or ""
             path_media_dst, name_reserved = self._claim_destination(
-                path_media_dst, media_id, _waves_owned_ids(media), fetch_is_atmos
+                path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos
             )
 
             if name_reserved is None:
@@ -3273,7 +3467,7 @@ class Download:
                 # and the same positive-evidence question finds it. Asked before
                 # the error, so an expected step-aside is not reported as a lost
                 # download.
-                path_media_own = self._already_landed_here(path_media_dst, media)
+                path_media_own = self._already_landed_here(path_media_dst, media, fetch_version)
 
                 if path_media_own is not None:
                     self._note_skipped_after_stream(media)
@@ -3281,14 +3475,45 @@ class Download:
                     return True, path_media_own
 
                 # Nothing is lost here, but the download has nowhere to land and
-                # must say so: the old code took the last occupied candidate and
-                # the move then refused it as somebody else's file.
+                # must say so: taking the last occupied candidate just gets it
+                # refused by the move as somebody else's file.
                 self.fn_logger.error(
                     f"No free name left for '{log_content(path_media_dst.name)}': "
                     f"the name and all {UNIQUIFY_THRESHOLD} of its numbered copies are taken."
                 )
 
                 return False, path_media_dst
+
+            placement = getattr(self._tls, "placement", None) or PlacementDecision("download")
+            upgrade_target = self._is_upgrade_target(media)
+            if upgrade_target and not digest_matches(self._upgrade_plan.origin_digest, self._upgrade_plan.origin_path):
+                self._note_skipped_after_stream(media)
+                self._note_retained(media, UPGRADE_RETAINED_REASON)
+                if name_reserved is not None:
+                    self._release_name(name_reserved)
+                return True, pathlib.Path(self._upgrade_plan.origin_path)
+            if (
+                self._quality_strategy == "minimum_required"
+                and self._pinned_tier is not None
+                and quality_rank(delivered_facts.tier) < quality_rank(self._pinned_tier)
+            ):
+                if check_file_exists(path_media_dst, extension_ignore=False):
+                    # The delivery cannot meet the minimum: keep the copy
+                    # already there rather than replace it with a lower one.
+                    self._note_skipped_after_stream(media)
+                    self._note_retained(media, RETAINED_REASON)
+                    if name_reserved is not None:
+                        self._release_name(name_reserved)
+                    return True, path_media_dst
+                self.fn_logger.warning(
+                    "The delivery is below the requested minimum; the file is kept and reported as such."
+                )
+            if placement.action == "replace":
+                overwrite = True
+            elif placement.action == "keep_both" or self._duplicate_policy in ("replace_owned", "keep_both"):
+                overwrite = False
+            else:
+                overwrite = not self.skip_existing
 
             try:
                 if path_media_dst != path_media_asked:
@@ -3303,7 +3528,7 @@ class Download:
                     # the name is still a stranger and this still steps aside
                     # for it: only a state CHANGE inside the window can answer
                     # yes here, since the same question answered no moments ago.
-                    path_media_own = self._already_landed_here(path_media_asked, media)
+                    path_media_own = self._already_landed_here(path_media_asked, media, fetch_version)
 
                     if path_media_own is not None:
                         self._note_skipped_after_stream(media)
@@ -3312,8 +3537,59 @@ class Download:
 
                 # Tag the temp file and hold the sidecars it produced.
                 extras = self._handle_metadata_and_extras(
-                    media, tmp_path_file, path_media_dst, is_parent_album, media_stream
+                    media, tmp_path_file, path_media_dst, is_parent_album, stream_info
                 )
+
+                replacing_own = check_file_exists(path_media_dst, extension_ignore=False) and (
+                    placement.action == "replace"
+                    or self._is_own_copy(path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos)
+                )
+                if replacing_own:
+                    # The old copy's own tags survive the replacement, whether
+                    # this is the policy's replace, a stale-copy upgrade or an
+                    # explicit Redownload. A carry-over failure aborts before
+                    # the swap: the existing file and its row stay as they were.
+                    try:
+                        carry_over_tags(path_media_dst, tmp_path_file, strict=True)
+                    except Exception:
+                        logger.debug("Could not carry user tags over; keeping the existing copy", exc_info=True)
+                        self._note_skipped_after_stream(media)
+                        self._note_retained(media, CARRY_OVER_FAILED_REASON)
+                        return True, path_media_dst
+
+                if upgrade_target:
+                    origin_path = pathlib.Path(self._upgrade_plan.origin_path)
+                    delivered_suffix = str(stream_info.file_extension or origin_path.suffix)
+                    same_container = delivered_suffix.lower() == origin_path.suffix.lower()
+                    result = commit_upgrade(
+                        tmp_path_file,
+                        self._upgrade_plan,
+                        delivered_facts,
+                        place=lambda staged, final: self._move_file(
+                            staged,
+                            final,
+                            overwrite=same_container,
+                            occupant_is_own=(
+                                (lambda candidate: digest_matches(self._upgrade_plan.origin_digest, candidate))
+                                if same_container
+                                else None
+                            ),
+                        ),
+                        record=lambda final: self._record_upgraded(media, final, stream_info),
+                        final_suffix=delivered_suffix,
+                    )
+                    if result.ok and result.path is not None:
+                        self._note_stage(media, cum["move"])
+                        self._record_name_written(result.path, media_id)
+                        self._note_dir_filled(result.path)
+                        if extras:
+                            self._move_extras(extras, result.path)
+                        self._note_upgraded(media, self._upgrade_plan.origin_id, self._upgrade_plan.origin_path)
+                        return True, result.path
+                    self._note_skipped_after_stream(media)
+                    self._note_retained(media, UPGRADE_RETAINED_REASON)
+                    return True, pathlib.Path(self._upgrade_plan.origin_path)
+
                 self.fn_logger.info(f"Downloaded item '{log_content(name_builder_item(media))}'.")
 
                 self._note_stage(media, cum["tag"])
@@ -3338,15 +3614,9 @@ class Download:
 
                 def _occupant_is_this_items_own(path_occupied: pathlib.Path) -> bool:
                     nonlocal path_media_landed
-                    path_media_landed = self._already_landed_here(path_occupied, media)
+                    path_media_landed = self._already_landed_here(path_occupied, media, fetch_version)
 
                     return path_media_landed is not None
-
-                # Landing ON a copy (skipping off, a quality upgrade, a
-                # Redownload): the tags the user added to that copy by hand
-                # ride over to the new one first, or the replace loses them.
-                if overwrite and isinstance(media, Track) and check_file_exists(path_media_dst, extension_ignore=False):
-                    self._carry_over_user_tags(path_media_dst, tmp_path_file)
 
                 # Move final file to the configured destination directory.
                 moved: bool = self._move_file(
@@ -3362,6 +3632,8 @@ class Download:
                     # never momentarily free between the two.
                     self._record_name_written(path_media_dst, media_id)
                     self._note_dir_filled(path_media_dst)
+                    if placement.action == "keep_both" and placement.reason:
+                        self._note_protected(media, placement.reason)
                 elif path_media_landed is not None:
                     self._note_skipped_after_stream(media)
 
@@ -3381,36 +3653,19 @@ class Download:
                 if name_reserved is not None:
                     self._release_name(name_reserved)
 
-    def _carry_over_user_tags(self, path_occupied: pathlib.Path, tmp_path_file: pathlib.Path) -> None:
-        """Keep, on the fresh copy, the tags of the file it is about to replace
-        that the fresh tagging did not write (see metadata.carry_over_tags).
-        Best-effort: a copy that cannot be read carries nothing, and never
-        fails the download over it."""
-        try:
-            carried: int = carry_over_tags(path_occupied, tmp_path_file)
-        except Exception:
-            self.fn_logger.debug("Could not carry tags over from the copy being replaced", exc_info=True)
-
-            return
-
-        if carried:
-            self.fn_logger.info(
-                f"Kept {carried} tag(s) from the copy being replaced: '{log_content(path_occupied.name)}'"
-            )
-
     def _handle_metadata_and_extras(
         self,
         media: Track | Video,
         tmp_path_file: pathlib.Path,
         path_media_dst: pathlib.Path,
         is_parent_album: bool,
-        media_stream: Stream | None,
+        stream_info: StreamInfo | None,
     ) -> tuple[pathlib.Path | None, str, pathlib.Path | None] | None:
         """Tag the downloaded temp file and hand back the sidecars it produced.
 
-        The sidecars are NOT moved here. They used to be, which put a cover.jpg
+        The sidecars are NOT moved here. Moving them here would put a cover.jpg
         and a .lrc into the library before the audio they belong to, so a move
-        that then failed left them orphaned there, and nothing removes them
+        that then fails leaves them orphaned there, and nothing removes them
         afterwards (the app never deletes a user-visible file). The caller moves
         them once the audio has landed.
 
@@ -3419,14 +3674,16 @@ class Download:
             tmp_path_file (pathlib.Path): Temporary file path.
             path_media_dst (pathlib.Path): Destination file path.
             is_parent_album (bool): Whether this is a parent album.
-            media_stream (Stream | None): Media stream.
+            stream_info (StreamInfo | None): The seam's stream answer, whose
+                replay_gain dict carries the ReplayGain facts.
 
         Returns:
             tuple[pathlib.Path | None, str, pathlib.Path | None] | None: The temp
                 lyrics path, its extension, and the temp cover path. None for a
                 video, which has no sidecars.
         """
-        if isinstance(media, Video):
+        kind = stream_info.media_kind if stream_info is not None else self.provider.media_kind(media)
+        if kind == MediaType.VIDEO:
             # A converted music video carries tags (metadata_write_video); a
             # raw .ts cannot, MPEG-TS has no tag atoms mutagen can write.
             # Lyrics and cover sidecars stay track/album concepts either way.
@@ -3439,11 +3696,30 @@ class Download:
         lyrics_suffix: str = EXTENSION_LYRICS
 
         # Write metadata to file.
-        if media_stream:
-            result_metadata, tmp_path_lyrics, lyrics_suffix, tmp_path_cover = self.metadata_write(
-                media, tmp_path_file, is_parent_album, media_stream
-            )
-            if not result_metadata:
+        if stream_info is not None:
+            try:
+                atype = str((stream_info.delivered or {}).get("audio_type") or "") or None
+            except Exception:
+                atype = None
+            try:
+                _result_metadata, tmp_path_lyrics, lyrics_suffix, tmp_path_cover = self.metadata_write(
+                    media,
+                    tmp_path_file,
+                    is_parent_album,
+                    stream_info.replay_gain,
+                    audio_type=atype,
+                )
+            except TypeError as exc:
+                # Test doubles pinning the pre-audio-type shape (metadata_write
+                # without the audio_type param): fall back without it. Real
+                # callers always accept it (tags carry the Version). Re-raise
+                # any other TypeError (wrong types inside the writer).
+                if "audio_type" not in str(exc):
+                    raise
+                _result_metadata, tmp_path_lyrics, lyrics_suffix, tmp_path_cover = self.metadata_write(
+                    media, tmp_path_file, is_parent_album, stream_info.replay_gain
+                )
+            if not _result_metadata:
                 # A file mutagen could not open or save: filed anyway it sat
                 # in the library with no title, no artist and no item id,
                 # counted as delivered, and trusted as the track by every
@@ -3453,6 +3729,45 @@ class Download:
                 raise UntaggableFile(f"could not tag '{log_content(name_builder_item(media))}'")
 
         return tmp_path_lyrics, lyrics_suffix, tmp_path_cover
+
+    def _provider_id(self) -> str:
+        """This download's provider id for per-provider options.
+
+        The pipeline is composed with a Provider (TIDAL by default); its
+        lyrics/artwork options live under that provider's mirrors, keyed by the
+        provider's own id, so a third provider reaches its own mirrors with no
+        allow-list edit. No provider at all reads TIDAL, the
+        historical default; an unrecognized word falls back to the shared keys
+        inside ``provider_setting``, never to another provider's mirror.
+        """
+        try:
+            pid = str(getattr(getattr(self, "provider", None), "id", "") or "").strip().lower()
+        except Exception:
+            pid = ""
+        return pid or "tidal"
+
+    def _psetting(self, key: str, default=None):
+        """One lyrics/artwork option for this download's provider.
+
+        A per-click Chooser pin wins over the stored options for this job
+        only; nothing is persisted.
+        """
+        pinned = getattr(self, "_chooser_toggles", None) or {}
+        if key in pinned:
+            return pinned[key]
+        try:
+            data = self.settings.data
+        except Exception:
+            return default
+        return provider_setting(data, self._provider_id(), key, default)
+
+    def _tag_write(self, tag: str) -> bool:
+        """Whether the Custom template keeps one tag group on this download."""
+        try:
+            data = self.settings.data
+        except Exception:
+            return True
+        return metadata_tag_write(data, tag)
 
     def _move_extras(
         self,
@@ -3468,11 +3783,11 @@ class Download:
         tmp_path_lyrics, lyrics_suffix, tmp_path_cover = extras
 
         # Move lyrics file
-        if self.settings.data.lyrics_file and tmp_path_lyrics:
+        if self._psetting("lyrics_file", False) and tmp_path_lyrics:
             self._move_lyrics(tmp_path_lyrics, path_media_dst, suffix=lyrics_suffix)
 
         # Move cover file
-        if self.settings.data.cover_album_file and tmp_path_cover:
+        if self._psetting("cover_album_file", True) and tmp_path_cover:
             self._move_cover(tmp_path_cover, path_media_dst)
 
     def _perform_post_processing(
@@ -3496,13 +3811,12 @@ class Download:
             quality_video (QualityVideo | None): Video quality setting.
             quality_audio_old (Quality | None): Previous audio quality.
             quality_video_old (QualityVideo | None): Previous video quality.
-            download_delay (bool): Kept for the callers; the delay itself is the stream
-                slot's cooldown now (see _download_cooldown), so nothing sleeps here.
+            download_delay (bool): Whether to apply download delay.
             skip_file (bool): Whether file was skipped.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
         """
         # If files needs to be symlinked, do postprocessing here.
-        if self.settings.data.symlink_to_track and not isinstance(media, Video):
+        if self.settings.data.symlink_to_track and self.provider.media_kind(media) != MediaType.VIDEO:
             # Determine file extension for symlink
             file_extension = path_media_dst.suffix
             self.media_move_and_symlink(media, path_media_dst, file_extension)
@@ -3513,6 +3827,19 @@ class Download:
 
         if quality_video_old is not None:
             self.adjust_quality_video(quality_video_old)
+
+        # Apply download delay if needed
+        if download_delay and not skip_file:
+            time_sleep: float = round(
+                random.SystemRandom().uniform(
+                    self.settings.data.download_delay_sec_min, self.settings.data.download_delay_sec_max
+                ),
+                1,
+            )
+
+            self.fn_logger.debug(f"Next download will start in {time_sleep} seconds.")
+
+            self._sleep_politely(time_sleep, event_stop)
 
     def media_move_and_symlink(
         self, media: Track | Video, path_media_src: pathlib.Path, file_extension: str
@@ -3539,6 +3866,10 @@ class Download:
             use_primary_album_artist=self.settings.data.use_primary_album_artist,
             illegal_replacement=self._illegal_replacement(),
             illegal_map=self._illegal_map(),
+            provider_name=self._provider_folder(),
+            quality=self._quality_token(),
+            audio_type=self._pinned_audio_type or "",
+            facts=self._path_facts(media),
         )
         path_media_dst: pathlib.Path = (
             pathlib.Path(self.path_base).expanduser() / (file_name_relative + file_extension)
@@ -3556,8 +3887,7 @@ class Download:
             # would delete or mis-file a user's own file, so leave both where
             # they are. A convenience pointer is never worth a file.
             self.fn_logger.error(
-                f"Not replacing '{log_content(path_media_src.name)}' with a symlink: "
-                f"the file there is not this track."
+                f"Not replacing '{log_content(path_media_src.name)}' with a symlink: the file there is not this track."
             )
 
             return path_media_src
@@ -3567,16 +3897,21 @@ class Download:
             # _perform_actual_download): is the destination really THIS item,
             # claim the name before anything else can pick it, and overwrite
             # only when the user turned skip-existing off. Deciding by filename
-            # alone used to hand a colliding stranger's file to this track: the
-            # audio just downloaded was unlinked and the playlist entry pointed
+            # alone would hand a colliding stranger's file to this track: the
+            # audio just downloaded is unlinked and the playlist entry points
             # at somebody else's track.
-            overwrite: bool = not self.skip_existing
+            # Keep both never overwrites: a file that appeared at the name meanwhile
+            # is stepped around, whatever the legacy skip-existing toggle says.
+            overwrite: bool = not self.skip_existing and self._duplicate_policy != "keep_both"
             name_reserved: str | None = None
-            media_id: str = _waves_item_id(media)
+            media_id: str = download_identity_id(media)
 
             if self.skip_existing:
+                # The file being moved is this fetch's own copy, so its Version
+                # is the one the occupant must match (the same answer
+                # _claim_destination below asks the file for).
                 path_media_found: pathlib.Path | None = (
-                    self._existing_same_item_at(path_media_dst, media)
+                    self._existing_same_item_at(path_media_dst, media, read_file_audio_type(path_media_src))
                     if check_file_exists(path_media_dst, extension_ignore=False)
                     else None
                 )
@@ -3600,8 +3935,16 @@ class Download:
                 # The mode of the fetch IS the mode of the file being moved, so
                 # ask the file itself: this claim runs long after the stream
                 # object is gone.
+                tls = getattr(self, "_tls", None)
+                if tls is None:
+                    tls = self._tls = local()
+                tls.claim_media = media
+                # This move has no delivery of its own: a previous item's
+                # delivered facts on this thread must not name it.
+                tls.claim_delivered_tier = ""
+                tls.claim_delivered_audio_type = ""
                 path_media_dst, name_reserved = self._claim_destination(
-                    path_media_dst, media_id, _waves_owned_ids(media), _file_audio_mode_is_atmos(path_media_src)
+                    path_media_dst, media_id, owned_item_ids(media), _file_audio_mode_is_atmos(path_media_src)
                 )
 
                 if name_reserved is None:
@@ -3641,7 +3984,7 @@ class Download:
             # the step's own missing-parent handling takes it from here.
             return True
 
-        media_id = _waves_item_id(media)
+        media_id = download_identity_id(media)
 
         if media_id and self._names_written.get(str(path_media_src)) == media_id:
             return True
@@ -3651,7 +3994,7 @@ class Download:
         except Exception:
             return False
 
-        return bool(occupant_id) and occupant_id in _waves_owned_ids(media)
+        return bool(occupant_id) and occupant_id in owned_item_ids(media)
 
     def _symlink_after_move(
         self,
@@ -3862,9 +4205,8 @@ class Download:
     # buffer is 64 KiB, which turns a 40 MB track into ~640 sequential write
     # round-trips on a network mount (SMB especially); 8 MiB lets the mount's
     # client coalesce the same file into a handful of large writes. Worst-case
-    # transient RAM is one buffer per track being moved: the streams plus the
-    # finishing seats (downloads_concurrent_max + downloads_finishing_max, so
-    # typically 6 x 8 MiB, 18 at the maximums).
+    # transient RAM is one buffer per concurrent move (downloads_concurrent_max,
+    # so typically 3 x 8 MiB).
     _COPY_BUFFER_BYTES: int = 8 * 1024 * 1024
 
     def _copy_file_contents(self, path_source: pathlib.Path, path_destination: pathlib.Path) -> None:
@@ -3933,7 +4275,7 @@ class Download:
             if path_destination.exists():
                 if not overwrite and not _is_truncated_leftover(path_destination):
                     # Nothing raised, so the retry wrapper has nothing to log: say it here or
-                    # a finished download disappears without a word (issue #15 follow-up).
+                    # a finished download disappears without a word.
                     # Guessing a new name instead would strand the lyrics and cover already
                     # written for this one.
                     #
@@ -4036,11 +4378,11 @@ class Download:
             # Past the swap, the track has landed and nothing may unmake that.
             # A source that will not go away this instant (a Windows scanner
             # holding the temp for a moment, the exact lock the retry helpers
-            # exist for) used to re-raise here, and the retry then found the
-            # destination occupied by "another writer" and reported the landed
+            # exist for) would re-raise here, and the retry then finds the
+            # destination occupied by "another writer" and reports the landed
             # track FAILED: red row, misleading log, and its .lrc and cover
             # never moved, with a re-run skipping it as existing so the
-            # sidecars never arrived at all. The source sits in this item's own
+            # sidecars never arrive at all. The source sits in this item's own
             # temp directory, which is cleared when the item finishes.
             with contextlib.suppress(OSError):
                 path_file_source.unlink(missing_ok=True)
@@ -4096,10 +4438,19 @@ class Download:
         Returns:
             bool: True if moved, False otherwise.
         """
-        # Named by Settings ("cover" unless changed, issue #66). A folder that
-        # already holds a cover under another name keeps it: nothing is
-        # renamed or removed, the new name is simply written beside it.
-        name = cover_file_name(getattr(self.settings.data, "cover_file_name", None))
+        # Sidecar format: jpg or png; raw is Apple-only
+        # and falls back to jpg here so TIDAL behavior stays byte-for-byte.
+        # Per-provider: this engine reads its own provider's mirror.
+        fmt = (
+            str(
+                (getattr(getattr(self, "settings", None), "data", None) and self._psetting("cover_file_format", "jpg"))
+                or "jpg"
+            )
+            .strip()
+            .lower()
+        )
+        name = "cover.png" if fmt == "png" else "cover.jpg"
+        # Build tmp lyrics filename
         path_file_cover: pathlib.Path = file_media_dst.parent / name
         result: bool = self._move_file(path_cover, path_file_cover, overwrite=False, skip_if_exists=True)
 
@@ -4216,63 +4567,12 @@ class Download:
                     self._cover_cache.popitem(last=False)
         return fetched
 
-    def _cover_baseline_mode(self) -> str:
-        """The baseline-JPEG rewrite to apply to covers: "small", "faithful",
-        or "" for off. An exact membership test, so anything else (an unknown
-        value, a test double standing in for the settings) reads as off."""
-        mode = getattr(self.settings.data, "metadata_cover_baseline", CoverBaseline.OFF)
-        if isinstance(mode, str) and mode in (CoverBaseline.SMALL, CoverBaseline.FAITHFUL):
-            return str(mode)
-        return ""
-
-    def _cover_baseline(self, url: str | None, data, mode: str):
-        """``data`` (the cover fetched from ``url``) rewritten as baseline JPEG.
-
-        Converted once per job: the result rides the cover cache under a key
-        derived from the URL, beside the untouched original. Whatever goes
-        wrong, the original bytes come back, so the option can only ever
-        match "off" or better it, and it never fails a track.
-        """
-        if not mode or not data or not url:
-            return data
-        key = f"baseline:{mode}:{url}"
-        with self._cover_cache_lock:
-            cached = self._cover_cache.get(key)
-            if cached is not None:
-                self._cover_cache.move_to_end(key)
-                return cached
-        try:
-            from waves.waves_ui.cover_baseline import to_baseline
-
-            result, outcome = to_baseline(data, mode)
-        except Exception:
-            logger_covers.info("Cover kept as served: the baseline rewrite could not run.")
-            return data
-        if outcome not in ("converted", "already-baseline"):
-            logger_covers.info("Cover kept as served (%s).", outcome)
-        with self._cover_cache_lock:
-            self._cover_cache[key] = result
-            while len(self._cover_cache) > self._COVER_CACHE_MAX:
-                self._cover_cache.popitem(last=False)
-        return result
-
     @staticmethod
     def _want_cover_file(save_cover: bool, is_parent_album: bool, single_track: bool) -> bool:
         """Whether to write the separate cover.jpg. The master toggle (save_cover)
         must be on; then album/collection downloads always qualify, and a lone
         single-track download qualifies only when the user opted in (single_track)."""
         return bool(save_cover) and (bool(is_parent_album) or bool(single_track))
-
-    @staticmethod
-    def _cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimensions:
-        """Resolve the saved cover.jpg size. 'follow' (or an unknown value) uses
-        the embedded size; otherwise a CoverDimensions member name."""
-        if pref == "follow":
-            return embedded
-        try:
-            return CoverDimensions[pref]
-        except KeyError:
-            return embedded
 
     def _album_cover_file_data(
         self, track: Track, embedded_data, embedded_dim: CoverDimensions, file_dim: CoverDimensions
@@ -4284,18 +4584,6 @@ class Download:
         if file_dim == embedded_dim:
             return embedded_data
         return self.cover_data_cached(track.album.image(int(file_dim)))
-
-    def _album_cover_file_baseline(
-        self, track: Track, embedded_data, embedded_dim: CoverDimensions, file_dim: CoverDimensions, mode: str
-    ):
-        """``_album_cover_file_data`` with the opt-in baseline rewrite. At the
-        embedded size it is the embedded bytes, already rewritten; at its own
-        size it came from its own fetch, so it gets its own rewrite."""
-        data = self._album_cover_file_data(track, embedded_data, embedded_dim, file_dim)
-        if not mode or not data or data is embedded_data:
-            return data
-        size = CoverDimensions.PxORIGIN if file_dim == CoverDimensions.PxORIGIN else int(file_dim)
-        return self._cover_baseline(track.album.image(size), data, mode)
 
     def _retrieve_lyrics(self, track: Track) -> tuple[str, str, str]:
         """Fetch lyrics for a track, LRCLIB first, TIDAL as the fallback.
@@ -4313,11 +4601,10 @@ class Download:
             best available form (synced over unsynced), all empty when neither
             source has any.
         """
-        lyrics: str = ""
         lyrics_synced: str = ""
         lyrics_unsynced: str = ""
 
-        if getattr(self.settings.data, "lyrics_prefer_lrclib", True):
+        if self._psetting("lyrics_prefer_lrclib", True):
             lyrics_synced, lyrics_unsynced = fetch_lrclib_lyrics(
                 self._shared_http(),
                 artist=track.artist.name if track.artist else "",
@@ -4342,64 +4629,31 @@ class Download:
 
         return lyrics, lyrics_synced, lyrics_unsynced
 
-    def _genre_facts(self, media) -> tuple[str, dict[str, str]] | None:
-        """What the genre lookup is asked with for this track's release: the
-        TIDAL album id and the barcode, artist and title that find it on
-        MusicBrainz. None when there is no lookup (the setting is off) or the
-        track names no album (a playlist entry with the block missing)."""
-        if self.genre_lookup is None or not isinstance(media, Track):
-            return None
-        album = getattr(media, "album", None)
-        album_id = str(getattr(album, "id", "") or "") if album is not None else ""
-        if not album_id:
-            return None
-        try:
-            artists = get_album_artists(media)
-        except Exception:
-            artists = []
-        return album_id, {
-            "upc": str(getattr(album, "upc", "") or ""),
-            "artist": str(artists[0] if artists else getattr(getattr(album, "artist", None), "name", "") or ""),
-            "title": str(getattr(album, "name", "") or ""),
-        }
-
-    def _genre_prefetch(self, media) -> None:
-        """Start this track's release lookup in the background (see
-        GenreLookup.prefetch); a failure to even ask never touches the download."""
-        facts = self._genre_facts(media)
-        if facts is None:
-            return
-        try:
-            self.genre_lookup.prefetch(facts[0], **facts[1])
-        except Exception:
-            logger.debug("could not start the genre lookup", exc_info=True)
-
-    def _genre_text(self, track: Track) -> str:
-        """The Genre tag for this track: the release's genres joined by the
-        separator setting, "" when there is nothing to write."""
-        facts = self._genre_facts(track)
-        if facts is None:
-            return ""
-        try:
-            genres = self.genre_lookup.genres(facts[0], **facts[1])
-        except Exception:
-            logger.debug("genre lookup failed", exc_info=True)
-            return ""
-        text = join_genres(genres, getattr(self.settings.data, "metadata_delimiter_genre", None))
-        if text:
-            logger.info("Genre tag: %d genre(s) for %s", len(genres), log_content(facts[1]["title"]))
-        return text
-
     def metadata_write(
-        self, track: Track, path_media: pathlib.Path, is_parent_album: bool, media_stream: Stream
+        self,
+        track: Track,
+        path_media: pathlib.Path,
+        is_parent_album: bool,
+        replay_gain: dict | None = None,
+        audio_type: str | None = None,
     ) -> tuple[bool, pathlib.Path | None, str, pathlib.Path | None]:
         """Write metadata, lyrics, and cover to a media file.
+
+        The track's attribute facts ride the Provider seam: the provider's
+        ``track_facts`` pull answers with the identity, credits, album block
+        and descriptors the tag writer needs, so tagging stays
+        provider-neutral. The cover URL, the native-lyrics fetch and the title
+        naming stay engine bodies over the engine's own objects until a second
+        engine forces their hand; the ids arrive namespaced and are stripped
+        again by the legacy tag writer that owns the WAVES_TIDAL_* tags.
 
         Args:
             track (Track): Track object.
             path_media (pathlib.Path): Path to media file.
             is_parent_album (bool): Whether this is a parent album.
-            media_stream (Stream): Stream object.
+            replay_gain (dict | None, optional): The stream's ReplayGain
+                measurements (album_replay_gain, album_peak_amplitude,
+                track_replay_gain, track_peak_amplitude). Defaults to None.
 
         Returns:
             tuple[bool, pathlib.Path | None, str, pathlib.Path | None]: (Success,
@@ -4410,73 +4664,58 @@ class Download:
         path_lyrics: pathlib.Path | None = None
         lyrics_suffix: str = EXTENSION_LYRICS
         path_cover: pathlib.Path | None = None
+        delivered_facts = self.provider.track_facts(track)
+        facts = resolve_track_facts(
+            delivered_facts,
+            self._origin_facts,
+            self._metadata_source,
+            self._origin_consistent,
+            delivered_title=name_builder_title(track),
+        )
+        replay_gain = replay_gain or {}
+        lyrics_synced: str = ""
+        lyrics_unsynced: str = ""
+        cover_data: bytes = None
         # A track can reach here with no album at all: TIDAL's playlist pages
         # carry entries whose album block is absent, and the re-fetch only
         # replaces an album it already found one to replace. The rest of this
         # method has always guarded for that (see the `if track.album` tests
-        # below); these two spellings did not, and on a playlist that meant an
-        # AttributeError per unlucky track (issue #35).
+        # below); these two spellings must guard too, or a playlist raises an
+        # AttributeError per unlucky track.
         album = getattr(track, "album", None)
-        release_date: str = (
-            album.available_release_date.strftime("%Y-%m-%d")
-            if album and album.available_release_date
-            else album.release_date.strftime("%Y-%m-%d") if album and album.release_date else ""
-        )
-        copy_right: str = track.copyright if hasattr(track, "copyright") and track.copyright else ""
-        isrc: str = track.isrc if hasattr(track, "isrc") and track.isrc else ""
-        lyrics_synced: str = ""
-        lyrics_unsynced: str = ""
-        cover_data: bytes = None
-        url_cover: str | None = None
-        release_type: str = (
-            track.album.type.lower()
-            if hasattr(track, "album") and hasattr(track.album, "type") and track.album.type
-            else ""
-        )
 
-        # Asked before the lyrics and the cover, which take their own moment:
-        # the lookup left when the track started, so this mostly finds it done.
-        genre: str = self._genre_text(track)
-
-        if self.settings.data.lyrics_embed or self.settings.data.lyrics_file:
+        if self._psetting("lyrics_embed", False) or self._psetting("lyrics_file", False):
             _lyrics, lyrics_synced, lyrics_unsynced = self._retrieve_lyrics(track)
 
-        if self.settings.data.lyrics_file:
+        if self._psetting("lyrics_file", False):
             file_lyrics, lyrics_suffix = lyrics_file_choice(
                 lyrics_synced,
                 lyrics_unsynced,
-                getattr(self.settings.data, "lyrics_file_synced_only", False),
+                self._psetting("lyrics_file_synced_only", False),
             )
             if file_lyrics:
                 path_lyrics = self.lyrics_to_file(path_media.parent, file_lyrics)
 
-        cover_dimension = self.settings.data.metadata_cover_dimension
+        cover_dimension = self._psetting("metadata_cover_dimension", CoverDimensions.Px320)
         # The separately-saved cover.jpg can use its own size (see the helpers
         # above); "follow" keeps the historical behaviour of matching embedded.
-        cover_file_pref = getattr(self.settings.data, "metadata_cover_file_dimension", "follow") or "follow"
-        cover_file_dimension = self._cover_file_dimension(cover_dimension, cover_file_pref)
+        cover_file_pref = self._psetting("metadata_cover_file_dimension", "follow") or "follow"
+        cover_file_dim = cover_file_dimension(cover_dimension, cover_file_pref)
         want_cover_file = self._want_cover_file(
-            self.settings.data.cover_album_file,
+            self._psetting("cover_album_file", True),
             is_parent_album,
-            getattr(self.settings.data, "cover_single_track_file", False),
+            self._psetting("cover_single_track_file", False),
         )
 
-        if album is not None and (self.settings.data.metadata_cover_embed or want_cover_file):
+        if album is not None and (self._psetting("metadata_cover_embed", True) or want_cover_file):
             # Do not write CoverDimensions.PxORIGIN to metadata, since it can exceed max metadata file size (>16Mb)
             url_cover = album.image(
                 int(cover_dimension) if cover_dimension != CoverDimensions.PxORIGIN else int(CoverDimensions.Px1280)
             )
             cover_data = self.cover_data_cached(url_cover)
 
-        # Opt-in: rewrite the cover as baseline JPEG for players that cannot
-        # decode progressive ones. Off (the default) hands the bytes through.
-        baseline_mode = self._cover_baseline_mode()
-        cover_data = self._cover_baseline(url_cover, cover_data, baseline_mode)
-
         if cover_data and want_cover_file:
-            cover_data_album_file = self._album_cover_file_baseline(
-                track, cover_data, cover_dimension, cover_file_dimension, baseline_mode
-            )
+            cover_data_album_file = self._album_cover_file_data(track, cover_data, cover_dimension, cover_file_dim)
             # Its own fetch at the file size can fail ('' back) while the
             # embedded one worked: the track still lands, without cover.jpg.
             if cover_data_album_file:
@@ -4484,10 +4723,16 @@ class Download:
 
         metadata_target_upc = MetadataTargetUPC(self.settings.data.metadata_target_upc)
         target_upc: dict[str, str] = METADATA_LOOKUP_UPC[metadata_target_upc]
-        explicit: bool = track.explicit if hasattr(track, "explicit") else False
-        title = name_builder_title(track)
+        album_facts: dict = facts.get("album") or {}
+        explicit: bool = bool(facts.get("explicit", False))
+        title = str(facts.get("title") or name_builder_title(track))
         title += METADATA_EXPLICIT if explicit and self.settings.data.mark_explicit else ""
         borrowed_slot: bool = bool(getattr(track, "waves_identity_id", None))
+        # The albumartist tag honours the opt-in 'Clean album-artist' pref,
+        # read live (see __init__); every other credit is written as credited.
+        album_artist_names = facts.get("album_artists") or []
+        if self._album_artist_tag_clean():
+            album_artist_names = clean_album_artists(album_artist_names)
 
         # `None` values are not allowed.
         #
@@ -4505,25 +4750,25 @@ class Download:
                 path_file=path_media,
                 target_upc=target_upc,
                 # Fetched when either switch is on; embedded only when asked.
-                lyrics=lyrics_synced if self.settings.data.lyrics_embed else "",
-                lyrics_unsynced=lyrics_unsynced if self.settings.data.lyrics_embed else "",
-                copy_right=copy_right,
+                lyrics=lyrics_synced if self._psetting("lyrics_embed", False) else "",
+                lyrics_unsynced=lyrics_unsynced if self._psetting("lyrics_embed", False) else "",
+                copy_right=facts.get("copyright") or "",
                 title=title,
-                artists=[a.name for a in track.artists],
-                album=album.name if album else "",
-                tracknumber=track.track_num,
-                date=release_date,
-                isrc=isrc,
-                albumartist=get_album_artists(track),
+                artists=[name for _artist_id, name in facts.get("artists") or []],
+                album=album_facts.get("name") or "",
+                tracknumber=facts.get("track_num"),
+                date=facts.get("release_date") or "",
+                isrc=facts.get("isrc") or "",
+                albumartist=album_artist_names,
                 # An album fetched through the 404 fallback carries no track
                 # count, and "of 1" beside a real track number is a claim the
                 # data does not support (the naming rule for the same unknown,
                 # in helper/path.py, writes nothing rather than a made-up one).
                 # 0 is how both containers spell "unknown".
-                totaltrack=album.num_tracks if album and album.num_tracks else 0,
-                totaldisc=album.num_volumes if album and album.num_volumes else 0,
-                discnumber=track.volume_num if track.volume_num else 1,
-                cover_data=cover_data if self.settings.data.metadata_cover_embed else None,
+                totaltrack=album_facts.get("num_tracks") or 0,
+                totaldisc=album_facts.get("num_volumes") or 0,
+                discnumber=facts.get("volume_num") or 1,
+                cover_data=cover_data if self._psetting("metadata_cover_embed", True) else None,
                 # A best-of-both member borrowed from another edition (it
                 # carries waves_identity_id) streams under its SOURCE track id,
                 # so the stream's album gain and peak belong to the source
@@ -4532,21 +4777,31 @@ class Download:
                 # identity album's value would not fit a different master
                 # either, so album gain and peak stay unwritten for that file.
                 # Track gain and peak describe this audio and stay.
-                album_replay_gain=None if borrowed_slot else media_stream.album_replay_gain,
-                album_peak_amplitude=None if borrowed_slot else media_stream.album_peak_amplitude,
-                track_replay_gain=media_stream.track_replay_gain,
-                track_peak_amplitude=media_stream.track_peak_amplitude,
-                url_share=track.share_url if track.share_url and self.settings.data.metadata_write_url else "",
+                album_replay_gain=None if borrowed_slot else replay_gain.get("album_replay_gain"),
+                album_peak_amplitude=None if borrowed_slot else replay_gain.get("album_peak_amplitude"),
+                track_replay_gain=replay_gain.get("track_replay_gain"),
+                track_peak_amplitude=replay_gain.get("track_peak_amplitude"),
+                url_share=(
+                    facts.get("share_url") if facts.get("share_url") and self.settings.data.metadata_write_url else ""
+                ),
                 replay_gain_write=self.settings.data.metadata_replay_gain,
-                upc=album.upc if album and album.upc else "",
+                upc=album_facts.get("upc") or "",
                 explicit=explicit,
-                bpm=track.bpm if track.bpm else 0,
-                initial_key=format_initial_key(track.key, track.key_scale, self.settings.data.initial_key_format),
-                release_type=release_type,
-                item_id=_waves_item_id(track),
-                artist_ids=_artist_ids(track),
-                album_artist_ids=get_album_artist_ids(track),
-                genre=genre,
+                bpm=facts.get("bpm") or 0,
+                initial_key=format_initial_key(
+                    facts.get("key"), facts.get("key_scale"), self.settings.data.initial_key_format
+                ),
+                release_type=facts.get("release_type") or "",
+                item_id=facts.get("item_id") or "",
+                artist_ids=facts.get("artist_ids") or [],
+                album_artist_ids=facts.get("album_artist_ids") or [],
+                audio_type=audio_type,
+                write_composer=self._tag_write("composer"),
+                write_copyright=self._tag_write("copyright"),
+                write_isrc=self._tag_write("isrc"),
+                write_bpm=self._tag_write("bpm"),
+                write_initial_key=self._tag_write("initial_key"),
+                write_upc=self._tag_write("upc"),
             )
         except (MetadataUnreadable, MutagenError, OSError):
             # A truncated/unidentifiable file (e.g. a failed download) can't be tagged.
@@ -4590,7 +4845,7 @@ class Download:
         # this tag exists.
         credited = getattr(video, "artists", None) or []
         album_artist = primary if primary is not None and getattr(primary, "name", "") else next(iter(credited), None)
-        artist_ids: list[str] = _artist_ids(video)
+        artist_ids: list[str] = credited_artist_ids(video)
         album_artist_ids: list[str] = (
             [str(album_artist.id)] if album_artist is not None and getattr(album_artist, "id", None) else []
         )
@@ -4599,7 +4854,7 @@ class Download:
         album_name: str = getattr(getattr(video, "album", None), "name", "") or ""
 
         cover_data: bytes | None = None
-        if self.settings.data.metadata_cover_embed and getattr(video, "cover", None):
+        if self._psetting("metadata_cover_embed", True) and getattr(video, "cover", None):
             try:
                 # 1080x720 is the largest thumbnail TIDAL serves for videos.
                 cover_data = self.cover_data_cached(video.image(1080, 720))
@@ -4688,7 +4943,7 @@ class Download:
         file_name_relative, list_media_name, list_media_name_short, items, progress_stdout = download_context
 
         # Set up progress tracking
-        progress: Progress = self.progress_overall if self.progress_overall else self.progress
+        progress: Progress = self.progress_overall or self.progress
         progress_task: TaskID = progress.add_task(
             f"[green]List '{list_media_name_short}'", total=len(items), visible=progress_stdout
         )
@@ -4750,7 +5005,7 @@ class Download:
         the file is called, whether it sorts by number, or what it lists.
 
         The reported paths carry the list's own track order, so the m3u plays
-        back in TIDAL's order (issue #22); the directory set alone cannot say
+        back in TIDAL's order; the directory set alone cannot say
         which track comes first. They are also the m3u's CONTENTS, skipped
         tracks included: re-downloading an album whose songs are already there
         must still list the whole album, not just the one song that was
@@ -4803,7 +5058,9 @@ class Download:
         # spelling has to be preferred at THIS level too: by the time an item
         # is formatted the folder is literal text and the old name could no
         # longer be recovered (see _keep_existing_layout).
-        def build_collection(tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None) -> str:
+        def build_collection(
+            tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True
+        ) -> str:
             return format_path_media(
                 file_template,
                 media,
@@ -4813,6 +5070,10 @@ class Download:
                 tidy_spacing=tidy,
                 illegal_replacement=replacement,
                 illegal_map=mapping,
+                provider_name=self._provider_folder() if provider else "",
+                quality=self._quality_token(),
+                audio_type=self._pinned_audio_type or "",
+                facts=self._path_facts(media),
             )
 
         # The same spelling, finished off by a real item of this collection.
@@ -4820,11 +5081,15 @@ class Download:
         # template's opening {artist_name} (a track's question) survives as
         # literal text, and a folder tested with that in it never exists. The
         # folders compared have to be the ones items actually land in.
-        sample = next((item for item in items if isinstance(item, Track | Video)), None)
+        sample = next(
+            (item for item in items if self.provider.media_kind(item) in (MediaType.TRACK, MediaType.VIDEO)), None
+        )
 
-        def build_probe(tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None) -> str:
+        def build_probe(
+            tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True
+        ) -> str:
             return format_path_media(
-                build_collection(tidy, replacement, mapping),
+                build_collection(tidy, replacement, mapping, provider=provider),
                 sample,
                 self.settings.data.album_track_num_pad_min,
                 1,
@@ -4835,14 +5100,24 @@ class Download:
                 tidy_spacing=tidy,
                 illegal_replacement=replacement,
                 illegal_map=mapping,
+                provider_name=self._provider_folder() if provider else "",
+                quality=self._quality_token(),
+                audio_type=self._pinned_audio_type or "",
+                facts=self._path_facts(sample),
             )
 
-        spellings: list[tuple[bool, str, dict[str, str] | None]] = [
-            (True, self._illegal_replacement(), self._illegal_map()),
-            (True, self._illegal_replacement(), None),
-            (True, "", None),
-            (False, "", None),
+        spellings: list[tuple[bool, str, dict[str, str] | None, bool]] = [
+            (True, self._illegal_replacement(), self._illegal_map(), True),
+            (True, self._illegal_replacement(), None, True),
+            (True, "", None, True),
+            (False, "", None, True),
         ]
+        if "{provider_name}" in file_template:
+            # The provider split is a new spelling era at bake
+            # level too: the pre-split spellings ride along (provider newest
+            # first), so a legacy folder can win the bake instead of leaving
+            # every item to divert one by one below.
+            spellings += [(tidy, replacement, mapping, False) for tidy, replacement, mapping, _ in spellings]
 
         # Older spellings (most recent first) win when their folder exists,
         # exactly as in _keep_existing_layout; the stand-in settings only name
@@ -4917,12 +5192,8 @@ class Download:
         # success. A single failed track therefore left the whole item list being
         # re-submitted forever, re-downloading every sibling on each pass.
         while not progress.tasks[progress_task].finished:
-            # Stream slots plus finishing seats worth of workers (see
-            # _item_workers): the slot ledger, not this pool, is what caps the
-            # streams in flight.
-            workers = self._item_workers()
-            COLLECTION_GAUGE.limit(workers)
-            with futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            COLLECTION_GAUGE.limit(self.settings.data.downloads_concurrent_max)
+            with futures.ThreadPoolExecutor(max_workers=self.settings.data.downloads_concurrent_max) as executor:
                 # Dispatch all download tasks to worker threads
                 download_futures: list[futures.Future] = [
                     executor.submit(
@@ -4970,7 +5241,7 @@ class Download:
             list[pathlib.Path]: The items' landed file paths, in LIST ORDER
             (the submission order of the futures), one per item that produced a
             file. This order is the collection's own track order, which the m3u
-            writer reproduces; a set of directories would lose it (issue #22).
+            writer reproduces; a set of directories would lose it.
         """
         # Report results as they become available
         for future in futures.as_completed(futures_list):
@@ -4986,12 +5257,12 @@ class Download:
 
                 break
 
-            # An item that crashed is THAT item's failure, not the list's. This
-            # used to re-raise, which unwound the whole collection: the outcome
-            # was never judged from the counters, the m3u was never written, and
-            # the row reported whatever the one bad item happened to raise. On a
-            # 500-track playlist a single crash therefore threw away the reading
-            # of 499 successes (issue #35). Counted here, exactly as the merge
+            # An item that crashed is THAT item's failure, not the list's.
+            # Re-raising would unwind the whole collection: the outcome is
+            # never judged from the counters, the m3u is never written, and
+            # the row reports whatever the one bad item happened to raise. On a
+            # 500-track playlist a single crash would therefore throw away the
+            # reading of 499 successes. Counted here, exactly as the merge
             # fan-out counts its own crashes, so _collection_incomplete_reason
             # judges the list.
             try:
@@ -5031,9 +5302,9 @@ class Download:
         refusal, a failed fetch, a stopped download or a name with no free
         variant answers ``(False, <the path it was aiming for>)`` from before
         anything was written there. Neither produced a file, so neither is
-        listed; a first-time album that lost every track used to fail on the
-        playlist's own temp file in a folder that was never created, and that
-        error hid the real reason.
+        listed; a first-time album that lost every track would fail on the
+        playlist's own temp file in a folder that was never created, hiding the
+        real reason.
 
         A reported path is NOT proof this run wrote it. An item found already
         on disk answers ``(True, <the file it found>)``, which is right for the
@@ -5079,250 +5350,23 @@ class Download:
                 landed file paths in ITS OWN track order. When given, each
                 directory's playlist lists exactly these files in this order,
                 which is what makes a downloaded TIDAL playlist play back in
-                TIDAL's order (issue #22). Without it the directory is globbed
-                and sorted by name or file age, which reconstructs an album's
-                order from numbered filenames but knows nothing of a playlist's.
+                TIDAL's order. Without it the directory is globbed and sorted
+                by name or file age, which reconstructs an album's order from
+                numbered filenames but knows nothing of a playlist's.
 
         Returns:
             list[pathlib.Path]: List of created playlist file paths.
         """
-        result: list[pathlib.Path] = []
-
-        # For each dir, which contains tracks
-        for dir_scoped in dirs_scoped:
-            # Spelled like every other name in the library: the per-character
-            # stand-ins first, then the general one, then the spacing tidy. The
-            # old call handed the whole "_<name>.m3u" string to pathvalidate
-            # with no stand-ins at all, so a playlist called "?" came out as the
-            # bare prefix while an album called "?" kept its name (issue #16).
-            name_sanitized: str = sanitize_name_component(name_list, self._illegal_replacement(), self._illegal_map())
-            path_playlist = dir_scoped / sanitize_filename(PLAYLIST_PREFIX + name_sanitized + PLAYLIST_EXTENSION)
-            path_playlist = pathlib.Path(path_file_sanitize(path_playlist, adapt=True))
-
-            # A playlist file the library already holds keeps its name: older
-            # versions wrote .m3u (and, before 0.1.18, a spelling with no
-            # stand-ins that left the doubled space a removed character
-            # created). Writing the new name beside an old one left two files
-            # for one playlist, both ingested by a library scanner, and the
-            # stale one can never be removed (prevention-only cleanup). Same
-            # answer _keep_existing_layout gives every other name; most recent
-            # spelling first.
-            for stem, extension in (
-                (name_sanitized, PLAYLIST_EXTENSION_LEGACY),
-                (name_list, PLAYLIST_EXTENSION_LEGACY),
-            ):
-                if path_playlist.is_file():
-                    break
-
-                path_playlist_legacy = dir_scoped / sanitize_filename(PLAYLIST_PREFIX + stem + extension)
-                path_playlist_legacy = pathlib.Path(path_file_sanitize(path_playlist_legacy, adapt=True))
-
-                if path_playlist_legacy.name != path_playlist.name and path_playlist_legacy.is_file():
-                    path_playlist = path_playlist_legacy
-                    break
-
-            # The NAME only, and as content: the full path spells out the
-            # download root, which normally sits under the user's home.
-            self.fn_logger.debug(f"Playlist: Creating {log_content(path_playlist.name)}")
-
-            path_tracks: list[pathlib.Path] = self._playlist_entries(
-                dir_scoped, is_album, sort_alphabetically, paths_ordered
-            )
-
-            # Write the m3u the way every other file reaches the library: into a
-            # hidden temp sibling, flushed to stable storage, then swapped into
-            # the real name. Opening the real name in truncating mode meant a
-            # crash, a full disk or a share going away mid-write left the user
-            # with an emptied or half-written playlist where a complete one had
-            # been. This is the only file the engine writes at its destination
-            # rather than moving into place, so it needs the swap spelled out
-            # here (the pattern mirrors BaseConfig.save and _stage_and_swap).
-            # Through _staging_path, never hand-decorated: the sanitizer fits
-            # the FINAL name to the caps, and 42 unbudgeted characters on top
-            # of a name at the cap made the temp unopenable, failing the whole
-            # job at its very last step with every track already landed.
-            path_playlist_tmp: pathlib.Path = _staging_path(path_playlist)
-
-            try:
-                with path_playlist_tmp.open(mode="w", encoding="utf-8") as f:
-                    for path_track in path_tracks:
-                        # If it's a symlink write the relative file path to the actual track into the playlist file
-                        if path_track.is_symlink():
-                            try:
-                                media_file_target = path_track.resolve().relative_to(path_track.parent, walk_up=True)
-                            except (OSError, ValueError):
-                                # resolve() can spell the target on a different
-                                # anchor than the link's own folder: a Windows
-                                # mapped drive resolves to its UNC name, so the
-                                # two are 'Z:\...' and '\\server\share\...',
-                                # and relating them raises ValueError. That
-                                # escaped the whole collection job at its very
-                                # last step, with every track already landed and
-                                # a hidden temp left behind on each retry. The
-                                # link's own name plays exactly as well: a
-                                # player follows the link the way it followed
-                                # the relative target.
-                                media_file_target = path_track.name
-                        else:
-                            media_file_target = path_track.name
-
-                        # Write a plain '\n'; text mode ('w') translates it to the platform
-                        # line ending. Using os.linesep here would double-translate on Windows
-                        # ('\r\n' -> '\r\r\n') and corrupt the entries.
-                        f.write(str(media_file_target) + "\n")
-
-                    f.flush()
-                    os.fsync(f.fileno())
-
-                path_playlist_tmp.replace(path_playlist)
-            except (OSError, ValueError):
-                # Never leave the throwaway behind, and never let a failing
-                # cleanup mask what actually went wrong. ValueError is here so
-                # the cleanup is never narrower than the body it guards: a path
-                # comparison inside can raise it, and the temp would then
-                # survive every attempt.
-                with contextlib.suppress(OSError):
-                    path_playlist_tmp.unlink(missing_ok=True)
-
-                raise
-
-            # Written directly at the destination, so it needs the same
-            # AppleDouble cleanup the moved files get.
-            strip_apple_double(path_playlist)
-
-            result.append(path_playlist)
-
-        return result
-
-    @staticmethod
-    def _playlist_entries(
-        dir_scoped: pathlib.Path,
-        is_album: bool,
-        sort_alphabetically: bool,
-        paths_ordered: list[pathlib.Path] | None,
-    ) -> list[pathlib.Path]:
-        """One directory's playlist lines, in playback order (see
-        playlist_populate for the two modes)."""
-        # Every audio file the directory holds, which is what an m3u describes.
-        # The ordered list below is only allowed to REORDER this, never to
-        # shorten it, with one exception: another copy of a file this run
-        # landed (see _without_other_copies) is the same song twice.
-        path_tracks: list[pathlib.Path] = []
-
-        for extension_audio in AudioExtensionsValid:
-            # pathlib's glob matches hidden files, so filter dotfiles: macOS
-            # AppleDouble ghosts (._Track.flac) must never become playlist entries.
-            path_tracks = path_tracks + [
-                p for p in dir_scoped.glob(f"*{extension_audio!s}") if not p.name.startswith(".")
-            ]
-
-        # Sort alphabetically, e.g. if items are prefixed with numbers
-        if sort_alphabetically:
-            path_tracks.sort()
-        elif not is_album:
-            # If it is not an album sort by creation time
-            def _born(p: pathlib.Path) -> float:
-                try:
-                    st = p.stat()
-                except OSError:
-                    # A playlist-folder entry is a symlink into the track tree,
-                    # and a target on a share that is away cannot be stat'd. It
-                    # still belongs in the list, so it sorts oldest-first rather
-                    # than taking the whole write down with it.
-                    return 0.0
-                return float(getattr(st, "st_birthtime", st.st_ctime))
-
-            path_tracks.sort(key=_born)
-
-        if paths_ordered is None:
-            return path_tracks
-
-        # The collection's own order (issue #22), but only when this run can
-        # account for every file in the folder. A run reports back only what it
-        # actually fetched: a re-download skips the tracks you already have, a
-        # cancelled run stops partway, an item can fail. Writing just those, on
-        # a folder that already held a full playlist, REPLACED a complete m3u
-        # with a one-line one, which is the file equivalent of losing the
-        # playlist. So the folder is the truth about what belongs in the list,
-        # and this run's order is applied to it only when the two agree on the
-        # contents; otherwise the folder listing stands, exactly as it did
-        # before order was known at all.
-        # Matched on the key two spellings of one file share, not on the raw
-        # path: a normalizing filesystem (HFS+ externals, several NAS shares)
-        # stores an accented name as NFD while this run wrote it as NFC, and
-        # those compare unequal. Every accented track then missed the folder
-        # set, the counts could not agree, and TIDAL's order stood down on
-        # exactly the libraries most likely to hold accented titles: the
-        # issue #22 symptom, silently, with nothing logged.
-        here: dict[str, pathlib.Path] = {}
-        for landed in path_tracks:
-            here.setdefault(name_comparison_key(str(landed)), landed)
-        # First occurrences only: a playlist can carry the same track twice,
-        # and both occurrences land on ONE file (the name ledger lets an item
-        # retake its own name), so the raw ordered list held that path twice,
-        # could never match the folder's count, and the order fix silently
-        # stood down for exactly those playlists. One entry per file keeps the
-        # order; the duplicate spin is the playlist's business, not the m3u's.
-        seen: set[str] = set()
-        ordered: list[pathlib.Path] = []
-
-        for wrote in paths_ordered:
-            key = name_comparison_key(str(wrote))
-
-            if key in seen or key not in here:
-                continue
-
-            seen.add(key)
-            # The folder's spelling, never this run's: the m3u has to name each
-            # file the way the filesystem actually stores it.
-            ordered.append(here[key])
-
-        # When the folder holds more than this run landed, some of that can be
-        # OTHER COPIES of the very files that landed: a stereo FLAC beside
-        # the Atmos .m4a of the same album (both deliberately kept), or the
-        # old 320k .m4a beside its FLAC upgrade (nothing is ever deleted).
-        # Listing both plays every song twice, alternating formats. A copy
-        # of a landed file is dropped; a file this run cannot account for
-        # (a skipped, failed or cancelled track) stays, and the folder
-        # listing stands as before.
-        kept = path_tracks if len(ordered) == len(path_tracks) else Download._without_other_copies(path_tracks, ordered)
-
-        return ordered if len(ordered) == len(kept) else kept
-
-    @staticmethod
-    def _without_other_copies(path_tracks: list[pathlib.Path], landed: list[pathlib.Path]) -> list[pathlib.Path]:
-        """``path_tracks`` minus every file that is another copy of a landed
-        one: same item id (read off the tags), or the same stem under a
-        different audio extension (an untagged file from an older release
-        can only be told apart by its name)."""
-        landed_keys: set[str] = {name_comparison_key(str(p)) for p in landed}
-        landed_stems: set[str] = {name_comparison_key(p.stem) for p in landed}
-        landed_ids: set[str] = set()
-
-        for p in landed:
-            item_id = read_item_id(p)
-
-            if item_id:
-                landed_ids.add(item_id)
-
-        kept: list[pathlib.Path] = []
-
-        for p in path_tracks:
-            if name_comparison_key(str(p)) in landed_keys:
-                kept.append(p)
-                continue
-
-            item_id = read_item_id(p)
-
-            if item_id and item_id in landed_ids:
-                continue
-
-            if name_comparison_key(p.stem) in landed_stems:
-                continue
-
-            kept.append(p)
-
-        return kept
+        return populate_playlists(
+            dirs_scoped,
+            name_list,
+            is_album=is_album,
+            sort_alphabetically=sort_alphabetically,
+            paths_ordered=paths_ordered,
+            illegal_replacement=self._illegal_replacement(),
+            illegal_map=self._illegal_map(),
+            log=lambda name: self.fn_logger.debug(f"Playlist: Creating {log_content(name)}"),
+        )
 
     def _video_convert(self, path_file: pathlib.Path) -> pathlib.Path:
         """Convert a TS video file to MP4 using ffmpeg.
@@ -5352,16 +5396,24 @@ class Download:
 
         return path_file_out
 
-    def _extract_flac(self, path_media_src: pathlib.Path, event_stop: Event | None = None) -> pathlib.Path:
+    def _extract_flac(
+        self, path_media_src: pathlib.Path, transcode: bool = False, event_stop: Event | None = None
+    ) -> pathlib.Path:
         """Extract FLAC audio from a media file using ffmpeg.
 
+        Lossless sources move containers with a stream copy (no re-encode);
+        scope "all" re-encodes lossy sources instead, keeping
+        their rate and channels (``-c:a flac`` with no resample flags).
+
         The copied-out file is sealed (see _flac_seal_streaminfo) unless the
-        downsample stage is about to re-encode it: ffmpeg's FLAC encoder writes
-        its own correct signature and sample count, so a seal there would be a
-        full decode thrown away.
+        downsample stage is about to re-encode it, or the transcode above
+        already went through ffmpeg's FLAC encoder: both write their own
+        correct signature and sample count, so a seal there would be a full
+        decode thrown away.
 
         Args:
             path_media_src (pathlib.Path): Path to the source media file.
+            transcode (bool): Re-encode into FLAC instead of copying the stream.
             event_stop (Event | None, optional): The item's stop event; a stop
                 cuts the seal's decode short. Defaults to None.
 
@@ -5379,14 +5431,16 @@ class Download:
                 url=path_media_out,
                 map=0,
                 movflags="use_metadata_tags",
-                acodec="copy",
+                acodec="flac" if transcode else "copy",
                 map_metadata="0:g",
                 loglevel="quiet",
             )
         )
 
         ffmpeg.execute()
-        if self._downsample_will_reencode(path_media_out):
+        if transcode:
+            self.fn_logger.debug("FLAC seal skipped: the transcode wrote the file through ffmpeg's FLAC encoder.")
+        elif self._downsample_will_reencode(path_media_out):
             self.fn_logger.debug("FLAC seal skipped: the downsample stage re-encodes this file.")
         else:
             self._flac_seal_streaminfo(path_media_out, event_stop)
@@ -5436,13 +5490,12 @@ class Download:
         it as corrupt even though the audio is intact.
 
         The work is :func:`waves.flac_verify.seal_file`, shared with the
-        Settings tool that checks an existing library: decode once through
-        ffmpeg (about a second for a long hi-res track), hash the PCM the way
-        libFLAC defines it, fill in an unset signature and a wrong sample
-        count in place (34 header bytes, nothing else), leave a matching one
-        alone, and report a set signature that does not match rather than
-        paper over it. A failure of this step only logs: the file is still
-        the same playable file it was.
+        library check: decode once through ffmpeg (about a second for a long
+        hi-res track), hash the PCM the way libFLAC defines it, fill in an
+        unset signature and a wrong sample count in place (34 header bytes,
+        nothing else), leave a matching one alone, and report a set signature
+        that does not match rather than paper over it. A failure of this step
+        only logs: the file is still the same playable file it was.
 
         A stop (the item's own, or the whole run's abort) cuts the decode short
         and leaves the header as delivered, quietly: stopping is not a fault.
@@ -5451,10 +5504,9 @@ class Download:
             path_file (pathlib.Path): The extracted ``.flac`` file.
             event_stop (Event | None, optional): The item's stop event. Defaults to None.
         """
-        event_abort: Event | None = getattr(self, "event_abort", None)
 
         def should_continue() -> bool:
-            return not ((event_abort is not None and event_abort.is_set()) or (event_stop and event_stop.is_set()))
+            return not (self.event_abort.is_set() or (event_stop and event_stop.is_set()))
 
         try:
             row = seal_file(
@@ -5490,6 +5542,11 @@ class Download:
         for bit identical (no re-encode). The remux writes to a sibling temp and
         only replaces the original on success, so a failed remux never loses the
         file (it stays playable in lenient players, just 0:00 in strict ones).
+        The swap is retried on the shared file-operation budget: a brief refusal
+        (a scanner lock, a sharing violation) still lands the remuxed file, and
+        a refusal that outlasts the budget keeps the raw file's original bytes,
+        removes the leftover sibling (best effort: a refusal there is logged,
+        not raised) and returns the input path without raising.
 
         ``container_ext`` (``.m4a``/``.mp4``) is given explicitly because the input
         is the bare merge temp with no extension, so ffmpeg needs it to pick the
@@ -5525,8 +5582,7 @@ class Download:
             self.fn_logger.exception(
                 "Container remux failed; keeping the raw file (may report 0:00 in strict players)."
             )
-            with contextlib.suppress(OSError):
-                path_out.unlink()
+            self._unlink_with_retry(path_out)
 
             return path_file
 
@@ -5534,11 +5590,16 @@ class Download:
             os.replace(path_out, path_file)
             return True
 
-        # A scanner's brief lock on Windows must not fail the whole track: the
-        # raw file is still there and plays, so keep it if the swap never lands.
-        if not self._retry_file_operation(operation, "replace the remuxed container"):
-            with contextlib.suppress(OSError):
-                path_out.unlink()
+        if not self._retry_file_operation(operation, f"replace {log_content(path_out)} -> {log_content(path_file)}"):
+            # The swap never landed: keep the complete merged file rather than
+            # lose the download. The docstring owns the cleanup contract.
+            self.fn_logger.warning(
+                "Container remux replacement failed; keeping the raw file "
+                f"(may report 0:00 in strict players): {log_content(path_file)}"
+            )
+            self._unlink_with_retry(path_out)
+
+            return path_file
 
         return path_file
 
@@ -5584,16 +5645,19 @@ class Download:
         if depth_changing:
             filter_parts.append(f"osf={sample_fmt}")
             filter_parts.append("dither_method=triangular")
-        # soxr is asked for first. It is a build option, and the builds Waves
-        # ships with today (martin-riedl 9.x on macOS and Linux, Homebrew's 9.x)
-        # leave it out, where ffmpeg then fails the whole conversion with
-        # "Error reinitializing filters" and the track failed. Only that
-        # failure moves on to ffmpeg's own resampler, which every build
-        # carries, and a binary found without soxr goes straight there after.
+        # soxr is asked for first. It is a build option: the martin-riedl 9.x
+        # builds Waves installs on macOS and Linux, and Homebrew's 9.x, leave
+        # it out, where ffmpeg fails the whole conversion with "Error
+        # reinitializing filters". Only that failure moves on to ffmpeg's own
+        # resampler, which every build carries, and a binary found without
+        # soxr goes straight there after.
         path_ffmpeg = str(self.settings.data.path_binary_ffmpeg)
+        # One identity for the check and the note: an update landing during
+        # the failed soxr spawn must not be marked without being asked.
+        binary = _ffmpeg_identity(path_ffmpeg)
         filter_swr = "aresample=" + ":".join(["resampler=swr", *filter_parts])
         filters = [filter_swr]
-        if not _soxr_known_missing(path_ffmpeg):
+        if not _soxr_known_missing(binary):
             filters.insert(0, "aresample=" + ":".join(["resampler=soxr", "precision=33", *filter_parts]))
 
         output_kwargs: dict = {
@@ -5611,7 +5675,7 @@ class Download:
 
             for af in filters:
                 ffmpeg = (
-                    FFmpeg(executable=self.settings.data.path_binary_ffmpeg)
+                    FFmpeg(executable=path_ffmpeg)
                     .option("y")
                     .option("hide_banner")
                     .option("nostdin")
@@ -5631,7 +5695,7 @@ class Download:
                     )
                     if not soxr_missing:
                         raise
-                    _note_soxr_missing(path_ffmpeg)
+                    _note_soxr_missing(binary)
                     self.fn_logger.info("Downsample: this ffmpeg has no soxr resampler, using its built-in one.")
                     continue
                 break

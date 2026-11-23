@@ -1,0 +1,2579 @@
+"""Managed runtime + setup wizard (spec section 2, 9.2, 10).
+
+WHAT THIS FENCES OFF
+--------------------
+Turning Apple on starts the in-place setup wizard: the managed runtime
+provisioned FFmpeg-manager style (Waves-built pinned wrapper-v2 image;
+N_m3u8DL-RE downloaded, checksum-verified, tar.gz extracted, chmod'd),
+Apple ID login + 2FA through the wrapper guest's HTTP API, and the
+cookies-only fallback tier in the same wizard. The published image carries
+the guest libraries, so no APK is asked for (spec 10.2 ratification). The
+status light goes live (not set up / runtime ready / signed in / needs
+attention). The container runtime is detected with a gentle start attempt,
+never a silent install. Waves owns its engine configuration surface
+entirely (no user engine config file read or mutated); the wrapper runs on
+a free high port.
+
+The wrapper login + 2FA itself stays human (spec ground rule 6): this
+slice ships the runtime provisioning, the cookies verification, the
+container detect/guide, the isolated config + free-port plumbing, the
+live light, the wrapper login/session plumbing and the wizard state the
+QML renders. The live wrapper session (health probe, idle stop) is session
+supervision's.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import shutil
+import socket
+import tarfile
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from PySide6.QtCore import QCoreApplication
+from settings.fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
+from support.bridge_stub import BridgeStub
+from support.paths import REPO_ROOT
+
+from waves.desktop.backend import WavesBridge
+from waves.desktop.diagnostics.events import ApplicationEvents
+from waves.desktop.providers.lifecycle import provider_contexts
+from waves.desktop.providers.presentation import apple_status
+from waves.events import EventAction, EventCode, EventDomain, EventReferences, FailureScope, application_event
+from waves.providers.apple.runtime import (
+    APK_PINNED_VERSION,
+    NM3U8DLRE_VERSION,
+    WRAPPER_V2_IMAGE,
+    AppleRuntimeManager,
+    describe_setup,
+    detect_container_runtime,
+    gentle_start_command,
+    pick_free_high_port,
+    pinned_release,
+    verify_cookies_file,
+    wrapper_auth_state,
+    wrapper_login,
+    wrapper_login_2fa,
+    wrapper_url,
+)
+from waves.providers.apple.supervision import wrapper_data_host_dir
+
+
+@pytest.fixture(autouse=True)
+def _isolated_path_binaries(monkeypatch):
+    """Bridge light/gate tests must not see the machine's own binaries."""
+    monkeypatch.setattr(shutil, "which", lambda _name, **_kw: None)
+
+
+def _cookies_file(tmp_path: Path, *, with_token: bool = True) -> str:
+    lines = ["# Netscape HTTP Cookie File", ""]
+    if with_token:
+        lines.append(".apple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tabc123")
+    else:
+        lines.append(".apple.com\tTRUE\t/\tTRUE\t0\tsome-other-cookie\txyz")
+    p = tmp_path / "cookies.txt"
+    p.write_text("\n".join(lines), encoding="utf-8")
+    return str(p)
+
+
+# ---- pins ------------------------------------------------------------------ #
+
+
+def test_pins_are_versioned_not_floating():
+    assert WRAPPER_V2_IMAGE.count(":") == 1 and WRAPPER_V2_IMAGE.split(":")[1]
+    assert NM3U8DLRE_VERSION.startswith("v")
+    assert APK_PINNED_VERSION
+    rel = pinned_release("macos", "arm64")
+    assert rel is not None and rel.version == NM3U8DLRE_VERSION
+    assert rel.url.endswith("osx-arm64_20260629.tar.gz")
+    assert rel.sha256  # inline pin: the release publishes no checksum sidecars
+
+
+def test_pin_table_covers_every_desktop_platform_with_a_hash():
+    from waves.providers.apple.runtime import NM3U8DLRE_RELEASES, NM3U8DLRE_SHA256
+
+    for platform_key in [
+        ("macos", "arm64"),
+        ("macos", "amd64"),
+        ("linux", "amd64"),
+        ("linux", "arm64"),
+        ("windows", "amd64"),
+        ("windows", "arm64"),
+    ]:
+        url = NM3U8DLRE_RELEASES[platform_key]
+        assert url.startswith("https://github.com/nilaoda/N_m3u8DL-RE/releases/download/")
+        assert NM3U8DLRE_VERSION in url
+        if platform_key[0] == "windows":
+            assert url.endswith(".zip")
+        else:
+            assert url.endswith(".tar.gz")
+        sha = NM3U8DLRE_SHA256[platform_key]
+        assert len(sha) == 64 and all(c in "0123456789abcdef" for c in sha)
+        rel = pinned_release(*platform_key)
+        assert rel is not None and rel.url == url and rel.sha256 == sha
+
+
+def test_pinned_release_unknown_platform_is_none():
+    assert pinned_release("plan9", "sparc") is None
+
+
+# ---- setup state ------------------------------------------------------------ #
+
+
+def test_describe_setup_precedence():
+    assert describe_setup(enabled=False)["state"] == "off"
+    assert describe_setup(enabled=True)["state"] == "not_set_up"
+    assert describe_setup(enabled=True, runtime_ready=True)["state"] == "runtime_ready"
+    assert describe_setup(enabled=True, cookies_ready=True)["state"] == "signed_in"
+    assert describe_setup(enabled=True, signed_in=True)["state"] == "signed_in"
+    # Cookies alone unlock the tier with no container runtime (spec §2);
+    # the fetch binary is shared plumbing, and the full tier names itself
+    # once a wrapper session exists.
+    assert describe_setup(enabled=True, cookies_ready=True)["tier"] == "cookies"
+    assert describe_setup(enabled=True, runtime_ready=True, cookies_ready=True)["tier"] == "cookies"
+    assert describe_setup(enabled=True, runtime_ready=True)["tier"] == "runtime"
+    # Repair beats everything but off.
+    assert describe_setup(enabled=True, signed_in=True, needs_attention=True)["state"] == "needs_attention"
+    assert describe_setup(enabled=True, runtime_ready=True, signed_in=True)["state"] == "signed_in"
+
+
+def test_apple_status_helper_covers_all_five():
+    assert apple_status(False) == {"state": "off", "word": "Off"}
+    assert apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
+    assert apple_status(True, runtime_ready=True) == {"state": "runtime_ready", "word": "Runtime ready"}
+    assert apple_status(True, cookies_ready=True) == {"state": "signed_in", "word": "Signed in"}
+    assert apple_status(True, signed_in=True) == {"state": "signed_in", "word": "Signed in"}
+    assert apple_status(True, signed_in=True, needs_attention=True)["state"] == "needs_attention"
+
+
+# ---- container runtime ------------------------------------------------------- #
+
+
+def test_detect_container_prefers_docker_when_running():
+    def runner(cmd, **_k):
+        assert cmd[:2] == ["docker", "info"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    found = detect_container_runtime(runner=runner)
+    assert found == {"name": "docker", "available": True, "running": True, "hint": ""}
+
+
+def test_detect_container_daemon_down_guides_not_installs():
+    def runner(cmd, **_k):
+        return SimpleNamespace(returncode=1, stdout="", stderr="Cannot connect")
+
+    found = detect_container_runtime(runner=runner)
+    assert found["available"] is True and found["running"] is False
+    assert "Start" in found["hint"] and "install" not in found["hint"].lower()
+
+
+def test_detect_container_keeps_probing_past_a_stopped_docker():
+    calls = []
+
+    def runner(cmd, **_k):
+        calls.append(cmd[0])
+        if cmd[0] == "docker":
+            return SimpleNamespace(returncode=1, stdout="", stderr="Cannot connect")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    found = detect_container_runtime(runner=runner)
+    assert calls == ["docker", "podman"]
+    assert found == {"name": "podman", "available": True, "running": True, "hint": ""}
+
+
+def test_detect_container_hint_names_the_idle_runtime():
+    def runner(cmd, **_k):
+        if cmd[0] == "docker":
+            raise FileNotFoundError(cmd[0])
+        return SimpleNamespace(returncode=1, stdout="", stderr="stopped")
+
+    found = detect_container_runtime(runner=runner)
+    assert found["name"] == "podman" and found["running"] is False
+    assert "Podman" in found["hint"] and "Docker Desktop" not in found["hint"]
+
+
+def test_detect_container_absent_guides_to_manual_install():
+    def runner(cmd, **_k):
+        raise FileNotFoundError(cmd[0])
+
+    found = detect_container_runtime(runner=runner)
+    assert found == {
+        "name": "",
+        "available": False,
+        "running": False,
+        "hint": (
+            "Install Docker Desktop for your platform, start it, then continue setup. Waves never installs it for you."
+        ),
+    }
+    assert "never installs" in found["hint"].lower() or "never installs" in found["hint"]
+
+
+def test_gentle_start_is_macos_only(monkeypatch):
+    import platform as _platform
+
+    monkeypatch.setattr(_platform, "system", lambda: "Darwin")
+    assert gentle_start_command() == ["open", "-a", "Docker"]
+    assert gentle_start_command("podman") == ["open", "-a", "Podman Desktop"]
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    assert gentle_start_command() is None
+
+
+def test_gentle_start_reports_only_a_launch(monkeypatch):
+    import platform as _platform
+
+    from waves.providers.apple.runtime import attempt_gentle_start
+
+    monkeypatch.setattr(_platform, "system", lambda: "Darwin")
+
+    def _ok(*a, **k):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _failing(*a, **k):
+        return SimpleNamespace(returncode=1, stdout="", stderr="nope")
+
+    assert attempt_gentle_start(runner=_ok, name="podman") is True
+    assert attempt_gentle_start(runner=_failing, name="docker") is False
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    assert attempt_gentle_start(runner=_ok) is False
+
+
+# ---- free high port ----------------------------------------------------------- #
+
+
+def test_picked_port_is_high_and_free():
+    port = pick_free_high_port()
+    assert 49152 <= port <= 65535
+    assert wrapper_url(port) == f"http://127.0.0.1:{port}"
+
+
+def test_pick_exhausted_high_range_raises():
+    with pytest.raises(OSError, match="no free high port"):
+        pick_free_high_port(low=65535, high=65534)
+
+
+def test_pick_skips_a_port_served_on_the_wildcard_address():
+    """A wildcard listener must make its port read taken.
+
+    macOS/BSD let a reuse-borrowing probe bind over it (see
+    ``pick_free_high_port``); the returned port is not *which* port comes next,
+    only that the wildcard-held one is skipped.
+    """
+    listener = candidate = None
+    for port in range(61000, 61050):
+        sock = socket.socket()
+        try:
+            sock.bind(("", port))
+        except OSError:
+            sock.close()
+            continue
+        listener, candidate = sock, port
+        break
+    assert listener is not None and candidate is not None, "no wildcard test port available"
+    with listener:
+        picked = pick_free_high_port(low=candidate, high=candidate + 49)
+        assert picked != candidate
+        assert candidate < picked <= candidate + 49
+
+
+def test_manager_ensure_port_prefers_override_when_free(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    port = mgr.ensure_port(0)
+    assert 1024 <= port <= 65535
+    assert mgr.read_port() == port
+    # A second ensure with the now-taken persisted port still answers a port.
+    again = mgr.ensure_port(port)
+    assert 1024 <= again <= 65535
+
+
+# ---- cookies ------------------------------------------------------------------- #
+
+
+def test_verify_cookies_accepts_signed_in_export(tmp_path):
+    path = _cookies_file(tmp_path, with_token=True)
+    assert verify_cookies_file(path) == {"ok": True, "path": path, "has_token": True}
+
+
+def test_verify_cookies_rejects_export_without_token(tmp_path):
+    with pytest.raises(ValueError, match="media-user-token"):
+        verify_cookies_file(_cookies_file(tmp_path, with_token=False))
+
+
+def test_verify_cookies_ignores_a_token_on_a_lookalike_domain(tmp_path):
+    """The domain field decides: a media-user-token filed under a host that
+    merely ends in "apple.com" is not an Apple session."""
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\nevilapple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no signed-in Apple session"):
+        verify_cookies_file(str(path))
+
+
+def test_verify_cookies_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        verify_cookies_file(str(tmp_path / "missing.txt"))
+
+
+def test_verify_cookies_rejects_an_expired_token(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        f"# Netscape HTTP Cookie File\n.apple.com\tTRUE\t/\tTRUE\t{int(time.time()) - 60}\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="expired"):
+        verify_cookies_file(str(path))
+
+
+def test_verify_cookies_accepts_future_and_session_tokens(tmp_path):
+    future = tmp_path / "future.txt"
+    future.write_text(
+        "# Netscape HTTP Cookie File\n"
+        f".apple.com\tTRUE\t/\tTRUE\t{int(time.time()) + 3600}\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    assert verify_cookies_file(str(future))["has_token"] is True
+
+    # 0 is a session cookie: no static expiry to check, still a valid marker.
+    session = tmp_path / "session.txt"
+    session.write_text(
+        "# Netscape HTTP Cookie File\n.apple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    assert verify_cookies_file(str(session))["has_token"] is True
+
+    session.write_text(".apple.com\tTRUE\t/\tTRUE\t\tmedia-user-token\tabc123\n", encoding="utf-8")
+    assert verify_cookies_file(str(session))["has_token"] is True
+
+
+# ---- wrapper guest session ---------------------------------------------------- #
+
+
+class _WrapperResp:
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _WrapperSession:
+    """A scripted wrapper HTTP session keyed by URL."""
+
+    def __init__(self, get=None, post=None):
+        self._get = get or {}
+        self._post = post or {}
+        self.calls: list = []
+
+    def get(self, url, timeout=10):
+        self.calls.append(("GET", url))
+        return self._get.get(url, _WrapperResp(status_code=404, text="not found"))
+
+    def post(self, url, json=None, timeout=10):
+        self.calls.append(("POST", url))
+        return self._post.get(url, _WrapperResp(status_code=404, text="not found"))
+
+
+def test_wrapper_auth_state_reads_the_guest_me():
+    base = "http://127.0.0.1:51234"
+    session = _WrapperSession(
+        get={
+            f"{base}/me": _WrapperResp(
+                payload={"auth": {"state": "authenticated"}, "account": {"email": "me@example.com"}}
+            )
+        }
+    )
+    assert wrapper_auth_state(base, session=session) == {
+        "reachable": True,
+        "state": "authenticated",
+        "logged_in": True,
+        "account": "me@example.com",
+        "error": "",
+    }
+    # The live guest names the account under auth.apple_id / auth.username.
+    live = _WrapperSession(
+        get={
+            f"{base}/me": _WrapperResp(
+                payload={"auth": {"state": "authenticated", "apple_id": "me@example.com", "username": "me@example.com"}}
+            )
+        }
+    )
+    assert wrapper_auth_state(base, session=live)["account"] == "me@example.com"
+    assert wrapper_auth_state(base, session=live)["logged_in"] is True
+
+
+def test_wrapper_auth_state_is_never_an_exception():
+    base = "http://127.0.0.1:51234"
+    state = wrapper_auth_state(base, session=_WrapperSession())
+    assert state["reachable"] is False and state["state"] == "" and state["error"]
+    assert state["logged_in"] is False
+    assert wrapper_auth_state("", session=_WrapperSession())["reachable"] is False
+    assert wrapper_auth_state("", session=_WrapperSession())["logged_in"] is False
+
+
+def test_wrapper_auth_state_reports_logged_out_and_rejects_malformed():
+    base = "http://127.0.0.1:51234"
+    out = _WrapperSession(get={f"{base}/me": _WrapperResp(payload={"auth": {"state": "logged_out"}})})
+    assert wrapper_auth_state(base, session=out) == {
+        "reachable": True,
+        "state": "logged_out",
+        "logged_in": False,
+        "account": "",
+        "error": "",
+    }
+    malformed = _WrapperSession(get={f"{base}/me": _WrapperResp(payload="not a dict")})
+    result = wrapper_auth_state(base, session=malformed)
+    assert result["reachable"] is True and result["state"] == "" and result["error"]
+    assert result["logged_in"] is False
+    absent = _WrapperSession(get={f"{base}/me": _WrapperResp(payload={})})
+    missing = wrapper_auth_state(base, session=absent)
+    assert missing["reachable"] is True and missing["state"] == ""
+    assert missing["logged_in"] is False
+
+
+def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_logged_in=False)
+    stub.providers["apple"] = provider
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    emitted = []
+    lights = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: lights.append(True))
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_auth_state",
+        lambda url, **kwargs: {
+            "reachable": True,
+            "state": "authenticated",
+            "logged_in": True,
+            "account": "me@example.com",
+            "error": "",
+        },
+    )
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
+
+    result = stub._refresh_apple_wrapper_auth()
+
+    assert result["state"] == "authenticated"
+    assert provider.wrapper_logged_in is True
+    assert emitted, "the wizard's form re-read signal fires on a state change"
+    assert lights, "the status light re-reads the same probe"
+
+
+def test_a_probe_from_before_a_sign_out_cannot_restore_the_session(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_logged_in=False)
+    stub.providers["apple"] = provider
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    stub._apple_session_gen = 1
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+
+    def _probe(url, **kwargs):
+        # A sign-out lands while the /me probe is still in flight.
+        stub._apple_session_gen += 1
+        return {"reachable": True, "state": "authenticated", "logged_in": True, "account": "", "error": ""}
+
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", _probe)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
+
+    result = stub._refresh_apple_wrapper_auth()
+
+    assert result["logged_in"] is True, "the probe's answer is still returned to its caller"
+    assert provider.wrapper_logged_in is False, "the dropped account is not mirrored back"
+    assert stub._apple_wrapper_auth_cache == {"at": 0.0, "result": None}, "the cache is left cleared"
+    assert emitted == [], "no signed-in flip is signalled"
+
+
+def _bind_wrapper_login(stub) -> None:
+    """Bind the wrapper sign-in path onto a stub bridge, Qt-free."""
+    for name in (
+        "_apple_wrapper_login_url",
+        "_apple_wrapper_port_for_job",
+        "_apple_wrapper_port_for_start",
+        "_apple_wrapper_ensure_running",
+        "_apple_sidecar_guard",
+        "_apple_wrapper_login_call",
+        "_run_apple_wrapper_login",
+        "appleWrapperLogin",
+        "appleWrapperSubmit2fa",
+    ):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+
+
+def test_login_provisions_the_wrapper_port_when_none_is_set(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_url="")
+    stub.providers["apple"] = provider
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: 51234)
+    _bind_wrapper_login(stub)
+
+    assert stub._apple_wrapper_login_url() == "http://127.0.0.1:51234"
+    assert provider.wrapper_url == "http://127.0.0.1:51234"
+
+
+def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_url="")
+    stub.providers["apple"] = provider
+    events = []
+
+    class _FreshManager:
+        """A fresh tier: no persisted port until ensure_port picks one."""
+
+        def __init__(self):
+            self.port = 0
+
+        def ensure_port(self, preferred=0):
+            events.append("ensure_port")
+            self.port = 51234
+            return self.port
+
+        def read_port(self):
+            return self.port
+
+    stub._apple_runtime = _FreshManager()
+    stub._apple_supervisor_for_job = lambda: SimpleNamespace(is_ready=lambda port: True)
+    stub._refresh_apple_wrapper_auth = lambda: None
+    _bind_wrapper_login(stub)
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_login",
+        lambda url, username, password: (
+            events.append(("post", url, provider.wrapper_url))
+            or {
+                "ok": True,
+                "needs_2fa": False,
+                "error": "",
+                "url": url,
+                "provider_url": provider.wrapper_url,
+            }
+        ),
+    )
+
+    stub.appleWrapperLogin("me@example.com", "secret")
+
+    assert events == ["ensure_port", ("post", "http://127.0.0.1:51234", "http://127.0.0.1:51234")]
+
+
+def test_start_port_keeps_the_effective_port_when_free_or_serving(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    calls = []
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub)
+
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "free")
+    assert stub._apple_wrapper_port_for_start() == 51234
+
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "wrapper")
+    assert stub._apple_wrapper_port_for_start() == 51234
+
+    assert calls == [], "a usable port is never re-provisioned"
+
+
+def test_start_port_repicks_a_port_another_app_holds(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_url="http://127.0.0.1:49152")
+    stub.providers["apple"] = provider
+    calls = []
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
+    stub._apple_wrapper_port_for_job = lambda: 49152
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub)
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "foreign")
+
+    assert stub._apple_wrapper_port_for_start() == 51235
+    assert calls == [0], "the stolen port gives way to a fresh pick, persisted"
+    assert provider.wrapper_url == "http://127.0.0.1:51235", (
+        "the provider follows the move, or its fetch stack keeps the old port"
+    )
+
+
+def test_start_port_keeps_the_port_when_ownership_cannot_be_told(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    calls = []
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub)
+
+    def _probe_fails(port):
+        raise ConnectionError("probe failed")
+
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", _probe_fails)
+    assert stub._apple_wrapper_port_for_start() == 51234
+    assert calls == [], "a probe that cannot tell must not churn a working sidecar"
+
+
+def test_login_url_follows_a_repicked_port(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_url="")
+    stub.providers["apple"] = provider
+    stub._apple_wrapper_port_for_job = lambda: 49152
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: 51235)
+    _bind_wrapper_login(stub)
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "foreign")
+
+    assert stub._apple_wrapper_login_url() == "http://127.0.0.1:51235"
+    assert provider.wrapper_url == "http://127.0.0.1:51235"
+
+
+def test_login_starts_the_guest_then_posts(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
+    events = []
+
+    class _Sup:
+        def is_ready(self, port):
+            events.append("probe")
+            return False
+
+        def ensure_started(self, http_port):
+            events.append("start")
+            return True
+
+    stub._apple_supervisor_for_job = lambda: _Sup()
+    _bind_wrapper_login(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+
+    result = stub._apple_wrapper_login_call(
+        lambda url: events.append("post") or {"ok": True, "needs_2fa": False, "error": "", "url": url}
+    )
+
+    assert events == ["probe", "start", "post"]
+    assert result["url"] == "http://127.0.0.1:51234"
+
+
+def test_login_keeps_probing_a_guest_that_starts_slowly(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
+    probes = []
+
+    class _Sup:
+        def is_ready(self, port):
+            probes.append(port)
+            return len(probes) >= 3  # the guest answers on the third probe
+
+        def ensure_started(self, http_port):
+            return False  # the supervisor's point-in-time probes missed it
+
+    stub._apple_supervisor_for_job = lambda: _Sup()
+    _bind_wrapper_login(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+
+    result = stub._apple_wrapper_login_call(
+        lambda url: {"ok": True, "needs_2fa": False, "error": "", "url": url}, timeout=5.0
+    )
+
+    assert len(probes) == 3
+    assert result["url"] == "http://127.0.0.1:51234"
+
+
+def test_login_reports_a_guest_that_will_not_start(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
+    stub._apple_supervisor_for_job = lambda: SimpleNamespace(
+        is_ready=lambda port: False, ensure_started=lambda **k: False
+    )
+    _bind_wrapper_login(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+
+    called = []
+    result = stub._apple_wrapper_login_call(
+        lambda url: called.append(url) or {"ok": True, "needs_2fa": False, "error": ""}, timeout=0.05
+    )
+
+    assert called == []
+    assert result["ok"] is False and "did not start" in result["error"]
+
+
+def test_login_names_a_port_provisioning_failure(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_url="")
+
+    def _refuse(preferred=0):
+        raise OSError("permission denied")
+
+    stub._apple_runtime = SimpleNamespace(ensure_port=_refuse)
+    _bind_wrapper_login(stub)
+
+    posted = []
+    result = stub._apple_wrapper_login_call(lambda url: posted.append(url) or {"ok": True})
+
+    assert posted == []
+    assert result["ok"] is False and "could not be provisioned" in result["error"]
+
+
+def test_login_form_shows_busy_until_the_worker_finishes(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    deferred = []
+    stub.threadpool = SimpleNamespace(start=deferred.append)
+    stub._apple_wrapper_login_call = lambda request, timeout=60.0: {
+        "ok": False,
+        "needs_2fa": False,
+        "error": "guest did not answer",
+    }
+    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub)
+    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub)
+    stub._run_apple_wrapper_login = WavesBridge._run_apple_wrapper_login.__get__(stub)
+    stub.appleWrapperLogin = WavesBridge.appleWrapperLogin.__get__(stub)
+    stub._apple_wrapper_auth_cache = {
+        "at": time.time(),
+        "result": {"reachable": True, "state": "", "logged_in": False, "account": "", "error": ""},
+    }
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+
+    stub.appleWrapperLogin("me@example.com", "secret")
+
+    assert emitted, "starting an attempt makes the form re-read"
+    assert stub.appleWrapperAuth()["busy"] is True
+
+    deferred[0].run()
+
+    assert stub.appleWrapperAuth()["busy"] is False
+    assert stub.appleWrapperAuth()["login_error"] == "Sign-in failed. Try again."
+
+
+@pytest.fixture()
+def wrapper_event_bridge(tmp_path):
+    """Exercise the real login owner and queued event relay without a window."""
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_url="", wrapper_logged_in=False)
+    _bind_wrapper_login(stub)
+    stub.apple_wrapper_auth_state = WavesBridge.apple_wrapper_auth_state.__get__(stub)
+    stub.appleWrapperAuth = WavesBridge.appleWrapperAuth.__get__(stub)
+    stub._apple_wrapper_auth_cache = {
+        "at": time.time(),
+        "result": {"reachable": True, "state": "logged_out", "logged_in": False, "account": "", "error": ""},
+    }
+    visible = []
+    delivered = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: visible.append(stub.appleWrapperAuth()))
+    stub._events = ApplicationEvents()
+    stub._events.changed.connect(delivered.append)
+    yield stub, visible, delivered, loop
+    stub._events.close()
+    loop.processEvents()
+
+
+@pytest.mark.parametrize(
+    "header, secrets",
+    [
+        ("Authorization: Basic dXNlcjpwYXNz", ("dXNlcjpwYXNz",)),
+        (
+            'Authorization: Digest username="private-user", nonce="private-nonce", response="private-response"',
+            ("private-user", "private-nonce", "private-response"),
+        ),
+    ],
+)
+def test_failed_wrapper_callback_is_private_in_form_retention_events_and_copy(
+    wrapper_event_bridge, monkeypatch, header, secrets
+):
+    stub, visible, delivered, loop = wrapper_event_bridge
+    raw = f"Request rejected.\n{header}\nCannot open /Volumes/Private Wrapper/Account Folder/cached-login.json"
+    result = {"ok": False, "needs_2fa": False, "error": raw, "_exception": RuntimeError(raw)}
+    copied = []
+    monkeypatch.setattr(
+        "waves.desktop.backend.QtGui.QGuiApplication.clipboard", lambda: SimpleNamespace(setText=copied.append)
+    )
+
+    stub._run_apple_wrapper_login(lambda: result)
+
+    assert delivered == [], "the event waits for queued GUI delivery"
+    assert visible[-1]["login_error"] == "Sign-in failed. Try again."
+    assert stub._apple_wrapper_login_result == {"ok": False, "needs_2fa": False, "error": "Sign-in failed. Try again."}
+    loop.processEvents()
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert payload["scope"] == FailureScope.UNKNOWN
+    assert payload["references"]["provider_id"] == "apple"
+    assert payload["references"]["runtime_id"] == "apple:wrapper-v2"
+    assert payload["summary"] == "Sign-in failed. Try again."
+    assert "RuntimeError" not in payload["summary"] and "RuntimeError" in payload["diagnostics"]
+    retained = stub._events.action(payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert retained is not None
+    assert WavesBridge.eventAction(stub, payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert len(copied) == 1
+    for representation in (
+        repr(visible),
+        repr(stub.appleWrapperAuth()),
+        repr(stub._apple_wrapper_login_result),
+        json.dumps(delivered),
+        repr(retained),
+        retained.copy_text(),
+        copied[0],
+    ):
+        for private in (*secrets, "Private Wrapper", "Account Folder", "cached-login.json"):
+            assert private not in representation
+
+
+def test_wrapper_port_provisioning_failure_has_configuration_scope_and_private_diagnostics(wrapper_event_bridge):
+    stub, visible, delivered, loop = wrapper_event_bridge
+
+    def refuse(preferred=0):
+        raise PermissionError("Cannot write /Volumes/Private Wrapper/private-port.json")
+
+    stub._apple_runtime = SimpleNamespace(ensure_port=refuse)
+    stub._apple_wrapper_port_for_start = lambda: 0
+    posted = []
+
+    stub._run_apple_wrapper_login(
+        lambda: stub._apple_wrapper_login_call(lambda url: posted.append(url) or {"ok": True})
+    )
+    loop.processEvents()
+
+    assert posted == []
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert payload["scope"] == FailureScope.CONFIGURATION
+    assert payload["code"] == EventCode.INVALID_CONFIGURATION
+    assert payload["summary"] == "The wrapper port could not be provisioned. Check setup in Settings."
+    assert visible[-1]["login_error"] == payload["summary"]
+    assert "PermissionError" in payload["diagnostics"] and "PermissionError" not in payload["summary"]
+    retained = stub._events.action(payload["id"], EventAction.COPY_DIAGNOSTICS)
+    assert retained is not None
+    for representation in (
+        repr(visible),
+        repr(stub._apple_wrapper_login_result),
+        json.dumps(delivered),
+        retained.copy_text(),
+    ):
+        assert "Private Wrapper" not in representation and "private-port.json" not in representation
+
+
+def test_wrapper_login_retry_resolves_only_its_notice_after_non_two_factor_success(wrapper_event_bridge):
+    stub, _visible, delivered, loop = wrapper_event_bridge
+    other = application_event(
+        EventDomain.ACCOUNT,
+        "The cookies session needs attention.",
+        key="cookies-account",
+        scope=FailureScope.ACCOUNT,
+        references=EventReferences(provider_id="apple"),
+        actions=(EventAction.COPY_DIAGNOSTICS,),
+    )
+    stub._events.publish(other)
+    stub._run_apple_wrapper_login(lambda: {"ok": False, "needs_2fa": False, "error": "Guest rejected sign-in"})
+    loop.processEvents()
+    wrapper_id = application_event(EventDomain.ACCOUNT, "", key="wrapper-login").id
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is not None
+    assert stub._events.action(other.id, EventAction.COPY_DIAGNOSTICS) is not None
+
+    stub._run_apple_wrapper_login(lambda: {"ok": True, "needs_2fa": True, "error": ""})
+    loop.processEvents()
+    assert stub.appleWrapperAuth()["needs_2fa"] is True
+    assert not any(payload["lifecycle"] == "resolved" for payload in delivered)
+
+    refreshed = []
+    stub._refresh_apple_wrapper_auth = lambda: refreshed.append(True)
+    stub._run_apple_wrapper_login(lambda: {"ok": True, "needs_2fa": False, "error": ""})
+    loop.processEvents()
+
+    assert refreshed == [True]
+    assert stub.appleWrapperAuth()["login_ok"] is True
+    assert stub.appleWrapperAuth()["login_error"] == ""
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is None
+    assert stub._events.action(other.id, EventAction.COPY_DIAGNOSTICS) is not None
+    resolved = [payload for payload in delivered if payload["lifecycle"] == "resolved"]
+    assert [payload["id"] for payload in resolved] == [wrapper_id]
+
+
+def test_revoked_apple_context_drops_the_queued_wrapper_login_notice(wrapper_event_bridge):
+    stub, _visible, delivered, loop = wrapper_event_bridge
+    stub._run_apple_wrapper_login(lambda: {"ok": False, "needs_2fa": False, "error": "Guest rejected sign-in"})
+    assert delivered == []
+
+    provider_contexts(stub).revoke("apple")
+    loop.processEvents()
+
+    assert delivered == []
+    wrapper_id = application_event(EventDomain.ACCOUNT, "", key="wrapper-login").id
+    assert stub._events.action(wrapper_id, EventAction.COPY_DIAGNOSTICS) is None
+
+
+def test_apple_sign_out_clears_the_account_session(tmp_path):
+    cookies = _cookies_file(tmp_path, with_token=True)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=cookies)
+    provider = SimpleNamespace(wrapper_logged_in=True, cookies_path=cookies)
+    stub.providers["apple"] = provider
+    stub._configure_apple_provider = lambda: setattr(provider, "cookies_path", stub.settings.data.apple_cookies_path)
+    stops = []
+    stub._apple_supervisor = SimpleNamespace(stop=lambda: stops.append(True) or True)
+    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub)
+    session_dir = wrapper_data_host_dir(tmp_path)
+    session_dir.mkdir(parents=True)
+    (session_dir / "account.json").write_text("{}", encoding="utf-8")
+    stub._apple_wrapper_auth_cache = {"at": 1.0, "result": {"logged_in": True}}
+    stub._apple_wrapper_login_result = {"ok": True, "needs_2fa": False, "error": ""}
+    stub._apple_session_gen = 0
+    stub._apple_session_expired = True
+    saved = []
+    stub._save_settings = lambda: saved.append(True)
+    events = []
+
+    def _emit(name):
+        return lambda *args: events.append((name, *args))
+
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=_emit("wrapper"))
+    stub.appleStatusChanged = SimpleNamespace(emit=_emit("light"))
+    stub.appleRuntimeStatusChanged = SimpleNamespace(emit=_emit("runtime"))
+    stub.appleRuntimeStateChanged = SimpleNamespace(emit=_emit("state"))
+    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub)
+
+    stub.appleSignOut()
+
+    assert stub.settings.data.apple_cookies_path == ""
+    assert Path(cookies).is_file(), "the user's cookies file stays on disk"
+    assert saved == [True], "clearing a stored cookies path persists the settings"
+    assert stops == [True], "the supervised guest is stopped"
+    assert not session_dir.exists(), "the wrapper session volume is wiped"
+    assert provider.wrapper_logged_in is False and provider.cookies_path == ""
+    assert stub._apple_wrapper_auth_cache is None
+    assert stub._apple_session_gen == 1, "probes from before the sign-out are invalidated"
+    assert stub._apple_session_expired is False
+    assert stub._apple_wrapper_login_result == {"ok": None, "needs_2fa": False, "error": ""}
+    states = [e for e in events if e[0] == "state"]
+    assert states[0][1] == "downloading"
+    assert states[-1] == ("state", "done", "Signed out of Apple Music")
+    assert [e[0] for e in events].count("wrapper") == 1
+    assert "light" in [e[0] for e in events] and "runtime" in [e[0] for e in events]
+
+
+@pytest.mark.parametrize("reachable", [True, False])
+def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path, reachable):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_logged_in=True, cookies_path="")
+    stub.providers["apple"] = provider
+    stub._apple_supervisor = SimpleNamespace(stop=lambda: False, is_ready=lambda port: reachable)
+    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+    session_dir = wrapper_data_host_dir(tmp_path)
+    session_dir.mkdir(parents=True)
+    (session_dir / "account.json").write_text("{}", encoding="utf-8")
+    stub._apple_wrapper_auth_cache = {"at": 1.0, "result": {"logged_in": True}}
+    stub._apple_wrapper_login_result = {"ok": True, "needs_2fa": False, "error": ""}
+    stub._configure_apple_provider = lambda: None
+    stub._save_settings = lambda: None
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append("wrapper"))
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append("light"))
+    stub.appleRuntimeStatusChanged = SimpleNamespace(emit=lambda: emitted.append("runtime"))
+    stub.appleRuntimeStateChanged = SimpleNamespace(emit=lambda state, msg: emitted.append((state, msg)))
+    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub)
+
+    stub.appleSignOut()
+
+    assert (
+        "failed",
+        "The wrapper guest would not stop, so its session was not cleared."
+        " Sign out again when the container runtime is back.",
+    ) in emitted
+    assert session_dir.exists(), "a guest that never stopped keeps its session volume"
+    assert stub._apple_wrapper_auth_cache["result"]["logged_in"] is False
+    assert provider.wrapper_logged_in is True, "the still-running guest's session is not mirrored away"
+    assert stub._apple_wrapper_login_result == {"ok": True, "needs_2fa": False, "error": ""}
+
+
+def test_signout_waits_for_an_inflight_guest_post_then_clears_its_session(tmp_path):
+    from threading import Event, Thread
+
+    stub = _bridge_stub(tmp_path, enabled=True)
+    provider = SimpleNamespace(wrapper_logged_in=False)
+    stub.providers["apple"] = provider
+    stub._configure_apple_provider = lambda: None
+    stub._save_settings = lambda: None
+    entered, release, stopped = Event(), Event(), Event()
+    order = []
+    threads = []
+
+    def start(worker):
+        thread = Thread(target=worker.fn)
+        threads.append(thread)
+        thread.start()
+
+    def stop():
+        order.append("stop")
+        stopped.set()
+        return True
+
+    stub.threadpool = SimpleNamespace(start=start)
+    stub._apple_supervisor_for_job = lambda: SimpleNamespace(stop=stop)
+    stub._refresh_apple_wrapper_auth = lambda: setattr(provider, "wrapper_logged_in", True)
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: None)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub.appleRuntimeStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub.appleRuntimeStateChanged = SimpleNamespace(emit=lambda *_args: None)
+
+    def post():
+        entered.set()
+        assert release.wait(3)
+        order.append("post")
+        return {"ok": True, "needs_2fa": False}
+
+    try:
+        WavesBridge._run_apple_wrapper_login(stub, post)
+        assert entered.wait(3)
+        WavesBridge.appleSignOut(stub)
+        assert not stopped.wait(0.05), "cleanup must follow the guest's credential mutation"
+        release.set()
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(3)
+            assert not thread.is_alive()
+
+    assert order == ["post", "stop"]
+    assert provider.wrapper_logged_in is False
+    assert stub._apple_wrapper_login_result["ok"] is None
+    assert stub._apple_wrapper_auth_cache is None
+
+
+def test_refresh_wrapper_auth_signals_error_text_changes(tmp_path, monkeypatch):
+    # Error text, not just the signed-in flip, drives the form's last-probe line.
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_logged_in=False)
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    results = iter(
+        [
+            {"reachable": False, "state": "", "logged_in": False, "account": "", "error": "Connection refused"},
+            {"reachable": False, "state": "", "logged_in": False, "account": "", "error": "timed out"},
+        ]
+    )
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", lambda url, **kwargs: next(results))
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
+
+    stub._refresh_apple_wrapper_auth()
+    stub._refresh_apple_wrapper_auth()
+
+    assert len(emitted) == 2, "a changed probe error still re-reads the form"
+
+
+def test_wrapper_login_covers_success_two_factor_and_failure():
+    base = "http://127.0.0.1:51234"
+    ok_session = _WrapperSession(post={f"{base}/login": _WrapperResp(status_code=200)})
+    assert wrapper_login(base, "me@example.com", "pw", session=ok_session) == {
+        "ok": True,
+        "needs_2fa": False,
+        "error": "",
+    }
+    two_factor = _WrapperSession(post={f"{base}/login": _WrapperResp(status_code=202)})
+    assert wrapper_login(base, "me@example.com", "pw", session=two_factor)["needs_2fa"] is True
+    refused = _WrapperSession(post={f"{base}/login": _WrapperResp(status_code=401, text="bad credentials")})
+    result = wrapper_login(base, "me@example.com", "pw", session=refused)
+    assert result["ok"] is False and "bad credentials" in result["error"]
+    assert wrapper_login(base, "", "", session=ok_session)["ok"] is False
+
+
+def test_wrapper_login_2fa_posts_the_code():
+    base = "http://127.0.0.1:51234"
+    session = _WrapperSession(post={f"{base}/login/2fa": _WrapperResp(status_code=200)})
+    assert wrapper_login_2fa(base, "123456", session=session) == {"ok": True, "error": ""}
+    assert ("POST", f"{base}/login/2fa") in session.calls
+    assert wrapper_login_2fa(base, "", session=session)["ok"] is False
+    expired = _WrapperSession(post={f"{base}/login/2fa": _WrapperResp(status_code=400, text="code expired")})
+    assert wrapper_login_2fa(base, "000000", session=expired)["ok"] is False
+
+
+# ---- manager: provisioning ------------------------------------------------------- #
+
+
+def _make_tarball(exe_name: str, payload: bytes = b"#!/bin/sh\necho v0\n") -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(name=f"dist/{exe_name}")
+        info.size = len(payload)
+        info.mode = 0o755
+        tf.addfile(info, io.BytesIO(payload))
+    return buf.getvalue()
+
+
+def _make_zip(exe_name: str, payload: bytes = b"MZ-fake-binary") -> bytes:
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr(exe_name, payload)
+    return buf.getvalue()
+
+
+def test_extract_reads_tar_gz_and_zip(tmp_path):
+    from waves.providers.apple.runtime import _exe_name, _extract_binary
+
+    mgr = AppleRuntimeManager(tmp_path)
+    exe = _exe_name(mgr.os_key or "macos")
+    tar_dest, zip_dest = tmp_path / "from-tar", tmp_path / "from-zip"
+    tarball, zipped = tmp_path / "a.tar.gz", tmp_path / "b.zip"
+    tarball.write_bytes(_make_tarball(exe, b"tar-payload"))
+    zipped.write_bytes(_make_zip("N_m3u8DL-RE.exe", b"zip-payload"))
+    _extract_binary(tarball, tar_dest, exe)
+    assert tar_dest.read_bytes() == b"tar-payload"
+    _extract_binary(zipped, zip_dest, "N_m3u8DL-RE.exe")
+    assert zip_dest.read_bytes() == b"zip-payload"
+
+
+def test_extract_rejects_unknown_format(tmp_path):
+    from waves.providers.apple.runtime import _extract_binary
+
+    blob = tmp_path / "a.7z"
+    blob.write_bytes(b"nope")
+    with pytest.raises(ValueError, match="unsupported"):
+        _extract_binary(blob, tmp_path / "out", "N_m3u8DL-RE")
+
+
+class _Resp:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self.headers = {"Content-Length": str(len(payload))}
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size=1 << 16):
+        yield self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _Sess:
+    def __init__(self, payload: bytes, sha_hex: str):
+        self._payload = payload
+        self._sha = sha_hex
+
+    def get(self, url, **_k):
+        if url.endswith(".sha256"):
+            return SimpleNamespace(text=f"{self._sha}  archive.tar.gz\n", raise_for_status=lambda: None)
+        return _Resp(self._payload)
+
+
+def test_install_verifies_extracts_chmods_and_records_provenance(tmp_path, monkeypatch):
+    from waves.providers.apple.runtime import _exe_name
+
+    mgr = AppleRuntimeManager(tmp_path)
+    exe = _exe_name(mgr.os_key or "macos")
+    blob = _make_tarball(exe)
+    sha = hashlib.sha256(blob).hexdigest()
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
+    status = mgr.install(
+        release=__import__("waves.providers.apple.runtime", fromlist=["Nm3u8dlreRelease"]).Nm3u8dlreRelease(
+            version=NM3U8DLRE_VERSION,
+            url="https://example.invalid/N.tar.gz",
+            sha256_url="https://example.invalid/N.tar.gz.sha256",
+        ),
+        session=_Sess(blob, sha),
+    )
+    assert status["state"] == "managed" and status["available"] is True
+    assert mgr.is_installed()
+    import os as _os
+
+    assert _os.access(mgr.binary_path, _os.X_OK)
+    mani = json.loads(mgr.manifest_path.read_text(encoding="utf-8"))
+    assert mani["url"].endswith(".tar.gz") and mani["sha256"] == sha
+
+
+def test_install_fails_closed_without_checksum(tmp_path):
+    from waves.providers.apple.runtime import Nm3u8dlreRelease
+
+    mgr = AppleRuntimeManager(tmp_path)
+    blob = _make_tarball("N_m3u8DL-RE")
+
+    class _NoSha(_Sess):
+        def get(self, url, **_k):
+            if url.endswith(".sha256"):
+                raise ConnectionError("sidecar gone")
+            return _Resp(self._payload)
+
+    with pytest.raises(ValueError, match="no checksum"):
+        mgr.install(
+            release=Nm3u8dlreRelease(
+                version="v0", url="https://example.invalid/N.tar.gz", sha256_url="https://x/s.tar.gz.sha256"
+            ),
+            session=_NoSha(blob, ""),
+        )
+    assert not mgr.is_installed()
+
+
+def test_install_rejects_checksum_mismatch(tmp_path):
+    from waves.providers.apple.runtime import Nm3u8dlreRelease
+
+    mgr = AppleRuntimeManager(tmp_path)
+    blob = _make_tarball("N_m3u8DL-RE")
+    with pytest.raises(ValueError, match="mismatch"):
+        mgr.install(
+            release=Nm3u8dlreRelease(version="v0", url="https://example.invalid/N.tar.gz", sha256="1" * 64),
+            session=_Sess(blob, "2" * 64),
+        )
+    assert not mgr.is_installed()
+
+
+def test_install_honours_a_preset_abort(tmp_path):
+    """The installer's abort contract: a caller that already set the Event (the
+    app quitting, or a cancel affordance) stops the install before the download
+    starts -- no request is made and nothing is staged. The bridge does not pass
+    an Event today; this is the manager-level contract it would ride on."""
+    from threading import Event
+
+    from waves.providers.apple.runtime import AppleRuntimeCancelled, Nm3u8dlreRelease
+
+    mgr = AppleRuntimeManager(tmp_path)
+    abort = Event()
+    abort.set()
+    with pytest.raises(AppleRuntimeCancelled):
+        mgr.install(
+            release=Nm3u8dlreRelease(version="v0", url="https://example.invalid/N.tar.gz"),
+            abort=abort,
+            session=object(),
+        )
+    assert not mgr.binary_path.exists(), "an aborted install stages nothing"
+
+
+def test_a_stale_managed_binary_reports_runtime_stale(tmp_path, monkeypatch):
+    """An installed copy whose recorded provenance predates the shipped
+    pin must not read as current forever, and installing the new pin is the
+    update. An unchanged pin reports current and re-downloads nothing."""
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    mgr = AppleRuntimeManager(tmp_path)
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    sha = hashlib.sha256(blob).hexdigest()
+    pinned = Nm3u8dlreRelease(version="v9.9.9", url="https://example.invalid/N-999.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: pinned)
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "9.9.9")
+    mgr.install(release=pinned, session=_Sess(blob, sha))
+
+    current = mgr.status()
+    assert current["state"] == "managed" and current["runtime_stale"] is False
+
+    # A pin bump: new version, new asset, new checksum. The installed copy is
+    # still executable and does not read as current any more.
+    bumped = Nm3u8dlreRelease(version="v9.9.10", url="https://example.invalid/N-9910.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: bumped)
+    stale = mgr.status()
+    assert stale["state"] == "managed" and stale["runtime_stale"] is True
+
+    # The offered Install (the wizard's apple_update_runtime action) replaces
+    # it, and the copy reads current again.
+    mgr.install(release=bumped, session=_Sess(blob, sha))
+    assert mgr.status()["runtime_stale"] is False
+
+
+def test_remove_clears_binary_and_manifest(tmp_path, monkeypatch):
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    mgr = AppleRuntimeManager(tmp_path)
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
+    mgr.install(
+        release=Nm3u8dlreRelease(
+            version="v", url="https://example.invalid/N.tar.gz", sha256=hashlib.sha256(blob).hexdigest()
+        ),
+        session=_Sess(blob, hashlib.sha256(blob).hexdigest()),
+    )
+    assert mgr.is_installed()
+    assert mgr.remove()["state"] in ("missing", "path")
+
+
+# ---- config isolation -------------------------------------------------------------- #
+
+
+def test_engine_config_lives_under_app_dir_not_home(tmp_path, monkeypatch):
+    mgr = AppleRuntimeManager(tmp_path)
+    monkeypatch.setenv("HOME", "/nonexistent-home-for-test")
+    d = mgr.engine_config_dir()
+    assert str(d).startswith(str(tmp_path))
+    assert ".gamdl" not in str(d)
+    env = mgr.engine_env(port=51234)
+    assert env["WAVES_APPLE_WRAPPER_URL"] == "http://127.0.0.1:51234"
+    assert env["XDG_CONFIG_HOME"] == str(d)
+
+
+def test_no_apple_module_touches_user_gamdl_config():
+    # Waves owns its engine config surface: no Apple path may resolve a file
+    # under the user's home gamdl config. Mentions in comments/docstrings
+    # (documenting the ban) are fine; filesystem access is not.
+    root = REPO_ROOT / "waves" / "providers" / "apple"
+    assert list(root.rglob("*.py")), "no Apple modules found: point this guard at the package's new home"
+    hits = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for marker in ("Path.home()", '"~/.gamdl', "'~/.gamdl", ".gamdl/config", "config.ini"):
+            if marker in text:
+                # The runtime module names the banned path only to say it
+                # never touches it; that is the one allowed mention.
+                if path.name == "runtime.py" and marker in ("config.ini", ".gamdl/config"):
+                    continue
+                hits.append(f"{path.name}: {marker}")
+    assert hits == []
+
+
+# ---- bridge: live light --------------------------------------------------------------- #
+
+
+def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
+    from waves.model.cfg import Settings as ModelSettings
+
+    stub = BridgeStub()
+    data = ModelSettings()
+    data.apple_enabled = enabled
+    data.apple_cookies_path = cookies
+    data.path_binary_nm3u8dlre = ""
+    stub.settings = SimpleNamespace(data=data)
+    stub.providers = {}
+    stub._apple_runtime = AppleRuntimeManager(tmp_path)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
+    stub._apple_runtime_ready = WavesBridge._apple_runtime_ready.__get__(stub)
+    stub._apple_needs_attention = WavesBridge._apple_needs_attention.__get__(stub)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub)
+    stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub)
+    # GUI-thread callers read the cached probe, never a live subprocess:
+    # tests pin a fresh absent cache instead of touching the machine's
+    # runtimes (cold-cache tests set their own stale value explicitly).
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+    stub._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(stub)
+    stub._schedule_apple_container_refresh = WavesBridge._schedule_apple_container_refresh.__get__(
+        stub, SimpleNamespace
+    )
+    stub._scheduled_apple_container_refresh = WavesBridge._scheduled_apple_container_refresh.__get__(
+        stub, SimpleNamespace
+    )
+    stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub)
+    stub._apple_container_serves = WavesBridge._apple_container_serves.__get__(stub)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub.appleStatus = WavesBridge.appleStatus.__get__(stub)
+    stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub)
+    stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
+    stub._end_provider_context = lambda pid, _reason: provider_contexts(stub).revoke(pid)
+    return stub
+
+
+def test_fresh_machine_light_is_not_set_up(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up", "actions": APPLE_SETUP_PILLS}
+
+
+def _stub_binary(tmp_path: Path) -> str:
+    """A stand-in fetch binary so the tier reads ready without a download."""
+    binary = tmp_path / "N_m3u8DL-RE"
+    binary.write_bytes(b"#!/bin/sh\n")
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_cookies_plus_binary_unlocks_signed_in_without_container(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    assert stub.appleStatus() == {
+        "state": "signed_in",
+        "word": "Signed in",
+        "actions": [*APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL],
+    }
+    state = stub.appleSetupState()
+    assert state["light"]["tier"] == "cookies"
+    assert state["cookies"]["verified"] is True
+    assert state["runtime"]["state"] in ("missing", "path")
+
+
+def test_cookies_without_any_binary_is_not_signed_in(tmp_path):
+    # Verified cookies alone cannot start a download: the engine pulls
+    # every tier through N_m3u8DL-RE, so the light stays honest until the
+    # fetch binary below is ready.
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    assert stub.settings.data.path_binary_nm3u8dlre == ""
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up", "actions": APPLE_SETUP_PILLS}
+    state = stub.appleSetupState()
+    assert state["cookies"]["verified"] is True
+    assert state["light"]["state"] == "not_set_up"
+
+
+def test_live_flags_read_the_wrapper_session_without_cookies(tmp_path):
+    # A wrapper-only account is signed in for the light and the wizard, and
+    # names the full tier once the guest reports an authenticated session.
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "docker", "available": True, "running": True, "hint": ""},
+    }
+    stub.apple_wrapper_auth_state = lambda *a, **k: {
+        "reachable": True,
+        "state": "authenticated",
+        "logged_in": True,
+        "account": "me@example.com",
+        "error": "",
+    }
+    flags = stub._apple_live_flags()
+    assert flags["signed_in"] is True and flags["wrapper_ready"] is True
+    assert stub.appleStatus() == {
+        "state": "signed_in",
+        "word": "Signed in",
+        "actions": [*APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL],
+    }
+    state = stub.appleSetupState()
+    assert state["light"]["tier"] == "full"
+    assert state["wrapper"]["auth"]["account"] == "me@example.com"
+
+
+def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+
+    stub._apple_session_expired = True
+    flags = stub._apple_live_flags()
+    assert flags["needs_attention"] is True and flags["signed_in"] is False
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention", "actions": APPLE_SETUP_PILLS}
+
+    # The wrapper probe authenticating again clears the marker (its tokens
+    # refresh on their own) and moves the light back.
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    emitted = []
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_auth_state",
+        lambda url, **kwargs: {
+            "reachable": True,
+            "state": "authenticated",
+            "logged_in": True,
+            "account": "me@example.com",
+            "error": "",
+        },
+    )
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
+
+    stub._refresh_apple_wrapper_auth()
+
+    assert stub._apple_session_expired is False
+    assert emitted, "the light re-reads when the session comes back"
+
+
+def test_a_wrapper_sign_in_does_not_lift_a_cookies_marker(tmp_path, monkeypatch):
+    """The light's half of the rule: the marker remembers which credential failed, so a
+    healthy wrapper probe cannot report a cookies-broken session healed (and
+    the light keeps saying needs attention until the export is proven)."""
+    from waves.providers.apple.engine import AppleCredential
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._apple_mark_session_expired(AppleCredential.COOKIES)
+
+    # A wrapper probe that authenticates is not the cookies proof.
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_auth_state",
+        lambda url, **kwargs: {"reachable": True, "state": "authenticated", "logged_in": True, "account": "me"},
+    )
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub)
+    stub._refresh_apple_wrapper_auth()
+    assert stub._apple_session_expired is True, "the wrapper probe cannot answer for a cookies failure"
+
+    # The cookies proof is its own: a saved export clears the cookies marker.
+    stub._apple_clear_session_expired(AppleCredential.COOKIES)
+    assert stub._apple_session_expired is False
+
+
+def test_a_cookies_proof_does_not_lift_a_wrapper_marker(tmp_path):
+    """The mirror gate: a fresh export is not the wrapper's recovery."""
+    from waves.providers.apple.engine import AppleCredential
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._apple_mark_session_expired(AppleCredential.WRAPPER)
+
+    stub._apple_clear_session_expired(AppleCredential.COOKIES)
+    assert stub._apple_session_expired is True, "a cookies proof cannot answer for a wrapper failure"
+
+    stub._apple_clear_session_expired(AppleCredential.WRAPPER)
+    assert stub._apple_session_expired is False
+
+
+def test_live_flags_downgrade_a_wrapper_session_without_a_runtime(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub.apple_wrapper_auth_state = lambda *a, **k: {
+        "reachable": True,
+        "state": "authenticated",
+        "logged_in": True,
+        "account": "me@example.com",
+        "error": "",
+    }
+
+    # Daemon stopped (runtime installed, not running).
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "docker", "available": True, "running": False, "hint": "start Docker"},
+    }
+    flags = stub._apple_live_flags()
+    assert flags["needs_attention"] is True and flags["signed_in"] is False
+
+    # Runtime missing entirely.
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+    assert stub._apple_live_flags()["needs_attention"] is True
+
+    # A cold (checking) probe does not downgrade while the worker looks.
+    stub._apple_container_cache = None
+    stub.threadpool = SimpleNamespace(start=lambda worker: None)
+    flags = stub._apple_live_flags()
+    assert flags["signed_in"] is True and flags["needs_attention"] is False
+
+    # A running runtime keeps the light green.
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "docker", "available": True, "running": True, "hint": ""},
+    }
+    flags = stub._apple_live_flags()
+    assert flags["signed_in"] is True and flags["needs_attention"] is False
+
+
+def test_live_flags_ignore_container_health_for_the_cookies_tier(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+
+    flags = stub._apple_live_flags()
+
+    assert flags["signed_in"] is True and flags["wrapper_ready"] is False
+    assert flags["needs_attention"] is False
+
+
+def test_apple_provider_is_logged_in_follows_the_wrapper_session():
+    from waves.providers.apple import AppleProvider
+
+    provider = AppleProvider()
+    assert provider.is_logged_in is False
+    provider.wrapper_logged_in = True
+    assert provider.is_logged_in is True
+
+
+def test_stale_cookies_export_needs_attention(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=False))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention", "actions": APPLE_SETUP_PILLS}
+
+
+def test_missing_saved_cookies_file_needs_attention(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=str(tmp_path / "gone.txt"))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention", "actions": APPLE_SETUP_PILLS}
+
+
+def test_managed_runtime_alone_is_runtime_ready(tmp_path, monkeypatch):
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    mgr = AppleRuntimeManager(tmp_path)
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
+    mgr.install(
+        release=Nm3u8dlreRelease(
+            version="v", url="https://example.invalid/N.tar.gz", sha256=hashlib.sha256(blob).hexdigest()
+        ),
+        session=_Sess(blob, hashlib.sha256(blob).hexdigest()),
+    )
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    # What _configure_apple_provider writes after provisioning: the resolved
+    # managed path on the provider.
+    stub.providers["apple"] = SimpleNamespace(cookies_path="", nm3u8dlre_path=str(mgr.binary_path))
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
+
+
+def test_override_binary_counts_as_runtime_ready(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
+
+
+def test_path_binary_counts_as_runtime_ready(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        shutil, "which", lambda name, **_kw: "/usr/local/bin/N_m3u8DL-RE" if name == "N_m3u8DL-RE" else None
+    )
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
+
+
+def test_setup_state_carries_wizard_pins_and_high_port(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    state = stub.appleSetupState()
+    assert state["wrapper"]["image"] == WRAPPER_V2_IMAGE
+    assert "apk" not in state
+    assert state["wrapper"]["auth"] == {}
+    assert state["light"]["next_step"]
+    port = state["wrapper"]["port"]
+    assert port == 0 or 1024 <= port <= 65535
+
+
+def test_setup_state_surfaces_a_stale_managed_runtime(tmp_path, monkeypatch):
+    """The wizard read wires the stale flag through from the manager status:
+    a managed copy whose provenance predates the shipped pin turns
+    the runtime step to attention with the Install action, and a current one
+    keeps the done step."""
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    mgr = stub._apple_runtime
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    sha = hashlib.sha256(blob).hexdigest()
+    old = Nm3u8dlreRelease(version="v0.5.0", url="https://example.invalid/old.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: old)
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.5.0")
+    mgr.install(release=old, session=_Sess(blob, sha))
+    stub.providers["apple"] = SimpleNamespace(cookies_path="", nm3u8dlre_path=str(mgr.binary_path))
+
+    current = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert current["runtime"]["state"] == "done"
+
+    bumped = Nm3u8dlreRelease(version="v0.6.0-beta", url="https://example.invalid/new.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: bumped)
+    stale = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert stale["runtime"]["state"] == "attention"
+    assert stale["runtime"]["action"] == "apple_update_runtime"
+
+
+def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    stub = _bridge_stub(tmp_path)
+    stub._resolve_apple_nm3u8dlre = WavesBridge._resolve_apple_nm3u8dlre.__get__(stub)
+    assert stub._resolve_apple_nm3u8dlre() == ""
+    stub.settings.data.path_binary_nm3u8dlre = "/custom/N_m3u8DL-RE"
+    assert stub._resolve_apple_nm3u8dlre() == "/custom/N_m3u8DL-RE"
+    stub.settings.data.path_binary_nm3u8dlre = ""
+    mgr = stub._apple_runtime
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
+    mgr.install(
+        release=Nm3u8dlreRelease(
+            version="v", url="https://example.invalid/N.tar.gz", sha256=hashlib.sha256(blob).hexdigest()
+        ),
+        session=_Sess(blob, hashlib.sha256(blob).hexdigest()),
+    )
+    assert stub._resolve_apple_nm3u8dlre() == str(mgr.binary_path)
+
+
+# ---- wrapper image -------------------------------------------------------------- #
+
+
+def _ok_runner(seen, digest=""):
+    def run(cmd, **_k):
+        seen.append(cmd)
+        if "image" in cmd and "inspect" in cmd:
+            payload = [f"{WRAPPER_V2_IMAGE.rsplit(':', 1)[0]}@{digest}"] if digest else []
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
+
+    return run
+
+
+def test_ensure_image_pulls_the_pinned_tag_and_records_it(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    assert mgr.image_pulled() is False
+    seen = []
+    mani = mgr.ensure_image(runner=_ok_runner(seen))
+    assert seen[0] == ["docker", "pull", WRAPPER_V2_IMAGE]
+    assert seen[1][:3] == ["docker", "image", "inspect"]
+    assert mani["image"] == WRAPPER_V2_IMAGE
+    assert mgr.image_pulled() is True
+
+
+def test_ensure_image_records_the_pinned_digest(tmp_path):
+    from waves.providers.apple.runtime import WRAPPER_V2_IMAGE_DIGEST
+
+    mgr = AppleRuntimeManager(tmp_path)
+    mani = mgr.ensure_image(runner=_ok_runner([], digest=WRAPPER_V2_IMAGE_DIGEST))
+
+    assert mani["digest"] == WRAPPER_V2_IMAGE_DIGEST
+    assert mani["digest_ok"] is True
+    assert mgr.image_pulled() is True
+
+
+def test_ensure_image_refuses_a_digest_mismatch(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    wrong = "sha256:" + "0" * 64
+
+    with pytest.raises(RuntimeError, match="pinned digest"):
+        mgr.ensure_image(runner=_ok_runner([], digest=wrong))
+
+    assert mgr.image_pulled() is False
+
+
+def test_ensure_image_tolerates_an_unreportable_digest(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+
+    def runner(cmd, **_k):
+        if "image" in cmd and "inspect" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="no format")
+        return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
+
+    mani = mgr.ensure_image(runner=runner)
+
+    assert mani["digest"] == "" and mani["digest_ok"] is None
+    assert mgr.image_pulled() is True
+
+
+def test_the_pin_wins_among_multiple_repo_digests(tmp_path):
+    from waves.providers.apple.runtime import WRAPPER_V2_IMAGE_DIGEST
+
+    mgr = AppleRuntimeManager(tmp_path)
+    repo = WRAPPER_V2_IMAGE.rsplit(":", 1)[0]
+    platform_digest = "sha256:" + "1" * 64
+
+    def runner(cmd, **_k):
+        if "image" in cmd and "inspect" in cmd:
+            payload = [f"{repo}@{platform_digest}", f"{repo}@{WRAPPER_V2_IMAGE_DIGEST}"]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
+
+    mani = mgr.ensure_image(runner=runner)
+
+    assert mani["digest"] == WRAPPER_V2_IMAGE_DIGEST
+    assert mani["digest_ok"] is True
+
+
+def test_a_receipt_that_recorded_a_mismatch_never_reads_pulled(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    mgr.runtime_dir.mkdir(parents=True, exist_ok=True)
+    mgr.image_manifest_path.write_text(
+        json.dumps({"image": WRAPPER_V2_IMAGE, "pulled_at": 1, "digest": "sha256:" + "2" * 64, "digest_ok": False}),
+        encoding="utf-8",
+    )
+
+    assert mgr.image_pulled() is False
+
+
+def test_ensure_image_failure_raises_and_records_nothing(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+
+    def failing(cmd, **_k):
+        return SimpleNamespace(returncode=1, stdout="", stderr="no such image")
+
+    with pytest.raises(RuntimeError, match="Could not pull"):
+        mgr.ensure_image(runner=failing)
+    assert mgr.image_pulled() is False
+
+
+def test_ensure_image_uses_the_detected_compatible_binary(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    seen = []
+    mgr.ensure_image(runner=_ok_runner(seen), binary="podman")
+    assert seen[0] == ["podman", "pull", WRAPPER_V2_IMAGE]
+    assert seen[1][:3] == ["podman", "image", "inspect"]
+
+
+# ---- wizard steps ----------------------------------------------------------------- #
+
+
+def _steps(**over):
+    base = {
+        "enabled": True,
+        "cookies_path": "",
+        "cookies_verified": False,
+        "cookies_error": "",
+        "runtime_state": "missing",
+        "container": {"name": "", "available": False, "running": False, "hint": "Install Docker Desktop"},
+        "wrapper_auth": {},
+        "image_pulled": False,
+        "port": 0,
+    }
+    base.update(over)
+    base.setdefault("port_dirty", False)
+    return {s["key"]: s for s in WavesBridge._apple_wizard_steps(**base)}
+
+
+def test_a_stale_managed_runtime_step_asks_for_an_update():
+    """The setup pass reads the stale managed copy as an
+    attention step whose action is the Install that refreshes it; a current
+    copy keeps the done step and Remove."""
+    steps = _steps(runtime_state="managed", runtime_stale=True)
+    assert steps["runtime"]["state"] == "attention"
+    assert steps["runtime"]["action"] == "apple_update_runtime"
+    assert "newer pinned" in steps["runtime"]["detail"]
+
+    steps = _steps(runtime_state="managed")
+    assert steps["runtime"]["state"] == "done"
+    assert steps["runtime"]["action"] == "apple_remove_runtime"
+
+
+def test_fresh_machine_steps_walk_in_order():
+    steps = _steps(enabled=True)
+    assert list(steps) == ["enable", "cookies", "runtime", "codec_check", "container", "image", "login", "port"]
+    assert steps["enable"]["state"] == "done"
+    assert steps["cookies"]["state"] == "todo"
+    assert steps["cookies"]["action"] == "apple_import_cookies"
+    assert steps["cookies"]["action_label"] == "Import file"
+    assert steps["runtime"]["action"] == "apple_update_runtime"
+    assert steps["runtime"]["action_label"] == "Install"
+    assert steps["container"]["action"] == ""  # absent runtime: guide only, never install
+    assert steps["image"]["action"] == "apple_pull_image"
+    assert steps["image"]["action_label"] == "Pull image"
+    assert steps["login"]["state"] == "todo"
+    assert steps["login"]["action"] == "apple_wrapper_login"
+    assert steps["login"]["action_label"] == "Sign in"
+    assert steps["port"]["action"] == "apple_ensure_port"
+    assert "no apk" in steps["image"]["detail"].lower()
+
+
+@pytest.mark.platform
+def test_container_step_offers_the_gentle_start_when_idle():
+    steps = _steps(container={"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"})
+    assert steps["container"]["state"] == "todo"
+    import platform as _platform
+
+    if _platform.system() == "Darwin":
+        assert steps["container"]["action"] == "apple_start_container"
+        assert steps["container"]["action_label"] == "Start"
+    else:
+        assert steps["container"]["action"] == ""
+
+
+def test_container_step_hides_start_where_no_start_command_exists(monkeypatch):
+    import platform as _platform
+
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    steps = _steps(container={"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"})
+    assert steps["container"]["state"] == "todo"
+    assert steps["container"]["action"] == ""
+    assert (
+        "Start Docker Desktop" in steps["container"]["detail"]
+        or "installed but not running" in steps["container"]["detail"]
+    )
+
+
+def test_container_running_and_runtime_managed_are_done():
+    steps = _steps(
+        cookies_verified=True,
+        runtime_state="managed",
+        container={"name": "docker", "available": True, "running": True, "hint": ""},
+        wrapper_auth={
+            "reachable": True,
+            "state": "authenticated",
+            "logged_in": True,
+            "account": "me@example.com",
+            "error": "",
+        },
+        image_pulled=True,
+        port=51234,
+    )
+    assert steps["cookies"]["state"] == "done"
+    assert steps["runtime"]["state"] == "done"
+    # A finished step's button says what it does: removal wears its own
+    # label, never a next-step mask.
+    assert steps["runtime"]["action"] == "apple_remove_runtime"
+    assert steps["runtime"]["action_label"] == "Remove"
+    assert steps["container"]["state"] == "done" and steps["container"]["action"] == ""
+    assert steps["image"]["state"] == "done"
+    assert steps["login"]["state"] == "done"
+    assert "me@example.com" in steps["login"]["detail"]
+    assert steps["port"]["state"] == "done" and steps["port"]["action"] == ""
+
+
+def test_stale_cookies_are_attention_and_login_still_todo():
+    steps = _steps(cookies_path="/c.txt", cookies_error="no token")
+    assert steps["cookies"]["state"] == "attention"
+    assert steps["login"]["state"] == "todo"
+    assert steps["login"]["action"] == "apple_wrapper_login"
+
+
+def test_login_step_reports_the_last_probe_failure():
+    steps = _steps(wrapper_auth={"reachable": False, "state": "", "account": "", "error": "Connection refused"})
+    assert steps["login"]["state"] == "todo"
+    assert "Connection refused" in steps["login"]["detail"]
+
+
+def test_setup_state_carries_steps_wrapper_auth_and_login_hint(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    state = stub.appleSetupState()
+    assert [s["key"] for s in state["steps"]] == [
+        "enable",
+        "cookies",
+        "runtime",
+        "codec_check",
+        "container",
+        "image",
+        "login",
+        "port",
+    ]
+    assert "apk" not in state
+    assert state["wrapper"]["image_pulled"] is False
+    assert state["wrapper"]["auth"] == {}
+    assert "2FA" in state["wrapper"]["login_hint"]
+
+
+def test_the_codec_check_step_says_when_downloads_skip_it():
+    """Without an ffprobe the runner trusts the delivered codec family; the
+    step is where that shows, as attention rather than a silent skip."""
+    missing = _steps()["codec_check"]
+    assert missing["state"] == "attention"
+    assert "skip the format check" in missing["detail"]
+    assert "Processing (FFmpeg)" in missing["detail"]
+    assert missing["action"] == ""
+
+    ready = _steps(ffprobe_ready=True)["codec_check"]
+    assert ready["state"] == "done"
+    assert "E-AC-3" in ready["detail"]
+
+
+def _tool(folder: Path, name: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    tool = folder / (name + (".exe" if os.name == "nt" else ""))
+    tool.write_bytes(b"#!/bin/sh\n")
+    tool.chmod(0o755)
+    return tool
+
+
+def test_setup_state_finds_ffprobe_where_the_codec_check_looks(tmp_path):
+    """The step reads the same place the runner's codec check does: beside
+    the Apple provider's resolved ffmpeg (PATH holds nothing here, see
+    _isolated_path_binaries), so a managed FFmpeg pair reads done and a
+    managed ffmpeg alone reads attention."""
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    ffmpeg = _tool(tmp_path / "bin", "ffmpeg")
+    stub.providers["apple"] = SimpleNamespace(cookies_path="", ffmpeg_path=str(ffmpeg))
+
+    steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert steps["codec_check"]["state"] == "attention"
+
+    _tool(tmp_path / "bin", "ffprobe")
+    steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert steps["codec_check"]["state"] == "done"
+
+
+def test_setup_state_accepts_an_ffprobe_on_path(tmp_path, monkeypatch):
+    tool = _tool(tmp_path / "on-path", "ffprobe")
+    monkeypatch.setattr(shutil, "which", lambda name, **_kw: str(tool) if name == "ffprobe" else None)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+
+    steps = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert steps["codec_check"]["state"] == "done"
+
+
+def test_container_state_caches_for_gui_callers(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_detect(timeout=10):
+        calls.append(timeout)
+        return {"name": "", "available": False, "running": False, "hint": ""}
+
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", fake_detect)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_container_cache = {"at": 0.0, "result": None}  # cold: no probe completed yet
+    stub.appleSetupState()
+    stub.appleSetupState()
+    assert calls == [3]  # cold probe once, short GUI timeout; the second read rides the cache
+
+
+def test_non_executable_override_does_not_light_the_tier(tmp_path):
+    plain = tmp_path / "not-a-binary.txt"
+    plain.write_bytes(b"nope")
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    stub.settings.data.path_binary_nm3u8dlre = str(plain)
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up", "actions": APPLE_SETUP_PILLS}
+
+
+def test_port_override_wins_over_persisted_pick(tmp_path):
+    from waves.providers.apple.runtime import wrapper_url
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    manager = stub._apple_runtime
+    persisted = manager.ensure_port(0)
+    assert 49152 <= persisted <= 65535
+    stub.settings.data.apple_wrapper_port = 50000 if persisted != 50000 else 50001
+    state = stub.appleSetupState()
+    assert state["wrapper"]["port"] == stub.settings.data.apple_wrapper_port
+    assert state["wrapper"]["url"] == wrapper_url(state["wrapper"]["port"])
+    port_step = next(s for s in state["steps"] if s["key"] == "port")
+    assert port_step["state"] == "done" and port_step["action"] == "apple_ensure_port"
+    # Matching override and persisted pick: nothing to persist.
+    stub.settings.data.apple_wrapper_port = persisted
+    state = stub.appleSetupState()
+    assert state["wrapper"]["port"] == persisted
+    assert next(s for s in state["steps"] if s["key"] == "port")["action"] == ""
+
+
+def test_concurrent_refreshes_coalesce_to_one_probe(tmp_path, monkeypatch):
+    from threading import Lock
+
+    calls = []
+
+    def fake_detect(timeout=10):
+        calls.append(timeout)
+        return {"name": "", "available": False, "running": False, "hint": ""}
+
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", fake_detect)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_container_refresh_lock = Lock()
+    stub._apple_container_cache = {
+        "at": time.time() - 1000.0,
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+    ran = []
+    stub.threadpool = SimpleNamespace(start=lambda worker: ran.append(worker))
+    stub._apple_container_state()
+    stub._apple_container_state()
+    assert len(ran) == 1  # second stale read coalesced onto the in-flight refresh
+    ran[0].run()
+    assert calls == [10]
+    assert stub._apple_container_state() == {"name": "", "available": False, "running": False, "hint": ""}
+    assert calls == [10]
+
+
+def test_stale_cache_serves_immediately_and_refreshes_on_worker(tmp_path, monkeypatch):
+    stale = {"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"}
+    fresh = {"name": "docker", "available": True, "running": True, "hint": ""}
+    calls = []
+
+    def fake_detect(timeout=10):
+        calls.append(timeout)
+        return fresh
+
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", fake_detect)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_container_cache = {"at": time.time() - 1000.0, "result": dict(stale)}
+    started = []
+    stub.threadpool = SimpleNamespace(start=lambda worker: started.append(worker))
+    # Served synchronously with no subprocess: the GUI never waits.
+    assert stub._apple_container_state() == stale
+    assert calls == [] and len(started) == 1
+    # The scheduled worker refreshes the cache with the full timeout.
+    started[0].run()
+    assert calls == [10]
+    assert stub._apple_container_state() == fresh
+
+
+def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
+    seen = []
+    provider = SimpleNamespace(cookies_path="")
+    stub = BridgeStub(
+        providers={"apple": provider},
+        settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    # The no-account click names the cookies step: that tier (or the wrapper
+    # sign-in under it) is the missing piece the click routes to.
+    assert "cookies" in seen
+
+
+def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path):
+    seen = []
+    cookies = _cookies_file(tmp_path, with_token=True)
+    provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path="")
+    stub = BridgeStub(
+        providers={"apple": provider},
+        settings=SimpleNamespace(
+            data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=""),
+        ),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
+    # Cookies verify, but no fetch binary anywhere: the row must not queue
+    # only to fail inside the engine.
+    queued = []
+    stub._download_gate = lambda: "ok"
+    stub._enqueue = lambda *a, **k: queued.append(a)
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    assert queued == []
+    assert "runtime" in seen
+
+
+def test_wrapper_only_account_passes_the_setup_gate(tmp_path):
+    seen = []
+    provider = SimpleNamespace(cookies_path="")
+    stub = BridgeStub(
+        providers={"apple": provider},
+        settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub)
+    stub.apple_wrapper_auth_state = lambda *a, **k: {
+        "reachable": True,
+        "state": "authenticated",
+        "logged_in": True,
+        "account": "me@example.com",
+        "error": "",
+    }
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
+    assert stub._apple_account_ready() is True
+    # The account gate opens, then the binary gate stops the click (no binary):
+    # the wrapper session alone is enough to pass the sign-in gate.
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    assert "runtime" in seen
+    assert not any("sign-in" in str(item) for item in seen)
+
+
+def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
+    seen = []
+    cookies = _cookies_file(tmp_path, with_token=True)
+    binary = _stub_binary(tmp_path)
+    provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path=binary)
+    stub = BridgeStub(
+        providers={"apple": provider},
+        settings=SimpleNamespace(
+            data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=binary),
+        ),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub)
+    stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub)
+    stub._download_gate = lambda: "block"  # stop after the setup gates: no queueing here
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    assert seen == []
+
+
+def test_wait_for_session_returns_when_the_cookies_export_changes(tmp_path, monkeypatch):
+    from threading import Event
+
+    from waves.providers.apple import runner
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("old export", encoding="utf-8")
+    provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="")
+
+    def _change_and_sleep(seconds, job_abort):
+        cookies.write_text("fresh export", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(runner, "sleep_abortable", _change_and_sleep)
+
+    assert runner.wait_for_session(runner.AppleJobHooks(), provider, Event()) is True
+
+
+def test_wait_for_session_returns_false_on_stop(tmp_path):
+    from threading import Event
+
+    from waves.providers.apple import runner
+
+    provider = SimpleNamespace(cookies_path="", wrapper_url="")
+    abort = Event()
+    abort.set()
+
+    assert runner.wait_for_session(runner.AppleJobHooks(), provider, abort) is False
+
+
+def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
+    """The wrapper guest being signed in says nothing about the cookies
+    a fetch needed, and reading it as recovery re-ran the identical failing
+    fetch forever. The cookies hold watches the export alone, and past its
+    bound it hands the row to setup with the cookies words."""
+    from threading import Event
+
+    from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("broken export", encoding="utf-8")
+    provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="http://127.0.0.1:1234")
+    probes: list = []
+    requested: list = []
+    statuses: list = []
+    hooks = runner.AppleJobHooks(
+        refresh_wrapper_auth=lambda **kw: probes.append(kw) or {"logged_in": True},
+        setup_requested=lambda kind: requested.append(kind),
+        status=lambda message: statuses.append(message),
+    )
+    sleeps: list = []
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: sleeps.append(seconds) or True)
+
+    with pytest.raises(runner._AppleSetupRequired) as excinfo:
+        runner.wait_for_session(hooks, provider, Event(), credential=AppleCredential.COOKIES)
+
+    assert "cookies export" in str(excinfo.value)
+    assert "Settings" in str(excinfo.value)
+    assert probes == [], "the wrapper probe cannot answer for a cookies fetch"
+    assert requested == ["setup"], "the row's reason is the wizard's click"
+    assert statuses and "cookies export" in statuses[-1]
+    assert sleeps == [runner.HELD_POLL_SEC], "one poll before the bound"
+
+
+def test_a_dead_runtime_ends_the_wrapper_hold_for_the_down_path():
+    """A wrapper hold whose probe finds the runtime unreachable is not a
+    credential question: it returns at once so the retried fetch runs the
+    runtime's own held-not-failed path (spec §3), never blaming the session."""
+    from threading import Event
+
+    from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
+
+    provider = SimpleNamespace(cookies_path="", wrapper_url="http://127.0.0.1:1234")
+    hooks = runner.AppleJobHooks(refresh_wrapper_auth=lambda **kw: {"reachable": False, "logged_in": False})
+
+    assert runner.wait_for_session(hooks, provider, Event(), credential=AppleCredential.WRAPPER) is True
+
+
+def test_a_wrapper_hold_waits_for_the_guest_not_the_cookies(tmp_path, monkeypatch):
+    """The mirror: an ALAC fetch needs the wrapper, so a changed cookies file
+    is not its recovery and the guest signing back in is."""
+    from threading import Event
+
+    from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("broken export", encoding="utf-8")
+    provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="http://127.0.0.1:1234")
+    state = {"logged_in": False}
+
+    def _probe(**kw):
+        return {"logged_in": state["logged_in"]}
+
+    def _change_cookies_and_sleep(seconds, job_abort):
+        cookies.write_text("fresh export", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", _change_cookies_and_sleep)
+
+    with pytest.raises(runner._AppleSetupRequired) as excinfo:
+        runner.wait_for_session(
+            runner.AppleJobHooks(refresh_wrapper_auth=_probe),
+            provider,
+            Event(),
+            credential=AppleCredential.WRAPPER,
+        )
+    assert "wrapper session" in str(excinfo.value)
+
+    state["logged_in"] = True
+    hooks = runner.AppleJobHooks(refresh_wrapper_auth=_probe)
+    assert runner.wait_for_session(hooks, provider, Event(), credential=AppleCredential.WRAPPER) is True
+
+
+def test_the_landed_credential_reads_the_delivery():
+    """A landing lifts only the marker its own fetch answers for: an ALAC
+    landing (lossless/hi-res stereo) is wrapper proof; Atmos and lossy AAC
+    come through the cookies export (spec §3)."""
+    from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
+
+    assert runner._landed_credential({"quality": {"tier": "LOSSLESS", "audio_mode": "STEREO"}}) is (
+        AppleCredential.WRAPPER
+    )
+    assert (
+        runner._landed_credential({"quality": {"tier": "HI_RES_LOSSLESS", "audio_mode": "STEREO"}})
+        is AppleCredential.WRAPPER
+    )
+    assert runner._landed_credential({"quality": {"tier": "HI-RES", "audio_mode": "DOLBY_ATMOS"}}) is (
+        AppleCredential.COOKIES
+    )
+    assert runner._landed_credential({"quality": {"tier": "HIGH", "audio_mode": "STEREO"}}) is (AppleCredential.COOKIES)
+    assert runner._landed_credential({}) is AppleCredential.COOKIES
+
+
+def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():
+    from waves.desktop.backend import _apple_cookies_resave_changed
+
+    assert _apple_cookies_resave_changed({}, "/old.txt") is False
+    assert _apple_cookies_resave_changed({"apple_cookies_path": "/old.txt"}, "/old.txt") is False
+    assert _apple_cookies_resave_changed({"apple_cookies_path": "/new.txt"}, "/old.txt") is True
+
+
+@pytest.mark.parametrize("admission", ["stopped", "confirmation_required", "incompatible"])
+def test_setup_keeps_cookies_tier_when_wrapper_is_authenticated_but_not_admitted(tmp_path, admission):
+    from waves.providers.apple.runtime_sessions import (
+        AppleRuntimeSessions,
+        RuntimeKind,
+        RuntimeProfile,
+        SessionEvidence,
+    )
+
+    host = _bridge_stub(tmp_path, cookies=_cookies_file(tmp_path, with_token=True))
+    host.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    sessions = AppleRuntimeSessions(tmp_path)
+    profile = RuntimeProfile("apple:wrapper-v2", RuntimeKind.USER_MANAGED, "wrapper-v2")
+    sessions.configure(profile)
+    sessions.observe(profile.id, SessionEvidence(True, True, True, admission != "incompatible"))
+    if admission == "stopped":
+        sessions.stop(profile.id)
+    host._apple_runtime_sessions = sessions
+    host._apple_runtime_profile = profile
+    auth = {"reachable": True, "state": "authenticated", "logged_in": True}
+    host._apple_wrapper_auth_cache = {"result": auth}
+    host.apple_wrapper_auth_state = lambda **kwargs: auth
+    host._apple_container_serves = lambda: True
+    state = WavesBridge.appleSetupState(host)
+    assert state["light"]["tier"] == "cookies"
+    assert state["wrapper"]["auth"]["logged_in"]
+    assert state["execution"]["state"] == admission
+
+
+def _controlled_wrapper_login(tmp_path, *, mode="managed", verified=True):
+    """Control runtime observations while driving real credential actions."""
+    from threading import Event, Lock
+
+    from waves.providers.apple.provider import AppleProvider
+    from waves.providers.apple.runtime_sessions import (
+        AppleRuntimeSessions,
+        RuntimeKind,
+        RuntimeProfile,
+        SessionEvidence,
+    )
+    from waves.providers.apple.supervision import RuntimeIdentity
+
+    host = _bridge_stub(tmp_path)
+    host.settings.data.apple_runtime_mode = mode
+    host.settings.data.apple_wrapper_url = "http://127.0.0.1:50100"
+    host.settings.data.apple_wrapper_port = 50100
+    host.settings.data.apple_wrapper_image_digest = "sha256:" + "a" * 64
+    host.settings.data.apple_wrapper_container = "my-wrapper"
+    sessions = AppleRuntimeSessions(tmp_path)
+    profile = RuntimeProfile("apple:wrapper-v2", RuntimeKind(mode), "wrapper-v2", "http://127.0.0.1:50100")
+    sessions.configure(profile)
+    sessions.observe(profile.id, SessionEvidence(True, True, True, True))
+    assert sessions.confirm_account(profile.id)
+    host._apple_runtime_sessions = sessions
+    host._apple_runtime_profile = profile
+    host._apple_runtime_abort = Event()
+    host.providers["apple"] = AppleProvider()
+    supervisor = SimpleNamespace(
+        configure_runtime=lambda profile, sessions, **kwargs: sessions.configure(profile),
+        verify_identity=lambda *args: verified,
+        observe_identity=lambda *args: RuntimeIdentity(verified, "runtime-1"),
+        ensure_started=lambda **kwargs: True,
+    )
+    host._apple_supervisor = supervisor
+    host._apple_supervisor_for_job = lambda: supervisor
+    workers = []
+    host.threadpool = SimpleNamespace(start=workers.append)
+    _bind_wrapper_login(host)
+    for name in ("_apple_effective_wrapper_port", "_resolve_apple_wrapper_url", "_invalidate_apple_engine_facts"):
+        setattr(host, name, getattr(WavesBridge, name).__get__(host))
+    host._apple_wrapper_port_for_start = host._apple_effective_wrapper_port
+    host.apple_wrapper_auth_state = lambda **kwargs: {"logged_in": False, "state": "logged_out"}
+    host._refresh_apple_wrapper_auth = lambda: None
+    host._waves_prefs = {}
+    host._settings_save_lock = Lock()
+    host._ffmpeg_flag_prefs = {}
+    host._resolve_ffmpeg_locked = lambda: ""
+    host._submit_settings_write = lambda: None
+    host._ffmpeg_source_label = lambda: "missing"
+    host._configure_apple_provider = WavesBridge._configure_apple_provider.__get__(host)
+    host._logged_in = False
+    host._set_status = lambda message: None
+    return host, sessions, workers, supervisor
+
+
+@pytest.mark.parametrize("mode", ["managed", "user_managed"])
+@pytest.mark.parametrize("verified", [None, False, True])
+@pytest.mark.parametrize("action", ["login", "2fa"])
+def test_credentials_are_sent_only_to_a_verified_current_runtime(tmp_path, monkeypatch, mode, verified, action):
+    host, _, workers, _ = _controlled_wrapper_login(tmp_path, mode=mode, verified=verified)
+    posted = []
+    request = lambda url, *args: posted.append(url) or {"ok": True, "needs_2fa": False}
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login", request)
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login_2fa", request)
+    if action == "login":
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+    else:
+        WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+    workers.pop().run()
+    state = WavesBridge.appleWrapperAuth(host)
+    assert posted == (["http://127.0.0.1:50100"] if verified is True else [])
+    assert state["login_ok"] is (verified is True)
+    assert not state["busy"]
+
+
+@pytest.mark.parametrize("action", ["login", "2fa"])
+@pytest.mark.parametrize("change", ["queued_settings", "startup_settings", "startup_stop"])
+def test_runtime_changes_during_a_credential_action_prevent_submission(tmp_path, monkeypatch, action, change):
+    host, sessions, workers, supervisor = _controlled_wrapper_login(tmp_path)
+    posted = []
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_login", lambda *args: posted.append(args) or {"ok": True}
+    )
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_login_2fa", lambda *args: posted.append(args) or {"ok": True}
+    )
+
+    def switch_runtime():
+        WavesBridge.applySettings(
+            host, {"apple_runtime_mode": "user_managed", "apple_wrapper_url": "http://127.0.0.1:50101"}
+        )
+
+    if change.startswith("startup"):
+
+        def start(**kwargs):
+            if change == "startup_settings":
+                switch_runtime()
+            else:
+                WavesBridge.stopAppleExecution(host)
+            return True
+
+        supervisor.ensure_started = start
+    if action == "login":
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+    else:
+        WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+    if change == "queued_settings":
+        switch_runtime()
+    workers.pop(0).run()
+    assert posted == []
+    assert WavesBridge.appleWrapperAuth(host)["login_ok"] is not True
+    assert not sessions.confirm_account("apple:wrapper-v2")
+
+
+@pytest.mark.parametrize("action", ["login", "2fa", "signout"])
+def test_account_actions_revoke_admission_before_the_worker_starts(tmp_path, action):
+    host, sessions, workers, _ = _controlled_wrapper_login(tmp_path)
+    revision = sessions.revision("apple:wrapper-v2")
+    assert WavesBridge.appleExecutionState(host)["state"] == "ready"
+    if action == "login":
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+    elif action == "2fa":
+        WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+    else:
+        WavesBridge.appleSignOut(host)
+    assert len(workers) == 1
+    assert sessions.revision("apple:wrapper-v2") != revision
+    assert WavesBridge.appleExecutionState(host)["state"] == "unknown"
+    assert not WavesBridge.appleExecutionState(host)["can_confirm"]
+
+
+@pytest.mark.qml
+@pytest.mark.parametrize("outcome", ["failure", "success", "exception"])
+@pytest.mark.parametrize("action", ["login", "2fa"])
+def test_replaced_runtime_drops_delayed_login_results_and_notices(tmp_path, monkeypatch, outcome, action):
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    host, _, workers, _ = _controlled_wrapper_login(tmp_path)
+    pending = []
+    delivered = []
+    host._catalogEvent = SimpleNamespace(emit=pending.append)
+    host._events = ApplicationEvents()
+    host._events.changed.connect(delivered.append)
+    attention = application_event(
+        EventDomain.ACCOUNT,
+        "The current wrapper sign-in needs attention.",
+        key="wrapper-login",
+        references=EventReferences(provider_id="apple", runtime_id="apple:wrapper-v2"),
+        actions=(EventAction.COPY_DIAGNOSTICS,),
+    )
+    host._events.publish(attention)
+    loop.processEvents()
+
+    def request(*args):
+        if outcome == "exception":
+            raise RuntimeError("Isolated credential request failed")
+        return {"ok": outcome == "success", "needs_2fa": False, "error": "Isolated sign-in failure"}
+
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login", request)
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login_2fa", request)
+    try:
+        if action == "login":
+            WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+        else:
+            WavesBridge.appleWrapperSubmit2fa(host, "isolated-code")
+        workers.pop(0).run()
+        assert WavesBridge.appleWrapperAuth(host)["login_ok"] is None
+        assert not WavesBridge.appleWrapperAuth(host)["busy"]
+
+        WavesBridge.applySettings(
+            host, {"apple_runtime_mode": "user_managed", "apple_wrapper_url": "http://127.0.0.1:50101"}
+        )
+        for event in pending:
+            WavesBridge._on_catalog_event(host, event)
+        loop.processEvents()
+
+        assert WavesBridge.appleWrapperAuth(host)["login_ok"] is None
+        assert WavesBridge.appleWrapperAuth(host)["login_error"] == ""
+        assert [payload["summary"] for payload in delivered] == [attention.summary]
+        assert host._events.action(attention.id, EventAction.COPY_DIAGNOSTICS) is not None
+    finally:
+        host._events.close()
+        loop.processEvents()
+
+
+@pytest.mark.qml
+def test_login_exception_after_runtime_switch_cannot_restore_the_form(tmp_path, monkeypatch):
+    loop = QCoreApplication.instance() or QCoreApplication([])
+    host, _, workers, _ = _controlled_wrapper_login(tmp_path)
+    pending = []
+    delivered = []
+    host._catalogEvent = SimpleNamespace(emit=pending.append)
+    host._events = ApplicationEvents()
+    host._events.changed.connect(delivered.append)
+
+    def request(*args):
+        WavesBridge.applySettings(
+            host, {"apple_runtime_mode": "user_managed", "apple_wrapper_url": "http://127.0.0.1:50101"}
+        )
+        raise RuntimeError("Isolated credential request failed")
+
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_login", request)
+    try:
+        WavesBridge.appleWrapperLogin(host, "isolated-user", "isolated-password")
+        workers.pop(0).run()
+        for event in pending:
+            WavesBridge._on_catalog_event(host, event)
+        loop.processEvents()
+
+        assert WavesBridge.appleWrapperAuth(host)["login_ok"] is None
+        assert WavesBridge.appleWrapperAuth(host)["login_error"] == ""
+        assert not WavesBridge.appleWrapperAuth(host)["busy"]
+        assert delivered == []
+    finally:
+        host._events.close()
+        loop.processEvents()
+
+
+@pytest.mark.parametrize("state", ["awaiting_2fa", "unknown", "not_logged_out", "", "rejected"])
+def test_wrapper_only_authenticated_state_is_signed_in(state):
+    base = "http://127.0.0.1:51234"
+    session = _WrapperSession(get={f"{base}/me": _WrapperResp(payload={"auth": {"state": state}})})
+    result = wrapper_auth_state(base, session=session)
+    assert result["state"] == state
+    assert result["logged_in"] is False

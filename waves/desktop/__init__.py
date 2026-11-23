@@ -1,0 +1,13 @@
+"""Waves UI, the QML front-end for the download engine.
+
+This package is intentionally self-contained: it imports the engine modules
+(config, download, paths, redaction, providers) through a narrow seam and
+keeps UI concerns out of them. This boundary keeps the engine independent
+of Qt and makes its behavior easier to audit.
+"""
+
+# The app's user-facing version, the one the in-app updater
+# (:mod:`waves.desktop.updates.updater`) compares against the latest GitHub release
+# tag. tests/packaging/test_package_version.py pins pyproject.toml to the same value.
+# Bump both (and tag a matching ``vX.Y.Z`` release) on every shipped build.
+__version__ = "0.1.32"

@@ -1,0 +1,135 @@
+"""A click that is parked behind a prerequisite must not look like a download.
+
+Three entry points answer a click before anything is queued: a metadata
+re-fetch (the object aged out of the browse registry), a playlist-folder-tree
+warm (``{folder_path}`` would resolve blind), and the best-of-both edition
+scan. They publish "preparing", which the buttons draw exactly like queued; a
+"running" state would draw the progress bar instead: a dot matrix at 0% for a
+download that had not started, torn down again a moment later when
+``_download`` publishes "queued". Clicking download on a Browse playlist would
+flash the bar and snap to the queued pill.
+
+With "preparing" published, the hand-over to a real queue row is the cancel X
+arriving and nothing else.
+"""
+
+from __future__ import annotations
+
+import re
+from threading import Lock
+from types import SimpleNamespace
+
+from providers.fakes import StubProvider
+from support.bridge_stub import BridgeStub
+from support.paths import QML_DIR, REPO_ROOT
+
+from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
+
+
+class _Emit:
+    def __init__(self):
+        self.calls: list = []
+
+    def emit(self, *args):
+        self.calls.append(args)
+
+
+class _InlinePool:
+    @staticmethod
+    def start(worker):
+        worker.fn()
+
+
+class _RefetchStub(BridgeStub):
+    _refetch_for_download = WavesBridge._refetch_for_download
+
+    def __init__(self):
+        self._refetch_inflight: set = set()
+        self._logged_in = True
+        self._browse_gen = 0
+        self.downloadState = _Emit()
+        self.statuses: list = []
+        self.threadpool = SimpleNamespace(start=lambda w: None)
+
+    def _set_status(self, text):
+        self.statuses.append(text)
+
+
+def test_a_refetch_never_lights_the_progress_bar():
+    stub = _RefetchStub()
+    stub._refetch_for_download("album", "alb-9")
+
+    assert stub.downloadState.calls == [("alb-9", "preparing")]
+
+
+class _WarmStub(BridgeStub):
+    _warm_folder_tree = WavesBridge._warm_folder_tree
+    _on_folder_tree_warmed = WavesBridge._on_folder_tree_warmed
+    _current_folder_tree = WavesBridge._current_folder_tree
+    downloadPlaylist = WavesBridge.downloadPlaylist
+    _playlist_template = WavesBridge._playlist_template
+    _needs_folder_tree = WavesBridge._needs_folder_tree
+
+    def __init__(self):
+        self._folder_tree = {}
+        self._media_lists_lock = Lock()
+        self._logged_in = True
+        self._tracked_sessions = frozenset({"tidal"})
+        self._tree_warm_waiting: list = []
+        self._tree_warm_inflight: set = set()
+        # Parks the sweep instead of running it, so the button state published
+        # for the wait is the only thing under test.
+        self.threadpool = SimpleNamespace(start=lambda w: None)
+        self.downloadState = _Emit()
+        self._objs = {"playlist": {"p1": SimpleNamespace(id="p1", name="Road Songs")}}
+        self.settings = SimpleNamespace(data=SimpleNamespace(format_playlist="Playlists/{folder_path}{playlist_name}"))
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
+
+    def _set_busy(self, on):
+        pass
+
+
+def test_a_playlist_waiting_on_the_folder_sweep_never_lights_the_progress_bar():
+    stub = _WarmStub()
+    WavesBridge.downloadPlaylist(stub, "p1")
+
+    assert stub.downloadState.calls == [("p1", "preparing")]
+
+
+def test_wiring_every_pre_queue_hand_off_uses_the_same_word():
+    """No entry point may publish "running" for a click it has not queued.
+
+    Wiring pin, not behavior coverage: the five acknowledgements (refetch, apple
+    refetch, playlist warm, category warm, edition scan) share one word the QML
+    buttons draw as a wait. The behavior is proved by the refetch/warm tests
+    above plus test_the_buttons_draw_preparing_as_a_wait_not_a_download below;
+    this fences the count so a sixth hand-off cannot introduce a second word.
+    """
+    src = (REPO_ROOT / "waves" / "desktop" / "backend.py").read_text()
+    # The pre-queue acknowledgements, each immediately before a return or
+    # a worker dispatch. Any of them saying "running" is the progress-bar flash.
+    assert src.count('"preparing")') == 5, "refetch, apple refetch, playlist warm, category warm, edition scan"
+
+
+def test_the_buttons_draw_preparing_as_a_wait_not_a_download():
+    db = (QML_DIR / "domains/downloads/DownloadButton.qml").read_text()
+    di = (QML_DIR / "domains/downloads/DownloadIcon.qml").read_text()
+    bc = (QML_DIR / "domains/browse/BrowseCard.qml").read_text()
+    # Each of the three surfaces that shows a download state derives one flag,
+    # so a state that is not yet queued can never fall through to the idle or
+    # the running arm.
+    assert 'st === "queued" || st === "preparing"' in db
+    assert 'di.st === "queued" || di.st === "preparing"' in di
+    assert 'bc.dlSt === "queued" || bc.dlSt === "preparing"' in bc
+    # The dot matrix stays pinned to a real download.
+    assert re.search(r'active:\s*db\.st === "running"', db)
+
+
+def test_only_a_real_queue_row_can_be_cancelled():
+    """The X keeps its space while preparing (so the label does not shift when
+    the row lands) but is invisible and inert: there is nothing to cancel yet,
+    and a press that silently does nothing is worse than no X at all."""
+    body = (QML_DIR / "domains/downloads/DownloadButton.qml").read_text()
+    assert 'opacity: db.st === "queued" ? 1 : 0' in body
+    assert 'enabled: db.st === "queued"' in body

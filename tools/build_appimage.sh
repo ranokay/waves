@@ -47,25 +47,7 @@ mkdir -p "$APPDIR/usr/lib"
 cp -a "$DIST_TREE" "$APPDIR/usr/lib/waves"
 install -m 0755 "$REPO_ROOT/tools/appimage/AppRun" "$APPDIR/AppRun"
 install -m 0644 "$REPO_ROOT/tools/appimage/waves.desktop" "$APPDIR/waves.desktop"
-install -m 0644 "$REPO_ROOT/waves/ui/icon512.png" "$APPDIR/waves.png"
-
-# AppStream metainfo: catalogs (AppImageHub, software centers) read it for the
-# description and the author-chosen screenshots. Without it the AppImageHub
-# page can only show the screenshot its test VM takes itself, which on a fresh
-# machine with no TIDAL account is the sign-in screen, never the app. Version
-# and date are stamped from pyproject.toml (already pinned to the app's own
-# version by tests/test_package_version.py) so the file cannot lag a release.
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/pyproject.toml" | head -n 1)"
-[ -n "$VERSION" ] || { echo "error: could not read version from pyproject.toml" >&2; exit 1; }
-mkdir -p "$APPDIR/usr/share/metainfo"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$(date -u +%Y-%m-%d)/g" \
-  "$REPO_ROOT/tools/appimage/dev.getwaves.Waves.metainfo.xml" \
-  > "$APPDIR/usr/share/metainfo/dev.getwaves.Waves.metainfo.xml"
-# The metainfo names its launcher by desktop id, and validators (appstreamcli
-# validate-tree) look for that id under usr/share/applications, not at the
-# AppDir root where appimagetool wants its own copy.
-mkdir -p "$APPDIR/usr/share/applications"
-install -m 0644 "$REPO_ROOT/tools/appimage/waves.desktop" "$APPDIR/usr/share/applications/waves.desktop"
+install -m 0644 "$REPO_ROOT/waves/desktop/icons/icon512.png" "$APPDIR/waves.png"
 
 TOOL="$WORK/appimagetool"
 echo "→ fetching appimagetool ${TOOL_VERSION} (${TOOL_ARCH})"

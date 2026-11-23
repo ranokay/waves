@@ -1,0 +1,12 @@
+# Endings: shell, Python, YAML and JSON are LF everywhere.
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+# Blobs git must never touch.
+*.png binary
+*.gif binary
+*.icns binary
+*.ico binary
+*.AppImage binary

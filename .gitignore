@@ -16,7 +16,6 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -43,7 +42,6 @@ pip-delete-this-directory.txt
 
 # Unit test / coverage reports
 htmlcov/
-.tox/
 .nox/
 .coverage
 .coverage.*
@@ -54,6 +52,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 cover/
 
 # Translations
@@ -98,13 +97,6 @@ ipython_config.py
 #   having no cross-platform support, pipenv may install dependencies that don't work, or not
 #   install all needed dependencies.
 #Pipfile.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
 
 # pdm
 #   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
@@ -169,23 +161,71 @@ cython_debug/
 
 # Custom
 
-download/
+# Local media output and scratch download folders. Anchored to the repo root on
+# purpose: an unanchored `downloads/` also matches `tests/downloads/`, hiding
+# its tracked test modules from rg, editors and review tooling.
+/download/
+/downloads/
 
 # Local design mockups (not part of the shipped app)
 mockups/
 
-# Local scratch / working files (not part of the shipped app)
+# Legacy local scratch. Do not create routine artifacts: session state belongs
+# in the agent's private context, and evidence worth keeping belongs in the
+# owning issue or PR. The ignore rule stays so old files cannot be committed.
 scratchpad/
+/.scratch/
 
 # Deferred distribution channels (kept local until each venue actually launches)
 packaging/aur/
 packaging/winget/
 
+# Dated audit working notes and their captured evidence (screenshots, logs,
+# JSON dumps) are local analysis artifacts, not product documentation; promote
+# one deliberately if it should become durable.
+/docs/audits/
+/docs/evidence/
+/docs/research/
+/docs/reports/
+
+# Local test captures, generated reports and profiling output.
+/artifacts/
+/test-results/
+/reports/
+/screenshots/
+/pytest.xml
+/*.prof
+/*.pstats
+
+# Agent working state; durable guidance belongs in AGENTS.md and docs/agents/.
+/STATE.md
+/HANDOFF.md
+/CONTINUATION.md
+/PLAN.md
+/TODO.md
+
+# macOS Finder metadata and the local Apple cookies export used for manual
+# download tests: machine-local, never part of the repo.
+.DS_Store
+cookies.txt
+
+# Apple Music APK/.apkm bundles (maintainer-local, proprietary Apple binaries):
+# the setup wizard and image builds read them from disk, they must never be
+# committed.
+*.apk
+*.apkm
+*.apks
+
+# QML/JS compile caches (qmllint, the QML engine) land next to sources; the
+# Flatpak build tree lands at the repo root (packaging/flatpak/README.md).
+*.jsc
+*.qmlc
+/build-dir/
+/flatpak-repo/
+
 # Local audit / review reports (working notes, never part of the shipped app).
 # Root-scoped on purpose: the tracked tests/ files that mention "audit" in their
-# names are real source and must stay tracked. release.sh publishes the tree of
-# a ref, so untracked files were already safe from the public repo; this closes
-# the other door, a stray `git add -A` sweeping one into a commit.
+# names are real source and must stay tracked.
 /*audit*.md
 
 # Private notes: nothing new in notes/ is ever swept into a commit. The notes

@@ -12,7 +12,7 @@ instead, which is what saturation actually means there, and reads zero
 between jobs. One module-level gauge per pool kind, registered once at
 startup in backend.py beside the QThreadPools.
 
-Grew out of the scanner's private gauge (waves/library_index.py), promoted
+Grew out of the scanner's private gauge (waves/library/index.py), promoted
 here so the engine can use it without importing the scanner, and the scanner
 without importing the engine. Deliberately Qt-free: the download engine
 imports this and must stay importable without PySide6.
@@ -44,24 +44,15 @@ class PoolGauge:
         """Hold for the duration of one work item. The lock costs about a
         microsecond against work items that are a network round trip or a tag
         read, and a plain ``+= 1`` from eight threads is not atomic."""
-        self.start()
-        try:
-            yield
-        finally:
-            self.stop()
-
-    def start(self) -> None:
-        """One more item in flight. For a hold that does not fit a ``with``
-        block (the download slots: taken in one method, given back in
-        another); pair every start with exactly one stop."""
         with self._lock:
             self._busy += 1
             if self._busy > self.peak:
                 self.peak = self._busy
-
-    def stop(self) -> None:
-        with self._lock:
-            self._busy = max(0, self._busy - 1)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._busy -= 1
 
     def activeThreadCount(self) -> int:  # (Qt's spelling: the sampler calls this)
         return self._busy

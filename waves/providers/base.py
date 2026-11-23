@@ -1,0 +1,1150 @@
+"""The Provider seam's neutral half: the interface every music provider plugs
+into, and the Waves-owned vocabulary it speaks.
+
+Deliberately import-light (standard library only -- no tidalapi, no Qt): the
+neutral types are consumable by the engine, the bridge, the tests, and the
+second provider without dragging anyone else along.
+
+The Provider seam (spec §4) is one fused
+interface that TIDAL and Apple Music both implement, the row-dict schema as
+the contract with QML, namespaced string ids everywhere new, and one
+Waves-owned quality scale with the audio type (stereo / Dolby Atmos)
+orthogonal to it.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import NamedTuple, Protocol
+from urllib.parse import urlsplit
+
+# ============================================================================
+# The row-dict schema (the catalog contract with QML)
+# ============================================================================
+#
+# Every provider serves the SAME plain dicts the QML consumes today; the
+# field names below are the contract, spelled exactly as the bridge's dict
+# builders write them. New-provider rows use namespaced ids such as
+# ``apple:123``. Existing TIDAL rows keep their shipped bare ids, which every
+# namespaced reader interprets as TIDAL. A provider keeps the engine's raw id
+# behind that row id for later lookup. A missing fact is "", 0, -1 or None as
+# noted; rows are never partial-keyed because a QML ListModel freezes its roles
+# on the first row appended.
+#
+# Result rows (search payload, library pages, artist pages, browse cards):
+#   artist row:   {id, name, art, roles, popularity}
+#                   art: cover URL at 320px, best-effort "" when absent.
+#                   roles: display words for the artist's credits ("Artist"
+#                   when none). popularity: 0-100, or -1 until enriched.
+#   album row:    {id, title, artist, artist_id, artists, art, year, date,
+#                  tracks, duration_sec, quality, popularity, explicit, added}
+#                   artist: the album-artist line; artist_id: its single id;
+#                   artists: the full credited list [{id, name, roles}];
+#                   tracks: track count (0 unknown); duration_sec: release
+#                   length in raw seconds (0 unknown) -- the presence
+#                   matcher's duration witness; quality: the advertised tier
+#                   word ("" unknown); date: "YYYY-MM-DD" or ""; added: the
+#                   user's date-added "YYYY-MM-DDTHH:MM:SS" or "".
+#   track row:    {id, title, artist, artist_id, artists, album, album_id,
+#                  num, vol, art, year, date, duration, duration_sec,
+#                  quality, popularity, explicit, added}
+#                   duration: "M:SS"; num/vol: track and volume numbers
+#                   (0/1 defaults); art: 160px thumb.
+#   video row:    {id, title, artist, artists, art, art_big, duration,
+#                  explicit, added, date, quality}
+#                   art/art_big: 160x107 / 750x500 stills (videos are sized
+#                   as a width-height PAIR, not a square); quality: the
+#                   resolution label ("1080p", "" unknown).
+#   playlist row: {id, title, art, tracks, creator, added, kind, sub, path,
+#                  plCount}
+#                   kind: "playlist"; sub/path/plCount: "" / "" / 0 here,
+#                   filled by the bridge for playlist FOLDER rows, which
+#                   share this exact key set (kind: "folder") so a QML
+#                   ListModel never sees a new role mid-list.
+#   mix row:      {id, title, art, subtitle, added}
+#
+# Payloads built from those rows:
+#   search payload (the short-lived cache's provider groups; the page folds
+#   them into its unified sections):
+#     {groups: [{provider, artists, albums, tracks, videos, playlists, mixes,
+#                top, error}, ...]}
+#     One group per provider that answered, in arrival order, carrying the
+#     buckets its ``search_sections`` declares (a bucket it does not answer is
+#     absent), its best match (``top``: a row dict tagged with its kind
+#     ("album"/"track"/"video"/"playlist"; an artist top hit is dropped) or
+#     None) and its own failure words in ``error`` (empty on success). TIDAL's
+#     ``top`` comes from the reply's ``top_hit``; every other provider answers
+#     ``top`` itself.
+#   album expansion rows:  {id, num, title, duration, popularity, explicit}
+#     num: 1-based position in the album.
+#   playlist expansion rows:
+#     {id, kind, num, title, artist, duration, popularity, explicit}
+#     kind: "track" or "video" (the row routes its own download).
+#   artist page payload:
+#     {id, name, art, bio, albums: [album row], eps: [album row],
+#      tracks: [track row]}
+#     plus the bridge's context flags (refresh, libraryScoped).
+#   My Tidal home payload:
+#     sections: [{rowKind: "cards"|"tracks", title, target, items: [row]}]
+#     items additionally tagged with their row kind ("album"/"track").
+#
+# Apple builds these rows inside its provider. TIDAL still hands its existing
+# engine objects to the bridge's legacy builders so its shipped search behavior
+# stays unchanged. Neither form crosses into QML until it matches the schema
+# above. Object-method calls on an already-resolved object (an album's
+# .tracks(), an artist's .get_albums()) are the bridge's page-building policy,
+# not session reaches; they move behind the interface when those pages become
+# provider-routed.
+# The one delivered-quality ladder, lowest to highest, is Waves' own
+# (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS) and lives in waves.constants:
+# shared vocabulary spoken by the model layer, the ownership
+# store and the bridge -- none of which may import a provider package. This
+# interface speaks it in its signatures; implementations and callers import
+# the ladder (and its rank/fold helpers) from waves.constants directly.
+from waves.constants import MediaType, QualityTier
+from waves.events import Failure
+from waves.metadata.catalog_identity import CatalogIdentity, CatalogLookup
+from waves.providers.catalog_offers import AvailabilityEvidence, OfferConstraints
+
+logger = logging.getLogger(__name__)
+
+
+class RowValidationError(ValueError):
+    """A row dict that breaks the schema above; names the kind and the key."""
+
+
+# Required keys per row kind, in schema order. Extra keys (the album row's
+# "listed") are allowed: rows are never partial-keyed, but a view may carry
+# more than QML needs.
+_ROW_REQUIRED: dict[str, tuple[str, ...]] = {
+    "artist": ("id", "name", "art", "roles", "popularity"),
+    "album": (
+        "id",
+        "title",
+        "artist",
+        "artist_id",
+        "artists",
+        "art",
+        "year",
+        "date",
+        "tracks",
+        "duration_sec",
+        "quality",
+        "popularity",
+        "explicit",
+        "added",
+    ),
+    "track": (
+        "id",
+        "title",
+        "artist",
+        "artist_id",
+        "artists",
+        "album",
+        "album_id",
+        "num",
+        "vol",
+        "art",
+        "year",
+        "date",
+        "duration",
+        "duration_sec",
+        "quality",
+        "popularity",
+        "explicit",
+        "added",
+    ),
+    "video": (
+        "id",
+        "title",
+        "artist",
+        "artists",
+        "art",
+        "art_big",
+        "duration",
+        "explicit",
+        "added",
+        "date",
+        "quality",
+    ),
+    # Playlist folders share this exact key set (kind "folder"), so a QML
+    # ListModel never sees a new role mid-list.
+    "playlist": (
+        "id",
+        "title",
+        "art",
+        "tracks",
+        "creator",
+        "added",
+        "kind",
+        "sub",
+        "path",
+        "plCount",
+    ),
+    "mix": ("id", "title", "art", "subtitle", "added"),
+}
+
+_INT_KEYS = frozenset({"popularity", "tracks", "duration_sec", "num", "vol", "plCount"})
+_BOOL_KEYS = frozenset({"explicit"})
+
+_warned_kinds: set[str] = set()
+
+
+def _strict_rows() -> bool:
+    """Raise under pytest and CI; the shipped app only logs (behavior freeze)."""
+    return "pytest" in sys.modules or bool(os.environ.get("CI"))
+
+
+def _key_problem(kind: str, key: str, value: object) -> str | None:
+    """One present key's type verdict, or None when it passes."""
+    if key in _BOOL_KEYS:
+        if not isinstance(value, bool):
+            return f"row {kind!r} key {key!r} must be bool, got {type(value).__name__}"
+    elif key in _INT_KEYS:
+        if not isinstance(value, int) or isinstance(value, bool):
+            return f"row {kind!r} key {key!r} must be int, got {type(value).__name__}"
+    elif key == "artists":
+        if not (
+            isinstance(value, list)
+            and all(isinstance(item, dict) and "id" in item and "name" in item for item in value)
+        ):
+            return f"row {kind!r} key 'artists' must be a list of {{id, name}} dicts"
+    elif not isinstance(value, str):
+        return f"row {kind!r} key {key!r} must be str, got {type(value).__name__}"
+    return None
+
+
+def validate_row(kind: str, row: dict, *, strict: bool | None = None) -> dict:
+    """Check one row dict against the schema above; return it unchanged.
+
+    A deliberately key-dropped row fails naming the missing key (and a
+    mistyped value names the key and the expected type). Tests and CI raise
+    :class:`RowValidationError`; shipped runtime logs once per kind and
+    never alters the row. ``strict`` overrides the automatic mode, which the
+    log-once test uses; every other caller takes the default.
+    """
+    required = _ROW_REQUIRED.get(kind)
+    problems: list[str] = []
+    if required is None:
+        problems.append(f"unknown row kind {kind!r}")
+    elif not isinstance(row, dict):
+        problems.append(f"row {kind!r} is {type(row).__name__}, not a dict")
+    else:
+        for key in required:
+            if key not in row:
+                problems.append(f"row {kind!r} missing key {key!r}")
+            elif (problem := _key_problem(kind, key, row[key])) is not None:
+                problems.append(problem)
+    if not problems:
+        return row
+    message = "; ".join(problems)
+    if strict if strict is not None else _strict_rows():
+        raise RowValidationError(message)
+    if kind not in _warned_kinds:
+        _warned_kinds.add(kind)
+        logger.warning("invalid %s row: %s", kind, message)
+    return row
+
+
+class AudioType(StrEnum):
+    """Which mix of a track a delivery carries (GLOSSARY.md: audio type) --
+    orthogonal to the quality tier, never a rung on its ladder."""
+
+    STEREO = "stereo"
+    ATMOS = "atmos"
+
+
+class Capability(StrEnum):
+    """What a provider can do. The bridge consults these instead of
+    branching on provider identity, so Browse / My Music / mixes / videos
+    stay TIDAL-only without if-branches."""
+
+    SEARCH = "search"
+    OPEN_URL = "open_url"
+    CATALOG = "catalog"
+    DOWNLOAD = "download"
+    # The whole-discography verb, on top of DOWNLOAD: TIDAL answers an artist
+    # sweep; a catalog without it (Apple) renders no artist-page control at all
+    # instead of a live button whose only answer is a refusal.
+    ARTIST_DOWNLOAD = "artist_download"
+    LYRICS = "lyrics"
+    ART = "art"
+    BROWSE = "browse"
+    FAVORITES = "favorites"
+    PLAYLISTS = "playlists"
+    MIXES = "mixes"
+    VIDEOS = "videos"
+    PREVIEW = "preview"
+
+
+class AccountState(StrEnum):
+    SIGNED_IN = "signed_in"
+    SIGNED_OUT = "signed_out"
+    UNKNOWN = "unknown"
+
+
+class ReadinessState(StrEnum):
+    READY = "ready"
+    DISABLED = "disabled"
+    SIGN_IN_REQUIRED = "sign_in_required"
+    SETUP_REQUIRED = "setup_required"
+    UNKNOWN = "unknown"
+    UNSUPPORTED = "unsupported"
+
+
+@dataclass(frozen=True)
+class OperationReadiness:
+    operation: Capability
+    state: ReadinessState
+    action: str = ""
+
+
+@dataclass(frozen=True)
+class ProviderReadiness:
+    """A live snapshot, separate from a provider's static descriptor.
+
+    Each operation answers for itself: an account or provisioned runtime is
+    not evidence that every catalog or delivery operation can run.
+    """
+
+    enabled: bool | None
+    account: AccountState
+    operations: tuple[OperationReadiness, ...]
+
+    def for_operation(self, operation: Capability) -> OperationReadiness:
+        return next(
+            (item for item in self.operations if item.operation == operation),
+            OperationReadiness(operation, ReadinessState.UNSUPPORTED),
+        )
+
+
+@dataclass(frozen=True)
+class CatalogLink:
+    kind: str
+    row: dict
+
+
+class LoginAttempt(Protocol):
+    """A provider-private candidate; validation cannot mutate live credentials."""
+
+    def begin(self) -> str: ...
+    def validate(self, payload: str) -> bool: ...
+    def persist(self, commit_if_current: Callable[[Callable[[], None]], bool]) -> bool: ...
+    def reject(self, commit_if_current: Callable[[Callable[[], None]], bool]) -> bool: ...
+    def discard(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class QualityOption:
+    """One rung a provider's Chooser offers.
+
+    ``detail`` is the provider's own label text ("ALAC 24/192"), shown beside
+    the tier word; it is never ranked. The neutral shape states no detail.
+    """
+
+    tier: QualityTier
+    detail: str = ""
+
+
+class StatusKind(StrEnum):
+    """The shape of live status a provider's card carries.
+
+    The status itself is composed by the bridge — the probes (a session, a
+    runtime) are the bridge's to run — while the descriptor names which shape
+    the card needs, so the schema can generate it without provider branches.
+    """
+
+    SESSION = "session"  # a sign-in/sign-out status row from is_logged_in
+    SETUP = "setup"  # the provider owns its status rows and wizard (Apple)
+    NONE = "none"  # no status row; the card lists its fields only
+
+
+@dataclass(frozen=True)
+class ProviderDescriptor:
+    """A provider's static identity for every surface that lists providers.
+
+    The bridge composes this with live status (session state, setup steps)
+    into the schema QML renders; the live data stays bridge-owned because the
+    probes are, and the descriptor's ``status_kind`` tells the bridge which
+    status shape the card needs. A new provider contributes one descriptor;
+    the surfaces render from this shape, so it needs no QML branch.
+
+    ``settings_fields`` names the Settings field keys the provider's card
+    owns, in display order. The status keys among them are bridge-owned; a
+    status key the descriptor omits is still generated from ``status_kind``,
+    so a provider that contributes nothing but identity renders.
+    """
+
+    id: str
+    name: str
+    logo: str = ""  # QML asset path; "" renders no mark in the card's tile
+    logo_width: int = 20  # the card tile's mark width, px
+    logo_header_width: int = 14  # the section header tile's mark width, px
+    logo_header_height: int = 14  # the section header tile's mark height, px
+    capability_summary: str = ""  # one honest line, for onboarding cards
+    card_desc: str = ""  # the Settings card's longer blurb
+    welcome_action: str = ""  # the welcome card's action label (the provider's own words)
+    settings_fields: tuple[str, ...] = ()
+    status_kind: StatusKind = StatusKind.SESSION
+    link_hosts: tuple[str, ...] = ()
+    login_flow: str = "browser"
+
+
+class RefusalKind(StrEnum):
+    """How to read an engine error, shared across providers.
+
+    UNAVAILABLE is final: the provider will not serve this item (counted
+    unavailable, never retried). THROTTLED is the provider rate-limiting:
+    retry after a wait. FAILURE is everything else: retryable.
+    """
+
+    UNAVAILABLE = "unavailable"
+    THROTTLED = "throttled"
+    FAILURE = "failure"
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A classified engine error: the shared refusal-vs-failure verdict plus
+    the provider's own user-facing words when it refused the item itself."""
+
+    kind: RefusalKind
+    message: str = ""
+
+
+class FavoritesUnavailable(Exception):
+    """A favorite-id read failed partway; ``ids`` carries what was collected.
+
+    The bridge serves the partial set (or its stale cache) but never caches
+    it, so the caller's badges read as much truth as the failed read gathered
+    -- exactly the old path's rule: a partial set stamped fresh would read as
+    "you have nothing by this artist" until the TTL expired.
+    """
+
+    def __init__(self, ids: set[str]):
+        super().__init__("favourite pagination failed")
+        self.ids = ids
+
+
+class BrowseWindow(NamedTuple):
+    """One paged window of an editorial category: the parsed category, the
+    RAW item count the window returned (a parse may drop items; the caller's
+    offset must advance by what the endpoint actually sent, or it rewinds),
+    and the collection total."""
+
+    category: object
+    n: int
+    total: int
+
+
+@dataclass
+class StreamInfo:
+    """What a provider's stream resolution hands the download pipeline:
+    everything the shared segment/file pipeline needs, no engine types.
+
+    The no-stream answer is the all-default instance: an empty ``urls`` means
+    the provider could not resolve a streamable delivery (the pipeline treats
+    it exactly like a failed fetch).
+    """
+
+    urls: list[str] = field(default_factory=list)
+    file_extension: str = ""
+    codecs: str = ""
+    requires_flac_extraction: bool = False
+    # The delivered-quality snapshot: {tier, audio_type, bit_depth,
+    # sample_rate, codecs}, normalized to plain strings/ints for the
+    # ownership record.
+    delivered: dict = field(default_factory=dict)
+    # ReplayGain measurements where the provider serves them; None leaves the
+    # tags untagged (the existing rule for a stream without measurements).
+    # Keys, where measured: album_replay_gain, album_peak_amplitude,
+    # track_replay_gain, track_peak_amplitude.
+    replay_gain: dict | None = None
+    # The provider refuses to serve an encrypted delivery as audio: the
+    # pipeline must fail the item rather than write an unplayable file.
+    encrypted: bool = False
+    # Provider-proven count of over-generated trailing URLs: > 0 is padding
+    # whose failure is harmless, 0 means every URL is required audio, and a
+    # negative count means the timeline promises more audio than the URL list
+    # carries (the pipeline fails the item rather than land truncated audio).
+    # None when nothing is proven and the pipeline keeps its legacy
+    # last-segment leniency.
+    tail_spurious: int | None = None
+    # The delivery arrived as one complete file (no fragmented-segment merge),
+    # so its container is already whole and needs no duration-repairing remux.
+    single_file: bool = False
+    # The HLS master playlist URL when the delivery is HLS-shaped (TIDAL's
+    # non-BTS streams): the preview pipeline reads it, the download pipeline
+    # does not. Empty when the delivery is not HLS.
+    hls_url: str = ""
+    # A decrypted file already on local disk (Apple's cookies tier: the
+    # engine fetches and decrypts through gamdl, which no segment pipeline
+    # can replay). The pipeline stages this file instead of fetching ``urls``;
+    # empty on providers whose deliveries are fetched as streams.
+    local_file: str = ""
+    # Which item kind this delivery describes. The pipeline keys its
+    # track-vs-video behavior off this field -- never off the provider SDK's
+    # own types -- so a delivery's kind always comes from the provider answer.
+    # The default is TRACK: every existing constructor (track resolves,
+    # previews, the no-stream answer) describes a track delivery or no
+    # delivery at all; only a video resolve stamps VIDEO.
+    media_kind: MediaType = MediaType.TRACK
+
+
+class DownloadAdapter:
+    """One provider's download ask surface, reached through the seam.
+
+    The bridge's download paths -- a click, a Chooser click, a queued row's
+    retry, the retry's object rebuild and refetch, a standalone lyrics/art
+    ask, and the job body itself -- dispatch through the adapter of the
+    provider an id resolves to, so none of them branches on a provider id or
+    an id prefix.
+
+    The adapter is the provider's own: a provider package implements one, or
+    the bridge implements it where the download machinery is bridge code
+    (Apple's entry, queueing and runner) and assigns it to the provider where
+    the providers are wired. A provider whose deliveries ride the bridge's
+    engine path (tidalapi-shaped) carries none.
+
+    Which neutral answer hands the ask back is per method: serve_entry,
+    refetch_retry and job_runner answer "not served" (False / None), so the
+    bridge's engine path runs, while serve_retry and standalone are only
+    called for this adapter's own provider's ids, so their False / None are
+    verdicts (refused / item gone) with no fall-through. An adapter overrides
+    only what it serves.
+    """
+
+    def serve_entry(
+        self, kind: str, media_id: str, *, chooser=False, chooser_ask=None, chooser_audio=None, chooser_toggles=None
+    ) -> bool:
+        """Serve a download click on one of this provider's ids.
+
+        ``chooser`` marks a click from the Chooser popover; its ``chooser_*``
+        pins (possibly empty: no tier, Settings' audio) apply to that click
+        only. True = the ask was served (a row queued, a refetch started, or
+        a refusal stated); False = the bridge's engine entry serves the click.
+        """
+        return False
+
+    def serve_retry(self, item: dict, obj) -> bool:
+        """Re-enter a failed queue row at the row's own ask (its RETRY).
+
+        ``item`` is the queue row; ``obj`` is whatever ``cached_row`` rebuilt
+        for it (an engine object, or a row dict for a provider whose rows are
+        dicts). Only called for this adapter's own provider's ids, so the
+        answer is the queued/refused verdict: False (a gate held, or the
+        provider's switch is off) leaves the row in its Stopped section with
+        its RETRY, exactly as the engine's own re-entry does.
+        """
+        return False
+
+    def cached_row(self, kind: str, media_id: str) -> object | None:
+        """A row the retry can rebuild for an id whose live object is gone:
+        the app's row dict, or None. The neutral answer is None."""
+        return None
+
+    def refetch_retry(self, item: dict) -> bool:
+        """Re-fetch a retried row's vanished object.
+
+        True = this adapter owns the re-fetch (the row stays in the queue and
+        the object's return re-enters the retry); False = the bridge's engine
+        re-fetch by id runs.
+        """
+        return False
+
+    def standalone(self, media_id: str, mode: str) -> int | None:
+        """Fetch lyrics/art alone for one id (mode "lyrics" or "art").
+
+        The saved track count, 0 when nothing was found, or None when the
+        item is gone. Only ever called with the adapter's own provider's ids,
+        so the neutral answer is None (no adapter may silently fall through
+        to another provider's fetch)."""
+        return None
+
+    def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name) -> Callable[[object], None] | None:
+        """The worker body for one queued download, or None when the bridge's
+        engine path runs the job.
+
+        Consulted when the job starts, before the bridge builds its segment
+        engine: an adapter that answers a runner guarantees the tidalapi-
+        shaped engine (and the TIDAL session it composes) is never built for
+        its provider. The returned callable receives the dispatch-resolved
+        catalog object and runs on the job's own worker thread; it settles
+        its own queue row, exactly as the engine path settles its own.
+
+        ``spec`` is the bridge's queued-job description (read-only):
+        ``provider_id``, ``kind``, ``collection``, ``media_id``,
+        ``file_template``, ``base_template``, ``audio_type``, ``is_retry``,
+        ``chooser_toggles``, ``name``.
+        """
+        return None
+
+
+class Provider(ABC):
+    """One music service Waves can search and save from (GLOSSARY.md).
+
+    Implementations return the app's plain dicts and neutral types; the
+    row-dict schema QML already consumes IS the catalog contract, and the
+    catalog objects stay inside the provider (the bridge resolves ids back to
+    objects through :meth:`get_object`).
+    """
+
+    id: str
+    name: str
+    capabilities: frozenset[Capability]
+    public_operations: frozenset[Capability] = frozenset()
+    identity_kinds: frozenset[str] = frozenset()
+
+    downloads: DownloadAdapter | None = None
+    """This provider's download ask surface (see :class:`DownloadAdapter`),
+    or None when the bridge's engine path serves its downloads. The bridge
+    dispatches every download path through the adapter of the provider an id
+    resolves to. A provider that serves its own downloads carries one from
+    construction; the bridge attaches Apple's (whose entry, queueing and
+    runner are bridge code) where the providers are wired."""
+
+    # ----- chooser metadata (what a provider offers before an object exists)
+
+    quality_options: tuple[QualityOption, ...] = ()
+    """The rungs this provider's Chooser offers, in the order it presents
+    them. The neutral default is no rungs: a provider that declares none
+    lists none, never another provider's ladder."""
+
+    quality_setting: str = ""
+    """The Settings field holding this provider's default tier. The neutral
+    default is "": a provider that stores no default opens the Chooser with
+    no tier stated."""
+
+    audio_types: frozenset[AudioType] = frozenset()
+    """The audio types this provider can deliver for one item on its own.
+    The neutral default is none: the per-click Atmos choices stay off and the
+    Chooser's Atmos-only collapse cannot fire."""
+
+    settings_card: str = ""
+    """The settings-card namespace this provider's per-provider mirrors live
+    under (``apple_lyrics_embed``). The neutral default is "": the provider's
+    mirrors stay under its id namespace, with the shared keys as fallback."""
+
+    ttml_lyrics: bool = False
+    """Whether this provider's engine can write verbatim TTML lyric sidecars.
+    The neutral default is False, so the Chooser disables its TTML toggle for a
+    provider that cannot produce one, capability instead of provider identity."""
+
+    # ----- search surface (what a group in the results page renders)
+
+    search_sections: tuple[str, ...] = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
+    """The result sections this provider's search answers, in render order.
+    The bridge stamps them onto the provider's search group and the unified
+    page renders exactly those, so a provider whose catalog has no videos
+    (Apple) never grows a VIDEOS section -- or shows one under a filter it
+    cannot host."""
+
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """Static identity for the surfaces that list providers.
+
+        The neutral default carries the id and name every provider has; a
+        provider adds its logo, its capability line and the Settings fields
+        its card owns. See :class:`ProviderDescriptor`."""
+        return ProviderDescriptor(id=cls.id, name=cls.name)
+
+    def engine_details(self) -> list[dict]:
+        """Optional subordinate execution detail, safe for desktop presentation."""
+        return []
+
+    def readiness(self, *, enabled: bool | None = True, signed_in: bool | None = None) -> ProviderReadiness:
+        """Compose this service's account policy from current, explicit facts.
+
+        Desktop adapters can refine delivery setup without changing catalog
+        eligibility. StatusKind describes a card; it never grants an operation.
+        """
+        account = (
+            AccountState.UNKNOWN
+            if signed_in is None
+            else AccountState.SIGNED_IN
+            if signed_in
+            else AccountState.SIGNED_OUT
+        )
+        operations = []
+        for operation in Capability:
+            action = ""
+            if operation not in self.capabilities:
+                state = ReadinessState.UNSUPPORTED
+            elif enabled is False:
+                state, action = ReadinessState.DISABLED, "setup"
+            elif enabled is None:
+                state = ReadinessState.UNKNOWN
+            elif operation in getattr(self, "public_operations", frozenset()) or account == AccountState.SIGNED_IN:
+                state = ReadinessState.READY
+            elif account == AccountState.SIGNED_OUT:
+                state, action = ReadinessState.SIGN_IN_REQUIRED, "signin"
+            else:
+                state = ReadinessState.UNKNOWN
+            operations.append(OperationReadiness(operation, state, action))
+        return ProviderReadiness(enabled, account, tuple(operations))
+
+    def accepts_url(self, url: str) -> bool:
+        """Match only this provider's declared hosts, including subdomains."""
+        try:
+            parsed = urlsplit(url if "://" in url else f"https://{url}")
+            if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
+                return False
+            host = (parsed.hostname or "").lower()
+            return any(host == allowed or host.endswith(f".{allowed}") for allowed in self.descriptor().link_hosts)
+        except ValueError:
+            return False
+
+    def resolve_link(self, url: str) -> CatalogLink | None:
+        """Resolve and translate a link inside its owning provider.
+
+        The neutral catalog result is a kind/item mapping. SDK providers
+        override this translation; SDK objects never become a QML payload.
+        """
+        if not self.accepts_url(url):
+            return None
+        resolved = self.open_url(url)
+        if not isinstance(resolved, dict):
+            return None
+        kind = str(resolved.get("kind") or "")
+        if kind not in ("artist", "album", "track", "video", "playlist", "mix"):
+            return None
+        row = self.row_for(kind, resolved.get("item"))
+        return CatalogLink(kind, row) if row else None
+
+    def catalog_context(self) -> AbstractContextManager[None]:
+        """Capture the service's context for a scheduled catalog read."""
+        return nullcontext()
+
+    def invalidate_catalog_context(self) -> None:
+        """Discard account/context-bound catalog caches without closing workers."""
+        return None
+
+    def catalog_identity(self, kind: str, raw_id: str) -> CatalogIdentity:
+        """Raw identity facts for one selected item; no delivery/ownership inference."""
+        raise NotImplementedError("Catalog identity is unsupported")
+
+    def catalog_identity_context(self) -> tuple[str, ...]:
+        """Non-secret account/storefront/version stamp for a request snapshot."""
+        return ()
+
+    def catalog_candidates(self, origin: CatalogIdentity) -> CatalogLookup:
+        """One bounded identifier or manual-search page, without pagination."""
+        return CatalogLookup(complete=False, explanations=("Catalog identity lookup is unsupported.",))
+
+    def availability_context(self) -> tuple[str, ...]:
+        """Memory-only account/runtime stamp, safe during queued GUI validation.
+
+        Include enabled/setup state in this stamp or revoke the provider token
+        when it changes. Live filesystem/network readiness belongs on workers.
+        """
+        return self.catalog_identity_context()
+
+    def offer_readiness(
+        self, identity: CatalogIdentity, ask: OfferConstraints, live: ProviderReadiness
+    ) -> OperationReadiness:
+        """Readiness for this delivery, independently of catalog access."""
+        if ask.engine_pin not in ("", "auto"):
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        if identity.kind == "video" and Capability.VIDEOS not in self.capabilities:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        if identity.kind != "video" and ask.audio_type not in self.audio_types:
+            return OperationReadiness(Capability.DOWNLOAD, ReadinessState.UNSUPPORTED)
+        return live.for_operation(Capability.DOWNLOAD)
+
+    def probe_availability(self, identity: CatalogIdentity, ask: OfferConstraints) -> AvailabilityEvidence:
+        """Bounded metadata/manifests only. Never download or decrypt media."""
+        return AvailabilityEvidence(explanations=("Item availability is unknown; no metadata probe is supported.",))
+
+    def session_teardown_context(self) -> AbstractContextManager:
+        """Worker-only barrier before replacing resources used by old jobs."""
+        return nullcontext()
+
+    def collection_rows(self, obj, include_videos: bool = True) -> list:
+        """Translate collection members using this provider's row vocabulary."""
+        rows = []
+        for item in self.collection_items(obj, include_videos=include_videos):
+            kind = "video" if self.media_kind(item) == MediaType.VIDEO else "track"
+            row = self.row_for(kind, item)
+            if row:
+                rows.append({**row, "kind": kind})
+        return rows
+
+    # ----- session / auth
+
+    def create_login_attempt(
+        self, *, resume: bool = False, register_secrets: Callable[[dict[str, str]], None] | None = None
+    ) -> LoginAttempt:
+        """Create a detached auth candidate for cancellable desktop sign-in."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def login_begin(self) -> str:
+        """Start the login flow; returns the URL (or flow entry) for the GUI."""
+
+    @abstractmethod
+    def login_complete(self, payload: str) -> bool:
+        """Complete the login with the user's payload (pasted URL / code)."""
+
+    @abstractmethod
+    def logout(self) -> None:
+        """Forget the account's credentials."""
+
+    @abstractmethod
+    def login_resume(self) -> bool:
+        """Reopen the session from the credentials stored on disk (the app's
+        launch path). False when there is nothing usable stored, or the
+        provider refused them."""
+
+    @abstractmethod
+    def reset_session(self) -> None:
+        """Rebuild a clean session after a sign-out, so the user can sign
+        back in without restarting the app. A long-lived GUI cannot share the
+        CLI's assumption that the process exits right after logging out."""
+
+    @abstractmethod
+    def account_id(self) -> str:
+        """The signed-in account's id, as a plain string ("" unknown). The
+        key cached page snapshots are stamped with, so one account's
+        personalized pages never render for another."""
+
+    @abstractmethod
+    def credential_facts(self) -> dict[str, str]:
+        """The session's secret-bearing facts, keyed by what they are (e.g.
+        ``access_token``, ``session_id``, ``account_id``, ``username``). The
+        caller registers each value with the log redactor at the moment it
+        exists; the mapping to redactor tags stays with the caller."""
+
+    @property
+    @abstractmethod
+    def is_logged_in(self) -> bool:
+        """Whether the provider currently holds a working session."""
+
+    @abstractmethod
+    def apply_quality(self, tier: QualityTier, audio_type: AudioType) -> None:
+        """Make the provider request the given tier for subsequent streams.
+
+        The audio type is carried for interface symmetry: how a provider
+        delivers Atmos (TIDAL's per-stream session swap, Apple's own codec) is
+        that provider's fenced business, decided per stream -- never by this
+        call.
+        """
+
+    # ----- catalog read (returns the app's row dicts; the schema is the contract)
+
+    @abstractmethod
+    def search(self, needle: str) -> dict:
+        """Search the catalog and return this provider's per-type buckets.
+
+        Providers that own their row translation return the complete search
+        payload defined above. TIDAL keeps returning engine objects plus
+        ``top_hit`` for the bridge's existing renderer. Needs no user setup
+        beyond the provider's own session rules.
+        """
+
+    @abstractmethod
+    def open_url(self, url: str) -> object | None:
+        """Resolve a pasted share URL to the catalog object it names, or None
+        when the URL is not this provider's grammar / the item is gone. The
+        bridge builds the page payload from the resolved object."""
+
+    @abstractmethod
+    def get_object(self, kind: str, raw_id: str) -> object:
+        """The id -> engine object resolver every dispatch goes through."""
+
+    @abstractmethod
+    def collection_items(self, obj, include_videos: bool = True) -> list:
+        """Enumerate a collection's items (tracks/videos/albums), honoring
+        the music-videos switch."""
+
+    @abstractmethod
+    def user_collections(self) -> dict | None:
+        """The signed-in user's collections (playlists/mixes), or None when
+        the provider has no such capability."""
+
+    @abstractmethod
+    def folder_tree(self, root_folders: list | None = None) -> object | None:
+        """The user's playlist-folder tree (every level's folders, each
+        folder's playlists, and the playlist-id -> folder-path map), or None
+        when the provider has no folders.
+
+        ``root_folders`` are already-fetched root folders to reuse (a caller
+        mid-sweep has them in hand); fetched fresh when None."""
+
+    @abstractmethod
+    def search_tracks(self, needle: str, limit: int = 10) -> list:
+        """A lightweight, track-only search: the first ``limit`` track matches
+        for ``needle``, as engine objects. The video player's title-link
+        fallback lives on this shape -- a full search payload would pay for
+        buckets the heuristic never reads."""
+
+    @abstractmethod
+    def browse_page(self, title: str, api_path: str) -> object | None:
+        """One editorial (Browse) page, read and parsed: the engine's page
+        object for ``api_path``, ``title``-labelled. None when the page
+        cannot be read. The bridge renders the parsed categories; where the
+        bytes come from stays the provider's business."""
+
+    @abstractmethod
+    def browse_home(self) -> object | None:
+        """The personalized home feed as a parsed page object, or None when
+        the provider has no such feed."""
+
+    @abstractmethod
+    def browse_window(self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50) -> BrowseWindow:
+        """One paged window of an editorial category: the parsed category,
+        the RAW item count the window returned (the paging arithmetic's
+        input -- a parse may drop items, the offset may not rewind), and the
+        collection total."""
+
+    def browse_landing(self) -> dict:
+        """This provider's own Browse landing recipe, in provider-neutral
+        descriptors the bridge renders:
+
+        ``{"chips": {group: [{"title", "path"}, ...]},  # navigation link groups
+          "pages": [{"title", "path"}, ...],            # editorial pages inlined as rows, in order
+          "home": bool}``                               # append browse_home()'s shelves last
+
+        Called on a bridge worker; a recipe may read through the provider's
+        own session (a service whose page list is discovered by reading an
+        index page does that here). Every key is optional. The neutral
+        default is an empty landing: a provider reached through its catalog
+        pages contributes nothing to the combined landing, and no service
+        inherits another's editorial composition."""
+        return {}
+
+    def browse_rows(self, page) -> list[dict] | None:
+        """The neutral section rows for one page object this provider's
+        ``browse_page``/``browse_home`` returned, or None when the bridge's
+        stock renderer reads it (TIDAL's page objects).
+
+        A provider whose pages are its own engine's objects implements
+        this: every row is a plain dict in the app's row vocabulary
+        (``rowKind``, ``title``, ``items``, ``more``), and the bridge stamps
+        the owner and dresses the cards. TIDAL keeps the default, so its
+        tolerant per-category parse stays where it was."""
+        return None
+
+    def browse_window_rows(self, category) -> list[dict] | None:
+        """The neutral card rows for one paging window's parsed category
+        (``browse_window``'s ``category``), or None when the bridge's stock
+        renderer reads it (TIDAL's). See :meth:`browse_rows`."""
+        return None
+
+    def browse_path_ok(self, path: str) -> bool:
+        """Whether an editorial path this provider handed out may be
+        requested back, validated by the provider whose API receives it.
+
+        The neutral default accepts a relative path only: no scheme, no
+        authority, no backslash, so a payload can never steer a request to
+        another host. A provider whose API nests under a known prefix
+        tightens this (TIDAL requires ``pages/``)."""
+        text = str(path or "")
+        if not text or "//" in text or "\\" in text:
+            return False
+        parts = urlsplit(text)
+        return not parts.scheme and not parts.netloc
+
+    def browse_window_path_ok(self, path: str) -> bool:
+        """Whether a paging data path may be requested back through
+        :meth:`browse_window`. The neutral default is :meth:`browse_path_ok`
+        (a window path is one of the provider's own paths); a provider whose
+        paged handles nest under a narrower prefix tightens it (TIDAL's are
+        ``pages/data/`` only)."""
+        return self.browse_path_ok(path)
+
+    def link_art_sample(self, page, want: int = 12) -> list[str]:
+        """Cover URLs sampled from one of this provider's editorial pages,
+        for the landing's link-tile mosaics. The neutral default samples
+        nothing: a provider without an implementation gets no mosaics, never
+        another provider's covers."""
+        return []
+
+    @abstractmethod
+    def favorites_page(
+        self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None
+    ) -> tuple[list, bool]:
+        """One window ``[offset, offset+limit)`` of the signed-in user's
+        favorites of ``kind`` (e.g. "tracks", "albums"), as engine objects,
+        paired with whether more exist beyond the window.
+
+        ``order`` is the neutral sort spec ``(key, direction)`` -- keys from
+        the UI's vocabulary ("date", "name", "release", "artist"; direction
+        "asc"/"desc"), mapped onto the engine's own order enums inside the
+        provider. None asks for the engine's default order.
+
+        The "more" verdict must come from the provider's total count when it
+        has one: a limit-N window can return fewer than N rows (unavailable
+        items dropped inside the window), so a short window alone would
+        silently truncate the set.
+        """
+
+    @abstractmethod
+    def favorite_ids(self, kind: str) -> set[str]:
+        """Every id in the signed-in user's favorites of ``kind``, paged to
+        exhaustion, as plain strings. The bridge filters catalog rows against
+        these, so the ids are the engine's own (bare, not namespaced) -- the
+        same spelling a row's ``id`` field carries.
+
+        A failure raises :class:`FavoritesUnavailable` carrying the ids
+        collected before it; it must never raise a bare error and lose them,
+        and must never swallow the failure and serve a partial set as fresh.
+        """
+
+    # ----- quality -- what the Chooser presents
+
+    @abstractmethod
+    def advertised_tier(self, obj) -> QualityTier | None:
+        """The best tier the provider advertises for this object, on the
+        Waves ladder; None when unknown."""
+
+    @abstractmethod
+    def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
+        """Every (tier, audio type) delivery the provider advertises for this
+        object -- the Chooser's option list."""
+
+    @abstractmethod
+    def advertised_ceiling(self, obj) -> int | None:
+        """Best advertised quality rank, or None when unknown. Feeds the
+        upgrade-convergence gate, so it must trust only explicit signals."""
+
+    # ----- per-track delivery
+
+    def media_kind(self, obj) -> MediaType | None:
+        """Which downloadable kind ``obj`` is, or None when it is not one.
+
+        The pipeline keys its track-vs-video behavior off this answer (and
+        off ``StreamInfo.media_kind`` once a stream is resolved) -- never off
+        a provider SDK's own types, which only the provider that speaks them
+        may touch. A collection or an unknown object answers None.
+        """
+        return None
+
+    @abstractmethod
+    def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
+        """Resolve a track to a streamable delivery at the requested tier and
+        audio type.
+
+        The two are the caller's per-job request (one immutable ask, spec §5.5);
+        a caller that pinned neither passes None for both, and the provider then
+        answers from its own state (the legacy single row, whose fetch follows
+        the stored defaults). The per-job request never travels as shared
+        mutable state.
+        """
+
+    def resolve_video(self, video, file_extension: str) -> StreamInfo | None:
+        """Resolve a video to an extension-only delivery, or None when the
+        provider cannot serve it.
+
+        Videos carry no per-job tier or Version (the pipeline picks the
+        variant at URL-fetch time); the caller passes the extension it chose
+        from its own settings, and the provider answers whether its session
+        can serve a video at all. The inherited default is None: a provider
+        that serves no videos needs no override.
+        """
+        return None
+
+    @abstractmethod
+    def fetch_lyrics(self, track) -> tuple[str, str]:
+        """The provider's NATIVE lyrics for a track as (synced, plain). The
+        LRCLIB-first precedence lives above this, shared by both providers."""
+
+    @abstractmethod
+    def cover_url(self, obj, dimension: int) -> str:
+        """Best-effort cover URL at the requested square dimension ('' when
+        the object carries no image), the app's existing convention."""
+
+    @abstractmethod
+    def track_facts(self, track) -> dict:
+        """The fact schema the tag writer reads (copyright, ISRC, album
+        block, credited artists and their ids...), extracted from the engine
+        objects so tagging stays provider-neutral."""
+
+    @abstractmethod
+    def classify_refusal(self, exc) -> Refusal:
+        """Classify an engine error into the shared refusal vocabulary."""
+
+    def classify_failure(self, exc: BaseException) -> Failure:
+        """Classify an application failure without guessing from exception text.
+
+        Unknown failures do not establish an independent engine/runtime
+        boundary. Concrete providers override this for facts they own.
+        """
+        return Failure()
+
+    # ----- optional hooks
+
+    def preview_url(self, track) -> str | None:
+        """A directly-streamable preview URL, when the provider documents
+        one; None (the inherited default) when it does not. The PREVIEW
+        capability says whether to call the hook at all."""
+        return None
+
+    def resolve_preview(self, track) -> StreamInfo:
+        """A full preview STREAM resolution for providers whose previews need
+        their own session machinery (TIDAL's full-track preview: the stream
+        lock, the session normalisation, the LOW-tier pin and its restore are
+        fenced provider business, never the caller's).
+
+        The all-default StreamInfo (the inherited default) is "could not
+        resolve": the caller reports the preview failed rather than crashing.
+        A provider answering through :meth:`preview_url` alone never needs
+        this hook."""
+        return StreamInfo()
+
+    # ----- catalog helpers the row-rendering paths call
+
+    def cached(self, kind: str, raw_id: str) -> object | None:
+        """A previously fetched catalog object for (kind, raw_id), or None.
+
+        The re-dispatch paths ask whether a download whose object was evicted
+        can be rebuilt without the network; the neutral answer is "nothing
+        cached", and the provider's own cache stays its business.
+        """
+        return None
+
+    def row_for(self, kind: str, item) -> dict:
+        """The app's row dict for one catalog item of ``kind``.
+
+        Providers that own their row translation answer here; the neutral
+        answer is an empty row, which callers treat as "cannot render".
+        """
+        return {}
+
+    def collection_has_tracks(self, obj) -> bool:
+        """Whether a collection object carries playable tracks (the download
+        entry's "refetch before queueing" check). The neutral answer is no."""
+        return False
+
+    def favorites_count(self, kind: str) -> int | None:
+        """How many favorites of ``kind`` the signed-in user holds, or None
+        when the engine offers no count. The bulk DOWNLOAD ALL pager refuses
+        a None rather than paging on a short window: a limit-N window can
+        return fewer than N rows (unavailable items dropped inside it), so a
+        short window alone would silently truncate the set."""
+        return None
+
+    def has_atmos(self, item) -> bool:
+        """Whether one catalog item carries a Dolby Atmos delivery. The
+        neutral answer is no: a missing fact never promises a Version."""
+        return False
+
+    def artist_page(self, artist_item) -> dict:
+        """The artist-page payload for one item; the neutral answer is an
+        empty payload."""
+        return {}
+
+    def discard_delivery(self, local_file: str) -> None:
+        """Drop a provider's staged delivery after it was placed or failed.
+
+        The neutral default is a no-op: providers that stage outside their
+        caller's control (a fetch tool's workdir, a temporary decrypt tree)
+        override this so a landed or abandoned fetch leaves nothing behind.
+        """
+        return None

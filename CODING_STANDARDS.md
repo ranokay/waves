@@ -1,0 +1,83 @@
+# Coding standards
+
+Read when writing or reviewing Waves code. These conventions supplement the
+global standards and take precedence where they differ.
+
+## Naming
+
+- Python modules, functions, and properties use `snake_case`; classes use
+  `PascalCase`; constants use `UPPER_SNAKE_CASE`. Name files for their owner
+  and operation, such as `settings/schema.py` or `library/scan_process.py`.
+  Place code under its domain rather than generic shared, helper, or manager folders.
+- Qt slots, signals, and properties retain `camelCase` because QML consumes
+  that ABI. Internal Python helpers use `snake_case`.
+- QML component files use `PascalCase`; IDs, functions, and properties use
+  `camelCase`. Use concept names such as `QualityPicker`, `MusicList`, or
+  `ActionButton`. Keep QML file names unique across directories.
+- Use album, track, or video for a specific catalog kind. Use `media` for
+  code accepting several kinds.
+
+## Contracts and compatibility
+
+- Use [domain guidance](docs/agents/domain.md) for glossary terms and relevant
+  ADRs. Use [the architecture map](docs/architecture.md) for ownership,
+  dependency direction, and media identity contracts.
+- Import public helpers from the domain that owns the contract. Underscored
+  names are implementation details. Existing bridge mixins share private
+  coordination intentionally; their exception is documented in the architecture map.
+- For public desktop slots, signals, or payload changes, read and update
+  [BRIDGE.md](waves/desktop/BRIDGE.md).
+- Only plain dicts, lists, strings and numbers cross to QML. Engine objects stay
+  behind the provider or bridge seam.
+- Provider-facing QML renders from bridge descriptors and capabilities. Shared
+  surfaces do not branch on a provider id or hardcode a provider list.
+- Reuse the shared QML helper or component rather than copying a cascade.
+- New ADRs use the existing record shape, and GLOSSARY stays a glossary rather
+  than implementation notes.
+- Preserve serialized settings and payload keys during internal cleanup.
+- Moves must update source imports, QML imports and assets, test harnesses,
+  resource recipes, dynamic module names, CI and tool imports, and documentation.
+- Every settings-schema field has a reader and a writer in the same change.
+- Comments state invariants and decisions, not history. A comment the code
+  contradicts is a finding.
+- A QML `Text` whose content can be dynamic or remote sets
+  `textFormat: Text.PlainText`.
+- QML colors use the root palette tokens. A self-contained component may keep
+  a local palette block only under the `SettingsPage.qml` self-contained
+  exception, and its values must match Main.qml's static literals. A
+  9-character hex value is alpha-first.
+- The house rules here, in [BRIDGE.md](waves/desktop/BRIDGE.md), in
+  [the architecture map](docs/architecture.md), and in
+  [testing guidance](docs/agents/testing.md) bind every review.
+
+## Correctness
+
+The `/code-review` Standards review hunts these defect classes. Each finding names a
+concrete failure: the state or input, and the wrong result it produces.
+
+- **Provider identity travels with the data.** When a change lets a path
+  serve more than one provider, every key, cache, pending map, preference key,
+  rollup and paging guard built from a path, title or bare ID carries the
+  owning provider. TIDAL-specific type checks, defaults and fallbacks inside
+  that path move behind the provider seam.
+- **Stale work never publishes.** A worker re-checks every provider token it
+  read from at emit time, not only at start. Revoking or signing out a
+  provider clears its state from every combined surface it contributed to.
+- **Derived UI state follows its inputs.** Every input that changes a plan or
+  layout (resize, source filter, sort, refresh, expand or collapse, Back
+  restore) re-runs it, after the state it reads is restored. Counters and
+  caches keyed to delegates reset when those delegates are destroyed or replaced.
+- **Failure reads as failure.** A run whose every read failed reports an
+  error, not an empty success, and a partial index or result stays marked partial.
+
+## Tests
+
+- Name behavior tests `test_<behavior>.py`. Keep basenames unique across the
+  suite because pytest's current import mode requires them.
+- Put fixtures beside their domain. Only widely used harnesses belong in
+  `tests/support/`.
+- Before choosing markers, source-wiring guards or test groups, read
+  [testing guidance](docs/agents/testing.md) for design and evidence and
+  [the developer guide](DEVELOPER.md#testing-and-verification) for commands.
+- For issue delivery, follow [the implementation workflow](docs/agents/implementation-workflow.md)
+  for the gate class, review and merge evidence.

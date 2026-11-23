@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.getwaves.Waves</id>
+  <name>Waves</name>
+  <summary>Save music from your own TIDAL account for offline listening</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <description>
+    <p>
+      Waves is a native desktop app for saving music from your own TIDAL
+      account for offline listening: search-first, art-forward, and built for
+      people who'd rather click than type. It can only save what your account
+      can already play, up to HiRes Lossless and Dolby Atmos where available.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.getwaves.Waves.desktop</launchable>
+  <url type="homepage">https://getwaves.dev</url>
+  <developer id="dev.getwaves">
+    <name>iamprivacy</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+</component>

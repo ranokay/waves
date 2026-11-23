@@ -1,0 +1,740 @@
+"""The two-axis Providers area and the Apple Music section shell.
+
+WHAT THIS FENCES OFF
+--------------------
+Settings carries a Providers area: a TIDAL section (its session and its quality
+default) and an Apple Music section that is always visible behind an enable
+switch (default off) with a status light and setup-wizard + runtime-manage
+actions (Setup wizard, Update runtime,
+Remove runtime).
+The quality split (``tidal_quality_audio`` / ``apple_quality_audio``)
+gives the split fields
+their sections: TIDAL's quality lives in the TIDAL
+section, ``apple_quality_audio`` renders in the Apple section, and the shared
+sections' help text says it governs both providers.
+
+The two sections are cards inside ONE Providers section
+(each with its logo header and its fields); the field contents pinned below
+are unchanged, only the path to reach them gained a level.
+
+The page-side status row and its live mirror are pinned by source assertions
+(the repo's settings-page QML convention); the bridge side is exercised for
+real on plain stubs.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from threading import Lock
+from types import SimpleNamespace
+
+from settings.fakes import (
+    APPLE_SETUP_PILLS,
+    APPLE_SIGN_OUT_PILL,
+)
+from settings.fakes import schema_stub as _schema_stub
+from support.bridge_stub import BridgeStub
+from support.paths import QML_DIR
+
+from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.presentation import apple_status
+from waves.model.cfg import HelpSettings
+from waves.model.cfg import Settings as ModelSettings
+
+
+def _bind(stub, name):
+    return getattr(WavesBridge, name).__get__(stub, type(stub))
+
+
+# ---- the schema: the Providers area ----------------------------------------------
+
+
+def _schema(apple_enabled: bool = False, logged_in: bool = False):
+    stub = _schema_stub(apple_enabled, logged_in)
+    schema = WavesBridge.settingsSchema(stub)
+    return {s["id"]: s for s in schema}
+
+
+def _keys(section):
+    return [f["key"] for f in section["fields"]]
+
+
+def _providers(sections=None):
+    """The provider cards nested in the one Providers section,
+    keyed by card id."""
+    sections = sections if sections is not None else _schema()
+    providers = next(s for s in sections.values() if s["id"] == "providers")["providers"]
+    return {p["id"]: p for p in providers}
+
+
+def test_the_providers_area_is_one_section_with_two_provider_cards():
+    schema = WavesBridge.settingsSchema(_schema_stub())
+    ids = [s["id"] for s in schema]
+    assert "providers" in ids
+    assert "providers_tidal" not in ids and "providers_apple" not in ids
+    section = next(s for s in schema if s["id"] == "providers")
+    assert section["group"] == "Providers"
+    # The section's only loose field is the re-open command: everything
+    # provider-specific lives on the cards.
+    assert [(f["key"], f["type"], f["action"]) for f in section["fields"]] == [
+        ("provider_setup_action", "action", "show_setup")
+    ]
+    cards = _providers({s["id"]: s for s in schema})
+    assert set(cards) == {"providers_tidal", "providers_apple"}
+    assert cards["providers_tidal"]["name"] == "TIDAL"
+    assert cards["providers_apple"]["name"] == "Apple Music"
+    for card in cards.values():
+        assert card["desc"]
+
+
+def test_the_tidal_card_hosts_the_session_and_its_quality_default():
+    assert [k for k in _keys(_providers()["providers_tidal"]) if not k.startswith("download_policies.")] == [
+        "provider_tidal_session",
+        "tidal_quality_audio",
+        "tidal_lyrics_embed",
+        "tidal_lyrics_file",
+        "tidal_lyrics_prefer_lrclib",
+        "tidal_metadata_cover_dimension",
+        "tidal_metadata_cover_embed",
+        "tidal_cover_album_file",
+        "tidal_cover_file_format",
+    ]
+
+
+def test_the_tidals_quality_default_no_longer_sits_under_downloads():
+    sections = _schema()
+    assert "tidal_quality_audio" not in _keys(sections["downloads"])
+    # The rest of Downloads survives the move untouched, video quality
+    # included (a TIDAL-only capability that keeps its section, spec §9.2.2).
+    assert _keys(sections["downloads"])[:2] == ["download_base_path", "quality_video"]
+    assert "default_audio_type" in _keys(sections["downloads"])
+
+
+def test_the_apple_card_holds_the_switch_row_and_the_quality():
+    apple = _keys(_providers()["providers_apple"])
+    assert [k for k in apple if not k.startswith("download_policies.")] == [
+        "provider_apple_status",
+        "apple_setup_wizard",
+        "apple_quality_audio",
+        "apple_engine",
+        "apple_lyrics_embed",
+        "apple_lyrics_file",
+        "apple_lyrics_prefer_lrclib",
+        "apple_lyrics_word_timed",
+        "apple_lyrics_ttml_file",
+        "apple_metadata_cover_dimension",
+        "apple_metadata_cover_embed",
+        "apple_cover_album_file",
+        "apple_cover_file_format",
+        "apple_cookies_path",
+        "path_binary_nm3u8dlre",
+        "apple_wrapper_port",
+        "apple_runtime_mode",
+        "apple_wrapper_url",
+        "apple_wrapper_container",
+        "apple_wrapper_image_digest",
+        "apple_wrapper_decrypt_port",
+        "apple_lite_container",
+        "apple_lite_image_digest",
+        "apple_lite_endpoint",
+        "apple_runtime_auto_install",
+        "apple_quarantine_dir",
+        "apple_quarantine_keep",
+    ]
+    status = _providers()["providers_apple"]["fields"][0]
+    # The switch rides the status row (the section's master control), never
+    # the flag-tile grid, and the factory-reset walk still finds it.
+    assert status["enabled_key"] == "apple_enabled"
+    assert "apple_enabled" not in apple
+    # The status light sits at its not-set-up vocabulary, with the setup
+    # wizard + runtime-manage actions behind it.
+    assert status["actions"] == APPLE_SETUP_PILLS
+    # The in-place wizard card follows the status row: bridge-computed, not
+    # a pref, rendered from the live setup mirror.
+    wizard = _providers()["providers_apple"]["fields"][1]
+    assert wizard["key"] == "apple_setup_wizard" and wizard["type"] == "apple_setup"
+    assert wizard["live"] == "apple_setup"
+
+
+def test_dead_settings_keys_are_gone_from_the_model_and_the_help():
+    # Window geometry lives in waves.json prefs, and the APK override was
+    # replaced by the published wrapper image; neither is a setting now.
+    for key in ("window_x", "window_y", "window_w", "window_h", "apple_apk_path"):
+        assert not hasattr(ModelSettings(), key), key
+        assert not hasattr(HelpSettings(), key), key
+
+
+def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():
+    assert ModelSettings().apple_enabled is False
+    status = _providers()["providers_apple"]["fields"][0]
+    assert status["switch_value"] is False
+    assert status["value"] == "off"
+
+
+def test_the_supervision_seconds_fields_span_their_defaults():
+    fields = {f["key"]: f for f in _schema()["advanced"]["fields"]}
+    assert fields["apple_wrapper_idle_sec"]["value"] == 300.0
+    assert fields["apple_wrapper_idle_sec"]["maximum"] >= 300.0
+    assert fields["apple_pacing_delay_sec"]["value"] == 30.0
+    assert fields["apple_pacing_delay_sec"]["maximum"] >= 30.0
+
+
+def test_the_wrapper_port_fields_span_the_tcp_range():
+    fields = {f["key"]: f for f in _providers()["providers_apple"]["fields"]}
+    decrypt = fields["apple_wrapper_decrypt_port"]
+    assert (decrypt["minimum"], decrypt["maximum"]) == (1, 65535)
+    assert decrypt["minimum"] <= decrypt["value"] <= decrypt["maximum"]
+    # 0 asks setup to pick a free high port.
+    assert (fields["apple_wrapper_port"]["minimum"], fields["apple_wrapper_port"]["maximum"]) == (0, 65535)
+
+
+def test_the_status_light_flips_with_the_switch_and_the_session():
+    on = WavesBridge.settingsSchema(_schema_stub(apple_enabled=True))
+    cards = {p["id"]: p for p in next(s for s in on if s["id"] == "providers")["providers"]}
+    status = cards["providers_apple"]["fields"][0]
+    assert status["value"] == "not_set_up"
+    assert status["word"] == "Not set up"
+    assert status["switch_value"] is True
+
+    signed = WavesBridge.settingsSchema(_schema_stub(logged_in=True))
+    tidal = {p["id"]: p for p in next(s for s in signed if s["id"] == "providers")["providers"]}
+    session = tidal["providers_tidal"]["fields"][0]
+    assert session["value"] == "signed_in" and session["word"] == "Signed in"
+    unsigned = WavesBridge.settingsSchema(_schema_stub())
+    plain = {p["id"]: p for p in next(s for s in unsigned if s["id"] == "providers")["providers"]}
+    session = plain["providers_tidal"]["fields"][0]
+    assert session["value"] == "not_signed_in" and session["word"] == "Not signed in"
+
+
+def test_the_tidal_card_offers_the_session_action_matching_its_state():
+    unsigned = _providers(_schema(logged_in=False))["providers_tidal"]["fields"][0]
+    assert unsigned["key"] == "provider_tidal_session"
+    assert unsigned["value"] == "not_signed_in"
+    assert unsigned["actions"] == [{"label": "Sign in", "action": "tidal_signin"}]
+
+    # The action does not depend on the Apple switch: an Apple-enabled,
+    # TIDAL-signed-out install is exactly the state that lost its entry point.
+    apple_on = _providers(_schema(apple_enabled=True))["providers_tidal"]["fields"][0]
+    assert apple_on["actions"] == [{"label": "Sign in", "action": "tidal_signin"}]
+
+    signed = _providers(_schema(logged_in=True))["providers_tidal"]["fields"][0]
+    assert signed["value"] == "signed_in"
+    assert signed["actions"] == [{"label": "Sign out", "action": "tidal_signout"}]
+
+
+def test_the_apple_card_offers_sign_out_only_while_signed_in():
+    base = [
+        {"label": "Setup wizard", "action": "apple_setup"},
+        {"label": "Update runtime", "action": "apple_update_runtime"},
+        {"label": "Remove runtime", "action": "apple_remove_runtime"},
+    ]
+    out = _providers(_schema(apple_enabled=True))["providers_apple"]["fields"][0]
+    assert out["actions"] == base
+
+    # A signed-in light (the cookies tier or the wrapper guest) adds the
+    # session action the card was missing.
+    stub = _schema_stub(apple_enabled=True)
+    stub._apple_live_flags = lambda: {"enabled": True, "signed_in": True, "cookies_ready": True}
+    sections = {s["id"]: s for s in WavesBridge.settingsSchema(stub)}
+    signed = _providers(sections)["providers_apple"]["fields"][0]
+    assert signed["value"] == "signed_in"
+    assert signed["actions"] == [*base, APPLE_SIGN_OUT_PILL]
+
+
+def test_one_helper_serves_the_slot_and_the_schema():
+    assert apple_status(False) == {"state": "off", "word": "Off"}
+    assert apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
+
+
+# ---- the appleStatus() slot (the page's live mirror reads it) --------------------
+
+
+def test_the_apple_status_slot_reports_off_and_not_set_up():
+    stub = _schema_stub(apple_enabled=False)
+    stub.appleStatus = _bind(stub, "appleStatus")
+    assert stub.appleStatus() == {
+        "state": "off",
+        "word": "Off",
+        "actions": APPLE_SETUP_PILLS,
+    }
+    stub2 = _schema_stub(apple_enabled=True)
+    stub2.appleStatus = _bind(stub2, "appleStatus")
+    assert stub2.appleStatus() == {
+        "state": "not_set_up",
+        "word": "Not set up",
+        "actions": APPLE_SETUP_PILLS,
+    }
+
+
+# ---- applySettings: the switch persists and flips the light ----------------------
+
+
+class _Stub(BridgeStub):
+    """Bare object the real applySettings gets bound onto."""
+
+
+def _signal(seen=None):
+    return SimpleNamespace(emit=lambda *a: seen.append(a) if seen is not None else None)
+
+
+def _apply_stub(apple_enabled: bool = False):
+    stub = _Stub()
+    stub._waves_prefs = {}
+    stub.settings = SimpleNamespace(
+        data=SimpleNamespace(
+            apple_enabled=apple_enabled,
+            tidal_quality_audio="HIGH",
+            apple_quality_audio="LOSSLESS",
+            quality_video="480",
+            download_base_path="/music",
+            ffmpeg_source="system",
+            downloads_concurrent_max=3,
+        ),
+        save=lambda: None,
+    )
+    stub._ffmpeg_flag_prefs = {}
+    stub._settings_save_lock = Lock()
+    stub._submit_settings_write = lambda: stub.settings.save()
+    stub._restore_ffmpeg_flags = lambda: None
+    stub._restore_ffmpeg_path = lambda: None
+    stub._ffmpeg_source_label = lambda: "system"
+    stub._waves_pref_bool = lambda key: False
+    stub.ownershipChanged = _signal()
+    stub.targetTierChanged = _signal()
+    stub.skipExistingChanged = _signal()
+    stub.ffmpegStatusChanged = _signal()
+    stub.confirmCategoryDlChanged = _signal()
+    stub.librarySourceChanged = _signal()
+    stub.appleStatusChanged = _signal()
+    stub.providerStateChanged = _signal()
+    stub._set_login_busy = lambda provider_id, busy: None
+    stub._stop_provider_downloads = lambda provider_id, reason: 0
+    stub._schedule_provider_cache_clear = lambda provider_id: None
+    stub._end_provider_context = _bind(stub, "_end_provider_context")
+    stub._start_provider_logout = _bind(stub, "_start_provider_logout")
+    stub.threadpool = SimpleNamespace(start=lambda worker: worker.fn())
+    stub.appleSetupRequested = _signal()
+    stub._search_gen = 0
+    stub._search_cache = {}
+    stub.dl_pool = SimpleNamespace(setMaxThreadCount=lambda n: None)
+    stub._logged_in = False
+    stub._set_status = lambda text: None
+    stub._set_busy = lambda value: None
+    stub.providers = {"tidal": SimpleNamespace(apply_quality=lambda *a: None)}
+    stub._reapply_quality = WavesBridge._reapply_quality.__get__(stub, _Stub)
+    stub._reapply_provider_quality = WavesBridge._reapply_provider_quality.__get__(stub, _Stub)
+    return stub
+
+
+def _apply(stub, values):
+    WavesBridge.applySettings.__get__(stub, type(stub))(values)
+
+
+def test_saving_an_overlapping_quarantine_folder_warns_with_the_used_path(tmp_path):
+    """The resolver refuses a quarantine folder that
+    overlaps the download root, so the save says so instead of leaving the
+    stored value and the folder really used silently different."""
+    stub = _apply_stub()
+    stub.settings.data.download_base_path = str(tmp_path / "lib")
+    stub.settings.data.apple_quarantine_dir = ""
+    notes: list = []
+    stub._set_status = notes.append
+    stub._configure_apple_provider = lambda: None
+    stub._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(stub, type(stub))
+
+    _apply(stub, {"apple_quarantine_dir": str(tmp_path / "lib")})
+
+    assert stub.settings.data.apple_quarantine_dir == str(tmp_path / "lib"), "the typed value is stored as given"
+    assert notes and "Settings saved" in notes[-1], "the saved word survives the warning"
+    assert "overlaps the download folder" in notes[-1]
+    assert "Waves Quarantine" in notes[-1]
+
+    # A folder outside the download root saves with no warning.
+    notes.clear()
+    _apply(stub, {"apple_quarantine_dir": str(tmp_path / "quarantine")})
+    assert notes == ["Settings saved"], "only the plain saved word"
+
+    # Moving the download folder onto an existing custom quarantine folder
+    # is the same divergence and warns too.
+    notes.clear()
+    _apply(stub, {"download_base_path": str(tmp_path / "quarantine")})
+    assert notes and "overlaps the download folder" in notes[-1]
+
+
+def test_the_quarantine_card_names_the_folder_really_in_use(tmp_path):
+    """The stored value stays visible, and the card's help says which folder
+    is used instead when the resolver overrides it."""
+    stub = _schema_stub(apple_enabled=True)
+    stub.settings = SimpleNamespace(data=ModelSettings())
+    stub.settings.data.download_base_path = str(tmp_path / "lib")
+    stub._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(stub, type(stub))
+
+    def _quarantine_field():
+        for section in WavesBridge.settingsSchema(stub):
+            for card in section.get("providers") or []:
+                for field in card.get("fields") or []:
+                    if field["key"] == "apple_quarantine_dir":
+                        return field
+        raise AssertionError("the Apple card carries no quarantine field")
+
+    assert "overlaps the download folder" not in _quarantine_field()["help"]
+    stub.settings.data.apple_quarantine_dir = str(tmp_path / "lib")  # the download root itself
+    assert "overlaps the download folder" in _quarantine_field()["help"]
+    assert "Waves Quarantine" in _quarantine_field()["help"]
+
+
+def test_the_quarantine_note_names_the_separate_library_overlap(tmp_path):
+    """A custom quarantine naming the separate library root falls back to
+    the default with the library wordings, or the whole scanned library
+    would be excluded once registered."""
+    stub = _schema_stub(apple_enabled=True)
+    stub.settings = SimpleNamespace(data=ModelSettings())
+    stub.settings.data.download_base_path = str(tmp_path / "downloads")
+    stub.settings.data.apple_quarantine_dir = str(tmp_path / "library")
+    stub._library_root = lambda: str(tmp_path / "library")
+    stub._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(stub, type(stub))
+
+    note = stub._apple_quarantine_note()
+    assert "overlaps the library folder" in note
+    assert "Waves Quarantine" in note
+
+    # No separate library configured means the same custom folder stands.
+    stub._library_root = lambda: ""
+    assert stub._apple_quarantine_note() == ""
+
+
+def test_saving_the_switch_persists_it():
+    stub = _apply_stub()
+    _apply(stub, {"apple_enabled": True})
+    assert stub.settings.data.apple_enabled is True
+
+
+def test_a_real_flip_emits_the_status_signal_an_unchanged_resubmit_does_not():
+    stub = _apply_stub()
+    seen = []
+    stub.appleStatusChanged = _signal(seen)
+    _apply(stub, {"apple_enabled": True})
+    assert len(seen) == 1
+    # A later save in the same visit resubmits the keys unchanged; that is
+    # not a flip and must not move the light (the library keys' rule).
+    _apply(stub, {"apple_enabled": True})
+    assert len(seen) == 1
+    _apply(stub, {"apple_enabled": False})
+    assert len(seen) == 2
+
+
+def test_a_flip_off_is_also_a_flip():
+    stub = _apply_stub(apple_enabled=True)
+    seen = []
+    stub.appleStatusChanged = _signal(seen)
+    _apply(stub, {"apple_enabled": False})
+    assert len(seen) == 1
+
+
+def test_turning_apple_on_requests_the_setup_wizard():
+    stub = _apply_stub()
+    seen = []
+    stub.appleSetupRequested = _signal(seen)
+    _apply(stub, {"apple_enabled": True})
+    assert seen == [("setup",)]
+    # Off again, or an unchanged resubmit, requests nothing.
+    _apply(stub, {"apple_enabled": False})
+    assert seen == [("setup",)]
+    _apply(stub, {"apple_enabled": False})
+    assert seen == [("setup",)]
+
+
+def test_turning_apple_off_stops_its_queue_and_says_how_many():
+    stub = _apply_stub(apple_enabled=True)
+    calls = []
+    stub._stop_provider_downloads = lambda provider, reason: calls.append((provider, reason)) or 3
+    status: list = []
+    stub._set_status = status.append
+
+    _apply(stub, {"apple_enabled": False})
+
+    assert calls == [("apple", "Apple Music was disabled")]
+    assert status and "stopped 3 Apple downloads" in status[0]
+
+
+def test_turning_apple_on_does_not_stop_the_queue():
+    stub = _apply_stub()
+    calls = []
+    stub._stop_provider_downloads = lambda provider, reason: calls.append((provider, reason)) or 0
+
+    _apply(stub, {"apple_enabled": True})
+
+    assert calls == []
+
+
+def test_an_untouched_switch_emits_nothing():
+    stub = _apply_stub()
+    seen = []
+    stub.appleStatusChanged = _signal(seen)
+    _apply(stub, {"tidal_quality_audio": "LOSSLESS"})
+    assert seen == []
+
+
+# ---- factory reset covers the switch ---------------------------------------------
+
+
+def test_factory_reset_resets_the_apple_switch():
+    stub = _schema_stub(apple_enabled=True)
+    stub.settingsSchema = _bind(stub, "settingsSchema")
+    stub._factory_default_values = _bind(stub, "_factory_default_values")
+    values = stub._factory_default_values()
+    assert values["apple_enabled"] is False
+
+
+# ---- shared sections say they govern both providers ------------------------------
+
+
+def test_shared_help_text_names_both_providers():
+    help_settings = HelpSettings()
+    assert "every enabled provider" in help_settings.default_audio_type
+    assert "every enabled provider" in help_settings.lyrics_embed
+    assert "every enabled provider" in help_settings.lyrics_file
+    assert "every enabled provider" in help_settings.lyrics_prefer_lrclib
+    assert "every enabled provider" in _schema()["diagnostics"]["desc"]
+
+
+def test_the_playlist_template_help_no_longers_claims_tidals_tree():
+    # {folder_path} mirrors the playlist's folder tree on ITS PROVIDER; the
+    # old wording hard-coded TIDAL, which stopped being the whole truth the
+    # moment a second provider existed.
+    assert "TIDAL folder tree" not in HelpSettings().format_playlist
+    assert "its provider" in HelpSettings().format_playlist
+
+
+def test_the_provider_sections_declarations_carry_the_area_vocabulary():
+    src = QML_DIR / "domains/settings/SettingsPage.qml"
+    qml = src.read_text(encoding="utf-8")
+    # The status row delegate and the Apple light's live mirror are pinned
+    # by source (the settings-page QML convention): the mirror re-reads
+    # appleStatus() on the flip signal, and the row prefers it while it
+    # holds a value.
+    assert "onAppleStatusChanged" in qml
+    assert '"apple_status"' in qml
+    # The in-place wizard card renders the live setup mirror and
+    # calls back the named step actions.
+    assert '"apple_setup"' in qml
+    assert "appleSetupLive" in qml
+    assert "installAppleRuntime" in qml and "installAppleImage" in qml
+    assert "appleStartContainer" in qml and "appleEnsurePort" in qml
+    # Step buttons say what they do (Remove, Pull image…), never Continue.
+    assert "action_label" in qml
+    # The schema snapshots TIDAL's session, so login/logout must rebuild it.
+    assert "onLoggedInChanged" in qml
+    # The Apple switch is reachable without a pointer while its row is on
+    # screen, and drops out of the tab order with the page.
+    assert "activeFocusOnTab: visible" in qml
+    assert "Accessible.role: Accessible.CheckBox" in qml
+    assert "Keys.onPressed" in qml
+    assert "!event.isAutoRepeat" in qml
+
+
+def test_the_factory_reset_walk_still_finds_the_switch_through_the_composite():
+    # _factory_default_values enumerates composite sub-keys by name; the
+    # Apple status row's enabled_key is what makes RESET ALL SETTINGS reach
+    # the switch. Pinned against the real schema walk above (see
+    # test_factory_reset_resets_the_apple_switch); this asserts the
+    # enumeration keys the walk reads are the ones the row declares.
+    status = _providers()["providers_apple"]["fields"][0]
+    assert {status.get("key"), status.get("enabled_key")} == {"provider_apple_status", "apple_enabled"}
+
+
+def test_enabling_and_pre_setup_clicks_deep_link_into_the_wizard():
+    src = QML_DIR / "Main.qml"
+    qml = src.read_text(encoding="utf-8")
+    # Enabling Apple Music and tapping an Apple download before setup
+    # completes both land in Settings at the Apple section (spec section 7.1):
+    # the affordance stays live and opens the path.
+    assert "onAppleSetupRequested" in qml
+    assert "openAppleSetup" in qml
+    assert '"providers_apple"' in qml
+
+
+# ---- one Providers section, one card per provider -----------------------------
+
+
+def test_provider_cards_hold_only_field_kinds_the_band_renders():
+    # The band renders rowFields through the shared row renderer (which also
+    # covers the cover_sizes composite) and plain bools through the shared
+    # toggle tile. Any other kind (a third-width row, a char map, an
+    # embedded card) would silently vanish, so adding one must come with
+    # its renderer.
+    for card in _providers().values():
+        kinds = {(f["key"], f.get("type"), bool(f.get("third"))) for f in card["fields"]}
+        for key, kind, third in kinds:
+            assert kind in (
+                "status",
+                "apple_setup",
+                "enum",
+                "str",
+                "int",
+                "float",
+                "bool",
+                "cover_sizes",
+            ), key
+            assert third is False, key
+
+
+def test_factory_reset_reaches_inside_the_provider_cards():
+    stub = _schema_stub(apple_enabled=True)
+    stub.settingsSchema = _bind(stub, "settingsSchema")
+    stub._factory_default_values = _bind(stub, "_factory_default_values")
+    values = stub._factory_default_values()
+    # The switch, both quality defaults, and a deep Apple runtime key all
+    # resolve through the nested cards, not just the top-level sections.
+    assert values["apple_enabled"] is False
+    assert values["tidal_quality_audio"] == "HI_RES_LOSSLESS"
+    assert values["apple_quality_audio"] == "HI_RES_LOSSLESS"
+    assert values["apple_wrapper_idle_sec"] == 300.0
+    assert values["apple_quarantine_keep"] is True
+
+
+def test_the_page_renders_provider_bands_with_logos_and_deep_links():
+    src = QML_DIR / "domains/settings/SettingsPage.qml"
+    qml = src.read_text(encoding="utf-8")
+    # One band per provider entry, each headed by the logo its descriptor
+    # carries and its name, fields through the shared renderers. The page
+    # holds no per-provider switch: a new provider's descriptor travels the
+    # same path.
+    assert "card.modelData.providers" in qml
+    assert "modelData.logo" in qml
+    assert "modelData.logo_width" in qml
+    assert "providerLogo" not in qml
+    assert "modelData.name" in qml
+    assert "page.rowFields(modelData.fields)" in qml
+    assert "page.boolFields(modelData.fields)" in qml
+    # Action pills dispatch through the bridge's one provider-action slot,
+    # addressed by the provider the status row names — never by identity.
+    assert "waves.providerAction(" in qml
+    assert "statusCol.row.provider" in qml
+    # Legacy provider deep-links resolve generically onto the section and
+    # position its requested band after lazy controls finish sizing.
+    assert "dualLogo" in qml
+    assert "providerFieldCount" in qml
+    assert 'cardId.indexOf("providers_") === 0' in qml
+    assert "page.jumpProvider = providerId" in qml
+    assert "jumpCard.providerBandY(jumpProvider)" in qml
+
+
+# ---- the descriptor contract ------------------------------------------------------
+
+
+def test_both_providers_expose_a_descriptor_with_their_card_identity():
+    from waves.providers.apple.provider import AppleProvider
+    from waves.providers.tidal import TidalProvider
+
+    tidal = TidalProvider.descriptor()
+    assert (tidal.id, tidal.name) == ("tidal", "TIDAL")
+    assert tidal.logo == "assets/providers/tidal.png" and tidal.logo_width == 24
+    assert (tidal.logo_header_width, tidal.logo_header_height) == (18, 12)
+    assert tidal.status_kind == "session"
+    assert tidal.capability_summary
+    assert tidal.settings_fields[0] == "provider_tidal_session"
+
+    apple = AppleProvider.descriptor()
+    assert (apple.id, apple.name) == ("apple", "Apple Music")
+    assert apple.logo == "assets/providers/apple-music.png"
+    assert (apple.logo_header_width, apple.logo_header_height) == (14, 14)
+    assert apple.status_kind == "setup"
+    assert apple.capability_summary
+    assert apple.settings_fields[:2] == ("provider_apple_status", "apple_setup_wizard")
+
+
+def test_the_schema_cards_come_from_the_descriptors():
+    from waves.providers.tidal import TidalProvider
+
+    cards = _providers()
+    tidal = cards["providers_tidal"]
+    descriptor = TidalProvider.descriptor()
+    assert (tidal["name"], tidal["desc"], tidal["logo"], tidal["logo_width"]) == (
+        descriptor.name,
+        descriptor.card_desc,
+        descriptor.logo,
+        descriptor.logo_width,
+    )
+    assert [f["key"] for f in tidal["fields"] if not f["key"].startswith("download_policies.")] == list(
+        descriptor.settings_fields
+    )
+
+
+def test_a_third_provider_renders_a_card_and_actions_with_no_qml_branch():
+    """The ticket's paper test: a provider registered after the card renderer
+    was written contributes a descriptor and gets a card, a generated session
+    row and working action keys through the same generic path."""
+    from waves.providers.base import ProviderDescriptor
+
+    descriptor = ProviderDescriptor(
+        id="newco",
+        name="NewCo",
+        logo="assets/providers/newco.png",
+        logo_width=22,
+        capability_summary="A provider the page has never heard of.",
+        card_desc="NewCo's card, rendered from its descriptor.",
+        status_kind="session",
+    )
+    stub = _schema_stub()
+    stub.providers["newco"] = SimpleNamespace(id="newco", descriptor=lambda: descriptor, is_logged_in=True)
+    cards = _providers({s["id"]: s for s in WavesBridge.settingsSchema(stub)})
+    new = cards["providers_newco"]
+    assert (new["name"], new["desc"], new["logo"], new["logo_width"]) == (
+        "NewCo",
+        "NewCo's card, rendered from its descriptor.",
+        "assets/providers/newco.png",
+        22,
+    )
+    # Its session status row and matching action are generated, not copied.
+    row = new["fields"][0]
+    assert row["key"] == "provider_newco_session" and row["provider"] == "newco"
+    assert row["word"] == "Signed in"
+    assert row["actions"] == [{"label": "Sign out", "action": "newco_signout"}]
+
+
+def test_provider_action_dispatches_by_descriptor_key():
+    """The one slot a card's pills call: sign-in asks the welcome surface to
+    open, sign-out runs the provider's, and a provider the bridge has never
+    heard of still dispatches."""
+    from waves.providers.base import ProviderDescriptor
+
+    calls: list[str] = []
+    descriptor = ProviderDescriptor(id="newco", name="NewCo")
+    newco = SimpleNamespace(
+        id="newco",
+        descriptor=lambda: descriptor,
+        is_logged_in=False,
+        login_begin=lambda: calls.append("login_begin") or "https://example.invalid/login",
+        logout=lambda: calls.append("logout"),
+    )
+
+    stub = _apply_stub()
+    newco.name = "NewCo"
+    newco.invalidate_catalog_context = lambda: None
+    newco.session_teardown_context = contextlib.nullcontext
+    newco.reset_session = lambda: None
+    stub.providers["newco"] = newco
+    stub.signInRequested = SimpleNamespace(emit=lambda provider_id: calls.append(f"signin:{provider_id}"))
+    stub.providerAction = _bind(stub, "providerAction")
+
+    stub.providerAction("newco", "newco_signin")
+    stub.providerAction("newco", "newco_signout")
+    stub.providerAction("newco", "newco_unknown_verb")
+    # No hidden browser flow: sign-in only requests the surface.
+    assert calls == ["signin:newco", "logout"]
+
+
+def test_provider_action_ignores_an_unregistered_provider():
+    stub = _schema_stub()
+    stub.providerAction = _bind(stub, "providerAction")
+    stub.providerAction("ghost", "ghost_signin")  # no provider, no crash
+
+
+def test_apple_engine_setting_offers_auto_and_the_existing_route_without_a_recommendation():
+    field = next(item for item in _providers()["providers_apple"]["fields"] if item["key"] == "apple_engine")
+    assert field["type"] == "enum"
+    assert field["value"] == "auto"
+    assert field["options"] == [{"value": "auto", "label": "Auto"}, {"value": "gamdl", "label": "gamdl"}]
+    data = ModelSettings(apple_engine="gamdl")
+    assert ModelSettings.from_json(data.to_json()).apple_engine == "gamdl"

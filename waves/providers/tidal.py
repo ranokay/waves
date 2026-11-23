@@ -1,0 +1,1141 @@
+"""The TIDAL Provider: the seam's first implementation, by thin delegation.
+
+Every method hands the work to the body that has always done it --
+``waves.providers.tidal_client``'s catalog adapters, ``waves.config``'s session, and the
+identity helpers in ``waves.ids`` and pooled HTTP in ``waves.http``. The bridge routes every TIDAL
+session, catalog and editorial read through this module (the seam's contract
+half); the only tidal-object touches left in the bridge are the
+engine hand-off and the config layer's credential-event wiring.
+
+Where the provider adds code at all, it is vocabulary translation between the
+engine's TIDAL-shaped facts and the seam's neutral types (quality rungs, audio
+types, refusal classes) -- the drift-prone edges, each pinned in the test
+suite to the backend normalizer it must agree with.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import threading
+from collections.abc import Iterator
+from importlib.metadata import version
+
+import tidalapi
+from requests import HTTPError
+from tidalapi import page as tidal_page
+from tidalapi.exceptions import (
+    AssetNotAvailable,
+    AuthenticationError,
+    ManifestDecodeError,
+    ObjectNotFound,
+    StreamNotAvailable,
+    TooManyRequests,
+    UnknownManifestFormat,
+)
+from tidalapi.media import AudioMode, Track, Video
+from tidalapi.mix import Mix
+
+from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
+from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
+from waves.errors import DownloadIncomplete
+from waves.events import EventCode, Failure, FailureScope
+from waves.ids import credited_artist_ids, download_identity_id
+from waves.metadata.naming import get_album_artist_ids, get_album_artists
+from waves.providers.base import (
+    AudioType,
+    BrowseWindow,
+    Capability,
+    CatalogLink,
+    FavoritesUnavailable,
+    LoginAttempt,
+    Provider,
+    ProviderDescriptor,
+    QualityOption,
+    Refusal,
+    RefusalKind,
+    StatusKind,
+    StreamInfo,
+)
+from waves.providers.tidal_client import (
+    TIDAL_LINK_HOSTS,
+    get_tidal_media_id,
+    get_tidal_media_type,
+    instantiate_media,
+    items_results_all,
+    logged_in_user,
+    quality_audio_highest,
+    search_results_all,
+    user_media_lists,
+)
+from waves.providers.tidal_folders import walk_playlist_tree
+from waves.providers.tidal_manifest import overgenerated_tail_urls
+from waves.providers.tidal_refusals import asset_refusal_message
+
+logger = logging.getLogger("waves.providers.tidal")
+
+_ATMOS_MODE: str = str(AudioMode.dolby_atmos.value)
+
+# My Tidal sort: the order keys the UI speaks, mapped onto the per-category
+# tidalapi order enums (moved here from the bridge so the mapping rides the
+# seam with the favorites reads it serves). Direction is applied separately.
+# Built only when the enums are importable; an empty map means "no
+# server-side sort" (older tidalapi) and every category falls back to the API's
+# default date-added order.
+try:
+    from tidalapi.types import AlbumOrder, ArtistOrder, ItemOrder, OrderDirection, VideoOrder
+
+    _FAVORITES_ORDER: dict[str, dict[str, object]] = {
+        "albums": {
+            "date": AlbumOrder.DateAdded,
+            "name": AlbumOrder.Name,
+            "release": AlbumOrder.ReleaseDate,
+            "artist": AlbumOrder.Artist,
+        },
+        "artists": {"date": ArtistOrder.DateAdded, "name": ArtistOrder.Name},
+        "tracks": {"date": ItemOrder.Date, "name": ItemOrder.Name, "artist": ItemOrder.Artist},
+        "videos": {"date": VideoOrder.DateAdded, "name": VideoOrder.Name, "artist": VideoOrder.Artist},
+    }
+except Exception:  # pragma: no cover - depends on installed tidalapi version
+    _FAVORITES_ORDER = {}
+
+
+def _favorites_order_kwargs(kind: str, order: tuple[str, str] | None) -> dict:
+    """tidalapi favorites kwargs for a My Tidal sort, or ``{}`` for the
+    default order (an absent spec, an order key the category doesn't offer,
+    or an older tidalapi without ordered favourites)."""
+    if not _FAVORITES_ORDER or not order:
+        return {}
+    order_key, direction = order
+    enum = _FAVORITES_ORDER.get(kind, {}).get(order_key)
+    if enum is None:
+        return {}
+    direction_enum = OrderDirection.Ascending if direction == "asc" else OrderDirection.Descending
+    return {"order": enum, "order_direction": direction_enum}
+
+
+def _enum_value(value):
+    """A provider enum to its plain string value, anything else unchanged."""
+    return getattr(value, "value", value)
+
+
+def _tidal_id(raw) -> str:
+    """A TIDAL id in the seam's namespaced spelling (§4.2: namespaced string
+    ids everywhere new), empty staying empty."""
+    raw = str(raw or "")
+    return f"{CTX_TIDAL}:{raw}" if raw else ""
+
+
+# Item kinds a tile mosaic prefers, best first: an artist portrait or an
+# album cover reads better than a track's copy of the same art or a
+# text-heavy editorial playlist cover.
+_TILE_ART_RANK: tuple[tuple[type, int], ...] = (
+    (tidalapi.Artist, 0),
+    (tidalapi.Album, 1),
+    (Track, 2),
+    (Mix, 3),
+    (tidalapi.Playlist, 4),
+)
+
+
+class TidalProvider(Provider):
+    """TIDAL, through the existing engine bodies.
+
+    ``stream_resolver`` is the one collaborator the engine binds when the
+    download pipeline resolves through the seam (per-job state -- pacing,
+    logging, tallies -- lives there, not here); without a bound resolver the
+    provider carries the contract but cannot resolve streams. The binding is
+    the engine's own act (:meth:`stream_resolver_bound`), scoped to each
+    resolve, never a construction-time registration.
+    """
+
+    id = CTX_TIDAL
+    name = "TIDAL"
+    capabilities = frozenset(Capability)
+    identity_kinds = frozenset({"track", "album"})
+
+    # ----- chooser metadata
+
+    # TIDAL serves its four rungs; the detail words are the Chooser's label
+    # text, not ranks (ADR 0001).
+    quality_options = (
+        QualityOption(QualityTier.HI_RES_LOSSLESS, "FLAC 24-bit up to 192 kHz"),
+        QualityOption(QualityTier.LOSSLESS, "FLAC 16-bit/44.1 kHz"),
+        QualityOption(QualityTier.HIGH, "AAC 320"),
+        QualityOption(QualityTier.LOW, "AAC 96"),
+    )
+    quality_setting = "tidal_quality_audio"
+    # Atmos-only releases are their own ids, so a track can arrive with Atmos
+    # and no stereo at all.
+    audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
+    settings_card = "tidal"
+
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """TIDAL's card identity and the fields its Providers card owns."""
+        return ProviderDescriptor(
+            id=cls.id,
+            name=cls.name,
+            logo="assets/providers/tidal.png",
+            logo_width=24,
+            logo_header_width=18,
+            logo_header_height=12,
+            capability_summary="Sign in to search, browse and download.",
+            card_desc=(
+                "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."
+            ),
+            welcome_action="Continue with TIDAL",
+            settings_fields=(
+                "provider_tidal_session",
+                "tidal_quality_audio",
+                "tidal_lyrics_embed",
+                "tidal_lyrics_file",
+                "tidal_lyrics_prefer_lrclib",
+                "tidal_metadata_cover_dimension",
+                "tidal_metadata_cover_embed",
+                "tidal_cover_album_file",
+                "tidal_cover_file_format",
+            ),
+            status_kind=StatusKind.SESSION,
+            link_hosts=TIDAL_LINK_HOSTS,
+        )
+
+    def __init__(self, tidal: Tidal, stream_resolver=None):
+        self._tidal = tidal
+        self._availability_version = version("tidalapi")
+        self._stream_resolver = stream_resolver
+        # The app's row dictionaries for TIDAL objects, handed over by the
+        # bridge where the providers are wired (see bind_row_vocabulary).
+        self._row_builders: dict = {}
+        # The editorial (Browse) reads serialize behind their own lock: they
+        # parse through the session's SHARED page parser, which mutates itself
+        # on every parse and is not thread-safe. The lock lives here because
+        # the shared parser does -- every read that parses a page takes it,
+        # whoever calls.
+        self._browse_lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def stream_resolver_bound(self, resolver):
+        """Bind this caller's engine resolver for the binding's duration.
+
+        Per-job state -- pacing, quality pinning, delivered-quality capture --
+        lives in the engine, not in this translation layer, so a resolve_stream
+        call crosses the seam and comes straight back to the engine that ASKED.
+        The engine therefore binds its own fetch around each resolve and the
+        binding is restored after it: one shared provider serves many engines
+        (the GUI rebuilds its idle ``Download`` on every settings save while a
+        job is running), and a construction-time registration would let the
+        newest engine steal a running job's resolves -- silently dropping the
+        job's pinned quality and delivered-quality capture mid-album.
+        """
+        previous = self._stream_resolver
+        self._stream_resolver = resolver
+        try:
+            yield
+        finally:
+            self._stream_resolver = previous
+
+    # ----- session / auth
+
+    def has_resumable_session(self) -> bool:
+        """Read saved-session eligibility without contacting TIDAL."""
+        owner = self._tidal
+        return bool(
+            owner.token_from_storage
+            and getattr(owner, "_sign_in_at_stake", True)
+            and not getattr(owner, "persistence_frozen", False)
+            and not getattr(owner, "_keep_file_untouched", False)
+        )
+
+    def create_login_attempt(self, *, resume=False, register_secrets=None) -> LoginAttempt:
+        from waves.providers.tidal_auth import TidalLoginAttempt
+
+        return TidalLoginAttempt(self._tidal, resume=resume, register_secrets=register_secrets)
+
+    def login_begin(self) -> str:
+        # A prior sign-out tears the session down (the engine's logout deletes
+        # it outright); rebuild one so a fresh PKCE login can start: the
+        # self-heal lives where the session does, not in the bridge's login
+        # slot.
+        if getattr(self._tidal, "session", None) is None:
+            self.reset_session()
+        return self._tidal.session.pkce_login_url()
+
+    def login_complete(self, payload: str) -> bool:
+        token = self._tidal.session.pkce_get_auth_token(payload)
+        self._tidal.session.process_auth_token(token, is_pkce_token=True)
+        return bool(self._tidal.login_finalize())
+
+    def logout(self) -> None:
+        self._tidal.logout()
+
+    def login_resume(self) -> bool:
+        """Reopen the session from the credentials stored on disk.
+
+        The WavesTidal wrapper the GUI passes in owns the resilience policy
+        (a dead network must not cost the user their saved sign-in); the
+        provider only forwards the ask."""
+        return bool(self._tidal.login_token())
+
+    def reset_session(self) -> None:
+        """Rebuild the underlying tidalapi session after a sign-out.
+
+        The engine's ``Tidal.logout()`` deletes the session object outright (a
+        CLI assumption, the process exits right after logging out). The GUI is
+        long-running and lets the user sign back in, so a clean session is
+        rebuilt, mirroring ``Tidal.__init__``, and the configured quality is
+        reapplied. Without this, a sign-out leaves the wrapper with no
+        ``session`` and the next login, or any session call, raises
+        ``AttributeError``.
+        """
+        self._tidal.session = tidalapi.Session(tidalapi.Config(item_limit=10000))
+        # The rebuilt session is a fresh requests.Session too, so it needs the
+        # catalog retry/timeout policy re-mounted or every call after a
+        # sign-out goes back to being a single un-retried attempt.
+        harden_api_session(self._tidal.session)
+        self._tidal.original_client_id = self._tidal.session.config.client_id
+        self._tidal.original_client_secret = self._tidal.session.config.client_secret
+        # Both pairs, the same four the constructor captures: the Atmos swap
+        # moves the PKCE pair too, and these are what it restores to.
+        self._tidal.original_client_id_pkce = self._tidal.session.config.client_id_pkce
+        self._tidal.original_client_secret_pkce = self._tidal.session.config.client_secret_pkce
+        self._tidal.is_atmos_session = False
+        quality = session_quality_from_word(getattr(self._tidal.settings.data, "tidal_quality_audio", ""))
+        if quality is not None:
+            self._tidal.session.audio_quality = quality
+        self._tidal.session.video_quality = tidalapi.VideoQuality.high
+
+    @contextlib.contextmanager
+    def session_teardown_context(self) -> Iterator[None]:
+        """Let an old stream restore its credentials before replacing the session."""
+        with self._tidal.stream_lock:
+            yield
+
+    @property
+    def is_logged_in(self) -> bool:
+        # A sign-out deletes the session object outright (the engine's CLI
+        # assumption); a status refresh that lands after one reads as signed
+        # out, never an AttributeError.
+        session = getattr(self._tidal, "session", None)
+        return bool(session and session.check_login())
+
+    def account_id(self) -> str:
+        try:
+            return str(getattr(self._tidal.session.user, "id", "") or "")
+        except Exception:
+            return ""
+
+    def credential_facts(self) -> dict[str, str]:
+        """The session's secret-bearing facts for the caller's redactor.
+
+        A missing session or a missing attribute answers empty rather than
+        raising: this is called on every credential mint and every redactor
+        refresh, and a failure must never take a login or a quality switch
+        down with it.
+        """
+        facts: dict[str, str] = {}
+        try:
+            session = self._tidal.session
+            for key in ("access_token", "refresh_token", "session_id"):
+                facts[key] = str(getattr(session, key, "") or "")
+            user = getattr(session, "user", None)
+            facts["account_id"] = str(getattr(user, "id", "") or "")
+            facts["username"] = str(getattr(user, "username", "") or "")
+        except Exception:
+            logger.debug("Could not collect the session's credential facts", exc_info=True)
+        return facts
+
+    def apply_quality(self, tier: QualityTier, audio_type: AudioType) -> None:
+        # The session carries only the stereo tier, written exactly the way
+        # settings_apply writes it (guard included: while the Atmos swap owns
+        # the session, the stereo tier is held off it). The provider stores
+        # the Waves rung as its tier string on the engine's settings; the
+        # engine maps it onto its own codec vocabulary (spec §4.3). TIDAL's
+        # Atmos delivery is a per-stream decision inside the fenced swap
+        # machinery, never a session property this call could set.
+        self._tidal.settings.data.tidal_quality_audio = str(tier.value)
+        self._tidal.settings_apply()
+
+    # ----- catalog read
+
+    def catalog_identity_context(self):
+        return (
+            self.account_id(),
+            str(getattr(self._tidal.session, "country_code", "")),
+            self._tidal.session.config.openapi_v2_location,
+        )
+
+    def catalog_identity(self, kind, raw_id):
+        from waves.providers.tidal_catalog_identity import read_identity
+
+        return read_identity(self._tidal.session, kind, raw_id)
+
+    def catalog_candidates(self, origin):
+        from waves.providers.tidal_catalog_identity import find_candidates
+
+        return find_candidates(self._tidal.session, origin)
+
+    def availability_context(self):
+        return (*self.catalog_identity_context(), str(id(self._tidal.session)), self._availability_version)
+
+    def probe_availability(self, identity, ask):
+        from waves.providers.tidal_offers import probe
+
+        with self._tidal.stream_lock:
+            return probe(self._tidal.session, identity, ask)
+
+    def search(self, needle: str) -> dict:
+        # One page: the GUI keeps a bounded head of each bucket, so the
+        # pager's serial follow-ups only ever fetched rows it discarded.
+        return search_results_all(self._tidal.session, needle, single_page=True)
+
+    def open_url(self, url: str) -> object | None:
+        """Resolve a pasted share URL to the engine object it names.
+
+        None covers every "cannot show this" case for now -- not this
+        provider's grammar, an item that is gone, or a failed lookup (the
+        bridge's own handler reports them identically today). Telling those
+        apart to the user is the routing ticket's to decide.
+        """
+        if not self.accepts_url(url):
+            return None
+        media_type = get_tidal_media_type(url)
+        if media_type is False:
+            return None
+        try:
+            return instantiate_media(self._tidal.session, media_type, get_tidal_media_id(url))
+        except Exception:
+            return None
+
+    def resolve_link(self, url: str) -> CatalogLink | None:
+        media = self.open_url(url)
+        kinds = (
+            (tidalapi.Artist, "artist"),
+            (tidalapi.Album, "album"),
+            (Track, "track"),
+            (Video, "video"),
+            (tidalapi.Playlist, "playlist"),
+            (Mix, "mix"),
+        )
+        kind = next((kind for cls, kind in kinds if isinstance(media, cls)), "")
+        row = self.row_for(kind, media) if kind else {}
+        return CatalogLink(kind, row) if row else None
+
+    def get_object(self, kind: str, raw_id: str) -> object:
+        # Under the browse lock: a Mix construction parses through the SHARED
+        # session.page instance (the same non-thread-safe parser the editorial
+        # reads guard against); the other fetchers don't need it but holding
+        # it uniformly is harmless -- and it closes the dispatch path's
+        # unguarded Mix parse (a queued job resolving its object raced any
+        # concurrent Browse parse).
+        with self._browse_lock:
+            return instantiate_media(self._tidal.session, MediaType(kind), raw_id)
+
+    def collection_items(self, obj, include_videos: bool = True) -> list:
+        # Under the browse lock: a mix's lazy items() parse runs through the
+        # SHARED session.page instance (the same non-thread-safe parser the
+        # editorial reads serialize), and a parse racing a browse parse
+        # corrupts both. The other collections page through typed endpoints
+        # that do not touch that parser; holding it uniformly was judged
+        # harmless, but a long album pagination has no business blocking a
+        # browse parse, so only the mix branch takes it.
+        if isinstance(obj, Mix):
+            with self._browse_lock:
+                return items_results_all(obj, videos_include=include_videos)
+        return items_results_all(obj, videos_include=include_videos)
+
+    def user_collections(self) -> dict:
+        return user_media_lists(self._tidal.session)
+
+    def folder_tree(self, root_folders: list | None = None):
+        return walk_playlist_tree(self._tidal.session, root_folders=root_folders)
+
+    def search_tracks(self, needle: str, limit: int = 10) -> list:
+        try:
+            res = self._tidal.session.search(needle, models=[Track], limit=limit)
+        except Exception:
+            logger.debug("Track search failed for %r", needle, exc_info=True)
+            return []
+        return list(res.get("tracks") or [])
+
+    # ----- editorial reads (Browse) ---------------------------------------
+
+    def browse_page(self, title: str, api_path: str):
+        """One editorial page, read and parsed. The parse is the only part
+        that needs the lock (the shared session.page parser mutates itself on
+        every parse), so the request is issued BEFORE the lock: an untimed
+        request held under it meant one wedged peer blocked every other
+        acquirer. The V2 home-feed shape degrades to the stock parser rather
+        than misreading the payload, an unparseable module is dropped and
+        logged, and every parsed category carries the raw paging handle
+        (``_waves_pl``: dataApiPath + totals) endless scroll pages from
+        later."""
+        with self._browse_lock:
+            page = tidal_page.Page(self._tidal.session, title)
+        json_obj = page.request.request("GET", api_path, params={"deviceType": "BROWSER"}).json()
+        if "rows" not in json_obj:
+            # V2 home-feed shape, Browse never requests it, but degrade
+            # to the stock parser rather than misreading the payload.
+            with self._browse_lock:
+                return page.parse(json_obj)
+        page.title = str(json_obj.get("title") or "") or title
+        categories = []
+        for row in json_obj.get("rows") or []:
+            try:
+                with self._browse_lock:
+                    modules = row.get("modules") or []
+                    if not modules:
+                        continue
+                    cat = page.page_category.parse(modules[0])
+                # Stash the module's raw paging handle on the parsed
+                # category: dataApiPath + totals let a row load further
+                # pages later (endless scroll), tidalapi's own objects
+                # drop this information.
+                pl = modules[0].get("pagedList") or {}
+                cat._waves_pl = {  # ty: ignore[invalid-assignment]  # Waves' stashed paging handle; the stub has no such attribute
+                    "data": str(pl.get("dataApiPath") or ""),
+                    "total": int(pl.get("totalNumberOfItems") or 0),
+                    "n": len(pl.get("items") or []),
+                    "modType": str(modules[0].get("type") or ""),
+                }
+                categories.append(cat)
+            except Exception:
+                logger.debug("Skipped an unparseable browse module", exc_info=True)
+        page.categories = categories  # ty: ignore[invalid-assignment]  # V2 categories, richer than the stub's media list
+        return page
+
+    def browse_home(self):
+        """The V2 home feed as a parsed page ("Home"), each module parsed
+        tolerantly: one module type tidalapi doesn't know is dropped and
+        logged, the rest of the feed lives. The request runs before the
+        lock (see browse_page); the parse holds it."""
+        session = self._tidal.session
+        json_obj = session.request.request(
+            "GET",
+            "home/feed/static",
+            base_url=session.config.api_v2_location,
+            params={"deviceType": "BROWSER", "locale": session.locale, "platform": "WEB"},
+        ).json()
+        # A private parser instance for the same reason as browse_page:
+        # the shared session.page mutates itself on every parse.
+        with self._browse_lock:
+            parser = tidal_page.PageCategoryV2(session)
+            page = tidal_page.Page(session, "Home")
+            categories = []
+            for item in json_obj.get("items") or []:
+                try:
+                    categories.append(parser.parse_item(item))
+                except Exception:
+                    logger.debug("Skipped an unparseable home module", exc_info=True)
+            page.categories = categories  # ty: ignore[invalid-assignment]  # V2 categories, richer than the stub's media list
+            return page
+
+    def browse_window(self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50) -> BrowseWindow:
+        """One paged window of an editorial category, with the RAW item count
+        (the offset must advance by what the endpoint sent, never by what
+        survived the parse) and the collection total. The request is issued
+        before the lock; the parse holds it (see browse_page)."""
+        with self._browse_lock:
+            page = tidal_page.Page(self._tidal.session, title)
+        j = page.request.request(
+            "GET",
+            data_path,
+            params={"deviceType": "BROWSER", "locale": "en_US", "offset": offset, "limit": limit},
+        ).json()
+        raw = j.get("items") or []
+        with self._browse_lock:
+            cat = page.page_category.parse({"type": mod_type, "title": title, "pagedList": {"items": raw}})
+        return BrowseWindow(category=cat, n=len(raw), total=int(j.get("totalNumberOfItems") or 0))
+
+    def browse_landing(self) -> dict:
+        """TIDAL's landing recipe: Explore names the chip groups and the
+        New/Top quick links, those pages inline as content shelves, For You
+        follows, and the personalized home feed lands last. Only Explore is
+        read here -- its quick links decide the page list; the bridge fetches
+        the named pages through ``browse_page`` and renders them. A failed
+        Explore read fails TIDAL's whole contribution (the bridge isolates
+        it from other providers); missing quick links still ship the chips
+        and the For You page."""
+        explore = self.browse_page("Explore", "pages/explore")
+        chips, quick = self._chips_from_explore(explore)
+        pages = []
+        for name in ("New", "Top"):
+            path = quick.get(name)
+            if path:
+                pages.append({"title": name, "path": path})
+        pages.append({"title": "For You", "path": "pages/for_you"})
+        return {"chips": chips, "pages": pages, "home": True}
+
+    @staticmethod
+    def _chips_from_explore(explore) -> tuple[dict, dict]:
+        """Split the Explore page's PageLinks rows into the Genres / Moods /
+        Decades chip sets plus the untitled tail row's quick links (New / Top
+        / Videos / HiRes). The bridge stamps the chip links with their owner;
+        the quick links stay TIDAL's own page list."""
+        chips: dict[str, list] = {"genres": [], "moods": [], "decades": []}
+        quick: dict[str, str] = {}
+        for cat in list(explore.categories or []):
+            if not isinstance(cat, tidal_page.PageLinks):
+                continue
+            title = str(getattr(cat, "title", "") or "").strip().lower()
+            # Same Magazine rule as the page rows: editorial articles drill
+            # into nothing, so they never become a chip or tile.
+            links = [
+                {"title": str(link.title or ""), "path": str(link.api_path or "")}
+                for link in cat.items or []
+                if getattr(link, "api_path", None)
+                and str(link.title or "").strip()
+                and "magazine" not in str(link.title or "").lower()
+            ]
+            if title == "genres":
+                chips["genres"] = links
+            elif title.startswith("moods"):
+                chips["moods"] = links
+            elif title == "decades":
+                chips["decades"] = links
+            else:
+                quick.update({link["title"]: link["path"] for link in links})
+        return chips, quick
+
+    def browse_path_ok(self, path: str) -> bool:
+        """TIDAL editorial paths nest under ``pages/``; the neutral
+        no-scheme/no-host rule applies on top, so a payload path can never
+        carry the session's token to another host."""
+        text = str(path or "")
+        return text.startswith("pages/") and super().browse_path_ok(text)
+
+    def browse_window_path_ok(self, path: str) -> bool:
+        """TIDAL's paged handles are the ``pages/data/<id>`` endpoints only;
+        an arbitrary ``pages/`` path is not a window."""
+        text = str(path or "")
+        return text.startswith("pages/data/") and super().browse_window_path_ok(text)
+
+    @staticmethod
+    def _art_identity(obj) -> tuple | None:
+        """Who a cover "belongs to", for per-tile dedup: one cover per artist
+        (an artist portrait and two of their albums must not share a tile),
+        falling back to the item's own id when no artist is attached."""
+        if isinstance(obj, tidalapi.Artist):
+            return ("ar", str(getattr(obj, "id", "") or id(obj)))
+        if isinstance(obj, tidalapi.Album | Track):
+            artist = getattr(obj, "artist", None)
+            aid = getattr(artist, "id", None) if artist is not None else None
+            if aid is not None:
+                return ("ar", str(aid))
+            return ("it", str(getattr(obj, "id", "") or id(obj)))
+        if isinstance(obj, Mix | tidalapi.Playlist):
+            return ("md", str(getattr(obj, "id", "") or id(obj)))
+        return None
+
+    def _art_rows(self, page) -> list[list[tuple[int, str, tuple]]]:
+        """One page's covers as ranked, identity-unique rows (best item
+        first), with rows led by artist/album art ordered first."""
+        rows: list[list[tuple[int, str, tuple]]] = []
+        for cat in list(getattr(page, "categories", None) or []):
+            items = getattr(cat, "items", None)
+            if not isinstance(items, list):
+                continue
+            row: list[tuple[int, str, tuple]] = []
+            for obj in items:
+                rank = next((rank for kind, rank in _TILE_ART_RANK if isinstance(obj, kind)), None)
+                if rank is None:
+                    continue
+                ident = self._art_identity(obj)
+                url = self.cover_url(obj, 320)
+                if url and ident is not None:
+                    row.append((rank, url, ident))
+            if row:
+                row.sort(key=lambda t: t[0])
+                rows.append(row)
+        rows.sort(key=lambda r: r[0][0])  # artist/album-led rows pick first
+        return rows
+
+    @staticmethod
+    def _round_robin(rows: list[list[tuple[int, str, tuple]]], want: int) -> list[str]:
+        """Up to ``want`` covers, one per row per pass, identity- and
+        URL-unique."""
+        out: list[str] = []
+        seen_urls: set[str] = set()
+        seen_ids: set[tuple] = set()
+        i = 0
+        while len(out) < want:
+            progressed = False
+            for row in rows:
+                if i >= len(row):
+                    continue
+                progressed = True
+                _, url, ident = row[i]
+                if url not in seen_urls and ident not in seen_ids:
+                    seen_urls.add(url)
+                    seen_ids.add(ident)
+                    out.append(url)
+                    if len(out) >= want:
+                        break
+            if not progressed:
+                break
+            i += 1
+        return out
+
+    def link_art_sample(self, page, want: int = 12) -> list[str]:
+        """Sample up to ``want`` cover URLs from a TIDAL page for its tile
+        mosaic, four show at once, the rest feed the tile's slow rotation.
+
+        Diversity beats adjacency: covers are drawn round-robin ACROSS the
+        page's rows (one per row per pass), so the mosaic mixes Top Artists,
+        New/Classic Albums, Essentials… instead of four neighbours from one
+        list. Within a row, artist portraits and album covers outrank track
+        art and text-heavy editorial playlist covers; rows whose best item is
+        an artist/album get first pick. The pool is identity-unique (see
+        _art_identity), so no two covers from the same artist/album/track can
+        ever share a tile, no matter how the rotation lands. Deliberately
+        does NOT go through the row builders: sampling ~45 pages through them
+        would flood the bridge's object registry and evict live search
+        results."""
+        return self._round_robin(self._art_rows(page), want)
+
+    def _favorites_parts(self, kind: str) -> tuple:
+        """The favorites accessor for ``kind`` plus its total-count answer
+        (``None`` when the engine offers no count) -- the shared front of
+        both favorites reads."""
+        favorites = logged_in_user(self._tidal.session).favorites
+        method = getattr(favorites, kind)
+        try:
+            total = int(getattr(favorites, f"get_{kind}_count")())
+        except Exception:
+            total = None  # no count available: fall back to the short-window stop
+        return method, total
+
+    def favorites_page(
+        self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None
+    ) -> tuple[list, bool]:
+        # One window of the user's favorites, verbatim the bridge's ladder:
+        # the order kwargs first, dropped for older tidalapi, then the
+        # limit/offset kwargs, then one unpaged call sliced locally.
+        method, total = self._favorites_parts(kind)
+        order_kwargs = _favorites_order_kwargs(kind, order)
+        try:
+            raw = method(limit=limit, offset=offset, **order_kwargs) or []
+        except TypeError:
+            try:
+                raw = method(limit=limit, offset=offset) or []
+            except TypeError:
+                raw = (method() or [])[offset : offset + limit]
+        # A limit-N window can return FEWER than N rows (tidalapi drops
+        # unavailable items inside the window), so "more" must come from the
+        # total count, not the returned length; without a count, keep paging
+        # until a window comes back empty.
+        more = offset + limit < total if total is not None else len(raw) > 0
+        return list(raw), more
+
+    def favorites_count(self, kind: str) -> int | None:
+        # The count half of _favorites_parts: None when the engine offers
+        # no count (the bulk pager refuses that rather than guessing).
+        _method, total = self._favorites_parts(kind)
+        return total
+
+    def favorite_ids(self, kind: str) -> set[str]:
+        """The user's favourite ids of ``kind``, paged to exhaustion.
+
+        The window is the engine's own 100-row favorites page
+        (:data:`waves.constants.LIBRARY_PAGE`, the My Tidal page size -- one
+        size so the id sweep and the paged windows can never drift apart),
+        and "done" comes from the total count where one exists -- a short
+        window alone would silently truncate the set for the same reason it
+        would in :meth:`favorites_page`. A failure raises
+        :class:`FavoritesUnavailable` carrying the ids collected so far; the
+        bridge decides what a partial set is worth (it serves the stale one
+        when it has it and caches nothing).
+        """
+        method, total = self._favorites_parts(kind)
+        ids: set[str] = set()
+        offset = 0
+        try:
+            while True:
+                try:
+                    batch = method(limit=LIBRARY_PAGE, offset=offset) or []
+                    paged = True
+                except TypeError:
+                    batch = method() or []  # older tidalapi: one unpaged call
+                    paged = False
+                for obj in batch:
+                    ids.add(str(getattr(obj, "id", "")))
+                offset += LIBRARY_PAGE
+                if not paged:
+                    break
+                if total is not None:
+                    if offset >= total or not batch:  # empty guards a lying count
+                        break
+                elif len(batch) < LIBRARY_PAGE:
+                    break
+        except Exception as exc:
+            raise FavoritesUnavailable(ids) from exc
+        return ids
+
+    # ----- quality
+
+    def advertised_tier(self, obj) -> QualityTier | None:
+        try:
+            quality = quality_audio_highest(obj)
+        except Exception:
+            return None
+        if quality is None:
+            # No answer at all (no tags, no fallback quality): unknown stays
+            # unknown. The shared fold below answers None for an unrecognized
+            # spelling too, so a catalog oddity can never read as a real rung.
+            return None
+        return tier_from_word(quality)
+
+    def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
+        modes = getattr(obj, "audio_modes", None) or []
+        deliveries: list[tuple[QualityTier, AudioType]] = []
+        tier = self.advertised_tier(obj)
+        if tier is not None and (not modes or not all(str(mode) == _ATMOS_MODE for mode in modes)):
+            # A stereo master exists and its tier is known: advertise exactly
+            # what the catalog states, nothing more.
+            deliveries.append((tier, AudioType.STEREO))
+        if _ATMOS_MODE in {str(mode) for mode in modes}:
+            # Atmos rides ONE fixed request tier the quality setting cannot
+            # raise; the UI words an Atmos delivery ATMOS, never a rung. The
+            # tier folds from that fixed request quality, and an unreadable
+            # spelling falls back to HIGH (the 320k rung it asks for), never
+            # a crash.
+            deliveries.append((tier_from_word(ATMOS_REQUEST_QUALITY) or QualityTier.HIGH, AudioType.ATMOS))
+        return deliveries
+
+    def advertised_ceiling(self, obj) -> int | None:
+        # Mirrors the backend gate's input: only the explicit metadata tags
+        # are trusted; tags below the lossless line never cap.
+        try:
+            tags = {str(getattr(tag, "value", tag)) for tag in getattr(obj, "media_metadata_tags", None) or []}
+        except Exception:
+            return None
+        if "HIRES_LOSSLESS" in tags:
+            return quality_rank(QualityTier.HI_RES_LOSSLESS)
+        if "LOSSLESS" in tags:
+            return quality_rank(QualityTier.LOSSLESS)
+        return None
+
+    # ----- catalog rows the pane renderers ask for
+
+    def bind_row_vocabulary(self, builders: dict) -> None:
+        """Hand TIDAL the app's row dictionaries for its engine objects.
+
+        The row vocabulary -- cover sizing, the listed-date rule, the quality
+        pill, the ``_remember`` that keeps a row's live object resolvable --
+        is app-side and still lives with the bridge that has always built it.
+        The My Music pane asks the *source's* provider for its rows
+        (:meth:`row_for`), so TIDAL answers by delegating to those very
+        bodies, bound where the providers are wired: one implementation,
+        reached through the seam, and TIDAL's pane rows can never drift from
+        the rows search, Browse and the artist pages render.
+        """
+        self._row_builders = dict(builders or {})
+
+    def row_for(self, kind: str, item) -> dict:
+        """One engine object as the app's row dict, in TIDAL's vocabulary."""
+        builder = self._row_builders.get(str(kind))
+        return builder(item) if builder is not None else {}
+
+    # ----- per-track delivery
+
+    def media_kind(self, obj) -> MediaType | None:
+        # The one place that names the SDK's types: this provider speaks
+        # tidalapi, so it translates its own Track/Video into the seam's
+        # MediaType. Everything above the seam keys off this answer.
+        if isinstance(obj, Track):
+            return MediaType.TRACK
+        if isinstance(obj, Video):
+            return MediaType.VIDEO
+        return None
+
+    def resolve_video(self, video, file_extension: str) -> StreamInfo | None:
+        """Answer whether the session can serve this video, with the extension
+        the caller chose from its own settings.
+
+        Videos always require the normal session (no Atmos credentials), so
+        the restore is fenced here, beside the track resolve's own session
+        work. None restores the caller's historical limp-on: a failed restore
+        answers nothing and the pipeline fails the item at URL-fetch time.
+        Errors propagate: the engine's handler classifies them (throttled,
+        unavailable, failure) exactly as it did when this body lived there.
+        """
+        with self._tidal.stream_lock:
+            # Videos always require the normal session
+            if not self._tidal.restore_normal_session():
+                logger.error(f"Failed to restore normal session for video: {getattr(video, 'id', '')}")
+                return None
+            return StreamInfo(file_extension=file_extension, media_kind=MediaType.VIDEO)
+
+    def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
+        """One resolve through the engine fetch bound around this call.
+
+        The job's request (its tier and Version) is forwarded unchanged; None
+        means the job pinned nothing and the engine's own state decides.
+        """
+        if self._stream_resolver is None:
+            raise RuntimeError(  # noqa: TRY003
+                "TidalProvider has no stream resolver bound; "
+                "the engine binds its own fetch around each resolve "
+                "(stream_resolver_bound) before calling through the seam"
+            )
+        return self._as_stream_info(self._stream_resolver(track, tier, audio_type))
+
+    @staticmethod
+    def _as_stream_info(info) -> StreamInfo:
+        """The engine's stream answer into the neutral shape.
+
+        The delivered snapshot carries the same facts as the backend's own
+        normalizer, in the seam's vocabulary (``audio_type``, the neutral
+        word, where the backend snapshot says ``audio_mode``); the suite pins
+        the translation of the two together. The URL list is the stream
+        itself: the engine's no-stream answer (no manifest behind it)
+        translates to the all-default StreamInfo, which is the seam's "could
+        not resolve". The byte-pipeline steering facts -- the DASH tail
+        arithmetic, the encrypted-stream verdict, the single-file shape --
+        come off the same engine answer, so the pipeline never touches the
+        manifest again.
+        """
+        stream = getattr(info, "media_stream", None)
+        manifest = getattr(info, "stream_manifest", None)
+
+        if manifest is None:
+            return StreamInfo(media_kind=MediaType.TRACK)
+
+        urls: list = []
+        try:
+            urls = list(manifest.get_urls() or [])
+        except Exception:
+            urls = []
+
+        audio_mode = _enum_value(getattr(stream, "audio_mode", None))
+        replay_gain = None
+        if stream is not None:
+            replay_gain = {
+                "album_replay_gain": getattr(stream, "album_replay_gain", None),
+                "album_peak_amplitude": getattr(stream, "album_peak_amplitude", None),
+                "track_replay_gain": getattr(stream, "track_replay_gain", None),
+                "track_peak_amplitude": getattr(stream, "track_peak_amplitude", None),
+            }
+        codecs = getattr(manifest, "codecs", None)
+        return StreamInfo(
+            urls=urls,
+            file_extension=getattr(info, "file_extension", "") or "",
+            codecs=codecs or "",
+            requires_flac_extraction=bool(getattr(info, "requires_flac_extraction", False)),
+            media_kind=MediaType.TRACK,
+            delivered={
+                "tier": _enum_value(getattr(stream, "audio_quality", None)),
+                "audio_type": str(AudioType.ATMOS if str(audio_mode) == _ATMOS_MODE else AudioType.STEREO),
+                "bit_depth": getattr(stream, "bit_depth", None),
+                "sample_rate": getattr(stream, "sample_rate", None),
+                "codecs": codecs,
+            },
+            replay_gain=replay_gain,
+            encrypted=bool(getattr(manifest, "is_encrypted", False)),
+            tail_spurious=overgenerated_tail_urls(manifest),
+            single_file=bool(getattr(stream, "is_bts", False)),
+        )
+
+    def resolve_preview(self, track) -> StreamInfo:
+        """The full-track preview's stream resolution.
+
+        The caller's preview pipeline (HLS localisation, the ffmpeg remux)
+        stays app-side; what moved behind the seam is the session work the
+        resolve needs: it holds the stream lock (a concurrent or subsequent
+        download is never silently downgraded), normalises the session out of
+        Atmos mode, pins LOW for its own fetch and restores the configured
+        tier in ``finally`` (``restore_normal_session`` early-returns without
+        touching quality in normal mode, per config.py). An encrypted stream
+        answers ``encrypted`` -- Waves does not process encrypted streams, so
+        there is nothing here to preview. A failed normalisation answers the
+        all-default StreamInfo: the caller reports the preview failed.
+        """
+        with self._tidal.stream_lock:
+            try:
+                if not self._tidal.restore_normal_session():
+                    return StreamInfo()
+                self._tidal.session.audio_quality = tidalapi.Quality.low_96k
+            except Exception:
+                logger.debug("Could not normalise the session for preview", exc_info=True)
+                return StreamInfo()
+            try:
+                stream = track.get_stream()
+                manifest = stream.get_stream_manifest()
+                if manifest.is_encrypted:
+                    return StreamInfo(encrypted=True)
+                is_bts = bool(stream.is_bts)
+                return StreamInfo(
+                    urls=list(manifest.get_urls() or []),
+                    codecs=getattr(manifest, "codecs", "") or "",
+                    encrypted=False,
+                    single_file=is_bts,
+                    # Only an MPD manifest has an HLS answer; a BTS one raises.
+                    hls_url=("" if is_bts else self._hls_url(manifest)),
+                )
+            finally:
+                # Canonical resting quality, NOT restore_normal_session(),
+                # which leaves quality untouched in normal mode (config.py).
+                with contextlib.suppress(Exception):
+                    quality = session_quality_from_word(self._tidal.settings.data.tidal_quality_audio)
+                    if quality is not None:
+                        self._tidal.session.audio_quality = quality
+
+    @staticmethod
+    def _hls_url(manifest) -> str:
+        try:
+            return str(manifest.get_hls() or "")
+        except Exception:
+            return ""
+
+    def fetch_lyrics(self, track) -> tuple[str, str]:
+        # TIDAL's native lyrics only: the LRCLIB-first precedence is shared
+        # policy above the seam, and the engine keeps calling it until routed.
+        try:
+            lyrics = track.lyrics()
+        except Exception:
+            return "", ""
+        return lyrics.subtitles or "", lyrics.text or ""
+
+    def cover_url(self, obj, dimension: int) -> str:
+        # Best-effort, mirroring the backend's image helper: fall back to the
+        # engine object's own default size when the requested one is rejected
+        # (artist art allows only 160/320/480/750), and answer "" rather than
+        # raising -- an unavailable cover is no cover, never a failure.
+        target = obj if hasattr(obj, "image") else getattr(obj, "album", None)
+        if target is None or not hasattr(target, "image"):
+            return ""
+        for call in (lambda: target.image(int(dimension)), lambda: target.image()):
+            try:
+                url = call()
+            except Exception:
+                url = ""
+            if url:
+                return url
+        return ""
+
+    def track_facts(self, track) -> dict:
+        """The fact schema the tag writer reads, pulled once, here.
+
+        Mirrors the engine's inline fact pull field for field -- the engine's
+        metadata_write consumes this dict instead of reaching into the engine
+        objects, so tagging stays provider-neutral. The suite pins the schema.
+        """
+        album = getattr(track, "album", None)
+
+        def _date(value) -> str:
+            try:
+                return value.strftime("%Y-%m-%d") if value else ""
+            except Exception:
+                return ""
+
+        if album is not None:
+            release_date = _date(getattr(album, "available_release_date", None)) or _date(
+                getattr(album, "release_date", None)
+            )
+        else:
+            release_date = ""
+        release_type = str(album.type).lower() if album is not None and getattr(album, "type", None) else ""
+
+        return {
+            # Identity rides the seam's namespaced spelling (§4.2) -- the new
+            # schema never bares an id; the legacy tag writer strips when it
+            # writes the WAVES_TIDAL_* tags it still owns.
+            "item_id": _tidal_id(download_identity_id(track)),
+            "artist_ids": [_tidal_id(artist_id) for artist_id in credited_artist_ids(track)],
+            "album_artist_ids": [_tidal_id(artist_id) for artist_id in get_album_artist_ids(track)],
+            # Every credited artist keeps its name, exactly the old tag pull
+            # (`a.name for a in track.artists`): a credit whose id never
+            # arrived still belongs on the ARTIST tag (the id lists below
+            # filter separately). Dropping the whole pair would silently
+            # shrink the tag.
+            "artists": [
+                (_tidal_id(getattr(artist, "id", None)), artist.name)
+                for artist in getattr(track, "artists", None) or []
+            ],
+            "album_artists": get_album_artists(track),
+            "copyright": track.copyright if getattr(track, "copyright", None) else "",
+            "isrc": track.isrc if getattr(track, "isrc", None) else "",
+            "explicit": bool(getattr(track, "explicit", False)),
+            "bpm": track.bpm if getattr(track, "bpm", None) else 0,
+            "key": getattr(track, "key", None),
+            "key_scale": getattr(track, "key_scale", None),
+            "share_url": getattr(track, "share_url", None) or "",
+            "volume_num": track.volume_num,
+            "track_num": track.track_num,
+            "release_date": release_date,
+            "release_type": release_type,
+            "album": {
+                "name": album.name if album is not None else "",
+                "num_tracks": album.num_tracks if album is not None else None,
+                "num_volumes": album.num_volumes if album is not None else None,
+                "upc": album.upc if album is not None else "",
+                "type": album.type if album is not None else "",
+            },
+        }
+
+    # ----- refusals
+
+    def classify_failure(self, exc: BaseException) -> Failure:
+        """Use TIDAL's concrete response/type facts, never its diagnostic copy."""
+        if isinstance(exc, DownloadIncomplete):
+            return Failure(
+                FailureScope.ITEM,
+                EventCode.FAILED,
+                "Some items were not downloaded. Retry the job or open the logs.",
+                retryable=True,
+            )
+        if isinstance(exc, AuthenticationError):
+            return Failure(FailureScope.ACCOUNT, EventCode.ACCOUNT_REQUIRED, "Sign in to TIDAL again.")
+        if isinstance(exc, TooManyRequests):
+            return Failure(
+                FailureScope.UNKNOWN, EventCode.RATE_LIMITED, "TIDAL is limiting requests. Wait before trying again."
+            )
+        if isinstance(exc, StreamNotAvailable | ObjectNotFound | AssetNotAvailable):
+            return Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on TIDAL.")
+        if isinstance(exc, ManifestDecodeError | UnknownManifestFormat):
+            return Failure(
+                FailureScope.ENGINE,
+                EventCode.PROTOCOL_INCOMPATIBLE,
+                "Waves could not read TIDAL's delivery format. Check for an update.",
+            )
+        if isinstance(exc, HTTPError):
+            return self._http_application_failure(exc) or super().classify_failure(exc)
+        return super().classify_failure(exc)
+
+    @staticmethod
+    def _http_application_failure(exc: HTTPError) -> Failure | None:
+        if exc.response is None:
+            return None
+        status = exc.response.status_code
+        # 401/403 also describe item refusals. Preserve that distinction
+        # before identifying an expired account as the failure boundary.
+        if asset_refusal_message(exc) is not None or status == 404:
+            return Failure(FailureScope.ITEM, EventCode.UNAVAILABLE, "This item is not available on TIDAL.")
+        if status in (401, 403):
+            return Failure(FailureScope.ACCOUNT, EventCode.ACCOUNT_REQUIRED, "Sign in to TIDAL again.")
+        if status == 429:
+            return Failure(
+                FailureScope.UNKNOWN,
+                EventCode.RATE_LIMITED,
+                "TIDAL is limiting requests. Wait before trying again.",
+            )
+        if 500 <= status < 600:
+            return Failure(
+                FailureScope.PROVIDER, EventCode.FAILED, "TIDAL could not answer. Try again later.", retryable=True
+            )
+        return None
+
+    def classify_refusal(self, exc) -> Refusal:
+        """The engine's refusal decision, restated in the shared vocabulary.
+
+        Agreement with the engine's stream-info failure handling is pinned
+        test-side: unavailable exactly when the engine would mark it so.
+        """
+        if isinstance(exc, TooManyRequests):
+            return Refusal(RefusalKind.THROTTLED, "TIDAL is rate-limiting; back off and retry")
+        message = None
+        if isinstance(exc, HTTPError):
+            message = asset_refusal_message(exc)
+        if message is not None or isinstance(exc, StreamNotAvailable | ObjectNotFound | AssetNotAvailable):
+            return Refusal(RefusalKind.UNAVAILABLE, message or "this item is not available on TIDAL")
+        return Refusal(RefusalKind.FAILURE, str(exc) or type(exc).__name__)

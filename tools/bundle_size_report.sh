@@ -13,7 +13,7 @@
 set -euo pipefail
 
 DIR="${1:-dist/waves.app}"
-[ -e "$DIR" ] || { echo "error: '$DIR' not found; build first (make gui-waves)" >&2; exit 1; }
+[ -e "$DIR" ] || { echo "error: '$DIR' not found; build first (mise run build)" >&2; exit 1; }
 
 if [ -d "$DIR/Contents/MacOS" ]; then
   LIBDIR="$DIR/Contents/MacOS"
