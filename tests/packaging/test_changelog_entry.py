@@ -30,6 +30,10 @@ def _tool_module():
     return module
 
 
+# The fixtures create the ref the guard reads, so derive it from the guard.
+BASE_REF = f"refs/remotes/{_tool_module().BASE_REF}"
+
+
 @pytest.fixture(autouse=True)
 def _isolated_git(monkeypatch):
     """Scrub inherited Git environment and use an empty global config."""
@@ -80,9 +84,9 @@ def _commit(repo: Path, message: str, files: dict[str, str]) -> str:
 
 
 def _base(repo: Path) -> None:
-    """Commit the base files and create origin/develop."""
+    """Commit the base files and create origin/main."""
     _commit(repo, "base", {"waves/shipped.py": "value = 1\n", "CHANGELOG.md": "# Changelog\n"})
-    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "update-ref", BASE_REF, "HEAD")
 
 
 def _run(repo: Path, monkeypatch, capsys) -> tuple[int, str]:
@@ -143,7 +147,7 @@ def test_an_older_release_bullet_does_not_count(repo, monkeypatch, capsys):
             "CHANGELOG.md": "# Changelog\n\n## v1.0.0\n\n- old note\n",
         },
     )
-    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "update-ref", BASE_REF, "HEAD")
     _commit(
         repo,
         "change shipped behavior",
@@ -213,7 +217,7 @@ def test_a_clean_merge_of_opted_out_commits_passes(repo, monkeypatch, capsys):
 def test_a_clean_merge_of_a_shared_waves_file_passes(repo, monkeypatch, capsys):
     """A clean merge of one shared file adds no resolution hunk."""
     _commit(repo, "base", {"waves/shared.py": "alpha\nbeta\ngamma\n"})
-    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "update-ref", BASE_REF, "HEAD")
     _git(repo, "checkout", "-q", "-b", "side")
     _commit(repo, "side change\n\n[no-changelog]\n", {"waves/shared.py": "alpha-side\nbeta\ngamma\n"})
     _git(repo, "checkout", "-q", "main")
@@ -231,7 +235,7 @@ def test_an_auto_merged_waves_path_is_not_a_conflict(repo, monkeypatch, capsys):
         "base",
         {"waves/shared.py": "alpha\nbeta\ngamma\n", "docs/note.txt": "base\n"},
     )
-    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "update-ref", BASE_REF, "HEAD")
     _git(repo, "checkout", "-q", "-b", "side")
     _commit(
         repo,
@@ -281,7 +285,7 @@ def test_a_non_conflicted_waves_edit_in_a_conflicted_merge_needs_an_opt_out(repo
         "base",
         {"waves/shared.py": "base\n", "docs/note.txt": "base\n"},
     )
-    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "update-ref", BASE_REF, "HEAD")
     _git(repo, "checkout", "-q", "-b", "side")
     _commit(repo, "side change\n\n[no-changelog]\n", {"docs/note.txt": "side\n"})
     _git(repo, "checkout", "-q", "main")
@@ -300,7 +304,7 @@ def test_a_non_conflicted_waves_edit_in_a_conflicted_merge_needs_an_opt_out(repo
 def test_an_ascii_quoted_conflict_path_under_waves_is_detected(repo, monkeypatch, capsys):
     """A non-ASCII conflicted path is found without Git's quoting."""
     _commit(repo, "base", {"waves/café.py": "base\n"})
-    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "update-ref", BASE_REF, "HEAD")
     _git(repo, "checkout", "-q", "-b", "side")
     _commit(repo, "side change\n\n[no-changelog]\n", {"waves/café.py": "side\n"})
     _git(repo, "checkout", "-q", "main")
@@ -412,31 +416,31 @@ def test_a_file_moved_out_of_waves_still_counts(repo, monkeypatch, capsys):
     assert "waves/**" in err
 
 
-def test_a_missing_origin_develop_fails_with_its_cause_and_fix(repo, monkeypatch, capsys):
-    """A checkout without origin/develop names the fetch that fixes it."""
+def test_a_missing_origin_main_fails_with_its_cause_and_fix(repo, monkeypatch, capsys):
+    """A checkout without origin/main names the fetch that fixes it."""
     _commit(repo, "base", {"waves/shipped.py": "value = 1\n"})
     code, err = _run(repo, monkeypatch, capsys)
     assert code == 1
-    assert "origin/develop" in err
-    assert "git fetch origin 'develop:refs/remotes/origin/develop'" in err
+    assert "origin/main" in err
+    assert "git fetch origin 'main:refs/remotes/origin/main'" in err
 
 
-def _point_origin_develop_at_an_unrelated_commit(repo: Path) -> None:
-    """Point origin/develop at a root commit with no common ancestor."""
+def _point_origin_main_at_an_unrelated_commit(repo: Path) -> None:
+    """Point origin/main at a root commit with no common ancestor."""
     tree = _git(repo, "write-tree")
     unrelated = _git(repo, "commit-tree", tree, "-m", "unrelated history")
-    _git(repo, "update-ref", "refs/remotes/origin/develop", unrelated)
+    _git(repo, "update-ref", BASE_REF, unrelated)
 
 
 def test_unrelated_histories_name_the_cause_and_the_remedy(repo, monkeypatch, capsys):
     """Unrelated histories ask for the correct base or a rebase."""
     _commit(repo, "base", {"waves/shipped.py": "value = 1\n"})
-    _point_origin_develop_at_an_unrelated_commit(repo)
+    _point_origin_main_at_an_unrelated_commit(repo)
     code, err = _run(repo, monkeypatch, capsys)
     assert code == 1
     assert "merge-base" in err
     assert "unrelated" in err
-    assert "rebase the branch onto origin/develop" in err
+    assert "rebase the branch onto origin/main" in err
     assert "unshallow" not in err
 
 
@@ -449,19 +453,19 @@ def test_a_shallow_clone_without_a_merge_base_names_the_unshallow_fix(tmp_path, 
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", "--depth", "1", source.as_uri(), str(clone))
     _configure(clone)
-    _point_origin_develop_at_an_unrelated_commit(clone)
+    _point_origin_main_at_an_unrelated_commit(clone)
 
     code, err = _run(clone, monkeypatch, capsys)
     assert code == 1
     assert "shallow" in err
-    assert "git fetch --unshallow origin develop" in err
+    assert "git fetch --unshallow origin main" in err
 
 
 def test_a_shallow_boundary_inside_the_range_is_detected(repo, monkeypatch):
-    """A boundary inside origin/develop..HEAD makes the opt-out walk incomplete."""
+    """A boundary inside origin/main..HEAD makes the opt-out walk incomplete."""
     _base(repo)
     commit = _commit(repo, "change shipped behavior", {"waves/shipped.py": "value = 2\n"})
-    base = _git(repo, "rev-parse", "refs/remotes/origin/develop")
+    base = _git(repo, "rev-parse", BASE_REF)
     shown = Path(_git(repo, "rev-parse", "--git-path", "shallow"))
     shallow = shown if shown.is_absolute() else repo / shown
     shallow.write_text(commit + "\n", encoding="utf-8")

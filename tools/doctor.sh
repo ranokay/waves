@@ -64,7 +64,7 @@ fi
 if [ -f waves/desktop/qml/Main.qml ]; then
   ok "qml/Main.qml present"
 else
-  bad "qml/Main.qml missing" "reconcile the checkout against develop"
+  bad "qml/Main.qml missing" "reconcile the checkout against main"
 fi
 if [ "$have_uv" -eq 0 ]; then
   :

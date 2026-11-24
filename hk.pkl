@@ -101,7 +101,7 @@ hooks {
     stash = "git"
     steps = (linters) {
       ["no-commit-to-branch"] {
-        check = "hk util no-commit-to-branch --branch main --branch develop"
+        check = "hk util no-commit-to-branch --branch main"
       }
     }
   }

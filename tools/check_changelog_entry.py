@@ -5,7 +5,7 @@ notes, so a user-facing change adds its new bullet in the same PR. An
 internal-only change opts out with [no-changelog] on a line of its own in every
 commit that touches waves/.
 
-The check compares committed HEAD with its merge-base on origin/develop; the
+The check compares committed HEAD with its merge-base on origin/main; the
 working tree is not part of the decision, and --no-renames makes a file moved
 out of waves/ still count. Run it from the repository root, as `mise run
 check` does.
@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-BASE_REF = "origin/develop"
+BASE_REF = "origin/main"
 CHANGELOG = "CHANGELOG.md"
 SHIPPED_PREFIX = "waves/"
 OPT_OUT = "[no-changelog]"
@@ -167,7 +167,7 @@ def main() -> int:
     if ref.returncode != 0:
         return _error(
             f"{BASE_REF} is not available in this checkout. Run"
-            " `git fetch origin 'develop:refs/remotes/origin/develop'` (and fetch full history"
+            " `git fetch origin 'main:refs/remotes/origin/main'` (and fetch full history"
             " if the clone is shallow), then try again."
         )
 
@@ -175,17 +175,17 @@ def main() -> int:
     if merge_base.returncode != 0 or not merge_base.stdout.strip():
         shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
         if shallow:
-            return _error("The clone is shallow; run `git fetch --unshallow origin develop`, then try again.")
+            return _error("The clone is shallow; run `git fetch --unshallow origin main`, then try again.")
         return _error(
             f"No merge-base between HEAD and {BASE_REF}. The histories are unrelated;"
-            " fetch the correct base or rebase the branch onto origin/develop, then try again."
+            " fetch the correct base or rebase the branch onto origin/main, then try again."
         )
 
     base = merge_base.stdout.strip()
     if _shallow_boundary_in_range(base):
         return _error(
-            "The shallow boundary falls inside origin/develop..HEAD; run"
-            " `git fetch --unshallow origin develop`, then try again."
+            "The shallow boundary falls inside origin/main..HEAD; run"
+            " `git fetch --unshallow origin main`, then try again."
         )
     changed = _git("diff", "--name-only", "--no-renames", "-z", base, "HEAD")
     if changed.returncode != 0:

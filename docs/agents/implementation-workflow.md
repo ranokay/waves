@@ -6,9 +6,13 @@ How an agent turns an issue into merged code in this repo. `/implement` reads th
 
 This repo is a fork: `upstream` is the parent project, `origin` is the fork.
 
-- **`main` mirrors upstream.** It takes fast-forwards from upstream and nothing else. No direct commits, no PRs. A weekly scheduled `/sync-upstream` run keeps it current and judges upstream changes against our implementations and our open and closed issues and PRs. The issue loop does not sync.
-- **`develop` is this fork's integration branch.** Every PR lands here, and only here. PRs base on `develop`, never `main`.
-- **One branch per issue**, cut from up-to-date `develop`, named `<type>/issue-<n>-<slug>` (for example `feat/issue-23-generic-tag-family`; the type is the work's own: `feat`, `fix`, `spec`).
+- **`main` is this fork's integration branch.** Every PR lands here, and only
+  here.
+- **Upstream changes arrive through a Sync PR into `main`** that lands with a
+  merge commit. A weekly scheduled `/sync-upstream` run opens it and judges
+  upstream changes against our implementations and our open and closed issues
+  and PRs. The issue loop does not sync.
+- **One branch per issue**, cut from up-to-date `main`, named `<type>/issue-<n>-<slug>` (for example `feat/issue-23-generic-tag-family`; the type is the work's own: `feat`, `fix`, `spec`).
 
 The branch guard is commit-only. A conflicted upstream synchronization merge concludes with `HK_SKIP_STEPS=no-commit-to-branch git commit`.
 
@@ -19,7 +23,7 @@ The branch guard is commit-only. A conflicted upstream synchronization merge con
 3. **Format, then check.** Run `mise run fmt`, review its diff, then `mise run check`. `check` and commit hooks are read-only.
 4. **Review.** Run `/code-review` as the Review section below says. Every finding is fixed or explicitly refuted, with the disposition in the PR.
 5. **Gate.** Run the class's gate once on the final SHA. A code correction after the gate reruns the class gate. A prose-only correction may record the delta instead.
-6. **Open the PR.** Base it on `develop`, link the issue with `Closes #<n>`, and follow `.github/pull_request_template.md`. A user-facing change adds its bullet under `## Unreleased` in `CHANGELOG.md` in the same PR. For an internal-only change under `waves/`, put `[no-changelog]` on a line of its own in every commit that touches `waves/`.
+6. **Open the PR.** Base it on `main`, link the issue with `Closes #<n>`, and follow `.github/pull_request_template.md`. A user-facing change adds its bullet under `## Unreleased` in `CHANGELOG.md` in the same PR. For an internal-only change under `waves/`, put `[no-changelog]` on a line of its own in every commit that touches `waves/`.
 7. **Merge.** Verify the live PR as the next section says. A finding that arrives after merge becomes a separate corrective PR; it never rewrites merged history.
 8. **Close out.** The PR's `Closes #<n>` auto-closes the issue.
 9. **Clean up.** Delete the issue branch and any worktree this run created. Leave branches and worktrees that other sessions own.
@@ -51,9 +55,9 @@ This section owns the review policy.
 
 ## Merge verification
 
-Verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `develop`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. CodeRabbit is a required reviewer: wait until the `CodeRabbit` check on the head is titled `Finished`, because GitHub also passes a required check that was skipped or rate-limited. Merging mid-review cancels the review, so wait for the check. A `Review paused` head gets `@coderabbitai review` once when the head is ready for merge; a head with no check gets `@coderabbitai full review` once; a rate-limited PR is pending and reported. CodeQL and SonarCloud stay advisory: each failed one gets a written disposition in the PR (fixed, false positive with the reason, or accepted with the reason). A pending, skipped or empty review is recorded as incomplete, never claimed as coverage.
+Verify the live PR before merging. The head must equal the reviewed and tested head, the base must be `main`, the PR must be open and not a draft, GitHub must report acceptable mergeability, and every posted review or scan finding must have a written fix, refutation or disposition. CodeRabbit is a required reviewer: wait until the `CodeRabbit` check on the head is titled `Finished`, because GitHub also passes a required check that was skipped or rate-limited. Merging mid-review cancels the review, so wait for the check. A `Review paused` head gets `@coderabbitai review` once when the head is ready for merge; a head with no check gets `@coderabbitai full review` once; a rate-limited PR is pending and reported. CodeQL and SonarCloud stay advisory: each failed one gets a written disposition in the PR (fixed, false positive with the reason, or accepted with the reason). A pending, skipped or empty review is recorded as incomplete, never claimed as coverage.
 
-The PR body records the class gate's commands and exits on the tested head, and the `/code-review` result where the change is substantive code. Check with `gh pr view <pr> --repo ranokay/waves --json state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup`. Require `OPEN`, `isDraft: false`, base `develop`, head equal to the reviewed and tested head, `mergeable: MERGEABLE`, and `mergeStateStatus` in `CLEAN`, `UNSTABLE` or `HAS_HOOKS`. Then merge with `gh pr merge <pr> --repo ranokay/waves --squash --match-head-commit <head>`.
+The PR body records the class gate's commands and exits on the tested head, and the `/code-review` result where the change is substantive code. Check with `gh pr view <pr> --repo ranokay/waves --json state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup`. Require `OPEN`, `isDraft: false`, base `main`, head equal to the reviewed and tested head, `mergeable: MERGEABLE`, and `mergeStateStatus` in `CLEAN`, `UNSTABLE` or `HAS_HOOKS`. Then merge with `gh pr merge <pr> --repo ranokay/waves --squash --match-head-commit <head>`. A Sync PR is the exception: it verifies the same way but lands with `--merge` so the upstream merge base survives.
 
 ## Waiting on long commands
 

@@ -1,6 +1,9 @@
 name: master
 
-# Pull requests to `develop` run the cheap automatic checks: `quality`
+# The file and workflow keep the `master` name: the branch retarget does not
+# rename workflows or their checks.
+#
+# Pull requests to `main` run the cheap automatic checks: `quality`
 # (`mise run check`) and `test-fast` on Ubuntu. The strict matrix and the
 # macOS/Windows fast tests are heavier and stay manual-only (`workflow_dispatch`);
 # the strict suite on the frozen SHA remains the local merge gate
@@ -9,7 +12,7 @@ name: master
 on:
   workflow_dispatch:
   pull_request:
-    branches: [develop]
+    branches: [main]
     types: [opened, synchronize, reopened, edited]
 
 # A newer push to the same PR cancels the superseded run; a manual dispatch
