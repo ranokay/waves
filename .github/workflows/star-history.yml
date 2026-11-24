@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: narayann7/star-history-action@ffcb7d0219c8ccc46f21f6e0f530b17782a73f04 # v1, pinned
+      - uses: narayann7/star-history-action@40684de767f6f524052941ff59b91ab5b0c8d4f1 # v1, pinned
         with:
           # Always chart the public repo's stars, wherever this runs.
           repos: iamprivacy/Waves
